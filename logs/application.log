@@ -5993,3 +5993,11 @@ Traceback (most recent call last):
   File "/workspaces/DataEngineeringCopilot/data_engineering_copilot/infrastructure/ollama_client.py", line 90, in generate
     raise OllamaError(
 data_engineering_copilot.infrastructure.ollama_client.OllamaError: Ollama returned no final answer. Generation stopped with reason `length`. The model likely spent its output budget on reasoning. Try again, or increase `ollama_num_predict` in settings.py.
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot | Logging configured path=/workspaces/DataEngineeringCopilot/logs/application.log level=INFO
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot | Logging configured path=/workspaces/DataEngineeringCopilot/logs/application.log level=INFO
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot | Logging configured path=/workspaces/DataEngineeringCopilot/logs/application.log level=INFO
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot | Logging configured path=/workspaces/DataEngineeringCopilot/logs/application.log level=INFO
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot.infrastructure.vector_store | Opening Chroma vector store path=/workspaces/DataEngineeringCopilot/chroma_db collection=data_engineering_docs
+2026-06-19T16:34:11+0000 | INFO | data_engineering_copilot.infrastructure.vector_store | Opening Chroma vector store path=/workspaces/DataEngineeringCopilot/chroma_db collection=data_engineering_docs
+2026-06-19T16:34:17+0000 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector store count completed count=4426
+2026-06-19T16:34:17+0000 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector store count completed count=4426

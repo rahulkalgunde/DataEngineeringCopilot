@@ -52,11 +52,7 @@
   - `python main.py ingest --source "Apache Spark Documentation" --source "Delta Lake Documentation"`
   - `python main.py ask "question"`
   - `python main.py reset-index`
-  - `python main.py ui`
-
-### Factory: `data_engineering_copilot/factory.py`
-- Role:
-  - Composition root; wires concrete adapters into service objects from `AppSettings`.
+- `python main.py ui` (prints a platform-neutral Streamlit launch command)
 - Functions:
   - `build_ingestion_service(app_settings=settings)` → `IngestionService`
   - `build_rag_service(app_settings=settings)` → `RagAnswerService`

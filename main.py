@@ -81,7 +81,7 @@ def main() -> None:
             reset_index()
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
-            print(r"Run: .\.venv\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py")
+            print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
     except Exception:
         logger.exception("CLI command failed command=%s", args.command)
         raise
