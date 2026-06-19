@@ -95,7 +95,7 @@ class AppSettings:
     crawl_delay_seconds: float = 0.25
     max_pages_per_source: int = 80
     ingestion_batch_chunk_size: int = 128
-    logging_enabled: bool = True
+    logging_enabled: bool = False
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
 
 

@@ -30,4 +30,4 @@ def test_load_documentation_sources_from_json(tmp_path):
 def test_app_settings_default_logging_enabled() -> None:
     settings = AppSettings()
 
-    assert settings.logging_enabled is True
+    assert settings.logging_enabled is False
