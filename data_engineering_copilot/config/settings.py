@@ -89,6 +89,9 @@ class AppSettings:
     ollama_timeout_seconds: int = 420
     ollama_num_ctx: int = 4096
     ollama_num_predict: int = 2048
+    ollama_retry_context_ratio: float = 0.6
+    ollama_retry_extra_num_predict: int = 2048
+    ollama_retry_max_num_predict: int = 4096
     crawl_delay_seconds: float = 0.25
     max_pages_per_source: int = 80
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)

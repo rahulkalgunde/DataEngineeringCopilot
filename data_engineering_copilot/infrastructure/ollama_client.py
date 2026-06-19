@@ -30,7 +30,7 @@ class OllamaClient:
         self.num_ctx = num_ctx
         self.num_predict = num_predict
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
         logger.info(
             "Ollama generation started model=%s prompt_chars=%s num_ctx=%s num_predict=%s",
             self.model,
@@ -38,6 +38,11 @@ class OllamaClient:
             self.num_ctx,
             self.num_predict,
         )
+        if num_predict is None:
+            num_predict = self.num_predict
+        if num_ctx is None:
+            num_ctx = self.num_ctx
+
         payload = {
             "model": self.model,
             "prompt": self._format_raw_chat_prompt(prompt),
@@ -46,8 +51,8 @@ class OllamaClient:
             "options": {
                 "temperature": 0.1,
                 "top_p": 0.9,
-                "num_ctx": self.num_ctx,
-                "num_predict": self.num_predict,
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
             },
         }
         request = Request(
