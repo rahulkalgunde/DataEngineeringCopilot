@@ -37,38 +37,50 @@ DataEngineeringCopilot/
 
 ## Setup
 
-Use the existing project virtual environment.
+Create and activate a Python virtual environment for your platform.
+
+Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 Install and start Ollama, then pull the model once:
 
-```powershell
+```bash
 ollama pull qwen3:4b
 ollama serve
 ```
 
 Download the sentence-transformers embedding model once during setup:
 
-```powershell
-.\.venv\Scripts\python.exe scripts\download_embedding_model.py
+```bash
+python scripts/download_embedding_model.py
 ```
 
 ## Build the Local Repository
 
 The crawler downloads documentation pages and stores chunks in local ChromaDB. After ingestion, question answering is fully local: ChromaDB reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `qwen3:4b` locally.
 
-```powershell
-.\.venv\Scripts\python.exe main.py ingest --max-pages 40
+```bash
+python main.py ingest --max-pages 40
 ```
 
 If ChromaDB reports an incomplete local index, reset and ingest again:
 
-```powershell
-.\.venv\Scripts\python.exe main.py reset-index
-.\.venv\Scripts\python.exe main.py ingest --max-pages 40
+```bash
+python main.py reset-index
+python main.py ingest --max-pages 40
 ```
 
 The configured documentation sources are:
@@ -94,8 +106,8 @@ Each chunk stores:
 
 ## Ask from the CLI
 
-```powershell
-.\.venv\Scripts\python.exe main.py ask "How does Delta Lake time travel work?"
+```bash
+python main.py ask "How does Delta Lake time travel work?"
 ```
 
 If the best retrieval confidence is below the configured threshold, the system returns:
@@ -106,8 +118,14 @@ I cannot answer this question because it is outside my knowledge repository.
 
 ## Run the UI
 
+```bash
+python -m streamlit run data_engineering_copilot/ui/streamlit_app.py
+```
+
+If your virtual environment is activated, this uses the environment's Streamlit installation. On Windows you can also run the equivalent PowerShell command from the venv:
+
 ```powershell
-.\.venv\Scripts\streamlit.exe run data_engineering_copilot/ui/streamlit_app.py
+.\.venv\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py
 ```
 
 The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into ChromaDB. Ingestion requires internet access; answering after ingestion runs locally.
