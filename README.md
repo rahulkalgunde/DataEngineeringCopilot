@@ -1,0 +1,130 @@
+# DataEngineeringCopilot
+
+Offline question answering for data engineering documentation using Ollama, Qwen3:4b, ChromaDB, sentence-transformers, and Streamlit.
+
+## Project Structure
+
+```text
+DataEngineeringCopilot/
+  main.py
+  requirements.txt
+  README.md
+  chroma_db/
+  data/
+  data_engineering_copilot/
+    config/
+      documentation_sources.json
+      settings.py
+    domain/
+      models.py
+    infrastructure/
+      crawler.py
+      embeddings.py
+      html_parser.py
+      ollama_client.py
+      vector_store.py
+    services/
+      chunker.py
+      ingestion.py
+      rag.py
+    ui/
+      streamlit_app.py
+    utils/
+      text.py
+  scripts/
+    download_embedding_model.py
+```
+
+## Setup
+
+Use the existing project virtual environment.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Install and start Ollama, then pull the model once:
+
+```powershell
+ollama pull qwen3:4b
+ollama serve
+```
+
+Download the sentence-transformers embedding model once during setup:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\download_embedding_model.py
+```
+
+## Build the Local Repository
+
+The crawler downloads documentation pages and stores chunks in local ChromaDB. After ingestion, question answering is fully local: ChromaDB reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `qwen3:4b` locally.
+
+```powershell
+.\.venv\Scripts\python.exe main.py ingest --max-pages 40
+```
+
+If ChromaDB reports an incomplete local index, reset and ingest again:
+
+```powershell
+.\.venv\Scripts\python.exe main.py reset-index
+.\.venv\Scripts\python.exe main.py ingest --max-pages 40
+```
+
+The configured documentation sources are:
+
+- Apache Spark Documentation
+- Apache Airflow Documentation
+- Databricks Documentation
+- Delta Lake Documentation
+
+Edit documentation source URLs in:
+
+```text
+data_engineering_copilot/config/documentation_sources.json
+```
+
+Each chunk stores:
+
+- source name
+- title
+- original URL
+- chunk id
+- chunk text
+
+## Ask from the CLI
+
+```powershell
+.\.venv\Scripts\python.exe main.py ask "How does Delta Lake time travel work?"
+```
+
+If the best retrieval confidence is below the configured threshold, the system returns:
+
+```text
+I cannot answer this question because it is outside my knowledge repository.
+```
+
+## Run the UI
+
+```powershell
+.\.venv\Scripts\streamlit.exe run data_engineering_copilot/ui/streamlit_app.py
+```
+
+The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into ChromaDB. Ingestion requires internet access; answering after ingestion runs locally.
+
+Runtime logs are written under `logs/` in the project workspace:
+
+- `logs/application.log` captures CLI, Streamlit, ingestion, retrieval, vector store, and Ollama events for troubleshooting.
+- `logs/ingestion_refresh.log` captures detailed UI refresh events and fetched documentation URLs.
+
+## Architecture
+
+This project intentionally does not use LangChain or LlamaIndex.
+
+- `config`: source URLs and runtime settings
+- `domain`: simple dataclasses shared by the app
+- `infrastructure`: adapters for HTTP crawling, HTML parsing, embeddings, ChromaDB, and Ollama
+- `services`: business workflows for ingestion and RAG answering
+- `ui`: Streamlit interface
+
+Local generation can take time on CPU. The app uses Ollama raw prompt mode to avoid empty Qwen3 thinking-only responses. The timeout and generation limits are configured in `data_engineering_copilot/config/settings.py` as `ollama_timeout_seconds`, `ollama_num_ctx`, `ollama_num_predict`, `retrieval_top_k`, and `max_context_chars`.
