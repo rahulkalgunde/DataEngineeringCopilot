@@ -14,9 +14,12 @@ from data_engineering_copilot.config.settings import settings
 
 def main() -> None:
     settings.embedding_cache_dir.mkdir(parents=True, exist_ok=True)
+    # Use the newer kwargs to pass cache dir to transformers internals
     SentenceTransformer(
         settings.embedding_model_name,
-        cache_folder=str(settings.embedding_cache_dir),
+        model_kwargs={"cache_dir": str(settings.embedding_cache_dir)},
+        config_kwargs={"cache_dir": str(settings.embedding_cache_dir)},
+        processor_kwargs={"cache_dir": str(settings.embedding_cache_dir)},
         local_files_only=False,
     )
     print(f"Cached embedding model: {settings.embedding_model_name}")
