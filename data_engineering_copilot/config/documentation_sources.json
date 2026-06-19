@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Apache Spark Documentation",
+    "start_urls": [
+      "https://spark.apache.org/docs/latest/"
+    ],
+    "allowed_domains": [
+      "spark.apache.org"
+    ],
+    "url_prefixes": [
+      "https://spark.apache.org/docs/latest/"
+    ]
+  },
+  {
+    "name": "Apache Airflow Documentation",
+    "start_urls": [
+      "https://airflow.apache.org/docs/apache-airflow/stable/"
+    ],
+    "allowed_domains": [
+      "airflow.apache.org"
+    ],
+    "url_prefixes": [
+      "https://airflow.apache.org/docs/apache-airflow/stable/"
+    ]
+  },
+  {
+    "name": "Databricks Documentation",
+    "start_urls": [
+      "https://docs.databricks.com/aws/en/"
+    ],
+    "allowed_domains": [
+      "docs.databricks.com"
+    ],
+    "url_prefixes": [
+      "https://docs.databricks.com/aws/en/"
+    ]
+  },
+  {
+    "name": "Delta Lake Documentation",
+    "start_urls": [
+      "https://docs.delta.io/latest/"
+    ],
+    "allowed_domains": [
+      "docs.delta.io"
+    ],
+    "url_prefixes": [
+      "https://docs.delta.io/latest/"
+    ]
+  }
+]

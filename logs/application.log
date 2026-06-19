@@ -1,0 +1,29 @@
+2026-06-18T22:59:34+0530 | INFO | data_engineering_copilot | Logging configured path=C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\logs\application.log level=INFO
+2026-06-18T22:59:34+0530 | INFO | data_engineering_copilot.main | CLI command received command=ui
+2026-06-18T22:59:34+0530 | INFO | data_engineering_copilot.main | CLI ui command displayed Streamlit launch command
+2026-06-18T23:04:10+0530 | INFO | data_engineering_copilot | Logging configured path=C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\logs\application.log level=INFO
+2026-06-18T23:04:10+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Opening Chroma vector store path=C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\chroma_db collection=data_engineering_docs
+2026-06-18T23:04:18+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector store count completed count=8280
+2026-06-18T23:04:30+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector store count completed count=8280
+2026-06-18T23:04:30+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector store count completed count=8280
+2026-06-18T23:04:30+0530 | INFO | data_engineering_copilot.factory | Building RAG service model=qwen3:4b top_k=2 max_context_chars=2200 threshold=0.3500
+2026-06-18T23:04:30+0530 | INFO | data_engineering_copilot.infrastructure.embeddings | Loading embedding model model=sentence-transformers/all-MiniLM-L6-v2 cache_dir=C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\data\embedding_models local_files_only=True
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Opening Chroma vector store path=C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\chroma_db collection=data_engineering_docs
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.services.rag | RAG answer started question='what is pyspark?'
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.infrastructure.embeddings | Embedded texts count=1
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector query started top_k=2 embedding_dimensions=384
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.infrastructure.vector_store | Vector query completed results=2 top_confidence=0.6660
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.services.rag | RAG retrieval completed matches=2 top_confidence=0.6660 threshold=0.3500
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.services.rag | RAG prompt built context_chars=2388 blocks=1 max_context_chars=2200
+2026-06-18T23:04:31+0530 | INFO | data_engineering_copilot.infrastructure.ollama_client | Ollama generation started model=qwen3:4b prompt_chars=2925 num_ctx=4096 num_predict=768
+2026-06-18T23:07:43+0530 | INFO | data_engineering_copilot.infrastructure.ollama_client | Ollama generation completed done_reason=length raw_response_chars=0 final_response_chars=0
+2026-06-18T23:07:43+0530 | WARNING | data_engineering_copilot.infrastructure.ollama_client | Ollama returned no final answer done_reason=length body_keys=['created_at', 'done', 'done_reason', 'eval_count', 'eval_duration', 'load_duration', 'model', 'prompt_eval_count', 'prompt_eval_duration', 'response', 'thinking', 'total_duration']
+2026-06-18T23:07:43+0530 | ERROR | data_engineering_copilot.services.rag | Ollama failed during RAG answer
+Traceback (most recent call last):
+  File "C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\data_engineering_copilot\services\rag.py", line 54, in answer
+    generated = self.ollama_client.generate(prompt)
+  File "C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot\data_engineering_copilot\infrastructure\ollama_client.py", line 90, in generate
+    raise OllamaError(
+    ...<4 lines>...
+    )
+data_engineering_copilot.infrastructure.ollama_client.OllamaError: Ollama returned no final answer. Generation stopped with reason `length`. The model likely spent its output budget on reasoning. Try again, or increase `ollama_num_predict` in settings.py.
