@@ -109,9 +109,10 @@ class OllamaClient:
         return "\n".join(
             [
                 "<|im_start|>system",
-                "You are DataEngineeringCopilot. Answer directly and concisely.",
-                "Use only the repository context provided by the user.",
-                "Thinking mode is disabled. Do not show reasoning, analysis, or <think> tags.",
+                "You are DataEngineeringCopilot. Answer directly and concisely without reasoning.",
+                "Use ONLY the repository context provided by the user.",
+                "Respond immediately with facts from the context. No analysis, no thinking, no <think> tags.",
+                "Keep responses brief and practical.",
                 "<|im_end|>",
                 "<|im_start|>user",
                 "/no_think",

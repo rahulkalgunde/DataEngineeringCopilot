@@ -92,20 +92,21 @@ class RagAnswerService:
             self.max_context_chars,
         )
         return f"""You are DataEngineeringCopilot, an offline assistant for data engineering documentation.
-Answer only from the provided repository context.
-If the context does not contain the answer, reply exactly:
-{OUTSIDE_REPOSITORY_MESSAGE}
+    Answer only from the provided repository context.
+    If the context does not contain the answer, reply exactly:
+    {OUTSIDE_REPOSITORY_MESSAGE}
 
-Write a concise, practical answer in no more than 5 bullet points or 2 short paragraphs.
-Prefer direct facts, commands, and caveats from the context. Do not show hidden reasoning. Do not invent sources.
+    Provide a concise, practical answer using at most 3 bullet points or a single short paragraph.
+    Limit the answer to approximately 150 words (or ~800 characters). If the answer exceeds this, summarize the key points.
+    Prefer direct facts, commands, and caveats from the context. Do not show hidden reasoning. Do not invent sources.
 
-Repository context:
-{context}
+    Repository context:
+    {context}
 
-Question:
-{question}
+    Question:
+    {question}
 
-Answer:"""
+    Answer:"""
 
     def _unique_sources(self, matches: list[RetrievedChunk]) -> tuple:
         seen: set[tuple[str, str]] = set()

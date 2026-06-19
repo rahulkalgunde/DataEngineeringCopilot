@@ -82,13 +82,13 @@ class AppSettings:
     ollama_model: str = "qwen3:4b"
     chunk_size_words: int = 420
     chunk_overlap_words: int = 80
-    retrieval_top_k: int = 2
-    max_context_chars: int = 2200
+    retrieval_top_k: int = 1
+    max_context_chars: int = 1200
     confidence_threshold: float = 0.35
     request_timeout_seconds: int = 20
     ollama_timeout_seconds: int = 420
     ollama_num_ctx: int = 4096
-    ollama_num_predict: int = 768
+    ollama_num_predict: int = 2048
     crawl_delay_seconds: float = 0.25
     max_pages_per_source: int = 80
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
