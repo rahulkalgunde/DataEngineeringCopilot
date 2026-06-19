@@ -1,6 +1,6 @@
 import json
 
-from data_engineering_copilot.config.settings import load_documentation_sources
+from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
 
 
 def test_load_documentation_sources_from_json(tmp_path):

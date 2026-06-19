@@ -82,7 +82,7 @@ class AppSettings:
     ollama_model: str = "phi3"
     chunk_size_words: int = 420
     chunk_overlap_words: int = 80
-    retrieval_top_k: int = 1
+    retrieval_top_k: int = 3
     max_context_chars: int = 1200
     confidence_threshold: float = 0.35
     request_timeout_seconds: int = 20
@@ -94,7 +94,8 @@ class AppSettings:
     ollama_retry_max_num_predict: int = 4096
     crawl_delay_seconds: float = 0.25
     max_pages_per_source: int = 80
-    logging_enabled: bool = False
+    ingestion_batch_chunk_size: int = 128
+    logging_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
 
 

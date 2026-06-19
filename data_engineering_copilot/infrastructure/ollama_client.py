@@ -115,6 +115,7 @@ class OllamaClient:
             [
                 "<|im_start|>system",
                 "You are DataEngineeringCopilot. Answer directly and concisely without reasoning.",
+                "Do not show reasoning.",
                 "Use ONLY the repository context provided by the user.",
                 "Respond immediately with facts from the context. No analysis, no thinking, no <think> tags.",
                 "Keep responses brief and practical.",

@@ -4,7 +4,7 @@ import logging
 from typing import Callable, Iterable
 
 from data_engineering_copilot.config.settings import AppSettings
-from data_engineering_copilot.domain.models import IngestionEvent
+from data_engineering_copilot.domain.models import DocumentChunk, IngestionEvent
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
@@ -47,6 +47,15 @@ class IngestionService:
             [source.name for source in selected_sources],
         )
 
+        batch_chunks: list[DocumentChunk] = []
+
+        def flush_batch() -> None:
+            if not batch_chunks:
+                return
+            batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
+            self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
+            batch_chunks.clear()
+
         for source in selected_sources:
             print(f"Crawling {source.name}")
             logger.info("Ingestion source started source=%s page_limit=%s", source.name, page_limit)
@@ -77,8 +86,11 @@ class IngestionService:
                     )
                     continue
                 chunks = self.chunker.chunk(parsed)
-                vectors = self.embeddings.embed_texts([chunk.text for chunk in chunks])
-                self.vector_store.upsert_chunks(chunks, vectors)
+                batch_chunks.extend(chunks)
+
+                if len(batch_chunks) >= self.settings.ingestion_batch_chunk_size:
+                    flush_batch()
+
                 total_chunks += len(chunks)
                 source_chunks_indexed += len(chunks)
                 print(f"Indexed {len(chunks):>3} chunks from {parsed.title}")
@@ -122,6 +134,8 @@ class IngestionService:
                 source_pages_fetched,
                 source_chunks_indexed,
             )
+
+        flush_batch()
 
         logger.info("Ingestion completed total_chunks=%s", total_chunks)
         return total_chunks
