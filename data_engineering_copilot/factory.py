@@ -74,4 +74,7 @@ def build_rag_service(app_settings: AppSettings = settings) -> RagAnswerService:
         top_k=app_settings.retrieval_top_k,
         max_context_chars=app_settings.max_context_chars,
         confidence_threshold=app_settings.confidence_threshold,
+        retry_context_ratio=app_settings.ollama_retry_context_ratio,
+        retry_extra_num_predict=app_settings.ollama_retry_extra_num_predict,
+        retry_max_num_predict=app_settings.ollama_retry_max_num_predict,
     )
