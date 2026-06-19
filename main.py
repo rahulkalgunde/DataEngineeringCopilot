@@ -104,7 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    configure_logging(settings.project_root)
+    if settings.logging_enabled:
+        configure_logging(settings.project_root)
     parser = build_parser()
     args = parser.parse_args()
     logger.info("CLI command received command=%s", args.command)

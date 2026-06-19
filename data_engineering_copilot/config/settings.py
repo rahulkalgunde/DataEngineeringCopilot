@@ -79,7 +79,7 @@ class AppSettings:
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_local_files_only: bool = True
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:4b"
+    ollama_model: str = "phi3"
     chunk_size_words: int = 420
     chunk_overlap_words: int = 80
     retrieval_top_k: int = 1
@@ -94,6 +94,7 @@ class AppSettings:
     ollama_retry_max_num_predict: int = 4096
     crawl_delay_seconds: float = 0.25
     max_pages_per_source: int = 80
+    logging_enabled: bool = False
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
 
 

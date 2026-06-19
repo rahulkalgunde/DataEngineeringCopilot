@@ -25,3 +25,9 @@ def test_load_documentation_sources_from_json(tmp_path):
     assert sources[0].name == "Example Docs"
     assert sources[0].start_urls == ("https://example.com/docs/",)
     assert sources[0].allowed_domains == ("example.com",)
+
+
+def test_app_settings_default_logging_enabled() -> None:
+    settings = AppSettings()
+
+    assert settings.logging_enabled is True

@@ -19,7 +19,8 @@ from data_engineering_copilot.infrastructure.vector_store import ChromaVectorSto
 from data_engineering_copilot.logging_config import configure_logging
 
 
-configure_logging(settings.project_root)
+if settings.logging_enabled:
+    configure_logging(settings.project_root)
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +57,8 @@ def ingestion_log_path() -> Path:
 
 
 def append_ingestion_log(log_path: Path, event: IngestionEvent) -> None:
+    if not settings.logging_enabled:
+        return
     log_path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().isoformat(timespec="seconds")
     parts = [
@@ -99,7 +102,10 @@ def main() -> None:
         st.write(f"Ollama output limit: `{settings.ollama_num_predict}` tokens")
         st.write(f"Embedding model: `{settings.embedding_model_name}`")
         st.write(f"Confidence threshold: `{settings.confidence_threshold}`")
-        st.write(f"Application log: `{settings.project_root / 'logs' / 'application.log'}`")
+        if settings.logging_enabled:
+            st.write(f"Application log: `{settings.project_root / 'logs' / 'application.log'}`")
+        else:
+            st.write("Application logging is disabled.")
         st.divider()
         st.subheader("Ingestion")
         source_names = tuple(source.name for source in settings.sources)
@@ -113,8 +119,8 @@ def main() -> None:
         max_pages = st.number_input(
             "Max pages per source",
             min_value=1,
-            max_value=1000,
-            value=min(settings.max_pages_per_source, 1000),
+            max_value=5000,
+            value=min(settings.max_pages_per_source, 5000),
             step=10,
         )
         with st.expander("Documentation sources"):
