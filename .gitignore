@@ -4,7 +4,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-chroma_db/
 data/
 logs/*.log
 
