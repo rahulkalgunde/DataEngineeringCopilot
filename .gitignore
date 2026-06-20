@@ -8,3 +8,5 @@ data/
 logs/*.log
 chroma_db/
 
+chroma_db/
+*.sqlite3
