@@ -1,6 +1,6 @@
 # DataEngineeringCopilot
 
-Offline question answering for data engineering documentation using Ollama, Qwen3:4b, ChromaDB, sentence-transformers, and Streamlit.
+Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, ChromaDB, sentence-transformers, and Streamlit.
 
 ## Project Structure
 
@@ -58,7 +58,7 @@ python -m pip install -r requirements.txt
 Install and start Ollama, then pull the model once:
 
 ```bash
-ollama pull qwen3:4b
+ollama pull deepseek-coder:6.7b
 ollama serve
 ```
 
@@ -70,7 +70,7 @@ python scripts/download_embedding_model.py
 
 ## Build the Local Repository
 
-The crawler downloads documentation pages and stores chunks in local ChromaDB. After ingestion, question answering is fully local: ChromaDB reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `qwen3:4b` locally.
+The crawler downloads documentation pages and stores chunks in local ChromaDB. After ingestion, question answering is fully local: ChromaDB reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `deepseek-coder:6.7b` locally.
 
 ```bash
 python main.py ingest --max-pages 40
@@ -150,7 +150,7 @@ This project intentionally does not use LangChain or LlamaIndex.
 - `services`: business workflows for ingestion and RAG answering
 - `ui`: Streamlit interface
 
-Local generation can take time on CPU. The app uses Ollama raw prompt mode to avoid empty Qwen3 thinking-only responses. The timeout and generation limits are configured in `data_engineering_copilot/config/settings.py` as `ollama_timeout_seconds`, `ollama_num_ctx`, `ollama_num_predict`, `retrieval_top_k`, and `max_context_chars`.
+Local generation can take time on CPU. The timeout and generation limits are configured in `data_engineering_copilot/config/settings.py` as `ollama_timeout_seconds`, `ollama_num_ctx`, `ollama_num_predict`, `retrieval_top_k`, and `max_context_chars`.
 
 If Ollama fails due to prompt or output length, the service automatically retries with reduced repository context and then with a larger output budget. You can tune this behavior with `ollama_retry_context_ratio`, `ollama_retry_extra_num_predict`, and `ollama_retry_max_num_predict` in the same settings file.
 

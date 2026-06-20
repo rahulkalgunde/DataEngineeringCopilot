@@ -24,18 +24,19 @@ class _FakeResponse:
 def _client() -> OllamaClient:
     return OllamaClient(
         base_url="http://localhost:11434",
-        model="qwen3:4b",
+        model="deepseek-coder:6.7b",
         timeout_seconds=5,
         num_ctx=4096,
         num_predict=768,
     )
 
 
-def test_prompt_disables_qwen_thinking_mode() -> None:
+def test_prompt_format_for_deepseek_coder() -> None:
     prompt = _client()._format_raw_chat_prompt("What is Delta Lake?")
 
-    assert "/no_think" in prompt
-    assert "Do not show reasoning" in prompt
+    assert "DataEngineeringCopilot" in prompt
+    assert "provided context" in prompt
+    assert "What is Delta Lake?" in prompt
 
 
 def test_generate_strips_thinking_block(monkeypatch: pytest.MonkeyPatch) -> None:
