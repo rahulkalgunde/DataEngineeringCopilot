@@ -49,8 +49,8 @@ class OllamaClient:
             "raw": True,
             "stream": False,
             "options": {
-                "temperature": 0.1,
-                "top_p": 0.9,
+                "temperature": 0.05,
+                "top_p": 0.8,
                 "num_ctx": num_ctx,
                 "num_predict": num_predict,
             },
@@ -79,7 +79,7 @@ class OllamaClient:
         except URLError as exc:
             logger.exception("Ollama connection failed base_url=%s", self.base_url)
             raise OllamaError(
-                "Could not reach Ollama. Start Ollama and run: ollama pull qwen3:4b"
+                "Could not reach Ollama. Start Ollama and run: ollama pull deepseek-coder:6.7b"
             ) from exc
 
         response = self._extract_final_response(str(body.get("response", "")))
@@ -113,18 +113,12 @@ class OllamaClient:
     def _format_raw_chat_prompt(self, user_prompt: str) -> str:
         return "\n".join(
             [
-                "<|im_start|>system",
-                "You are DataEngineeringCopilot. Answer directly and concisely without reasoning.",
-                "Do not show reasoning.",
-                "Use ONLY the repository context provided by the user.",
-                "Respond immediately with facts from the context. No analysis, no thinking, no <think> tags.",
-                "Keep responses brief and practical.",
-                "<|im_end|>",
-                "<|im_start|>user",
-                "/no_think",
-                user_prompt,
-                "<|im_end|>",
-                "<|im_start|>assistant",
+                "You are DataEngineeringCopilot. Answer concisely using only provided context.",
+                "- No invented information.",
+                "- Brief and practical.",
                 "",
+                user_prompt,
+                "",
+                "Answer:",
             ]
         )
