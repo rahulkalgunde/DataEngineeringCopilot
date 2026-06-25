@@ -1,0 +1,19 @@
+# Python Environment Rules
+
+You MUST always use the Python virtual environment located at:
+`C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env`
+
+## Execution Protocols:
+1. **Running Python Scripts:** Do not run bare `python script.py` commands. Instead, explicitly use the absolute path to the virtual environment's executable:
+   `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\python.exe <command>`
+
+2. **Installing Packages:** Do not run bare `pip install`. Explicitly invoke pip via the environment's executable to avoid permission issues and scope leakage:
+   `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\pip.exe install <package>`
+
+3. **Multi-Command Terminal Sessions:** If you open a terminal state to run tests, execute interactive tools, or handle long-running background tasks, you must run the activation script first:
+   `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\activate.ps1`
+
+4. **Before running application or any test cases:** Download and cache embedding model first:
+   `python scripts/download_embedding_model.py`
+
+5. **streamlit application run:** Use streamlit from virtual environment only `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\streamlit.exe`
