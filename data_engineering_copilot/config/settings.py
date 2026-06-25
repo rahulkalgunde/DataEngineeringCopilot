@@ -79,7 +79,7 @@ class AppSettings:
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_local_files_only: bool = True
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "deepseek-coder:6.7b"
+    ollama_model: str = "qwen2.5-coder:7b-instruct-q4_K_M"
     chunk_size_words: int = 350
     chunk_overlap_words: int = 70
     retrieval_top_k: int = 3

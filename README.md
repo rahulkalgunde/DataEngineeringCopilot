@@ -37,13 +37,15 @@ DataEngineeringCopilot/
 
 ## Setup
 
+Python virtual environment path:C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env
 Create and activate a Python virtual environment for your platform.
 
 Windows PowerShell:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env
+C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1
+cd C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot
 python -m pip install -r requirements.txt
 ```
 
@@ -58,8 +60,8 @@ python -m pip install -r requirements.txt
 Install and start Ollama, then pull the model once:
 
 ```bash
-ollama pull deepseek-coder:6.7b
 ollama serve
+ollama pull deepseek-coder:6.7b
 ```
 
 Download the sentence-transformers embedding model once during setup:
@@ -130,7 +132,7 @@ python -m streamlit run data_engineering_copilot/ui/streamlit_app.py
 If your virtual environment is activated, this uses the environment's Streamlit installation. On Windows you can also run the equivalent PowerShell command from the venv:
 
 ```powershell
-.\.venv\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py
+C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py
 ```
 
 The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into ChromaDB. Ingestion requires internet access; answering after ingestion runs locally.
