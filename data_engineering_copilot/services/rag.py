@@ -1,18 +1,17 @@
-"""Production RAG service with Langfuse tracing and direct Ollama HTTP calls.
+Production RAG Service Implementation
 
-The service now uses the persistent Chroma vector store (ChromaVectorStore) which matches the rest of the codebase. It embeds the user question using SentenceTransformerEmbeddings, retrieves relevant chunks via the store's query method, and sends a prompt to Ollama.
-"""
-
-from __future__ import annotations
+This service integrates:
+- Langfuse tracing
+- Qdrant vector store for retrieval
+- Ollama LLM for response generation
 
 import logging
-from typing import List, Dict
-
+import logging
 import requests
 try:
     from langfuse import Langfuse
 except ImportError:
-    class Langfuse:  # Dummy placeholder
+    class Langfuse:
         def __init__(self, *args, **kwargs):
             pass
         def trace(self, *args, **kwargs):
@@ -20,41 +19,14 @@ except ImportError:
         class DummyTrace:
             def span(self, *args, **kwargs):
                 return self.DummySpan()
-            def end(self, *args, **kwargs):
-                pass
-            class DummySpan:
-                def end(self, *args, **kwargs):
-                    pass
-
-from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
-from data_engineering_copilot.domain.models import RetrievedChunk
-
-logger = logging.getLogger(__name__)
-
-
+            def end(self, *args):
 class ProductionRagService:
     def __init__(self):
-        # Initialise Langfuse tracing – configuration is read from env vars
         self.langfuse = Langfuse()
-        # Initialise vector store (persistent Chroma DB)
-# Initialise vector store (Qdrant)
         self.db = QdrantVectorStore(
             url=settings.qdrant_url,
             collection_name=settings.collection_name,
         )
-# Initialise vector store (Qdrant)
-        self.db = QdrantVectorStore(
-            url=settings.qdrant_url,
-            collection_name=settings.collection_name,
-        )
-        # Initialise embedder for query embedding
-        self.db = ChromaVectorStore(
-            persist_directory=str(settings.chroma_dir),
-            collection_name=settings.collection_name,
-        )
-        # Initialise embedder for query embedding
         self.embedder = SentenceTransformerEmbeddings(
             model_name=settings.embedding_model_name,
             cache_dir=settings.embedding_cache_dir,
@@ -68,9 +40,15 @@ class ProductionRagService:
         question: str,
         top_k: int = 4,
     ) -> Dict:
-        """Run the full RAG pipeline and return answer + sources.
+                pass
 
-        Returns a dictionary with keys ``answer``, ``sources`` and ``confidence``.
+"""Execute the full RAG pipeline: retrieve → generate → stream.
+        
+        The function:
+        1. Embeds the question using the SentenceTransformerEmbeddings model.
+        2. Queries Qdrant for the top-K most relevant chunks.
+        3. Uses the context to generate an answer via local Ollama HTTP API.
+        4. Returns the answer with metadata and sources.
         """
         trace = self.langfuse.trace(
             name="rag-query-pipeline",
@@ -79,7 +57,7 @@ class ProductionRagService:
             input=question,
         )
 
-        # ---------- Retrieval ----------
+        # Retrieval Phase
         retrieval_span = trace.span(name="retrieval")
         try:
             query_emb = self.embedder.embed_query(question)
@@ -90,9 +68,11 @@ class ProductionRagService:
             retrieval_span.end(output=str(exc), status="error")
             raise
 
-        # ---------- Generation ----------
+        # Context Construction for Ollama Generation
         context_str = "\n".join(chunk.chunk.text for chunk in retrieved_chunks)
         prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
+        
+        # Generation Phase (Ollama HTTP API)
         generation_span = trace.span(name="ollama-generation", input=prompt)
 
         try:
@@ -113,11 +93,28 @@ class ProductionRagService:
             generation_span.end(output=str(exc), status="error")
             raise
 
-        # ---------- Finalise ----------
+        # Finalization
         trace.end(output=answer_text)
-
         return {
             "answer": answer_text,
             "sources": [c.chunk.source_name for c in retrieved_chunks],
             "confidence": min(c.confidence for c in retrieved_chunks) if retrieved_chunks else 0.0,
-        }
+        }
+from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.domain.models import RetrievedChunk
+
+logger = logging.getLogger(__name__)
+from typing import List, Dict
+from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.domain.models import RetrievedChunk
+
+# Production implementation using Qdrant vector store
+Key components:
+- Uses QdrantVectorStore instead of deprecated ChromaVectorStore
+- Returns answer with sources and confidence score
+- Handles both success and error states
+"""
