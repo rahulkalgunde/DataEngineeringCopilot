@@ -6,21 +6,20 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
-from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore
+
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.ingestion import IngestionService
-from data_engineering_copilot.services.rag import RagAnswerService
-
+from data_engineering_copilot.services.rag import ProductionRagService
 
 logger = logging.getLogger(__name__)
 
 
 def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionService:
     logger.info(
-        "Building ingestion service sources=%s chroma_dir=%s collection=%s",
+        "Building ingestion service sources=%s qdrant_url=%s collection=%s",
         len(app_settings.sources),
-        app_settings.chroma_dir,
+        app_settings.qdrant_url,
         app_settings.collection_name,
     )
     return IngestionService(
@@ -36,45 +35,19 @@ def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionSe
         ),
         embeddings=SentenceTransformerEmbeddings(
             model_name=app_settings.embedding_model_name,
-            cache_dir=app_settings.embedding_cache_dir,
-            local_files_only=app_settings.embedding_local_files_only,
         ),
-        vector_store=ChromaVectorStore(
-            persist_directory=str(app_settings.chroma_dir),
+        vector_store=QdrantVectorStore(
+            url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
         ),
     )
 
 
-def build_rag_service(app_settings: AppSettings = settings) -> RagAnswerService:
+def build_rag_service(app_settings: AppSettings = settings) -> ProductionRagService:
     logger.info(
-        "Building RAG service model=%s top_k=%s max_context_chars=%s threshold=%.4f",
+        "Building Production RAG service model=%s top_k=%s max_context_chars=%s",
         app_settings.ollama_model,
         app_settings.retrieval_top_k,
         app_settings.max_context_chars,
-        app_settings.confidence_threshold,
     )
-    return RagAnswerService(
-        embeddings=SentenceTransformerEmbeddings(
-            model_name=app_settings.embedding_model_name,
-            cache_dir=app_settings.embedding_cache_dir,
-            local_files_only=app_settings.embedding_local_files_only,
-        ),
-        vector_store=ChromaVectorStore(
-            persist_directory=str(app_settings.chroma_dir),
-            collection_name=app_settings.collection_name,
-        ),
-        ollama_client=OllamaClient(
-            base_url=app_settings.ollama_base_url,
-            model=app_settings.ollama_model,
-            timeout_seconds=app_settings.ollama_timeout_seconds,
-            num_ctx=app_settings.ollama_num_ctx,
-            num_predict=app_settings.ollama_num_predict,
-        ),
-        top_k=app_settings.retrieval_top_k,
-        max_context_chars=app_settings.max_context_chars,
-        confidence_threshold=app_settings.confidence_threshold,
-        retry_context_ratio=app_settings.ollama_retry_context_ratio,
-        retry_extra_num_predict=app_settings.ollama_retry_extra_num_predict,
-        retry_max_num_predict=app_settings.ollama_retry_max_num_predict,
-    )
+    return ProductionRagService()

@@ -1,0 +1,2 @@
+import numpy==1.26.4  
+import grpcio==1.56.0 
