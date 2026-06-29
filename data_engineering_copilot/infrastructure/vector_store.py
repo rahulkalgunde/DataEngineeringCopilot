@@ -1,102 +1,62 @@
-from __future__ import annotations
+# Qdrant vector store alias for compatibility
 
-import logging
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 
-import chromadb
-from chromadb.errors import InternalError
+# Qdrant-backed vector store adapter (replaces legacy ChromaVectorStore)
+"""Compatibility layer that maps the historic ``ChromaVectorStore`` API to the new Qdrant implementation.
 
-from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+The rest of the codebase imports ``ChromaVectorStore`` from
+``data_engineering_copilot.infrastructure.vector_store``.  To avoid widespread
+import changes we keep the class name but delegate all operations to
+``QdrantVectorStore`` which is defined in ``qdrant_store.py``.
 
-
-logger = logging.getLogger(__name__)
+The adapter uses the ``settings`` object to obtain the Qdrant HTTP endpoint and
+collection name.  The ``persist_directory`` argument is accepted for backward
+compatibility but is ignored because Qdrant stores its data in the Docker‑
 
 
 class VectorStoreReadError(RuntimeError):
-    """Raised when the persisted Chroma index cannot be read."""
+    """Raised when the vector store cannot be read (e.g., missing collection)."""
+    pass
 
 
 class ChromaVectorStore:
+    """Legacy name retained for compatibility; forwards to :class:`QdrantVectorStore`.
+
+    Parameters
+    ----------
+    persist_directory: str
+        Ignored – kept only to match the historical signature.
+    collection_name: str
+        Name of the Qdrant collection used for storage.
+    """
+
     def __init__(self, persist_directory: str, collection_name: str) -> None:
-        logger.info("Opening Chroma vector store path=%s collection=%s", persist_directory, collection_name)
-        self.client = chromadb.PersistentClient(path=persist_directory)
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
+        # ``persist_directory`` is unused; the Qdrant service runs in Docker.
+        self._store = QdrantVectorStore(
+            url=settings.qdrant_url,
+            collection_name=collection_name,
+        )
+        logger.debug(
+            "Initialized QdrantVectorStore via ChromaVectorStore adapter: %s", collection_name
         )
 
-    def upsert_chunks(self, chunks: list[DocumentChunk], embeddings: list[list[float]]) -> None:
-        if not chunks:
-            logger.info("Skipping vector upsert because chunk list is empty")
-            return
-        if len(chunks) != len(embeddings):
-            logger.error("Vector upsert length mismatch chunks=%s embeddings=%s", len(chunks), len(embeddings))
-            raise ValueError("chunks and embeddings must have the same length")
+    # ---------------------------------------------------------------------
+    # Public API – mirrors the original ChromaVectorStore methods
+    # ---------------------------------------------------------------------
+    def upsert_chunks(
+        self,
+        chunks: Iterable[DocumentChunk],
+        embeddings: Iterable[Iterable[float]],
+    ) -> None:
+        self._store.upsert_chunks(chunks, embeddings)
 
-        logger.info("Upserting chunks count=%s first_chunk_id=%s", len(chunks), chunks[0].chunk_id)
-        self.collection.upsert(
-            ids=[chunk.chunk_id for chunk in chunks],
-            documents=[chunk.text for chunk in chunks],
-            embeddings=embeddings,
-            metadatas=[
-                {
-                    "source_name": chunk.source_name,
-                    "title": chunk.title,
-                    "url": chunk.url,
-                    "chunk_id": chunk.chunk_id,
-                }
-                for chunk in chunks
-            ],
-        )
-
-    def query(self, query_embedding: list[float], top_k: int) -> list[RetrievedChunk]:
-        logger.info("Vector query started top_k=%s embedding_dimensions=%s", top_k, len(query_embedding))
-        try:
-            result = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                include=["documents", "metadatas", "distances"],
-            )
-        except InternalError as exc:
-            if "Nothing found on disk" in str(exc):
-                logger.exception("Vector query failed because Chroma index is incomplete")
-                raise VectorStoreReadError(
-                    "The ChromaDB index is incomplete or corrupted. Run `python main.py reset-index`, then ingest again."
-                ) from exc
-            logger.exception("Vector query failed with Chroma internal error")
-            raise
-
-        documents = result.get("documents", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
-
-        retrieved: list[RetrievedChunk] = []
-        for text, metadata, distance in zip(documents, metadatas, distances):
-            confidence = max(0.0, min(1.0, 1.0 - float(distance)))
-            chunk = DocumentChunk(
-                chunk_id=str(metadata["chunk_id"]),
-                source_name=str(metadata["source_name"]),
-                title=str(metadata["title"]),
-                url=str(metadata["url"]),
-                text=text,
-            )
-            retrieved.append(RetrievedChunk(chunk=chunk, distance=float(distance), confidence=confidence))
-        logger.info(
-            "Vector query completed results=%s top_confidence=%.4f",
-            len(retrieved),
-            retrieved[0].confidence if retrieved else 0.0,
-        )
-        return retrieved
+    def query(self, query_embedding: List[float], top_k: int) -> List[RetrievedChunk]:
+        return self._store.query(query_embedding, top_k)
 
     def count(self) -> int:
-        try:
-            count = self.collection.count()
-            logger.info("Vector store count completed count=%s", count)
-            return count
-        except InternalError as exc:
-            if "Nothing found on disk" in str(exc):
-                logger.exception("Vector count failed because Chroma index is incomplete")
-                raise VectorStoreReadError(
-                    "The ChromaDB index is incomplete or corrupted. Run `python main.py reset-index`, then ingest again."
-                ) from exc
-            logger.exception("Vector count failed with Chroma internal error")
-            raise
+        return self._store.count()
+
+    # Optional hybrid query used by the reference RAG implementation
+    def hybrid_query(self, query: str, top_k: int) -> List[RetrievedChunk]:
+        return self._store.hybrid_query(query, top_k)

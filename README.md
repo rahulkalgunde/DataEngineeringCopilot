@@ -1,6 +1,6 @@
 # DataEngineeringCopilot
 
-Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, ChromaDB, sentence-transformers, and Streamlit.
+Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, Qdrant, sentence-transformers, and Streamlit.
 
 ## Project Structure
 
@@ -9,7 +9,7 @@ DataEngineeringCopilot/
   main.py
   requirements.txt
   README.md
-  chroma_db/
+  qdrant_db/ -> qdrant_db/
   data/
   data_engineering_copilot/
     config/
@@ -37,8 +37,7 @@ DataEngineeringCopilot/
 
 ## Setup
 
-Python virtual environment path:C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env
-Create and activate a Python virtual environment for your platform.
+Always Use Python virtual environment path C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1
 
 Windows PowerShell:
 
@@ -61,7 +60,8 @@ Install and start Ollama, then pull the model once:
 
 ```bash
 ollama serve
-ollama pull deepseek-coder:6.7b
+ollama pull nomic-embed-text:latest
+ollama pull qwen3.5:9b
 ```
 
 Download the sentence-transformers embedding model once during setup:
@@ -72,13 +72,13 @@ python scripts/download_embedding_model.py
 
 ## Build the Local Repository
 
-The crawler downloads documentation pages and stores chunks in local ChromaDB. After ingestion, question answering is fully local: ChromaDB reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `deepseek-coder:6.7b` locally.
+The crawler downloads documentation pages and stores chunks in local Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `nomic-embed-text` and `qwen3.5:9b` locally.
 
 ```bash
 python main.py ingest --max-pages 40
 ```
 
-If ChromaDB reports an incomplete local index, reset and ingest again:
+If Qdrant reports an incomplete local index, reset and ingest again:
 
 ```bash
 python main.py reset-index
@@ -87,7 +87,7 @@ python main.py ingest --max-pages 40
 
 Note about reusing the index across machines:
 
-If you switch between Windows and Unix environments, the local `chroma_db/` folder contains the persisted index. To avoid re-ingesting the documentation (which is time-consuming), copy or sync the `chroma_db/` directory between machines (for example using `rsync`, a shared drive, or a git-annex-like solution). Keeping a single shared `chroma_db/` avoids duplicate re-indexing when moving the project.
+If you switch between Windows and Unix environments, the local `qdrant_db/` folder contains the persisted index. To avoid re-ingesting the documentation (which is time‑consuming), copy or sync the `qdrant_db/` directory between machines (for example using `rsync`, a shared drive, or a git‑annex‑like solution). Keeping a single shared `qdrant_db/` avoids duplicate re‑indexing when moving the project.
 
 
 The configured documentation sources are:
@@ -135,7 +135,7 @@ If your virtual environment is activated, this uses the environment's Streamlit 
 C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py
 ```
 
-The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into ChromaDB. Ingestion requires internet access; answering after ingestion runs locally.
+The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into Qdrant. Ingestion requires internet access; answering after ingestion runs locally.
 
 Runtime logs are written under `logs/` in the project workspace:
 
@@ -148,7 +148,7 @@ This project intentionally does not use LangChain or LlamaIndex.
 
 - `config`: source URLs and runtime settings
 - `domain`: simple dataclasses shared by the app
-- `infrastructure`: adapters for HTTP crawling, HTML parsing, embeddings, ChromaDB, and Ollama
+- `infrastructure`: adapters for HTTP crawling, HTML parsing, embeddings, Qdrant, and Ollama
 - `services`: business workflows for ingestion and RAG answering
 - `ui`: Streamlit interface
 
@@ -168,10 +168,10 @@ ollama_retry_max_num_predict = 4096
 
 CLI helpers to export/import the index
 
-You can export the local `chroma_db/` to a zip archive and import it on another machine using the included CLI commands:
+You can export the local `qdrant_db/` to a zip archive and import it on another machine using the included CLI commands:
 
 ```bash
-# Export to chroma_db_export.zip (defaults):
+# Export to qdrant_db_export.zip (defaults):
 python main.py export-index
 
 # Export to a specific path:

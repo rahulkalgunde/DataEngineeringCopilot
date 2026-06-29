@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 import threading
-import time
+
 from dataclasses import dataclass, field
 import streamlit as st
 import os

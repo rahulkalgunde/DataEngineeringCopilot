@@ -18,8 +18,8 @@
 - Persistence: local `chroma_db/`; embedding cache under `data/embedding_models`
 
 ## 4. Folder Map (Compressed)
-- use python virtual environmet `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env`
-- Alway activate python virtual environmet before running any test case or app `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1`
+- ALWAYS use python virtual environmet `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env`
+- ALWAYS activate python virtual environmet before running any test case or app `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1`
 - `main.py` → CLI commands: `ingest`, `ask`, `reset-index`, `ui`
 - `data_engineering_copilot/config/` → runtime settings + documentation source JSON
 - `data_engineering_copilot/domain/` → shared dataclasses
@@ -78,10 +78,10 @@
   - `_required_string`, `_required_string_tuple`, `_optional_string_tuple` → JSON validation helpers
 - Key defaults:
   - `collection_name=data_engineering_docs`
-  - `embedding_model_name=sentence-transformers/all-MiniLM-L6-v2`
+  - `embedding_model_name=nomic-embed-text`
   - `embedding_local_files_only=True`
   - `ollama_base_url=http://localhost:11434`
-  - `ollama_model=qwen3:4b`
+  - `ollama_model=qwen3.5:9b`
   - `chunk_size_words=420`
   - `chunk_overlap_words=80`
   - `retrieval_top_k=2`
@@ -495,12 +495,8 @@
   - `https://docs.databricks.com/aws/en/`
 - Delta Lake docs:
   - `https://docs.delta.io/latest/`
-- ChromaDB:
-  - local persistent vector storage
-- sentence-transformers:
-  - `sentence-transformers/all-MiniLM-L6-v2`
 - Ollama:
-  - local `qwen3:4b` via `/api/generate`
+  - local `qwen3.5:9b` via `/api/generate`
 - Streamlit:
   - local web UI
 

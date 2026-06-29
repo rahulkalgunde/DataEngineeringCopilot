@@ -1,0 +1,174 @@
+"""Qdrant vector store implementation.
+
+This class mirrors the public API of ``ChromaVectorStore`` so that the rest of the
+codebase can switch between the two stores without modification.
+
+The implementation uses the official ``qdrant-client`` library.  The client is
+instantiated with the URL of the Qdrant service (e.g. ``http://de_copilot_vectorstore:6333``)
+and a collection name that matches the existing ``collection_name`` setting.
+
+All methods are wrapped in ``try/except`` blocks and log errors using the
+project's logging configuration.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Iterable, List
+
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+
+from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+
+logger = logging.getLogger(__name__)
+
+
+class QdrantVectorStore:
+    """A thin wrapper around Qdrant that provides the same interface as
+    ``ChromaVectorStore`` used elsewhere in the project.
+
+    Parameters
+    ----------
+    url: str
+        Base URL of the Qdrant HTTP API (e.g. ``http://de_copilot_vectorstore:6333``).
+    collection_name: str
+        Name of the collection to store/retrieve vectors.
+    """
+
+    def __init__(self, url: str, collection_name: str) -> None:
+        self._url = url
+        self._collection_name = collection_name
+        try:
+            self._client = QdrantClient(url=self._url, prefer_grpc=False)
+            # Ensure the collection exists; create if missing.
+            if not self._client.collection_exists(self._collection_name):
+                self._client.recreate_collection(
+                    collection_name=self._collection_name,
+                    vectors_config=models.VectorParams(
+                        size=self._embedding_dim(),
+                        distance=models.Distance.COSINE,
+                    ),
+                )
+        except Exception as exc:  # pragma: no cover – fatal init error
+            logger.exception("Failed to initialise Qdrant client: %s", exc)
+            raise
+
+    # --------------------------------------------------------------------- #
+    # Helper methods
+    # --------------------------------------------------------------------- #
+    def _embedding_dim(self) -> int:
+        """Return the dimensionality of the embedding model.
+
+        The project uses ``sentence-transformers/all-MiniLM-L6-v2`` which has
+        384 dimensions.  Hard‑coding the value avoids an extra round‑trip to
+        Qdrant during collection creation.
+        """
+        return 384
+
+    def _chunk_to_payload(self, chunk: DocumentChunk) -> dict:
+        """Convert a ``DocumentChunk`` into a Qdrant payload dict."""
+        return {
+            "source_name": chunk.source_name,
+            "title": chunk.title,
+            "url": chunk.url,
+            "text": chunk.text,
+        }
+
+    # --------------------------------------------------------------------- #
+    # Public API – matches ``ChromaVectorStore``
+    # --------------------------------------------------------------------- #
+    def upsert_chunks(
+        self,
+        chunks: Iterable[DocumentChunk],
+        embeddings: Iterable[Iterable[float]],
+    ) -> None:
+        """Insert or update a batch of chunks.
+
+        Parameters
+        ----------
+        chunks: Iterable[DocumentChunk]
+            The chunks to store.
+        embeddings: Iterable[Iterable[float]]
+            Corresponding embedding vectors; order must match ``chunks``.
+        """
+        try:
+            ids: List[str] = [chunk.chunk_id for chunk in chunks]
+            vectors: List[List[float]] = [list(e) for e in embeddings]
+            payloads: List[dict] = [self._chunk_to_payload(chunk) for chunk in chunks]
+
+            self._client.upsert(
+                collection_name=self._collection_name,
+                points=models.PointsList(
+                    ids=ids,
+                    vectors=vectors,
+                    payloads=payloads,
+                ),
+            )
+        except Exception as exc:
+            logger.exception("Failed to upsert chunks to Qdrant: %s", exc)
+            raise
+
+    def query(self, query_embedding: List[float], top_k: int) -> List[RetrievedChunk]:
+        """Retrieve the most similar chunks for a query embedding.
+
+        Returns a list of ``RetrievedChunk`` objects sorted by similarity
+        (highest confidence first).  Confidence is computed as ``1 - distance``
+        because Qdrant stores cosine distance in the range ``[0, 2]``; we clamp
+        the result to ``[0, 1]``.
+        """
+        try:
+            results = self._client.search(
+                collection_name=self._collection_name,
+                query_vector=query_embedding,
+                limit=top_k,
+                with_payload=True,
+                score_threshold=None,
+            )
+            retrieved: List[RetrievedChunk] = []
+            for hit in results:
+                payload = hit.payload or {}
+                chunk = DocumentChunk(
+                    chunk_id=hit.id,
+                    source_name=payload.get("source_name", ""),
+                    title=payload.get("title", ""),
+                    url=payload.get("url", ""),
+                    text=payload.get("text", ""),
+                )
+                # Qdrant returns cosine distance in [0, 2]; convert to confidence.
+                distance = hit.score if isinstance(hit.score, float) else 0.0
+                confidence = max(0.0, min(1.0, 1.0 - distance))
+                retrieved.append(
+                    RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence)
+                )
+            return retrieved
+        except Exception as exc:
+            logger.exception("Failed to query Qdrant vector store: %s", exc)
+            raise
+
+    def hybrid_query(self, query: str, top_k: int) -> List[RetrievedChunk]:
+        """Convenience method used by the reference RAG implementation.
+
+        It embeds the raw query string using the project's embedding model
+        and then delegates to ``query``.
+        """
+        try:
+            embedder = SentenceTransformerEmbeddings(
+                model_name=settings.embedding_model_name,
+                cache_dir=settings.embedding_cache_dir,
+                local_files_only=settings.embedding_local_files_only,
+            )
+            query_emb = embedder.embed_query(query)
+            return self.query(query_emb, top_k)
+        except Exception as exc:
+            logger.exception("Failed to perform hybrid query: %s", exc)
+            raise
+
+    def count(self) -> int:
+        """Return the number of points stored in the collection."""
+        try:
+            collection_info = self._client.get_collection(collection_name=self._collection_name)
+            return collection_info.points_count
+        except Exception as exc:
+            logger.exception("Failed to get Qdrant collection count: %s", exc)
+            raise

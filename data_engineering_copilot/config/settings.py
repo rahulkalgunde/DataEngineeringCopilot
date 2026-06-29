@@ -72,14 +72,21 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
 class AppSettings:
     project_root: Path = PROJECT_ROOT
     data_dir: Path = PROJECT_ROOT / "data"
+    # Legacy Chroma directory – retained for compatibility; not used in production.
     chroma_dir: Path = PROJECT_ROOT / "chroma_db"
+    # Qdrant persistence directory (mounted volume for Docker). Used by Qdrant container.
+    qdrant_dir: Path = PROJECT_ROOT / "qdrant_db"
     documentation_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
     embedding_cache_dir: Path = PROJECT_ROOT / "data" / "embedding_models"
     collection_name: str = "data_engineering_docs"
-    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # URLs for Docker‑Compose services
+    qdrant_url: str = "http://de_copilot_vectorstore:6333"
+    redis_url: str = "redis://de_copilot_broker:6379"
+    langfuse_url: str = "http://localhost:3000"
+    embedding_model_name: str = "nomic-embed-text"
     embedding_local_files_only: bool = True
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5-coder:7b-instruct-q4_K_M"
+    ollama_model: str = "qwen3.5:9b"
     chunk_size_words: int = 350
     chunk_overlap_words: int = 70
     retrieval_top_k: int = 3
