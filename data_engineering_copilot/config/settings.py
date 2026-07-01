@@ -95,9 +95,19 @@ class AppSettings:
     embedding_local_files_only: bool = True
     
     ollama_model: str = "llama3.2:3b"
-    chunk_size_words: int = 350
-    chunk_overlap_words: int = 70
+    # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
+    chunking_strategy: str = "sentence_preserving"
+    chunk_size_words: int = 250
+    chunk_overlap_words: int = 50
+    # Semantic chunker specific settings
+    min_semantic_similarity: float = 0.5
+    max_chunk_words: int | None = None  # Auto: 1.5x chunk_size_words if None
+    # Feature flags
+    enable_semantic_chunking: bool = False  # Enable semantic chunker (requires embedding model)
     retrieval_top_k: int = 5
+    reranker_enabled: bool = True
+    reranker_model: str = "cross-encoder/qnli-distilroberta-base"
+    reranker_top_k: int = 3
     max_context_chars: int = 2500
     confidence_threshold: float = 0.20
     request_timeout_seconds: int = 15
