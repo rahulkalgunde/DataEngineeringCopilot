@@ -50,7 +50,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: de_copilot_api
-    command: uvicorn data_engineering_copilot.api.routes:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     depends_on:

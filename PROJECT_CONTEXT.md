@@ -28,7 +28,6 @@
 - `scripts/` → one-time embedding model download
 - `tests/` → focused unit/regression tests for chunking, crawling, parsing, ingestion selection, settings
 - `logs/` → ingestion refresh logs
-- `chroma_db/` → local vector index; generated/runtime data
 - `data/` → local model/data cache
 
 ## 5. Modules (CRITICAL)

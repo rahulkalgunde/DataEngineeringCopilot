@@ -1,13 +1,15 @@
-Production RAG Service Implementation
-
-This service integrates:
-- Langfuse tracing
-- Qdrant vector store for retrieval
-- Ollama LLM for response generation
-
-import logging
 import logging
 import requests
+from typing import List, Dict
+
+from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.domain.models import RetrievedChunk, Answer
+from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+
+logger = logging.getLogger(__name__)
+
 try:
     from langfuse import Langfuse
 except ImportError:
@@ -20,7 +22,42 @@ except ImportError:
             def span(self, *args, **kwargs):
                 return self.DummySpan()
             def end(self, *args):
-class ProductionRagService:
+                pass
+        class DummySpan:
+            def end(self, *args, **kwargs):
+                pass
+
+class RagAnswerService:
+    def __init__(self, vector_store, ollama_client, embedder):
+        self.vector_store = vector_store
+        self.ollama_client = ollama_client
+        self.embedder = embedder
+
+    def answer(self, question: str) -> Answer:
+        query_emb = self.embedder.embed_query(question)
+        retrieved_chunks = self.vector_store.query(query_emb, top_k=settings.retrieval_top_k)
+        if not retrieved_chunks or retrieved_chunks[0].confidence < settings.confidence_threshold:
+            return Answer(text="I cannot answer this question because it is outside my knowledge repository.", sources=tuple(), confidence=0.0)
+
+        context_str = "\n".join(c.chunk.text for c in retrieved_chunks)
+        prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
+        answer_text = self.ollama_client.generate(prompt)
+        
+        return Answer(
+            text=answer_text,
+            sources=tuple(c.chunk for c in retrieved_chunks),
+            confidence=retrieved_chunks[0].confidence
+        )
+
+class ProductionRagService(RagAnswerService):
+    """Production RAG Service Implementation
+    
+    This service integrates:
+    - Langfuse tracing
+    - Qdrant vector store for retrieval
+    - Ollama LLM for response generation
+    """
+
     def __init__(self):
         self.langfuse = Langfuse()
         self.db = QdrantVectorStore(
@@ -32,6 +69,11 @@ class ProductionRagService:
             cache_dir=settings.embedding_cache_dir,
             local_files_only=settings.embedding_local_files_only,
         )
+        self.ollama_client = OllamaClient(
+            base_url=settings.ollama_base_url,
+            model_name=settings.ollama_model
+        )
+        super().__init__(self.db, self.ollama_client, self.embedder)
 
     def answer_question(
         self,
@@ -40,9 +82,7 @@ class ProductionRagService:
         question: str,
         top_k: int = 4,
     ) -> Dict:
-                pass
-
-"""Execute the full RAG pipeline: retrieve → generate → stream.
+        """Execute the full RAG pipeline: retrieve → generate → stream.
         
         The function:
         1. Embeds the question using the SentenceTransformerEmbeddings model.
@@ -100,21 +140,3 @@ class ProductionRagService:
             "sources": [c.chunk.source_name for c in retrieved_chunks],
             "confidence": min(c.confidence for c in retrieved_chunks) if retrieved_chunks else 0.0,
         }
-from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
-from data_engineering_copilot.domain.models import RetrievedChunk
-
-logger = logging.getLogger(__name__)
-from typing import List, Dict
-from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
-from data_engineering_copilot.domain.models import RetrievedChunk
-
-# Production implementation using Qdrant vector store
-Key components:
-- Uses QdrantVectorStore instead of deprecated ChromaVectorStore
-- Returns answer with sources and confidence score
-- Handles both success and error states
-"""

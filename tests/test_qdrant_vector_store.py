@@ -7,7 +7,7 @@ from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 class TestQdrantVectorStore:
     @pytest.fixture
     def mock_qdrant_client(self):
-        with patch('qdrant_client.QdrantClient') as mock_client_class:
+        with patch('data_engineering_copilot.infrastructure.qdrant_store.QdrantClient') as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
             yield mock_client
@@ -76,7 +76,7 @@ class TestQdrantVectorStore:
         
         assert len(results) == 1
         assert results[0].chunk.chunk_id == "chunk1"
-        assert results[0].confidence == 0.2  # 1 - 0.8
+        assert results[0].confidence == pytest.approx(0.2)  # 1 - 0.8
 
     def test_count_success(self, mock_qdrant_client):
         mock_qdrant_client.collection_exists.return_value = False

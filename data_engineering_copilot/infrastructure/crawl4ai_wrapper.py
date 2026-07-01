@@ -32,7 +32,7 @@ class Crawl4AIWrapper:
             if getattr(result, "success", False):
                 raw_documents.append(
                     RawDocument(
-                        source_name=\"Crawl4AI\",
+                        source_name="Crawl4AI",
                         url=result.url,
                         html=result.html,
                     )

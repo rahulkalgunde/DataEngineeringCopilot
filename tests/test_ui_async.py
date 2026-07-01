@@ -2,10 +2,13 @@ import time
 
 import pytest
 
+from unittest.mock import patch, Mock
+
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.ui.streamlit_app import IngestionManager, IngestionProgress
 
-def test_ingestion_manager_start_and_stop():
+@patch('data_engineering_copilot.infrastructure.qdrant_store.QdrantClient')
+def test_ingestion_manager_start_and_stop(mock_qdrant_client):
     # Ensure clean state
     IngestionManager.reset_status()
     assert not IngestionManager.is_running()

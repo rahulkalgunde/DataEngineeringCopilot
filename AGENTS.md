@@ -2,12 +2,12 @@
 
 ## 1. Purpose
 - Offline RAG assistant over data engineering documentation.
-- Crawls configured docs → chunks + embeds into local ChromaDB → answers questions via local Ollama/Qwen.
+- Crawls configured docs → chunks + embeds into local QdrantDB → answers questions via local Ollama/Qwen.
 
 ## 2. Stack
 - FE: Streamlit
 - BE: Python CLI + service layer
-- DB: ChromaDB persistent local vector store
+- DB: QdrantDB persistent local vector store
 - Infra: urllib HTTP crawling, BeautifulSoup HTML parsing, sentence-transformers embeddings, Ollama local LLM
 
 ## 3. Architecture
@@ -18,8 +18,8 @@
 - Persistence: local `chroma_db/`; embedding cache under `data/embedding_models`
 
 ## 4. Folder Map (Compressed)
-- ALWAYS use python virtual environmet `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env`
-- ALWAYS activate python virtual environmet before running any test case or app `C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1`
+- ALWAYS use python virtual environmet located at `/home/rahul/PythonVenvs/data_eng_copilot_env`
+- ALWAYS activate python virtual environmet before running any test case or app `/home/rahul/PythonVenvs/data_eng_copilot_env`
 - `main.py` → CLI commands: `ingest`, `ask`, `reset-index`, `ui`
 - `data_engineering_copilot/config/` → runtime settings + documentation source JSON
 - `data_engineering_copilot/domain/` → shared dataclasses
@@ -41,7 +41,7 @@
 - Functions:
   - `ingest(max_pages, source_names)` → build ingestion service; crawl selected/all sources; print chunk total
   - `ask(question)` → build RAG service; print answer, sources, confidence
-  - `reset_index()` → delete/recreate configured ChromaDB directory
+  - `reset_index()` → delete/recreate configured QdrantDB directory
   - `build_parser()` → argparse command tree
   - `main()` → route command to function
 - Uses:
@@ -178,7 +178,7 @@
 
 ### Vector Store: `infrastructure/vector_store.py`
 - Role:
-  - ChromaDB persistent vector index adapter.
+  - QdrantDB persistent vector index adapter.
 - Classes:
   - `ChromaVectorStore`
   - `VectorStoreReadError`
@@ -191,7 +191,7 @@
   - Converts Chroma `InternalError` containing `Nothing found on disk` to `VectorStoreReadError`
   - Validates chunks/embeddings length equality
 - Uses:
-  - `chromadb.PersistentClient`
+  - `QdrantDB.PersistentClient`
   - `DocumentChunk`, `RetrievedChunk`
 
 ### Ollama Client: `infrastructure/ollama_client.py`

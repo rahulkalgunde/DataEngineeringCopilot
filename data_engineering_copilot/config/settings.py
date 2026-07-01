@@ -80,8 +80,8 @@ class AppSettings:
     embedding_cache_dir: Path = PROJECT_ROOT / "data" / "embedding_models"
     collection_name: str = "data_engineering_docs"
     # URLs for Docker‑Compose services
-    qdrant_url: str = "http://de_copilot_vectorstore:6333"
-    redis_url: str = "redis://de_copilot_broker:6379"
+    qdrant_url: str = "http://localhost:6333"
+    redis_url: str = "redis://localhost:6379"
     langfuse_url: str = "http://localhost:3000"
     embedding_model_name: str = "nomic-embed-text"
     embedding_local_files_only: bool = True
