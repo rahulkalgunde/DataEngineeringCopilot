@@ -37,27 +37,27 @@ def ask(question: str) -> None:
 
 
 def reset_index() -> None:
-    logger.warning("Resetting ChromaDB index path=%s", settings.chroma_dir)
+    logger.warning("Resetting QdrantDB index path=%s", settings.chroma_dir)
     if settings.chroma_dir.exists():
         shutil.rmtree(settings.chroma_dir)
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("ChromaDB index reset path=%s", settings.chroma_dir)
-    print(f"Reset ChromaDB index at: {settings.chroma_dir}")
+    logger.info("QdrantDB index reset path=%s", settings.chroma_dir)
+    print(f"Reset QdrantDB index at: {settings.chroma_dir}")
 
 
 def export_index(output_path: str | None) -> None:
     import shutil
     from pathlib import Path
 
-    out = Path(output_path) if output_path else Path("chroma_db_export.zip")
-    logger.info("Exporting ChromaDB index from %s to %s", settings.chroma_dir, out)
+    out = Path(output_path) if output_path else Path("qdrant_db_export.zip")
+    logger.info("Exporting QdrantDB index from %s to %s", settings.chroma_dir, out)
     if not settings.chroma_dir.exists():
-        print(f"ChromaDB directory does not exist: {settings.chroma_dir}")
+        print(f"QdrantDB directory does not exist: {settings.chroma_dir}")
         return
     # shutil.make_archive expects a base name without extension
     base = out.with_suffix("")
     archive = shutil.make_archive(str(base), 'zip', root_dir=str(settings.chroma_dir))
-    print(f"Exported ChromaDB to: {archive}")
+    print(f"Exported QdrantDB to: {archive}")
 
 
 def import_index(archive_path: str) -> None:
@@ -68,21 +68,21 @@ def import_index(archive_path: str) -> None:
     if not archive.exists():
         print(f"Archive not found: {archive}")
         return
-    logger.info("Importing ChromaDB index from %s to %s", archive, settings.chroma_dir)
+    logger.info("Importing QdrantDB index from %s to %s", archive, settings.chroma_dir)
     # Remove existing dir first
     if settings.chroma_dir.exists():
         shutil.rmtree(settings.chroma_dir)
     settings.chroma_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(str(archive), 'r') as zf:
         zf.extractall(path=str(settings.chroma_dir))
-    print(f"Imported ChromaDB to: {settings.chroma_dir}")
+    print(f"Imported QdrantDB to: {settings.chroma_dir}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    ingest_parser = subparsers.add_parser("ingest", help="Crawl documentation and build the ChromaDB index.")
+    ingest_parser = subparsers.add_parser("ingest", help="Crawl documentation and build the QdrantDB index.")
     ingest_parser.add_argument("--max-pages", type=int, default=None, help="Maximum pages to crawl per source.")
     ingest_parser.add_argument(
         "--source",
@@ -94,11 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the local repository.")
     ask_parser.add_argument("question", help="Question to answer.")
 
-    subparsers.add_parser("reset-index", help="Delete the local ChromaDB index so ingestion can rebuild it.")
-    export_parser = subparsers.add_parser("export-index", help="Export the ChromaDB directory to a zip archive.")
-    export_parser.add_argument("--output", help="Output zip path. Defaults to chroma_db_export.zip.")
-    import_parser = subparsers.add_parser("import-index", help="Import a ChromaDB zip archive into local chroma_db.")
-    import_parser.add_argument("archive", help="Path to the chroma_db zip archive to import.")
+    subparsers.add_parser("reset-index", help="Delete the local QdrantDB index so ingestion can rebuild it.")
+    export_parser = subparsers.add_parser("export-index", help="Export the QdrantDB directory to a zip archive.")
+    export_parser.add_argument("--output", help="Output zip path. Defaults to qdrant_db_export.zip.")
+    import_parser = subparsers.add_parser("import-index", help="Import a QdrantDB zip archive into local qdrant_db.")
+    import_parser.add_argument("archive", help="Path to the qdrant_db zip archive to import.")
     subparsers.add_parser("ui", help="Print the Streamlit command.")
     return parser
 

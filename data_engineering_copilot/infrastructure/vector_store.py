@@ -1,6 +1,6 @@
-# Qdrant vector store alias for compatibility
+# Qdrant vector store adapter
 
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore as QdrantStoreImpl
 from typing import List, Iterable
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.config.settings import settings
@@ -8,26 +8,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Qdrant-backed vector store adapter (replaces legacy ChromaVectorStore)
-"""Compatibility layer that maps the historic ``ChromaVectorStore`` API to the new Qdrant implementation.
+"""Qdrant-backed vector store adapter.
 
-The rest of the codebase imports ``ChromaVectorStore`` from
-``data_engineering_copilot.infrastructure.vector_store``.  To avoid widespread
-import changes we keep the class name but delegate all operations to
-``QdrantVectorStore`` which is defined in ``qdrant_store.py``.
+The rest of the codebase imports ``QdrantVectorStore`` from
+``data_engineering_copilot.infrastructure.vector_store``. This module
+provides the Qdrant implementation which stores data in the Docker container.
 
 The adapter uses the ``settings`` object to obtain the Qdrant HTTP endpoint and
-collection name.  The ``persist_directory`` argument is accepted for backward
-compatibility but is ignored because Qdrant stores its data in the Docker container.
+collection name.
 """
+
 
 class VectorStoreReadError(RuntimeError):
     """Raised when the vector store cannot be read (e.g., missing collection)."""
     pass
 
 
-class ChromaVectorStore:
-    """Legacy name retained for compatibility; forwards to :class:`QdrantVectorStore`.
+class QdrantVectorStore:
+    """Qdrant vector store implementation.
 
     Parameters
     ----------
@@ -39,16 +37,16 @@ class ChromaVectorStore:
 
     def __init__(self, persist_directory: str, collection_name: str) -> None:
         # ``persist_directory`` is unused; the Qdrant service runs in Docker.
-        self._store = QdrantVectorStore(
-            url=settings.qdrant_url,
-            collection_name=collection_name,
+        self._store = QdrantStoreImpl(
+            settings.qdrant_url,
+            collection_name,
         )
         logger.debug(
-            "Initialized QdrantVectorStore via ChromaVectorStore adapter: %s", collection_name
+            "Initialized QdrantVectorStore: %s", collection_name
         )
 
     # ---------------------------------------------------------------------
-    # Public API – mirrors the original ChromaVectorStore methods
+    # Public API – Qdrant vector store methods
     # ---------------------------------------------------------------------
     def upsert_chunks(
         self,

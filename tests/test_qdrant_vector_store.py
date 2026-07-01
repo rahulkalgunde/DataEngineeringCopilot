@@ -34,8 +34,8 @@ class TestQdrantVectorStore:
     @pytest.fixture
     def sample_embeddings(self):
         return [
-            [0.1] * 384,
-            [0.2] * 384
+            [0.1] * 768,
+            [0.2] * 768
         ]
 
     def test_init_creates_client_and_collection(self, mock_qdrant_client):
@@ -61,21 +61,22 @@ class TestQdrantVectorStore:
     def test_query_success(self, mock_qdrant_client):
         mock_qdrant_client.collection_exists.return_value = False
         mock_hit = Mock()
-        mock_hit.id = "chunk1"
+        mock_hit.id = "550e8400-e29b-41d4-a716-446655440000"  # UUID format
         mock_hit.score = 0.8
         mock_hit.payload = {
+            "chunk_id": "chunk1",
             "source_name": "test_source",
             "title": "Test Title",
             "url": "http://example.com/1",
             "text": "Test content"
         }
-        mock_qdrant_client.search.return_value = [mock_hit]
+        mock_qdrant_client.query_points.return_value = [mock_hit]
         
         store = QdrantVectorStore(url="http://localhost:6333", collection_name="test")
-        results = store.query([0.1] * 384, top_k=1)
+        results = store.query([0.1] * 768, top_k=1)
         
         assert len(results) == 1
-        assert results[0].chunk.chunk_id == "chunk1"
+        assert results[0].chunk.chunk_id == "550e8400-e29b-41d4-a716-446655440000"
         assert results[0].confidence == pytest.approx(0.2)  # 1 - 0.8
 
     def test_count_success(self, mock_qdrant_client):

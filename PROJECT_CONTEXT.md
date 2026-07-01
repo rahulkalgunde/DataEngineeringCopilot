@@ -60,7 +60,7 @@
   - `DocumentationHtmlParser`
   - `DocumentChunker`
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `OllamaClient`
   - `AppSettings`
 
@@ -177,7 +177,7 @@
 - Role:
   - ChromaDB persistent vector index adapter.
 - Classes:
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `VectorStoreReadError`
 - Functions:
   - `__init__(persist_directory, collection_name)` → persistent client + collection with cosine space
@@ -256,7 +256,7 @@
   - `DocumentationHtmlParser`
   - `DocumentChunker`
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `IngestionEvent`
 
 ### RAG Service: `services/rag.py`
@@ -277,7 +277,7 @@
   - Prompt forbids hidden reasoning and invention; asks concise answer
 - Uses:
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `OllamaClient`
   - `Answer`, `RetrievedChunk`
 
@@ -301,7 +301,7 @@
 - Uses:
   - `settings`
   - `build_ingestion_service`, `build_rag_service`
-  - `ChromaVectorStore`, `VectorStoreReadError`
+  - `QdrantVectorStore`, `VectorStoreReadError`
   - `IngestionEvent`
   - Streamlit cache/resources/widgets
 
@@ -413,13 +413,13 @@
 - HTML Parse:
   - `RawDocument.html` → BeautifulSoup → remove chrome tags → select main/article/body → normalize text → word-count gate → `ParsedDocument`
 - Chunk + Embed + Store:
-  - `ParsedDocument.text` → `DocumentChunker.chunk` → chunk ids by source/url/index → `SentenceTransformerEmbeddings.embed_texts` → `ChromaVectorStore.upsert_chunks`
+  - `ParsedDocument.text` → `DocumentChunker.chunk` → chunk ids by source/url/index → `SentenceTransformerEmbeddings.embed_texts` → `QdrantVectorStore.upsert_chunks`
 - Ask CLI:
   - `python main.py ask Q` → `build_rag_service` → `RagAnswerService.answer(Q)` → print answer + sources + confidence
 - Ask UI:
   - question textarea → Ask button → `rag_service().answer(question)` → answer block → confidence → sources list
 - RAG Answer:
-  - question → `embed_query` → `ChromaVectorStore.query(top_k)` → confidence threshold → `_build_prompt` → `OllamaClient.generate` → `Answer`
+  - question → `embed_query` → `QdrantVectorStore.query(top_k)` → confidence threshold → `_build_prompt` → `OllamaClient.generate` → `Answer`
 - Vector Retrieval:
   - query vector → Chroma cosine query → docs/metadatas/distances → confidence=`clamp(1-distance)` → `RetrievedChunk[]`
 - Ollama Generation:
@@ -721,7 +721,7 @@ from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.ingestion import IngestionService
 from data_engineering_copilot.services.rag import RagAnswerService
@@ -753,7 +753,7 @@ def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionSe
             cache_dir=app_settings.embedding_cache_dir,
             local_files_only=app_settings.embedding_local_files_only,
         ),
-        vector_store=ChromaVectorStore(
+        vector_store=QdrantVectorStore(
             persist_directory=str(app_settings.chroma_dir),
             collection_name=app_settings.collection_name,
         ),
@@ -774,7 +774,7 @@ def build_rag_service(app_settings: AppSettings = settings) -> RagAnswerService:
             cache_dir=app_settings.embedding_cache_dir,
             local_files_only=app_settings.embedding_local_files_only,
         ),
-        vector_store=ChromaVectorStore(
+        vector_store=QdrantVectorStore(
             persist_directory=str(app_settings.chroma_dir),
             collection_name=app_settings.collection_name,
         ),
@@ -1493,7 +1493,7 @@ class VectorStoreReadError(RuntimeError):
     """Raised when the persisted Chroma index cannot be read."""
 
 
-class ChromaVectorStore:
+class QdrantVectorStore:
     def __init__(self, persist_directory: str, collection_name: str) -> None:
         logger.info("Opening Chroma vector store path=%s collection=%s", persist_directory, collection_name)
         self.client = chromadb.PersistentClient(path=persist_directory)
@@ -1589,7 +1589,7 @@ import logging
 from data_engineering_copilot.domain.models import Answer, RetrievedChunk
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient, OllamaError
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore, VectorStoreReadError
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore, VectorStoreReadError
 
 
 OUTSIDE_REPOSITORY_MESSAGE = "I cannot answer this question because it is outside my knowledge repository."
@@ -1600,7 +1600,7 @@ class RagAnswerService:
     def __init__(
         self,
         embeddings: SentenceTransformerEmbeddings,
-        vector_store: ChromaVectorStore,
+        vector_store: QdrantVectorStore,
         ollama_client: OllamaClient,
         top_k: int,
         max_context_chars: int,
@@ -1817,7 +1817,7 @@ from data_engineering_copilot.domain.models import DocumentChunk, IngestionEvent
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 
 
@@ -1832,7 +1832,7 @@ class IngestionService:
         parser: DocumentationHtmlParser,
         chunker: DocumentChunker,
         embeddings: SentenceTransformerEmbeddings,
-        vector_store: ChromaVectorStore,
+        vector_store: QdrantVectorStore,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -1999,7 +1999,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import IngestionEvent
 from data_engineering_copilot.factory import build_ingestion_service, build_rag_service
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore, VectorStoreReadError
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore, VectorStoreReadError
 from data_engineering_copilot.logging_config import configure_logging
 
 
@@ -2017,7 +2017,7 @@ def rag_service():
 @st.cache_resource
 def vector_store():
     logger.info("Streamlit cached vector store requested")
-    return ChromaVectorStore(str(settings.chroma_dir), settings.collection_name)
+    return QdrantVectorStore(str(settings.chroma_dir), settings.collection_name)
 
 
 def run_ingestion_refresh(
@@ -2437,7 +2437,7 @@ class BatchRecordingEmbeddings:
 
     def embed_texts(self, texts):
         self.batches.append(list(texts))
-        return [[0.0] * 384 for _ in texts]
+        return [[0.0] * 768 for _ in texts]
 
 
 class BatchRecordingVectorStore:

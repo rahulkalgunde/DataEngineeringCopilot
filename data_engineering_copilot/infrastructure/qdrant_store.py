@@ -14,19 +14,22 @@ project's logging configuration.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Iterable, List
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
+from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 
 logger = logging.getLogger(__name__)
 
 
 class QdrantVectorStore:
     """A thin wrapper around Qdrant that provides the same interface as
-    ``ChromaVectorStore`` used elsewhere in the project.
+    ``QdrantVectorStore`` used elsewhere in the project.
 
     Parameters
     ----------
@@ -60,20 +63,28 @@ class QdrantVectorStore:
     def _embedding_dim(self) -> int:
         """Return the dimensionality of the embedding model.
 
-        The project uses ``sentence-transformers/all-MiniLM-L6-v2`` which has
-        384 dimensions.  Hard‑coding the value avoids an extra round‑trip to
-        Qdrant during collection creation.
+        Returns the configurable embedding_dimension from AppSettings.
+        Default is 768 for the nomic-embed-text model.
         """
-        return 384
+        return settings.embedding_dimension
 
     def _chunk_to_payload(self, chunk: DocumentChunk) -> dict:
         """Convert a ``DocumentChunk`` into a Qdrant payload dict."""
         return {
+            "chunk_id": chunk.chunk_id,
             "source_name": chunk.source_name,
             "title": chunk.title,
             "url": chunk.url,
             "text": chunk.text,
         }
+
+    def _chunk_id_to_uuid(self, chunk_id: str) -> str:
+        """Convert a string chunk ID to a deterministic UUID.
+        
+        Uses UUID5 (SHA-1 based) with the DNS namespace to generate a deterministic UUID
+        from the chunk ID string. This ensures the same chunk ID always produces the same UUID.
+        """
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 
     # --------------------------------------------------------------------- #
     # Public API – matches ``ChromaVectorStore``
@@ -93,9 +104,10 @@ class QdrantVectorStore:
             Corresponding embedding vectors; order must match ``chunks``.
         """
         try:
-            ids: List[str] = [chunk.chunk_id for chunk in chunks]
+            chunks_list = list(chunks)
+            ids: List[str] = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in chunks_list]
             vectors: List[List[float]] = [list(e) for e in embeddings]
-            payloads: List[dict] = [self._chunk_to_payload(chunk) for chunk in chunks]
+            payloads: List[dict] = [self._chunk_to_payload(chunk) for chunk in chunks_list]
 
             self._client.upsert(
                 collection_name=self._collection_name,
@@ -118,9 +130,9 @@ class QdrantVectorStore:
         the result to ``[0, 1]``.
         """
         try:
-            results = self._client.search(
+            results = self._client.query_points(
                 collection_name=self._collection_name,
-                query_vector=query_embedding,
+                query=query_embedding,
                 limit=top_k,
                 with_payload=True,
                 score_threshold=None,

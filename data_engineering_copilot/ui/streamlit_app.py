@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import IngestionEvent
 from data_engineering_copilot.factory import build_ingestion_service, build_rag_service
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore, VectorStoreReadError
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore, VectorStoreReadError
 from data_engineering_copilot.logging_config import configure_logging
 
 if settings.logging_enabled:
@@ -33,7 +33,7 @@ def rag_service():
 @st.cache_resource
 def vector_store():
     logger.info("Streamlit cached vector store requested")
-    return ChromaVectorStore(str(settings.chroma_dir), settings.collection_name)
+    return QdrantVectorStore(str(settings.chroma_dir), settings.collection_name)
 
 _log_lock = threading.Lock()
 

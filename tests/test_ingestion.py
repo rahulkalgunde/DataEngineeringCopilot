@@ -40,7 +40,7 @@ class BatchRecordingEmbeddings:
 
     def embed_texts(self, texts):
         self.batches.append(list(texts))
-        return [[0.0] * 384 for _ in texts]
+        return [[0.0] * 768 for _ in texts]
 
 
 class BatchRecordingVectorStore:

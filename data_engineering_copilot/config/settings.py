@@ -79,14 +79,22 @@ class AppSettings:
     documentation_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
     embedding_cache_dir: Path = PROJECT_ROOT / "data" / "embedding_models"
     collection_name: str = "data_engineering_docs"
-    # URLs for Docker‑Compose services
+    
+    # URLs accessed from localhost
     qdrant_url: str = "http://localhost:6333"
-    redis_url: str = "redis://localhost:6379"
-    langfuse_url: str = "http://localhost:3000"
-    embedding_model_name: str = "nomic-embed-text"
-    embedding_local_files_only: bool = True
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3.5:9b"
+
+    # URLs accessed within docker
+    redis_url: str = "redis://redis:6379/0"
+    langfuse_url: str = "http://langfuse:3000"
+
+    embedding_model_name: str = "nomic-embed-text"
+    # Default dm is 768 for the nomic-embed-text model
+    embedding_dimension: int = 768
+    embedding_batch_size: int = 32
+    embedding_local_files_only: bool = True
+    
+    ollama_model: str = "llama3.2:3b"
     chunk_size_words: int = 350
     chunk_overlap_words: int = 70
     retrieval_top_k: int = 3

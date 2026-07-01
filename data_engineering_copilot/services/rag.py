@@ -71,7 +71,10 @@ class ProductionRagService(RagAnswerService):
         )
         self.ollama_client = OllamaClient(
             base_url=settings.ollama_base_url,
-            model_name=settings.ollama_model
+            model=settings.ollama_model,
+            timeout_seconds=settings.ollama_timeout_seconds,
+            num_ctx=settings.ollama_num_ctx,
+            num_predict=settings.ollama_num_predict,
         )
         super().__init__(self.db, self.ollama_client, self.embedder)
 

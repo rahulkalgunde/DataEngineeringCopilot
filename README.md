@@ -1,6 +1,6 @@
 # DataEngineeringCopilot
 
-Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, Qdrant, sentence-transformers, and Streamlit.
+Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, Qdrant, and Streamlit.
 
 ## Project Structure
 
@@ -55,14 +55,11 @@ ollama pull nomic-embed-text:latest
 ollama pull qwen3.5:9b
 ```
 
-Download the sentence-transformers embedding model once during setup:
-```bash
-python scripts/download_embedding_model.py
-```
+No additional embedding model download is required. The system uses Ollama's `nomic-embed-text` model via HTTP API.
 
 ## Build the Local Repository
 
-The crawler downloads documentation pages and stores chunks in local Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, sentence-transformers loads from `data/embedding_models`, and Ollama runs `nomic-embed-text` and `qwen3.5:9b` locally.
+The crawler downloads documentation pages and stores chunks in local Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, Ollama runs `nomic-embed-text` and `qwen3.5:9b` locally.
 
 ```bash
 python main.py ingest --max-pages 40

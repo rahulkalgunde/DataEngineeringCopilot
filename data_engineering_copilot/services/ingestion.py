@@ -8,7 +8,7 @@ from data_engineering_copilot.domain.models import DocumentChunk, IngestionEvent
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
-from data_engineering_copilot.infrastructure.vector_store import ChromaVectorStore
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 
 
@@ -23,7 +23,7 @@ class IngestionService:
         parser: DocumentationHtmlParser,
         chunker: DocumentChunker,
         embeddings: SentenceTransformerEmbeddings,
-        vector_store: ChromaVectorStore,
+        vector_store: QdrantVectorStore,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -52,8 +52,24 @@ class IngestionService:
         def flush_batch() -> None:
             if not batch_chunks:
                 return
-            batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
-            self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
+            try:
+                batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
+            except RuntimeError as exc:
+                logger.error(
+                    "Ingestion failed to embed batch of %d chunks: %s",
+                    len(batch_chunks),
+                    exc,
+                )
+                raise
+            try:
+                self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
+            except Exception as exc:
+                logger.error(
+                    "Ingestion failed to upsert batch of %d chunks to vector store: %s",
+                    len(batch_chunks),
+                    exc,
+                )
+                raise
             batch_chunks.clear()
 
         for source in selected_sources:
