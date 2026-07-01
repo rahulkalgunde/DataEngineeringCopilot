@@ -2,7 +2,7 @@
 
 ## 1. Overview
 - Offline Retrieval-Augmented Generation (RAG) assistant for data-engineering documentation.
-- Sources are crawled, parsed, chunked, embedded, and stored in **ChromaDB**.
+- Sources are crawled, parsed, chunked, embedded, and stored in **QdrantDB**.
 - Answers are generated locally via **Ollama** (Qwen) without LangChain or LlamaIndex.
 - Direct crawler/parser/chunker/embed/vector/query/generate pipeline.
 

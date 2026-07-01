@@ -35,6 +35,8 @@ def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionSe
         ),
         embeddings=SentenceTransformerEmbeddings(
             model_name=app_settings.embedding_model_name,
+            cache_dir=app_settings.embedding_cache_dir,
+            local_files_only=app_settings.embedding_local_files_only,
         ),
         vector_store=QdrantVectorStore(
             url=app_settings.qdrant_url,

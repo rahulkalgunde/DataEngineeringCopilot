@@ -1,6 +1,12 @@
 # Qdrant vector store alias for compatibility
 
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from typing import List, Iterable
+from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+from data_engineering_copilot.config.settings import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Qdrant-backed vector store adapter (replaces legacy ChromaVectorStore)
 """Compatibility layer that maps the historic ``ChromaVectorStore`` API to the new Qdrant implementation.
@@ -12,8 +18,8 @@ import changes we keep the class name but delegate all operations to
 
 The adapter uses the ``settings`` object to obtain the Qdrant HTTP endpoint and
 collection name.  The ``persist_directory`` argument is accepted for backward
-compatibility but is ignored because Qdrant stores its data in the Docker‑
-
+compatibility but is ignored because Qdrant stores its data in the Docker container.
+"""
 
 class VectorStoreReadError(RuntimeError):
     """Raised when the vector store cannot be read (e.g., missing collection)."""

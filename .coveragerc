@@ -1,0 +1,3 @@
+[run]
+omit =
+    data_engineering_copilot/ui/*

@@ -99,7 +99,7 @@ class QdrantVectorStore:
 
             self._client.upsert(
                 collection_name=self._collection_name,
-                points=models.PointsList(
+                points=models.Batch(
                     ids=ids,
                     vectors=vectors,
                     payloads=payloads,

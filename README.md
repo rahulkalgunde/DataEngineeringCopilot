@@ -37,23 +37,14 @@ DataEngineeringCopilot/
 
 ## Setup
 
-Always Use Python virtual environment path C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1
-
-Windows PowerShell:
-
-```powershell
-python -m venv C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env
-C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\Activate.ps1
-cd C:\Users\Rahul\PycharmProjects\DataEngineeringCopilot
-python -m pip install -r requirements.txt
-```
+Always Use Python virtual environment located at `/home/rahul/PythonVenvs/data_eng_copilot_env`
 
 Linux/macOS:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+python3 -m venv /home/rahul/PythonVenvs/data_eng_copilot_env
+source /home/rahul/PythonVenvs/data_eng_copilot_env/bin/activate
+python -m pip install -r /home/rahul/PycharmProjects/DataEngineeringCopilot/requirements.txt
 ```
 
 Install and start Ollama, then pull the model once:
@@ -65,7 +56,6 @@ ollama pull qwen3.5:9b
 ```
 
 Download the sentence-transformers embedding model once during setup:
-
 ```bash
 python scripts/download_embedding_model.py
 ```
@@ -127,12 +117,6 @@ I cannot answer this question because it is outside my knowledge repository.
 
 ```bash
 python -m streamlit run data_engineering_copilot/ui/streamlit_app.py
-```
-
-If your virtual environment is activated, this uses the environment's Streamlit installation. On Windows you can also run the equivalent PowerShell command from the venv:
-
-```powershell
-C:\Users\Rahul\PycharmProjects\PythonVirtualEnvs\data_eng_copilot_env\Scripts\streamlit.exe run data_engineering_copilot\ui\streamlit_app.py
 ```
 
 The sidebar includes a `Refresh Documentation` button. It crawls the configured documentation sources and upserts new or updated chunks into Qdrant. Ingestion requires internet access; answering after ingestion runs locally.
