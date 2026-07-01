@@ -7,6 +7,8 @@ from data_engineering_copilot.infrastructure.embeddings import SentenceTransform
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.domain.models import RetrievedChunk, Answer
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+from data_engineering_copilot.services.context_assembler import ContextAssembler
+from data_engineering_copilot.services.reranker import CrossEncoderReranker
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +100,28 @@ class RagAnswerService:
                 confidence=0.0
             )
         
-        logger.info("Confidence check passed. Proceeding to Ollama generation.")
+        logger.info("Confidence check passed. Proceeding to retrieval reranking and answer generation.")
         
         # Build context and generate answer
         try:
-            context_str = "\n".join(c.chunk.text for c in retrieved_chunks)
+            # Apply reranking if enabled
+            if settings.reranker_enabled:
+                reranker = CrossEncoderReranker(model_name=settings.reranker_model)
+                if reranker.is_available():
+                    # Retrieve 2x top_k candidates, then rerank to final top_k
+                    expanded_chunks = self.vector_store.query(query_emb, top_k=settings.retrieval_top_k * 2)
+                    retrieved_chunks = reranker.rerank(question, expanded_chunks, top_k=settings.reranker_top_k)
+                    logger.info("Reranking applied: %d → %d chunks", len(expanded_chunks), len(retrieved_chunks))
+                else:
+                    logger.info("Reranker model not available; using embedding similarity only")
+            
+            # Sort chunks by confidence (highest first) for better context ordering
+            sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
+            
+            # Assemble intelligent context with deduplication and truncation
+            assembler = ContextAssembler(max_context_chars=settings.max_context_chars)
+            context_str, source_names = assembler.assemble(sorted_chunks)
+            
             prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
             logger.debug("Ollama prompt (first 200 chars): %r", prompt[:200])
             
@@ -222,7 +241,13 @@ class ProductionRagService(RagAnswerService):
             raise
 
         # Context Construction for Ollama Generation
-        context_str = "\n".join(chunk.chunk.text for chunk in retrieved_chunks)
+        # Sort chunks by confidence (highest first) for better context ordering
+        sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
+        
+        # Assemble intelligent context with deduplication and truncation
+        assembler = ContextAssembler(max_context_chars=settings.max_context_chars)
+        context_str, source_names = assembler.assemble(sorted_chunks)
+        
         prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
         logger.debug("Constructed prompt with context_length=%d, prompt_preview=%r", len(context_str), prompt[:150])
         
