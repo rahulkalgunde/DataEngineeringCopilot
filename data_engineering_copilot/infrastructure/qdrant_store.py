@@ -156,7 +156,9 @@ class QdrantVectorStore:
                 score_threshold=None,
             )
             retrieved: List[RetrievedChunk] = []
-            for hit in results:
+            # QueryResponse returns a QueryResponse object with a points attribute
+            points_list = results.points if hasattr(results, 'points') else results
+            for hit in points_list:
                 payload = hit.payload or {}
                 chunk = DocumentChunk(
                     chunk_id=hit.id,

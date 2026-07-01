@@ -79,7 +79,7 @@ class OllamaClient:
         except URLError as exc:
             logger.exception("Ollama connection failed base_url=%s", self.base_url)
             raise OllamaError(
-                "Could not reach Ollama. Start Ollama and run: ollama pull deepseek-coder:6.7b"
+                "Could not reach Ollama. Start Ollama and run: ollama pull %s", self.model
             ) from exc
 
         response = self._extract_final_response(str(body.get("response", "")))

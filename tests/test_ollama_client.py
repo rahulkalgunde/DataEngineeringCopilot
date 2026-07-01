@@ -24,7 +24,7 @@ class _FakeResponse:
 def _client() -> OllamaClient:
     return OllamaClient(
         base_url="http://localhost:11434",
-        model="deepseek-coder:6.7b",
+        model="llama3.2:3b",
         timeout_seconds=5,
         num_ctx=4096,
         num_predict=768,

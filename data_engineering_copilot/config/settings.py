@@ -97,11 +97,11 @@ class AppSettings:
     ollama_model: str = "llama3.2:3b"
     chunk_size_words: int = 350
     chunk_overlap_words: int = 70
-    retrieval_top_k: int = 3
-    max_context_chars: int = 1500
-    confidence_threshold: float = 0.35
+    retrieval_top_k: int = 5
+    max_context_chars: int = 2500
+    confidence_threshold: float = 0.20
     request_timeout_seconds: int = 15
-    ollama_timeout_seconds: int = 240
+    ollama_timeout_seconds: int = 300
     ollama_num_ctx: int = 2048
     ollama_num_predict: int = 512
     ollama_retry_context_ratio: float = 0.5
@@ -110,7 +110,7 @@ class AppSettings:
     crawl_delay_seconds: float = 0.2
     max_pages_per_source: int = 80
     ingestion_batch_chunk_size: int = 256
-    logging_enabled: bool = False
+    logging_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
 
 

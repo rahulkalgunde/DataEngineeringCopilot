@@ -43,6 +43,7 @@ services:
       - NEXTAUTH_URL=http://localhost:3000
       - SALT=salt_string
       - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
+      - LANGFUSE_HOST=http://langfuse:3000
     restart: unless-stopped
 
   backend-api:
