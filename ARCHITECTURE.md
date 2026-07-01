@@ -43,7 +43,7 @@
   - `crawl4ai.AsyncWebCrawler` → raw HTML
   - `DocumentationHtmlParser` → clean text
   - `DocumentChunker` → overlapping word chunks
-  - `SentenceTransformerEmbeddings` → dense vectors
+  - `SentenceTransformerEmbeddings` (Ollama `/api/embed`) → dense vectors
   - `QdrantVectorStore.upsert_chunks` → persistent storage
 - **ProductionRagService** – embeds query, performs hybrid search (`QdrantVectorStore.hybrid_query`), applies confidence gating, builds prompt, calls Ollama via direct HTTP, sends tracing data to Langfuse.
 
@@ -51,7 +51,7 @@
 - **DocumentationCrawler** – unchanged BFS crawler (still used by async task).
 - **DocumentationHtmlParser** – unchanged.
 - **DocumentChunker** – unchanged.
-- **SentenceTransformerEmbeddings** – unchanged (model cached locally).
+- **SentenceTransformerEmbeddings** – Ollama-only embedding provider using `/api/embed` endpoint.
 - **QdrantVectorStore** (`data_engineering_copilot/infrastructure/qdrant_store.py`)
   - Mirrors the former Chroma API (`upsert_chunks`, `query`).
   - Adds `hybrid_query` for dense + BM25 sparse retrieval.
@@ -104,7 +104,7 @@
 ## 7. Deployment & Operations
 - **Docker‑Compose** (`docker-compose.yml`) brings up Redis, Qdrant, Langfuse.
 - Start services: `docker compose up -d`.
-- Ensure embedding model cached: `python scripts/download_embedding_model.py`.
+- Ensure Ollama is running with `nomic-embed-text` model: `ollama pull nomic-embed-text`.
 - Run Celery worker: `celery -A data_engineering_copilot.workers.tasks worker --loglevel=info`.
 - Launch FastAPI: `uvicorn api.routes:app --reload`.
 - Launch Streamlit UI (once refactored): `streamlit run data_engineering_copilot/ui/streamlit_app.py`.

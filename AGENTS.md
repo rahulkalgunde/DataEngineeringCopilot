@@ -8,14 +8,14 @@
 - FE: Streamlit
 - BE: Python CLI + service layer
 - DB: QdrantDB persistent local vector store
-- Infra: urllib HTTP crawling, BeautifulSoup HTML parsing, sentence-transformers embeddings, Ollama local LLM
+- Infra: urllib HTTP crawling, BeautifulSoup HTML parsing, Ollama embeddings, Ollama local LLM
 
 ## 3. Architecture
 - Pattern: layered architecture / ports-adapters style
 - Entry points: `main.py` CLI; `data_engineering_copilot/ui/streamlit_app.py`
 - Layers: config → domain dataclasses → infrastructure adapters → services/workflows → CLI/UI
 - RAG design: no LangChain/LlamaIndex; direct crawler/parser/chunker/embed/vector/query/generate pipeline
-- Persistence: local `chroma_db/`; embedding cache under `data/embedding_models`
+- Persistence: local `qdrant_db/`; embedding cache under `data/embedding_models`
 
 ## 4. Folder Map (Compressed)
 - ALWAYS use python virtual environmet located at `/home/rahul/PythonVenvs/data_eng_copilot_env`
@@ -27,10 +27,10 @@
 - `data_engineering_copilot/services/` → ingestion, chunking, RAG orchestration
 - `data_engineering_copilot/ui/` → Streamlit app
 - `data_engineering_copilot/utils/` → text normalization helpers
-- `scripts/` → one-time embedding model download
+- `scripts/` → one-time embedding model download (deprecated)
 - `tests/` → focused unit/regression tests for chunking, crawling, parsing, ingestion selection, settings
 - `logs/` → ingestion refresh logs
-- `chroma_db/` → local vector index; generated/runtime data
+- `qdrant_db/` → local vector index; generated/runtime data (deprecated)
 - `data/` → local model/data cache
 
 ## 5. Modules (CRITICAL)
@@ -63,7 +63,7 @@
   - `DocumentationHtmlParser`
   - `DocumentChunker`
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+   - `QdrantVectorStore`
   - `OllamaClient`
   - `AppSettings`
 
@@ -164,35 +164,66 @@
 
 ### Embeddings: `infrastructure/embeddings.py`
 - Role:
-  - Adapter around local/cached sentence-transformers model.
+  - Ollama-only embedding provider using the `/api/embed` endpoint.
 - Class:
   - `SentenceTransformerEmbeddings`
 - Functions:
-  - `__init__(model_name, cache_dir, local_files_only)` → load model
+  - `__init__(model_name, cache_dir, local_files_only)` → configure Ollama endpoint
   - `embed_texts(texts)` → normalized embedding vectors as `list[list[float]]`
   - `embed_query(text)` → first vector for query
+  - `_ollama_embed(texts)` → batch embedding via Ollama `/api/embed` endpoint
+  - `_validate_embedding_dimensions(embeddings, texts)` → validate embedding dimensions match config
+  - `_slice_texts_into_batches(texts, batch_size)` → split texts into batches for Ollama
+  - `_ollama_embed_single_batch(texts)` → single batch embedding via Ollama
 - Uses:
-  - `sentence_transformers.SentenceTransformer`
+  - `urllib.request` for Ollama API calls
 - Constraint:
-  - Default `local_files_only=True`; setup must pre-download model.
+  - Uses Ollama's `nomic-embed-text` model via HTTP API
+- Behavior:
+  - Uses Ollama `/api/embed` endpoint for all embeddings
+  - Batches embeddings to prevent OOM on resource-constrained machines
+- Note:
+  - The class name `SentenceTransformerEmbeddings` is historical; it's now Ollama-only.
+  - The `sentence_transformers` library is no longer used.
+  - Default configuration uses Ollama's `nomic-embed-text` model via HTTP API.
 
 ### Vector Store: `infrastructure/vector_store.py`
 - Role:
-  - QdrantDB persistent vector index adapter.
+  - QdrantDB persistent vector index adapter (compatibility layer for legacy ChromaVectorStore).
 - Classes:
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `VectorStoreReadError`
 - Functions:
   - `__init__(persist_directory, collection_name)` → persistent client + collection with cosine space
   - `upsert_chunks(chunks, embeddings)` → write ids/docs/embeddings/metadata
   - `query(query_embedding, top_k)` → retrieve `RetrievedChunk` list with confidence = `1 - cosine distance` clamped `[0,1]`
   - `count()` → collection count
+  - `hybrid_query(query, top_k)` → embed query and delegate to `query`
 - Error behavior:
   - Converts Chroma `InternalError` containing `Nothing found on disk` to `VectorStoreReadError`
   - Validates chunks/embeddings length equality
 - Uses:
-  - `QdrantDB.PersistentClient`
+  - `QdrantVectorStore` (delegates to)
   - `DocumentChunk`, `RetrievedChunk`
+
+### Qdrant Store: `infrastructure/qdrant_store.py`
+- Role:
+  - Qdrant vector store implementation (primary storage backend).
+- Class:
+  - `QdrantVectorStore`
+- Functions:
+  - `__init__(url, collection_name)` → Qdrant client + collection with cosine space
+  - `upsert_chunks(chunks, embeddings)` → write ids/docs/embeddings/metadata
+  - `query(query_embedding, top_k)` → retrieve `RetrievedChunk` list with confidence = `1 - cosine distance`
+  - `count()` → collection count
+  - `hybrid_query(query, top_k)` → embed query and delegate to `query`
+  - `_embedding_dim()` → returns configurable embedding_dimension from AppSettings
+  - `_chunk_to_payload(chunk)` → convert DocumentChunk to Qdrant payload dict
+  - `_chunk_id_to_uuid(chunk_id)` → convert chunk ID to deterministic UUID5
+- Uses:
+  - `qdrant_client.QdrantClient`
+  - `DocumentChunk`, `RetrievedChunk`
+  - `SentenceTransformerEmbeddings`
 
 ### Ollama Client: `infrastructure/ollama_client.py`
 - Role:
@@ -201,23 +232,25 @@
   - `OllamaClient`
   - `OllamaError`
 - Functions:
-  - `generate(prompt)` → POST `/api/generate`; non-streaming; raw prompt; return response text
-  - `_format_raw_chat_prompt(user_prompt)` → Qwen chat template in raw mode
+  - `generate(prompt, num_predict=None, num_ctx=None)` → POST `/api/generate`; non-streaming; raw prompt; return response text
+  - `_format_raw_chat_prompt(user_prompt)` → DataEngineeringCopilot chat template in raw mode
+  - `_extract_final_response(response)` → clean up <think> tags and whitespace
 - Options:
-  - `temperature=0.1`
-  - `top_p=0.9`
+  - `temperature=0.05`
+  - `top_p=0.8`
   - `num_ctx=settings.ollama_num_ctx`
   - `num_predict=settings.ollama_num_predict`
   - `raw=True`
   - `stream=False`
 - Error behavior:
   - Timeout → actionable `OllamaError`
-  - Connection failure → tells user to start Ollama and pull `qwen3:4b`
+  - Connection failure → tells user to start Ollama and pull `deepseek-coder:6.7b`
   - Empty response → suggests increasing `ollama_num_predict` or reducing `max_context_chars`
 - Uses:
   - `urllib.request`
   - `json`
   - `socket`
+  - `re`
 
 ### Chunker: `services/chunker.py`
 - Role:
@@ -259,37 +292,36 @@
   - `DocumentationHtmlParser`
   - `DocumentChunker`
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+   - `QdrantVectorStore`
   - `IngestionEvent`
 
 ### RAG Service: `services/rag.py`
 - Role:
   - Orchestrates question answering from local vector context and Ollama.
-- Constants:
-  - `OUTSIDE_REPOSITORY_MESSAGE="I cannot answer this question because it is outside my knowledge repository."`
-- Class:
-  - `RagAnswerService`
+- Classes:
+  - `RagAnswerService` → base RAG service with `answer()` method
+  - `ProductionRagService` → extended RAG service with Langfuse tracing and `answer_question()` method
 - Functions:
   - `answer(question)` → embed query → vector query → confidence gate → prompt → Ollama → `Answer`
-  - `_build_prompt(question, matches)` → compact source-labeled context with max char budget
-  - `_unique_sources(matches)` → de-duplicate returned source chunks by `(title,url)`
+  - `answer_question(user_id, session_id, question, top_k)` → Langfuse-traced RAG pipeline with retrieval and generation
 - Logic:
   - If vector store unreadable → outside-repository answer
   - If no match or top confidence below threshold → outside-repository answer
   - If Ollama fails → return error text with retrieved sources
-  - Prompt forbids hidden reasoning and invention; asks concise answer
+  - Prompt asks concise answer using only provided context
 - Uses:
   - `SentenceTransformerEmbeddings`
-  - `ChromaVectorStore`
+  - `QdrantVectorStore`
   - `OllamaClient`
   - `Answer`, `RetrievedChunk`
+  - `Langfuse` (optional, for ProductionRagService)
 
 ### Streamlit UI: `ui/streamlit_app.py`
 - Role:
   - Interactive local UI for index status, ingestion refresh, and Q&A.
 - Functions:
   - `rag_service()` → cached RAG service
-  - `vector_store()` → cached Chroma vector store
+   - `vector_store()` → cached Qdrant vector store
   - `run_ingestion_refresh(max_pages_per_source, source_names, on_event=None)` → build ingestion service and ingest selected sources
   - `ingestion_log_path()` → `logs/ingestion_refresh.log`
   - `append_ingestion_log(log_path, event)` → append pipe-delimited event line
@@ -304,9 +336,48 @@
 - Uses:
   - `settings`
   - `build_ingestion_service`, `build_rag_service`
-  - `ChromaVectorStore`, `VectorStoreReadError`
+   - `QdrantVectorStore`, `VectorStoreReadError`
   - `IngestionEvent`
   - Streamlit cache/resources/widgets
+
+### API: `api/app.py`
+- Role:
+  - FastAPI application for async ingestion and RAG service endpoints.
+- Classes:
+  - `app` → FastAPI app with routes
+- Uses:
+  - `fastapi.FastAPI`
+  - `api.routes`
+
+### API Routes: `api/routes.py`
+- Role:
+  - API endpoints for ingestion and task status.
+- Classes:
+  - `IngestRequest` → request body for ingestion endpoint
+  - `TaskStatus` → response body for task status endpoint
+- Functions:
+  - `ingest_documents(request)` → POST `/api/v1/ingest`; start async ingestion task
+  - `get_task_status(task_id)` → GET `/api/v1/task/{task_id}`; get task status
+- Uses:
+  - `fastapi.APIRouter`
+  - `pydantic.BaseModel`
+  - `celery.result.AsyncResult`
+  - `workers.tasks.execute_background_ingestion`
+
+### Workers: `workers/tasks.py`
+- Role:
+  - Async ingestion task using Crawl4AI and Qdrant.
+- Classes:
+  - `app` → Celery app with Redis broker
+- Functions:
+  - `_run_async_crawl(urls)` → crawl URLs concurrently with AsyncWebCrawler
+  - `execute_background_ingestion(urls)` → Celery task entry point
+- Uses:
+  - `Celery`
+  - `AsyncWebCrawler`
+  - `SentenceTransformerEmbeddings`
+  - `QdrantVectorStore`
+  - `DocumentChunker`
 
 ### Text Utils: `utils/text.py`
 - Role:
@@ -323,9 +394,9 @@
 - Behavior:
   - Imports `settings`
   - Downloads `settings.embedding_model_name` into `settings.embedding_cache_dir`
-  - Needed because runtime defaults to local-files-only embedding loading
+  - Note: No longer needed as the system uses Ollama's `nomic-embed-text` model via HTTP API
 - Uses:
-  - `sentence_transformers.SentenceTransformer`
+  - `sentence_transformers.SentenceTransformer` (deprecated, kept for reference)
 
 ### Tests
 - Role:
@@ -411,13 +482,13 @@
 - HTML Parse:
   - `RawDocument.html` → BeautifulSoup → remove chrome tags → select main/article/body → normalize text → word-count gate → `ParsedDocument`
 - Chunk + Embed + Store:
-  - `ParsedDocument.text` → `DocumentChunker.chunk` → chunk ids by source/url/index → `SentenceTransformerEmbeddings.embed_texts` → `ChromaVectorStore.upsert_chunks`
+  - `ParsedDocument.text` → `DocumentChunker.chunk` → chunk ids by source/url/index → `SentenceTransformerEmbeddings.embed_texts` → `QdrantVectorStore.upsert_chunks`
 - Ask CLI:
   - `python main.py ask Q` → `build_rag_service` → `RagAnswerService.answer(Q)` → print answer + sources + confidence
 - Ask UI:
   - question textarea → Ask button → `rag_service().answer(question)` → answer block → confidence → sources list
 - RAG Answer:
-  - question → `embed_query` → `ChromaVectorStore.query(top_k)` → confidence threshold → `_build_prompt` → `OllamaClient.generate` → `Answer`
+  - question → `embed_query` → `QdrantVectorStore.query(top_k)` → confidence threshold → `_build_prompt` → `OllamaClient.generate` → `Answer`
 - Vector Retrieval:
   - query vector → Chroma cosine query → docs/metadatas/distances → confidence=`clamp(1-distance)` → `RetrievedChunk[]`
 - Ollama Generation:
@@ -425,10 +496,10 @@
 - Reset Index:
   - `python main.py reset-index` → delete `settings.chroma_dir` if exists → recreate empty directory
 - Setup Embeddings:
-  - `python scripts/download_embedding_model.py` → cache sentence-transformers model → runtime embedding load succeeds with `local_files_only=True`
+  - Note: No longer needed as the system uses Ollama's `nomic-embed-text` model via HTTP API
 
 ## 8. API Summary
-- No public HTTP API exposed by this project.
+- HTTP API exposed via FastAPI for async ingestion and task status.
 - CLI commands:
   - `ingest` → crawl docs and build/update Chroma index
   - `ingest --source <source name>` → ingest only selected source; repeat for multiple
@@ -436,8 +507,12 @@
   - `ask <question>` → answer against local Chroma/Ollama
   - `reset-index` → recreate Chroma persistence directory
   - `ui` → print Streamlit launch command
+- HTTP API endpoints:
+  - `POST /api/v1/ingest` → start async ingestion task
+  - `GET /api/v1/task/{task_id}` → get task status
 - External/local API calls:
   - `POST {ollama_base_url}/api/generate` → local Ollama generation
+  - `POST {ollama_base_url}/api/embed` → local Ollama embeddings
   - HTTP GET documentation source pages via `urllib.request.urlopen`
 
 ## 9. Rules & Constraints
@@ -514,7 +589,7 @@
 - Confidence is simple `1 - cosine distance`; threshold tuning may be corpus/model dependent.
 - UI refresh is synchronous; long crawls block the Streamlit session.
 - No automated end-to-end test against live docs/Ollama/Chroma.
-- No structured API service; CLI/UI only.
+- No structured API service; CLI/UI only (FastAPI async endpoints available in `api/`).
 
 ### SYSTEM ROLE
 You are an elite, pragmatic AI Coding Agent specializing in production-grade, maintainable software. Your goal is to deliver working, syntactically correct, and fully optimized code on the first attempt.
