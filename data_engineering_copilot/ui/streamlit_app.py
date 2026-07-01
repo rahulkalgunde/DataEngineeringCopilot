@@ -33,7 +33,7 @@ def rag_service():
 @st.cache_resource
 def vector_store():
     logger.info("Streamlit cached vector store requested")
-    return QdrantVectorStore(str(settings.chroma_dir), settings.collection_name)
+    return QdrantVectorStore(settings.qdrant_url, settings.collection_name)
 
 _log_lock = threading.Lock()
 

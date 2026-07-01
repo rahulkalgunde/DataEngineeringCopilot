@@ -42,6 +42,7 @@ class QdrantVectorStore:
     def __init__(self, url: str, collection_name: str) -> None:
         self._url = url
         self._collection_name = collection_name
+        self._client = None
         try:
             self._client = QdrantClient(url=self._url, prefer_grpc=False)
             # Ensure the collection exists; create if missing.
@@ -103,6 +104,14 @@ class QdrantVectorStore:
         embeddings: Iterable[Iterable[float]]
             Corresponding embedding vectors; order must match ``chunks``.
         """
+        # Check if client was initialized successfully
+        if self._client is None:
+            logger.warning(
+                "Qdrant client not initialized. Cannot upsert chunks. "
+                "This may be because Qdrant is not running or not reachable at %s.",
+                self._url
+            )
+            return
         try:
             chunks_list = list(chunks)
             ids: List[str] = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in chunks_list]
@@ -129,6 +138,15 @@ class QdrantVectorStore:
         because Qdrant stores cosine distance in the range ``[0, 2]``; we clamp
         the result to ``[0, 1]``.
         """
+        # Check if client was initialized successfully
+        if self._client is None:
+            logger.warning(
+                "Qdrant client not initialized. "
+                "This may be because Qdrant is not running or not reachable at %s. "
+                "Returning empty results.",
+                self._url
+            )
+            return []
         try:
             results = self._client.query_points(
                 collection_name=self._collection_name,
@@ -155,6 +173,16 @@ class QdrantVectorStore:
                 )
             return retrieved
         except Exception as exc:
+            # Check if this is a 404 (collection not found) error
+            error_str = str(exc)
+            if "404" in error_str or "Not Found" in error_str or "collection" in error_str.lower():
+                logger.warning(
+                    "Qdrant collection '%s' not found or empty. "
+                    "This may be because no ingestion has been performed yet, "
+                    "or Qdrant is not running. Returning empty results.",
+                    self._collection_name
+                )
+                return []
             logger.exception("Failed to query Qdrant vector store: %s", exc)
             raise
 
@@ -178,6 +206,14 @@ class QdrantVectorStore:
 
     def count(self) -> int:
         """Return the number of points stored in the collection."""
+        # Check if client was initialized successfully
+        if self._client is None:
+            logger.warning(
+                "Qdrant client not initialized. Cannot get collection count. "
+                "This may be because Qdrant is not running or not reachable at %s.",
+                self._url
+            )
+            return 0
         try:
             collection_info = self._client.get_collection(collection_name=self._collection_name)
             return collection_info.points_count
