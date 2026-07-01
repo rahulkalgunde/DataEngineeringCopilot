@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    image: qdrant/qdrant:latest
     container_name: de_copilot_vectorstore
     ports:
       - "6333:6333"
