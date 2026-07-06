@@ -17,6 +17,12 @@ from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import IngestionEvent
 from data_engineering_copilot.factory import build_ingestion_service, build_rag_service
 from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore, VectorStoreReadError
+from data_engineering_copilot.services.metrics import (
+    MetricsCollector,
+    QueryMetrics,
+    RetrievalMetrics,
+    AnswerMetrics,
+)
 from logger_config import setup_logging
 
 if settings.logging_enabled:
@@ -419,6 +425,16 @@ def render_qa_tab() -> None:
                 len(answer.sources),
                 len(answer.text),
             )
+
+            # Record metrics
+            collector: MetricsCollector = st.session_state.metrics_collector
+            collector.record_query(
+                query=question.strip(),
+                retrieved_chunks=[],
+                answer=answer,
+                was_answered=True,
+            )
+
             st.subheader("Answer")
             st.write(answer.text)
             st.caption(f"Confidence: {answer.confidence:.2%}")
@@ -428,6 +444,23 @@ def render_qa_tab() -> None:
                     for i, source in enumerate(answer.sources, 1):
                         st.markdown(f"**{i}. [{source.title}]({source.url})**")
                         st.caption(f"Source: {source.source_name}")
+
+            # Per-answer detailed metrics
+            with st.expander("📊 Answer Metrics", expanded=False):
+                qm = collector.queries[-1] if collector.queries else None
+                if qm:
+                    col_a1, col_a2 = st.columns(2)
+                    with col_a1:
+                        st.metric("Query Difficulty", qm.query_difficulty.capitalize())
+                        st.metric("Query Length (words)", qm.query_length)
+                    with col_a2:
+                        st.metric("Answer Length (words)", qm.answer_metrics.answer_length if qm.answer_metrics else "N/A")
+                        st.metric("Sources Cited", qm.answer_metrics.source_count if qm.answer_metrics else "N/A")
+
+                    if qm.answer_metrics:
+                        sec_status = "✅ Yes" if qm.answer_metrics.has_key_sections else "❌ No"
+                        unc_status = "⚠️ Yes" if qm.answer_metrics.has_uncertainty_markers else "✅ No"
+                        st.caption(f"Structured sections: {sec_status}  |  Uncertainty markers: {unc_status}")
 
 
 def render_ingestion_tab() -> None:
@@ -572,8 +605,105 @@ def render_health_tab() -> None:
         st.info("💡 No documents indexed yet. Go to the **Ingestion** tab to crawl documentation sources.")
 
 
+def render_metrics_tab() -> None:
+    """Metrics Dashboard tab: service performance and quality metrics."""
+    st.subheader("RAG Service Metrics")
+
+    collector: MetricsCollector = st.session_state.metrics_collector
+    summary = collector.get_session_summary()
+
+    if summary["total_queries"] == 0:
+        st.info("No queries recorded yet. Ask questions in the **💬 Ask** tab to see metrics.")
+        return
+
+    # --- Session Summary Cards ---
+    st.markdown("### Session Summary")
+    col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+    col_s1.metric("Total Queries", summary["total_queries"])
+    col_s2.metric("Answered", summary["answered_queries"])
+    col_s3.metric("Answer Rate", f"{summary['answer_rate']:.0%}")
+    col_s4.metric("Avg MRR", f"{summary['avg_mrr']:.3f}")
+    col_s5.metric("Avg Answer Length (words)", summary["avg_answer_length"])
+
+    st.divider()
+
+    # --- Query Difficulty Breakdown ---
+    st.markdown("### Query Difficulty Breakdown")
+    by_diff = summary.get("by_difficulty", {})
+    if by_diff:
+        diff_cols = st.columns(3)
+        for col, (difficulty, data) in zip(diff_cols, sorted(by_diff.items())):
+            with col:
+                st.metric(
+                    f"{difficulty.capitalize()}",
+                    data["count"],
+                    delta=f"{data['answer_rate']:.0%} answered",
+                    delta_color="normal",
+                )
+                # Color coding
+                emoji = {"easy": "🟢", "medium": "🟡", "hard": "🔴"}.get(difficulty, "⚪")
+                st.caption(f"{emoji} {data['count']} total queries")
+
+    st.divider()
+
+    # --- Recent Queries Table ---
+    st.markdown("### Recent Queries")
+    recent = list(reversed(collector.queries[-20:]))  # Most recent first
+    if recent:
+        table_data = []
+        for qm in recent:
+            table_data.append({
+                "Query": qm.query[:50] + ("..." if len(qm.query) > 50 else ""),
+                "Difficulty": qm.query_difficulty.capitalize(),
+                "Confidence": f"{qm.confidence_score:.2%}" if qm.was_answered else "—",
+                "Answered": "✅" if qm.was_answered else "❌",
+                "Sources": qm.answer_metrics.source_count if qm.answer_metrics and qm.answer_metrics.source_count else 0,
+                "Answer Words": qm.answer_metrics.answer_length if qm.answer_metrics else "—",
+            })
+        st.dataframe(table_data, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- Confidence Distribution Chart ---
+    st.markdown("### Confidence Distribution")
+    answered_queries = [q for q in collector.queries if q.was_answered]
+    if answered_queries:
+        chart_data = {
+            "query_idx": list(range(1, len(answered_queries) + 1)),
+            "confidence": [q.confidence_score for q in answered_queries],
+        }
+        st.bar_chart(chart_data, x="query_idx", y="confidence", height=200)
+        st.caption("Confidence score per answered query (in chronological order)")
+    else:
+        st.caption("No answered queries yet.")
+
+    # --- Answer Length Distribution Chart ---
+    st.markdown("### Answer Length Distribution")
+    queries_with_answers = [q for q in collector.queries if q.answer_metrics]
+    if queries_with_answers:
+        length_data = {
+            "query_idx": list(range(1, len(queries_with_answers) + 1)),
+            "words": [q.answer_metrics.answer_length for q in queries_with_answers],
+        }
+        st.bar_chart(length_data, x="query_idx", y="words", height=200)
+        st.caption("Answer length in words per query (in chronological order)")
+    else:
+        st.caption("No answer data available yet.")
+
+    # Reset button
+    st.divider()
+    if st.button("Reset Metrics", type="secondary", key="reset_metrics_btn"):
+        st.session_state.metrics_collector = MetricsCollector()
+        st.rerun()
+
+
 def main() -> None:
     logger.info("Streamlit app render started")
+
+    # Initialize metrics collector in session state
+    if "metrics_collector" not in st.session_state:
+        st.session_state.metrics_collector = MetricsCollector()
+
     st.set_page_config(page_title="DataEngineeringCopilot", layout="wide")
     st.title("📚 DataEngineeringCopilot")
     st.caption("Offline RAG over Spark, Airflow, Databricks, and Delta Lake documentation.")
@@ -592,14 +722,25 @@ def main() -> None:
         except VectorStoreReadError:
             st.metric("Chunks in Store", 0)
 
+        # Mini metrics summary in sidebar
+        collector: MetricsCollector = st.session_state.metrics_collector
+        if collector.queries:
+            st.markdown("### Session Metrics")
+            answered = sum(1 for q in collector.queries if q.was_answered)
+            st.metric("Queries Asked", len(collector.queries))
+            st.metric("Answered", answered)
+            st.caption("Last answer confidence shown in Q&A tab.")
+
     # Tab layout
-    tab_ask, tab_ingest, tab_health = st.tabs(["💬 Ask", "📥 Ingestion", "🔧 System Health"])
+    tab_ask, tab_ingest, tab_health, tab_metrics = st.tabs(["💬 Ask", "📥 Ingestion", "🔧 System Health", "📊 Metrics"])
     with tab_ask:
         render_qa_tab()
     with tab_ingest:
         render_ingestion_tab()
     with tab_health:
         render_health_tab()
+    with tab_metrics:
+        render_metrics_tab()
 
 if __name__ == "__main__":
     main()
