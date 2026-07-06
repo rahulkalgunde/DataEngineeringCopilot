@@ -1,68 +1,74 @@
 import streamlit as st
 import pytest
 from data_engineering_copilot.ui.streamlit_app import (
-    render_ingestion_section,
+    render_ingestion_progress,
+    render_ingestion_tab,
     IngestionProgress,
     IngestionManager,
+    SourceProgress,
 )
 
 # Fixtures to reset Streamlit session state
 @pytest.fixture(autouse=True)
 def reset_session_state():
     st.session_state.clear()
+    IngestionManager.reset_status()
     yield
     st.session_state.clear()
+    IngestionManager.reset_status()
 
 
 def test_progress_shown():
     mock_progress = IngestionProgress(
         is_running=True,
         source_names=("Spark",),
-        max_pages=10,
-        pages_fetched=5,
-        chunks_indexed=2,
+        max_pages_per_source=10,
+        total_pages_fetched=5,
+        total_chunks_indexed=12,
+        current_phase="crawling",
+        sources={"Spark": SourceProgress(name="Spark", status="crawling", pages_fetched=5, chunks_indexed=12)},
         recent_urls=[],
         last_message="Starting ingestion...",
     )
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
-        mp.setattr(st, "progress", lambda value, key=None: value)
-        mp.setattr(st, "metric", lambda label, value: None)
-        mp.setattr(st, "success", lambda msg: None)
-        mp.setattr(st, "warning", lambda msg: None)
+        mp.setattr(st, "progress", lambda value: value)
+        mp.setattr(st, "metric", lambda label, value, delta=None: None)
+        mp.setattr(st, "markdown", lambda body: None)
+        mp.setattr(st, "caption", lambda body: None)
         mp.setattr(st, "button", lambda *args, **kwargs: False)
 
-        result = render_ingestion_section(("Spark",))
-
-    # The progress bar should be called with 0.5
-    # Since we replaced st.progress to return the value, we can assert that
-    # the function returned 0.5 (the last value passed to st.progress)
-    # However, render_ingestion_section does not return anything, so we
-    # rely on the side effect of st.progress. In this simplified test,
-    # we assume the progress bar was called correctly if no exception occurs.
+        result = render_ingestion_progress()
+        assert result is None  # Returns None (implicit), but no exception
 
 
 def test_cancel_button_triggers_stop():
     mock_progress = IngestionProgress(
         is_running=True,
         source_names=("Spark",),
-        max_pages=10,
-        pages_fetched=1,
-        chunks_indexed=0,
+        max_pages_per_source=10,
+        total_pages_fetched=1,
+        total_chunks_indexed=0,
+        current_phase="crawling",
+        sources={"Spark": SourceProgress(name="Spark", status="crawling", pages_fetched=1)},
         recent_urls=[],
         last_message="Running...",
     )
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
-        mp.setattr(st, "progress", lambda value, key=None: None)
-        mp.setattr(st, "metric", lambda label, value: None)
-        mp.setattr(st, "button", lambda *args, **kwargs: True if args[0] == "Stop Refresh" else False)
+        mp.setattr(st, "progress", lambda value: None)
+        mp.setattr(st, "markdown", lambda body: None)
+        mp.setattr(st, "caption", lambda body: None)
+        mp.setattr(st, "metric", lambda label, value, delta=None: None)
+        mp.setattr(st, "button", lambda *args, **kwargs: True if "Stop Refresh" in str(args) else False)
         mp.setattr(IngestionManager, "stop", lambda: None)
+        mp.setattr(st, "rerun", lambda: None)
 
-        render_ingestion_section(("Spark",))
-        # If stop was called, no exception will be raised in this simplified test
+        # Fragment may not fully execute in test mode without ScriptRunContext;
+        # verify no exception is raised.
+        render_ingestion_progress()
 
 
 def test_success_message_displayed():
@@ -70,6 +76,8 @@ def test_success_message_displayed():
         is_running=False,
         success_message="Refresh complete. Indexed or updated 42 chunks.",
         last_message="Refresh complete. Indexed or updated 42 chunks.",
+        elapsed_seconds=30.0,
+        sources={"Spark": SourceProgress(name="Spark", status="complete", pages_fetched=5, chunks_indexed=42)},
     )
 
     with pytest.MonkeyPatch().context() as mp:
@@ -77,8 +85,10 @@ def test_success_message_displayed():
         mp.setattr(st, "success", lambda msg: None)
         mp.setattr(st, "warning", lambda msg: None)
         mp.setattr(st, "button", lambda *args, **kwargs: False)
+        mp.setattr(st, "caption", lambda body: None)
+        mp.setattr(st, "markdown", lambda body: None)
 
-        render_ingestion_section(("Spark",))
+        render_ingestion_tab()
         # Success message should be displayed without errors
 
 
@@ -87,13 +97,20 @@ def test_dismiss_resets_status():
         is_running=False,
         success_message="Refresh complete. Indexed or updated 42 chunks.",
         last_message="Refresh complete. Indexed or updated 42 chunks.",
+        elapsed_seconds=30.0,
+        sources={"Spark": SourceProgress(name="Spark", status="complete", pages_fetched=5, chunks_indexed=42)},
     )
+
+    reset_called = []
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
         mp.setattr(st, "success", lambda msg: None)
-        mp.setattr(st, "button", lambda *args, **kwargs: True if args[0] == "Dismiss" else False)
-        mp.setattr(IngestionManager, "reset_status", lambda: None)
+        mp.setattr(st, "caption", lambda body: None)
+        mp.setattr(st, "markdown", lambda body: None)
+        mp.setattr(st, "button", lambda *args, **kwargs: True if "Dismiss" in str(args) else False)
+        mp.setattr(IngestionManager, "reset_status", lambda: reset_called.append(1))
+        mp.setattr(st, "rerun", lambda: None)
 
-        render_ingestion_section(("Spark",))
-        # reset_status should be called when dismiss button is clicked
+        render_ingestion_tab()
+        assert len(reset_called) == 1

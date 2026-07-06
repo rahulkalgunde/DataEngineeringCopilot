@@ -54,6 +54,18 @@ class QdrantVectorStore:
                         distance=models.Distance.COSINE,
                     ),
                 )
+            # Create payload index on url field for O(1) filtered lookups.
+            try:
+                self._client.create_payload_index(
+                    collection_name=self._collection_name,
+                    field_name="url",
+                    field_schema="keyword",
+                )
+            except Exception:  # pragma: no cover – index may already exist
+                logger.debug(
+                    "Payload index on 'url' already exists or could not be created.",
+                    exc_info=True,
+                )
         except Exception as exc:  # pragma: no cover – fatal init error
             logger.exception("Failed to initialise Qdrant client: %s", exc)
             raise
@@ -77,6 +89,7 @@ class QdrantVectorStore:
             "title": chunk.title,
             "url": chunk.url,
             "text": chunk.text,
+            "content_hash": chunk.content_hash,
         }
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
@@ -205,6 +218,71 @@ class QdrantVectorStore:
         except Exception as exc:
             logger.exception("Failed to perform hybrid query: %s", exc)
             raise
+
+    def get_content_hash_for_url(self, url: str) -> str | None:
+        """Retrieve the stored content_hash for a given URL.
+        
+        Uses scroll with a payload filter on the ``url`` field.  This is efficient
+        when a payload index on ``url`` exists (created at init time).
+        
+        Returns ``None`` if no chunks exist for the URL or if the client is not
+        initialised.
+        """
+        if self._client is None:
+            return None
+        try:
+            scroll_result = self._client.scroll(
+                collection_name=self._collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="url",
+                            match=models.MatchValue(value=url),
+                        )
+                    ]
+                ),
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points, _ = scroll_result
+            if points and points[0].payload:
+                return points[0].payload.get("content_hash")
+            return None
+        except Exception as exc:
+            logger.warning(
+                "Failed to retrieve content hash for url=%s: %s", url, exc
+            )
+            return None
+
+    def delete_by_url(self, url: str) -> None:
+        """Delete all points whose payload ``url`` field matches the given URL.
+        
+        This is used to purge ghost chunks before re-indexing a page whose
+        content has changed (e.g., the page shrunk from 10 chunks to 5).
+        """
+        if self._client is None:
+            logger.warning(
+                "Qdrant client not initialized. Cannot delete by url=%s.", url
+            )
+            return
+        try:
+            self._client.delete(
+                collection_name=self._collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="url",
+                                match=models.MatchValue(value=url),
+                            )
+                        ]
+                    )
+                ),
+            )
+            logger.info("Deleted all points for url=%s", url)
+        except Exception as exc:
+            logger.warning("Failed to delete points for url=%s: %s", url, exc)
 
     def count(self) -> int:
         """Return the number of points stored in the collection."""

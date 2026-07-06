@@ -1,0 +1,111 @@
+{
+  "timestamp": "/home/rahul/PycharmProjects/DataEngineeringCopilot/tests",
+  "layers": {
+    "vector_store": {
+      "layer": "Vector Store",
+      "status": "pass",
+      "checks": [
+        {
+          "name": "Qdrant URL connectivity",
+          "status": "pass",
+          "details": "Connected to http://localhost:6333"
+        },
+        {
+          "name": "Collection exists",
+          "status": "pass",
+          "details": "Collection 'data_engineering_docs' exists"
+        },
+        {
+          "name": "Document count",
+          "status": "pass",
+          "details": "Total chunks: 1296"
+        }
+      ]
+    },
+    "embeddings": {
+      "layer": "Embeddings",
+      "status": "unknown",
+      "checks": [
+        {
+          "name": "Ollama connectivity",
+          "status": "pass",
+          "details": "Connected to http://localhost:11434"
+        },
+        {
+          "name": "Embedding model availability",
+          "status": "pass",
+          "details": "Model 'nomic-embed-text' loaded"
+        },
+        {
+          "name": "Embedding generation",
+          "status": "pass",
+          "details": "Generated 768-dim embedding (expected 768)"
+        },
+        {
+          "name": "Embedding consistency",
+          "status": "pass",
+          "details": "Deterministic: True"
+        }
+      ]
+    },
+    "retrieval": {
+      "layer": "Retrieval",
+      "status": "fail",
+      "checks": [
+        {
+          "name": "Retrieval query",
+          "status": "fail",
+          "details": "Retrieved 0 chunks"
+        }
+      ]
+    },
+    "ingestion": {
+      "layer": "Ingestion",
+      "status": "pass",
+      "checks": [
+        {
+          "name": "Ingestion log exists",
+          "status": "pass",
+          "details": "Log file found at logs/ingestion_refresh.log"
+        },
+        {
+          "name": "Data ingested",
+          "status": "pass",
+          "details": "Total chunks in collection: 1296"
+        }
+      ]
+    },
+    "configuration": {
+      "layer": "Configuration",
+      "status": "pass",
+      "checks": [
+        {
+          "name": "Confidence threshold",
+          "status": "pass",
+          "details": "Threshold: 0.35"
+        },
+        {
+          "name": "Retrieval top_k",
+          "status": "pass",
+          "details": "top_k: 3"
+        },
+        {
+          "name": "Max context chars",
+          "status": "pass",
+          "details": "max_context_chars: 1500"
+        },
+        {
+          "name": "Ollama model",
+          "status": "pass",
+          "details": "Model: llama3.2:3b"
+        },
+        {
+          "name": "Collection name",
+          "status": "pass",
+          "details": "Collection: data_engineering_docs"
+        }
+      ]
+    }
+  },
+  "overall_status": "fail"
+}
