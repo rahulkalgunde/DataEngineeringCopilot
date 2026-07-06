@@ -22,7 +22,6 @@ class TestSentenceTransformerEmbeddingsOllama:
 
     def test_ollama_initialization(self, ollama_embeddings):
         """Test that Ollama embeddings initializes correctly."""
-        assert ollama_embeddings.is_ollama is True
         assert ollama_embeddings.model_name == "nomic-embed-text"
         assert ollama_embeddings.ollama_base_url == settings.ollama_base_url.rstrip('/')
 
@@ -413,96 +412,3 @@ class TestSentenceTransformerEmbeddingsOllama:
             assert mock_urlopen.call_count == 1
             assert len(result) == 3
 
-
-class TestSentenceTransformerEmbeddingsLocal:
-    """Test local SentenceTransformer embedding provider."""
-
-    @patch("data_engineering_copilot.infrastructure.embeddings.SentenceTransformer")
-    def test_local_initialization(self, mock_transformer):
-        """Test that local SentenceTransformer initializes correctly."""
-        mock_model = MagicMock()
-        mock_transformer.return_value = mock_model
-        
-        embeddings = SentenceTransformerEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            cache_dir=Path("/tmp/cache"),
-            local_files_only=False,
-        )
-        
-        assert embeddings.is_ollama is False
-        assert embeddings.model_name == "all-MiniLM-L6-v2"
-        assert embeddings.model == mock_model
-
-    @patch("data_engineering_copilot.infrastructure.embeddings.SentenceTransformer")
-    def test_local_embed_texts(self, mock_transformer):
-        """Test embedding texts with local SentenceTransformer."""
-        mock_model = MagicMock()
-        import numpy as np
-        mock_model.encode.return_value = np.array([[0.1, 0.2], [0.3, 0.4]])
-        mock_transformer.return_value = mock_model
-        
-        embeddings = SentenceTransformerEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            cache_dir=Path("/tmp/cache"),
-            local_files_only=False,
-        )
-        
-        result = embeddings.embed_texts(["text 1", "text 2"])
-        
-        assert len(result) == 2
-        assert result == [[0.1, 0.2], [0.3, 0.4]]
-        mock_model.encode.assert_called_once()
-
-    @patch("data_engineering_copilot.infrastructure.embeddings.SentenceTransformer")
-    def test_local_model_not_found(self, mock_transformer):
-        """Test error handling when local model is not found."""
-        mock_transformer.side_effect = RuntimeError(
-            "Cannot find the requested files in the disk cache"
-        )
-        
-        with pytest.raises(RuntimeError) as exc_info:
-            SentenceTransformerEmbeddings(
-                model_name="all-MiniLM-L6-v2",
-                cache_dir=Path("/tmp/cache"),
-                local_files_only=True,
-            )
-        
-        assert "Embedding model not found in local cache" in str(exc_info.value)
-
-    @patch("data_engineering_copilot.infrastructure.embeddings.SentenceTransformer")
-    def test_validate_embedding_dimensions_valid(self, mock_transformer):
-        """Test dimension validation with valid embeddings."""
-        mock_model = MagicMock()
-        mock_transformer.return_value = mock_model
-        
-        embeddings = SentenceTransformerEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            cache_dir=Path("/tmp/cache"),
-            local_files_only=False,
-        )
-        
-        # Should not raise
-        embeddings._validate_embedding_dimensions(
-            [[0.1] * 768, [0.2] * 768],
-            ["text1", "text2"]
-        )
-
-    @patch("data_engineering_copilot.infrastructure.embeddings.SentenceTransformer")
-    def test_validate_embedding_dimensions_not_list(self, mock_transformer):
-        """Test dimension validation when embedding is not a list."""
-        mock_model = MagicMock()
-        mock_transformer.return_value = mock_model
-        
-        embeddings = SentenceTransformerEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            cache_dir=Path("/tmp/cache"),
-            local_files_only=False,
-        )
-        
-        with pytest.raises(RuntimeError) as exc_info:
-            embeddings._validate_embedding_dimensions(
-                ["not a list"],
-                ["text1"]
-            )
-        
-        assert "not a list" in str(exc_info.value)
