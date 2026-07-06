@@ -5,7 +5,7 @@ import logging
 import shutil
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.logging_config import configure_logging
+from logger_config import setup_logging
 
 
 logger = logging.getLogger("data_engineering_copilot.main")
@@ -105,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     if settings.logging_enabled:
-        configure_logging(settings.project_root)
+        setup_logging()
     parser = build_parser()
     args = parser.parse_args()
     logger.info("CLI command received command=%s", args.command)

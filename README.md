@@ -37,6 +37,21 @@ DataEngineeringCopilot/
 
 ## Setup
 
+On windows machine, Install and start Ollama, then run the models:
+
+```bash
+ollama serve
+ollama pull nomic-embed-text:latest
+ollama pull qwen3.5:9b
+```
+
+Docker
+
+1. Start Docker Desktop on windows machine
+2. Login to wsl and go to Project Directory `/home/rahul/PycharmProjects/DataEngineeringCopilot`
+3. Activate python venv `source /home/rahul/PythonVenvs/data_eng_copilot_env/bin/activate`
+3. Run: `docker compose up -d`
+
 Always Use Python virtual environment located at `/home/rahul/PythonVenvs/data_eng_copilot_env`
 
 Linux/macOS:
@@ -47,13 +62,7 @@ source /home/rahul/PythonVenvs/data_eng_copilot_env/bin/activate
 python -m pip install -r /home/rahul/PycharmProjects/DataEngineeringCopilot/requirements.txt
 ```
 
-Install and start Ollama, then pull the model once:
 
-```bash
-ollama serve
-ollama pull nomic-embed-text:latest
-ollama pull qwen3.5:9b
-```
 
 No additional embedding model download is required. The system uses Ollama's `nomic-embed-text` model via HTTP API.
 

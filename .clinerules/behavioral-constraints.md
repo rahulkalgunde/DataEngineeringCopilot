@@ -8,4 +8,5 @@ You are operating under limited compute resources. You MUST adhere strictly to t
 3. **No Speculative Code:** Do not write boilerplate or placeholder comments like `# TODO: implement later`. Write the complete, production-ready implementation immediately.
 4. **No Unasked Refactoring:** Fix only the explicit target requested. Do not clean up, rename, or touch surrounding functions unless explicitly instructed.
 5. **Acknowledge and Test:** After making an edit, stop and ask the user to verify or run tests. Do not proceed to subsequent steps automatically.
-6. **Do not install anyhting without permission:** Do not install any new software or utility or run sudo without my permission.
+6. **Test-Driven Implementation** When you write new code or drastically alter an existing module, you need to write the unit tests first. After you do code change, test code using unit test.
+7. **Break complex lengthy tasks into smaller iterations** Do not perform single long big lengthy task. Break it into smaller managables tasks. Report task progress after each task.

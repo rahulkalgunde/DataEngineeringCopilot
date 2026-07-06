@@ -64,3 +64,11 @@ class QdrantVectorStore:
     # Optional hybrid query used by the reference RAG implementation
     def hybrid_query(self, query: str, top_k: int) -> List[RetrievedChunk]:
         return self._store.hybrid_query(query, top_k)
+
+    def get_content_hash_for_url(self, url: str) -> str | None:
+        """Retrieve the stored content_hash for a given URL."""
+        return self._store.get_content_hash_for_url(url)
+
+    def delete_by_url(self, url: str) -> None:
+        """Delete all points for a given URL (ghost chunk cleanup)."""
+        self._store.delete_by_url(url)

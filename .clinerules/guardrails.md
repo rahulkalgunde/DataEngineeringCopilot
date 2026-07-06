@@ -1,0 +1,2 @@
+1. **Do not install anyhting without permission:** Do not install any new software or utility. Do not run sudo without my permission.
+2. **Do not delete file without permission:**" Never use --force or destructive delete commands in the terminal without explicit manual permission.

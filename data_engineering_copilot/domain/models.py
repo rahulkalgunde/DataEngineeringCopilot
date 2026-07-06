@@ -20,6 +20,12 @@ class IngestionEvent:
     chunks_indexed: int = 0
     pages_fetched: int = 0
     error: str | None = None
+    timestamp: float = 0.0
+    total_pages_fetched: int = 0
+    total_chunks_indexed: int = 0
+    elapsed_seconds: float = 0.0
+    batch_size: int = 0
+    current_phase: str = ""
 
 
 @dataclass(frozen=True)
@@ -37,6 +43,7 @@ class DocumentChunk:
     title: str
     url: str
     text: str
+    content_hash: str = ""
 
 
 @dataclass(frozen=True)

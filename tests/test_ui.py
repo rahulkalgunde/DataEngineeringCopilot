@@ -8,7 +8,7 @@ def test_ingestion_progress_initial():
     IngestionManager.reset_status()
     progress = IngestionManager.get_progress()
     assert not progress.is_running
-    assert progress.max_pages == 0
+    assert progress.max_pages_per_source == 0
 
 @patch("data_engineering_copilot.ui.streamlit_app.build_ingestion_service")
 @patch("data_engineering_copilot.ui.streamlit_app.rag_service")
@@ -43,8 +43,8 @@ def test_ingestion_manager_success_flow(mock_vector_store, mock_rag_service, moc
 
     assert not IngestionManager.is_running()
     progress = IngestionManager.get_progress()
-    assert progress.pages_fetched == 1
-    assert progress.chunks_indexed == 5
+    assert progress.total_pages_fetched == 1
+    assert progress.total_chunks_indexed == 5
     assert "complete" in progress.success_message
     assert progress.error is None
     

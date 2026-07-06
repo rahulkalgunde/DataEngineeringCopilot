@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Callable, Iterable
 
@@ -38,8 +39,11 @@ class IngestionService:
         source_names: Iterable[str] | None = None,
         on_event: Callable[[IngestionEvent], None] | None = None,
     ) -> int:
+        import time as time_module
+        start_time = time_module.time()
         page_limit = max_pages_per_source or self.settings.max_pages_per_source
         total_chunks = 0
+        global_pages_fetched = 0
         selected_sources = self._selected_sources(source_names)
         logger.info(
             "Ingestion started page_limit=%s sources=%s",
@@ -49,9 +53,39 @@ class IngestionService:
 
         batch_chunks: list[DocumentChunk] = []
 
+        def _make_event(
+            event_type: str,
+            source_name: str,
+            message: str,
+            **kwargs: object,
+        ) -> IngestionEvent:
+            elapsed = time_module.time() - start_time
+            return IngestionEvent(
+                event_type=event_type,
+                source_name=source_name,
+                message=message,
+                timestamp=elapsed,
+                total_pages_fetched=global_pages_fetched,
+                total_chunks_indexed=total_chunks,
+                elapsed_seconds=elapsed,
+                **{k: v for k, v in kwargs.items() if v is not None},
+            )
+
         def flush_batch() -> None:
+            nonlocal total_chunks
             if not batch_chunks:
                 return
+            batch_size = len(batch_chunks)
+            self._emit(
+                on_event,
+                _make_event(
+                    "batch_embedding",
+                    source_name="",
+                    message=f"Embedding {batch_size} chunks...",
+                    batch_size=batch_size,
+                    current_phase="embedding",
+                ),
+            )
             try:
                 batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
             except RuntimeError as exc:
@@ -61,6 +95,16 @@ class IngestionService:
                     exc,
                 )
                 raise
+            self._emit(
+                on_event,
+                _make_event(
+                    "batch_indexing",
+                    source_name="",
+                    message=f"Indexing {batch_size} chunks into vector store...",
+                    batch_size=batch_size,
+                    current_phase="indexing",
+                ),
+            )
             try:
                 self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
             except Exception as exc:
@@ -79,21 +123,23 @@ class IngestionService:
             source_chunks_indexed = 0
             self._emit(
                 on_event,
-                IngestionEvent(
-                    event_type="source_start",
+                _make_event(
+                    "source_start",
                     source_name=source.name,
                     message=f"Crawling {source.name}",
+                    current_phase="crawling",
                 ),
             )
             for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 source_pages_fetched += 1
+                global_pages_fetched += 1
                 parsed = self.parser.parse(raw_document)
                 if parsed is None:
                     logger.info("Ingestion skipped unreadable page source=%s url=%s", raw_document.source_name, raw_document.url)
                     self._emit(
                         on_event,
-                        IngestionEvent(
-                            event_type="page_skipped",
+                        _make_event(
+                            "page_skipped",
                             source_name=raw_document.source_name,
                             url=raw_document.url,
                             message=f"Skipped page with no readable documentation content: {raw_document.url}",
@@ -101,7 +147,45 @@ class IngestionService:
                         ),
                     )
                     continue
+
+                # --- Content-hash dedup: skip embedding if page unchanged ---
+                content_hash = self._compute_content_hash(parsed.text)
+                stored_hash = self._get_stored_content_hash(parsed.url)
+                if stored_hash is not None and stored_hash == content_hash:
+                    logger.info(
+                        "Ingestion skipped duplicate page source=%s url=%s hash=%s",
+                        parsed.source_name,
+                        parsed.url,
+                        content_hash[:12],
+                    )
+                    self._emit(
+                        on_event,
+                        _make_event(
+                            "page_skipped_duplicate",
+                            source_name=parsed.source_name,
+                            url=parsed.url,
+                            title=parsed.title,
+                            message=f"Skipped duplicate page (content unchanged): {parsed.url}",
+                            pages_fetched=source_pages_fetched,
+                        ),
+                    )
+                    continue
+
+                # --- Ghost-chunk cleanup: if content changed, purge old chunks ---
+                if stored_hash is not None:
+                    logger.info(
+                        "Ingestion content hash changed for url=%s, purging old chunks",
+                        parsed.url,
+                    )
+                    self._delete_chunks_for_url(parsed.url)
+
                 chunks = self.chunker.chunk(parsed)
+                # Stamp content_hash onto every chunk for future dedup lookups
+                import dataclasses
+                chunks = [
+                    dataclasses.replace(chunk, content_hash=content_hash)
+                    for chunk in chunks
+                ]
                 batch_chunks.extend(chunks)
 
                 if len(batch_chunks) >= self.settings.ingestion_batch_chunk_size:
@@ -120,28 +204,30 @@ class IngestionService:
                 )
                 self._emit(
                     on_event,
-                    IngestionEvent(
-                        event_type="page_indexed",
+                    _make_event(
+                        "page_indexed",
                         source_name=parsed.source_name,
                         url=parsed.url,
                         title=parsed.title,
+                        message=f"Indexed {len(chunks)} chunks from {parsed.title}",
                         chunks_indexed=len(chunks),
                         pages_fetched=source_pages_fetched,
-                        message=f"Indexed {len(chunks)} chunks from {parsed.title}",
+                        current_phase="crawling",
                     ),
                 )
 
             self._emit(
                 on_event,
-                IngestionEvent(
-                    event_type="source_complete",
+                _make_event(
+                    "source_complete",
                     source_name=source.name,
-                    chunks_indexed=source_chunks_indexed,
-                    pages_fetched=source_pages_fetched,
                     message=(
                         f"Completed {source.name}: fetched {source_pages_fetched} HTML pages, "
                         f"indexed {source_chunks_indexed} chunks."
                     ),
+                    chunks_indexed=source_chunks_indexed,
+                    pages_fetched=source_pages_fetched,
+                    current_phase="crawling",
                 ),
             )
             logger.info(
@@ -153,7 +239,8 @@ class IngestionService:
 
         flush_batch()
 
-        logger.info("Ingestion completed total_chunks=%s", total_chunks)
+        total_elapsed = time_module.time() - start_time
+        logger.info("Ingestion completed total_chunks=%s elapsed=%.1fs", total_chunks, total_elapsed)
         return total_chunks
 
     def _selected_sources(self, source_names: Iterable[str] | None):
@@ -176,6 +263,37 @@ class IngestionService:
             )
 
         return tuple(sources_by_name[name] for name in requested_names)
+
+    @staticmethod
+    def _compute_content_hash(text: str) -> str:
+        """Compute a deterministic SHA-256 hash of the parsed document text."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _get_stored_content_hash(self, url: str) -> str | None:
+        """Retrieve the content hash stored in the vector store for a given URL.
+
+        Returns None if the vector store does not support this lookup or if no
+        chunks exist for the given URL.
+        """
+        lookup = getattr(self.vector_store, "get_content_hash_for_url", None)
+        if lookup is None:
+            return None
+        return lookup(url)
+
+    def _delete_chunks_for_url(self, url: str) -> None:
+        """Remove all chunks for a given URL from the vector store.
+
+        Uses the vector store's delete_by_url if available; otherwise silently
+        no-ops (graceful degradation for stores that don't support it).
+        """
+        deleter = getattr(self.vector_store, "delete_by_url", None)
+        if deleter is not None:
+            deleter(url)
+        else:
+            logger.debug(
+                "Vector store does not support delete_by_url; skipping ghost cleanup for %s",
+                url,
+            )
 
     def _emit(self, on_event: Callable[[IngestionEvent], None] | None, event: IngestionEvent) -> None:
         if on_event is not None:
