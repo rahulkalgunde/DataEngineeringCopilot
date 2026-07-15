@@ -62,9 +62,9 @@ class TestProductionRagService:
     def test_answer_question_success(self, mock_ollama_client, mock_embedder_class, mock_qdrant_class, mock_post, mock_langfuse_class):
         mock_langfuse = mock_langfuse_class.return_value
         mock_trace = MagicMock()
-        mock_langfuse.trace.return_value = mock_trace
+        mock_langfuse.start_observation.return_value = mock_trace
         mock_span = MagicMock()
-        mock_trace.span.return_value = mock_span
+        mock_trace.start_observation.return_value = mock_span
 
         mock_qdrant = mock_qdrant_class.return_value
         chunk = DocumentChunk(chunk_id="1", source_name="test_src", title="t", url="u", text="ctx")
@@ -91,9 +91,9 @@ class TestProductionRagService:
     def test_answer_question_empty(self, mock_ollama_client, mock_embedder_class, mock_qdrant_class, mock_post, mock_langfuse_class):
         mock_langfuse = mock_langfuse_class.return_value
         mock_trace = MagicMock()
-        mock_langfuse.trace.return_value = mock_trace
+        mock_langfuse.start_observation.return_value = mock_trace
         mock_span = MagicMock()
-        mock_trace.span.return_value = mock_span
+        mock_trace.start_observation.return_value = mock_span
 
         mock_qdrant = mock_qdrant_class.return_value
         mock_qdrant.query.return_value = []
@@ -113,9 +113,9 @@ class TestProductionRagService:
     def test_answer_question_retrieval_fail(self, mock_ollama, mock_embed, mock_qdrant_class, mock_langfuse_class):
         mock_langfuse = mock_langfuse_class.return_value
         mock_trace = MagicMock()
-        mock_langfuse.trace.return_value = mock_trace
+        mock_langfuse.start_observation.return_value = mock_trace
         mock_span = MagicMock()
-        mock_trace.span.return_value = mock_span
+        mock_trace.start_observation.return_value = mock_span
 
         mock_qdrant = mock_qdrant_class.return_value
         mock_qdrant.query.side_effect = Exception("DB error")
@@ -132,9 +132,9 @@ class TestProductionRagService:
     def test_answer_question_generation_fail(self, mock_ollama, mock_embed, mock_qdrant, mock_post, mock_langfuse_class):
         mock_langfuse = mock_langfuse_class.return_value
         mock_trace = MagicMock()
-        mock_langfuse.trace.return_value = mock_trace
+        mock_langfuse.start_observation.return_value = mock_trace
         mock_span = MagicMock()
-        mock_trace.span.return_value = mock_span
+        mock_trace.start_observation.return_value = mock_span
 
         mock_post.side_effect = Exception("Network error")
         

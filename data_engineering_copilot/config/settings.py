@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -87,6 +88,21 @@ class AppSettings:
     # URLs accessed within docker
     redis_url: str = "redis://redis:6379/0"
     langfuse_url: str = "http://langfuse:3000"
+    langfuse_public_key: str = field(
+        default_factory=lambda: os.environ.get(
+            "LANGFUSE_PUBLIC_KEY", "pk-lf-ef971ce8-841a-4237-a8fb-71859b27aaba"
+        )
+    )
+    langfuse_secret_key: str = field(
+        default_factory=lambda: os.environ.get(
+            "LANGFUSE_SECRET_KEY", "sk-lf-a7dc308f-5766-4e48-9fe7-6e497e6634be"
+        )
+    )
+    langfuse_host: str = field(
+        default_factory=lambda: os.environ.get(
+            "LANGFUSE_HOST", "http://langfuse:3000"
+        )
+    )
 
     embedding_model_name: str = "nomic-embed-text"
     # Default dm is 768 for the nomic-embed-text model
@@ -97,22 +113,22 @@ class AppSettings:
     ollama_model: str = "llama3.2:3b"
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
-    chunk_size_words: int = 250
-    chunk_overlap_words: int = 50
+    chunk_size_words: int = 375
+    chunk_overlap_words: int = 90
     # Semantic chunker specific settings
     min_semantic_similarity: float = 0.5
     max_chunk_words: int | None = None  # Auto: 1.5x chunk_size_words if None
     # Feature flags
-    enable_semantic_chunking: bool = False  # Enable semantic chunker (requires embedding model)
-    retrieval_top_k: int = 5
+    enable_semantic_chunking: bool = True  # Enable semantic chunker (requires embedding model)
+    retrieval_top_k: int = 15
     reranker_enabled: bool = True
-    reranker_model: str = "cross-encoder/qnli-distilroberta-base"
-    reranker_top_k: int = 3
-    max_context_chars: int = 2500
-    confidence_threshold: float = 0.20
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_top_k: int = 5
+    max_context_chars: int = 4000
+    confidence_threshold: float = 0.18
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 300
-    ollama_num_ctx: int = 2048
+    ollama_num_ctx: int = 4096
     ollama_num_predict: int = 512
     ollama_retry_context_ratio: float = 0.5
     ollama_retry_extra_num_predict: int = 512
