@@ -1,9 +1,13 @@
+version: "3.8"
+
 services:
   redis:
     image: redis:7-alpine
     container_name: de_copilot_broker
     ports:
       - "6379:6379"
+    networks:
+      - de_copilot_net
     restart: unless-stopped
 
   qdrant:
@@ -14,6 +18,58 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
+    networks:
+      - de_copilot_net
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: de_copilot_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9002:9000"
+      - "9001:9001"
+    networks:
+      - de_copilot_net
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: de_copilot_minio_init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin) do echo 'Waiting for MinIO...' && sleep 1; done;
+      /usr/bin/mc mb --ignore-existing myminio/local-dev;
+      exit 0;
+      "
+    networks:
+      - de_copilot_net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: de_copilot_clickhouse
+    cap_add:
+      - SYS_NICE
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: local_secure_password_123
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    networks:
+      - de_copilot_net
     restart: unless-stopped
 
   langfuse-postgres:
@@ -24,15 +80,20 @@ services:
       POSTGRES_PASSWORD: local_secure_password_123
       POSTGRES_DB: langfuse
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - langfuse_pg_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - de_copilot_net
 
   langfuse:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     container_name: de_copilot_observability
     depends_on:
       - langfuse-postgres
+      - clickhouse
+      - minio
+      - minio-init
     ports:
       - "3000:3000"
     extra_hosts:
@@ -44,6 +105,19 @@ services:
       - SALT=salt_string
       - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
       - LANGFUSE_HOST=http://langfuse:3000
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=langfuse
+      - CLICKHOUSE_PASSWORD=local_secure_password_123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=local-dev
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+    networks:
+      - de_copilot_net
     restart: unless-stopped
 
   backend-api:
@@ -57,6 +131,7 @@ services:
     depends_on:
       - redis
       - qdrant
+      - langfuse
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -66,9 +141,11 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - LANGFUSE_PUBLIC_KEY=pk-lf-...
-      - LANGFUSE_SECRET_KEY=sk-lf-...
+      - LANGFUSE_SECRET_KEY=sk-lf-63f67f7f-6aad-4b0a-b635-17f88e746d89
+      - LANGFUSE_PUBLIC_KEY=pk-lf-9d45307d-b79c-458d-bdcc-86d01e8f5201
       - LANGFUSE_HOST=http://langfuse:3000
+    networks:
+      - de_copilot_net
     restart: unless-stopped
 
   celery_worker:
@@ -90,8 +167,17 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    networks:
+      - de_copilot_net
     restart: unless-stopped
+
+networks:
+  de_copilot_net:
+    driver: bridge
 
 volumes:
   qdrant_storage:
-  pg_data:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:
+  langfuse_pg_data:
