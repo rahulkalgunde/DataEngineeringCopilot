@@ -7,6 +7,5 @@ __pycache__/
 data/
 logs/*.log
 chroma_db/
-
-chroma_db/
+dec_venv/
 *.sqlite3
