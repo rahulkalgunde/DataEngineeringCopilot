@@ -57,6 +57,8 @@ def get_langfuse_instance():
         from langfuse import Langfuse
 
         host = settings.langfuse_host
+        logger.info("Langfuse host: %s", host)
+
         if not _check_langfuse_health(host):
             logger.warning(
                 "Langfuse server is not healthy at %s; traces will not be exported. "
