@@ -90,12 +90,12 @@ class AppSettings:
     langfuse_url: str = "http://langfuse:3000"
     langfuse_public_key: str = field(
         default_factory=lambda: os.environ.get(
-            "LANGFUSE_PUBLIC_KEY", "pk-lf-3423e765-515a-46b1-a8ae-879ccac4d091"
+            "LANGFUSE_PUBLIC_KEY", "pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be"
         )
     )
     langfuse_secret_key: str = field(
         default_factory=lambda: os.environ.get(
-            "LANGFUSE_SECRET_KEY", "sk-lf-7fcdd8d3-9758-4ec7-a19b-7da6e1213c6d"
+            "LANGFUSE_SECRET_KEY", "sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1"
         )
     )
     langfuse_host: str = field(
