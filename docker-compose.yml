@@ -1,8 +1,8 @@
-
 services:
   redis:
     image: redis:7-alpine
     container_name: de_copilot_broker
+    command: ["redis-server", "--requirepass", "local_secure_password_123"]
     ports:
       - "6379:6379"
     networks:
@@ -93,6 +93,7 @@ services:
       - clickhouse
       - minio
       - minio-init
+      - redis
     ports:
       - "3000:3000"
     extra_hosts:
@@ -115,12 +116,57 @@ services:
       - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
       - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
       - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=local_secure_password_123
+      - REDIS_TLS_ENABLED=false
       - HOSTNAME=0.0.0.0
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/public/health', r=>process.exit(r.statusCode===200?0:1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - de_copilot_net
+    restart: unless-stopped
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: de_copilot_langfuse_worker
+    depends_on:
+      - langfuse-postgres
+      - clickhouse
+      - minio
+      - minio-init
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DATABASE_URL=postgresql://langfuse:local_secure_password_123@langfuse-postgres:5432/langfuse
+      - NEXTAUTH_SECRET=secret_string_minimum_32_characters_long
+      - NEXTAUTH_URL=http://localhost:3000
+      - SALT=salt_string
+      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
+      - LANGFUSE_HOST=http://langfuse:3000
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=langfuse
+      - CLICKHOUSE_PASSWORD=local_secure_password_123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=local-dev
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=local_secure_password_123
+      - REDIS_TLS_ENABLED=false
+      - HOSTNAME=0.0.0.0
     networks:
       - de_copilot_net
     restart: unless-stopped
@@ -129,6 +175,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: de_copilot_base_image:latest  # Tags the image to reuse it
     container_name: de_copilot_api
     command: uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload
     ports:
@@ -149,21 +196,21 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - LANGFUSE_SECRET_KEY=sk-lf-7fcdd8d3-9758-4ec7-a19b-7da6e1213c6d
-      - LANGFUSE_PUBLIC_KEY=pk-lf-3423e765-515a-46b1-a8ae-879ccac4d091
+      - LANGFUSE_SECRET_KEY=sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1
+      - LANGFUSE_PUBLIC_KEY=pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be
       - LANGFUSE_HOST=http://langfuse:3000
     networks:
       - de_copilot_net
     restart: unless-stopped
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: de_copilot_base_image:latest  # Reuses backend-api build instantly
     container_name: de_copilot_worker
     command: celery -A data_engineering_copilot.workers.tasks worker --loglevel=info
     shm_size: "2gb"
     depends_on:
+      backend-api:                       # Waits for backend-api build to finish
+        condition: service_started
       redis:
         condition: service_started
       qdrant:

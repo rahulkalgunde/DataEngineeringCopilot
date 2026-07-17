@@ -9,6 +9,7 @@ from data_engineering_copilot.domain.models import RetrievedChunk, Answer
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.reranker import CrossEncoderReranker
+from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,7 @@ class RagAnswerService:
                 generation_span.end()
             if trace:
                 trace.update(output=answer_text)
+                trace.end()
 
             if self.langfuse:
                 self.langfuse.flush()
@@ -241,41 +243,9 @@ class ProductionRagService(RagAnswerService):
         super().__init__(self.db, self.ollama_client, self.embedder)
 
         # Initialize Langfuse client using centralized settings with graceful fallback
-        self.langfuse = None
-        try:
-            # Primary Langfuse host (Docker internal name)
-            self.langfuse = Langfuse(
-                public_key=settings.langfuse_public_key,
-                secret_key=settings.langfuse_secret_key,
-                host=settings.langfuse_host,
-                debug=True,
-            )
-            auth_result = self.langfuse.auth_check()
-            print(auth_result)
-        except Exception as e:
-            logger.warning(
-                "Langfuse auth check failed on primary host %s: %s",
-                settings.langfuse_host,
-                e,
-                exc_info=True
-            )
-            # Attempt fallback to localhost when running outside Docker
-            fallback_host = "http://localhost:3000"
-            if getattr(settings, "langfuse_host", "") != fallback_host:
-                try:
-                    logger.info("Attempting Langfuse fallback to host: %s", fallback_host)
-                    self.langfuse = Langfuse(
-                        public_key=settings.langfuse_public_key,
-                        secret_key=settings.langfuse_secret_key,
-                        host=fallback_host,
-                        debug=True,
-                    )
-                    auth_result = self.langfuse.auth_check()
-                    print("Langfuse fallback auth succeeded:", auth_result)
-                except Exception as e2:
-                    logger.error("Langfuse fallback auth also failed: %s", e2, exc_info=True)
-                    self.langfuse = None
-        # If Langfuse is still None, tracing will be disabled
+        self.langfuse = get_langfuse_instance()
+        if self.langfuse is None:
+            logger.warning("Langfuse tracing is disabled because the client could not be initialized")
 
     def answer_question(
         self,
@@ -388,6 +358,7 @@ class ProductionRagService(RagAnswerService):
 
         # Finalization
         trace.update(output=answer_text)
+        trace.end()
         if self.langfuse:
             self.langfuse.flush()
 
