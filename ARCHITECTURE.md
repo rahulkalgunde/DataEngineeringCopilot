@@ -3,7 +3,7 @@
 ## 1. Overview
 - Offline Retrieval-Augmented Generation (RAG) assistant for data-engineering documentation.
 - Sources are crawled, parsed, chunked, embedded, and stored in **QdrantDB**.
-- Answers are generated locally via **Ollama** (Qwen) without LangChain or LlamaIndex.
+- Answers are generated locally via **Ollama** (llama3.2:3b model) without LangChain or LlamaIndex.
 - Direct crawler/parser/chunker/embed/vector/query/generate pipeline.
 
 ## 2. High‑Level Architecture
@@ -48,14 +48,13 @@
 - **ProductionRagService** – embeds query, performs hybrid search (`QdrantVectorStore.hybrid_query`), applies confidence gating, builds prompt, calls Ollama via direct HTTP, sends tracing data to Langfuse.
 
 ### 3.4 Infrastructure
-- **DocumentationCrawler** – unchanged BFS crawler (still used by async task).
-- **DocumentationHtmlParser** – unchanged.
-- **DocumentChunker** – unchanged.
+- **DocumentationCrawler** – BFS crawler
+- **DocumentationHtmlParser** – 
+- **DocumentChunker** – 
 - **SentenceTransformerEmbeddings** – Ollama-only embedding provider using `/api/embed` endpoint.
 - **QdrantVectorStore** (`data_engineering_copilot/infrastructure/qdrant_store.py`)
-  - Mirrors the former Chroma API (`upsert_chunks`, `query`).
   - Adds `hybrid_query` for dense + BM25 sparse retrieval.
-- **OllamaClient** – unchanged but now called directly by `ProductionRagService`.
+- **OllamaClient** – called directly by `ProductionRagService`.
 - **LangfuseTracer** – wrapper used by `ProductionRagService` to log prompts, responses, and latency.
 
 ### 3.5 Async Workers (`workers/tasks.py`)
@@ -76,7 +75,7 @@
 | Setting | Default | Description |
 |---------|----------|-------------|
 | `embedding_model_name` | `nomic-embed-text:latest` | Embedding model |
-| `ollama_model` | `qwen3.5:9b` | LLM model |
+| `ollama_model` | `llama3.2:3b` | LLM model |
 | `chunk_size_words` | `420` | Chunk size |
 | `chunk_overlap_words` | `80` | Overlap |
 | `retrieval_top_k` | `2` | Top‑k dense retrieval |
@@ -104,10 +103,10 @@
 ## 7. Deployment & Operations
 - **Docker‑Compose** (`docker-compose.yml`) brings up Redis, Qdrant, Langfuse.
 - Start services: `docker compose up -d`.
-- Ensure Ollama is running with `nomic-embed-text` model: `ollama pull nomic-embed-text`.
+- Ensure Ollama is running with `nomic-embed-text` and `llama3.2:3b` model: `ollama pull nomic-embed-text && ollama pull llama3.2:3b`.
 - Run Celery worker: `celery -A data_engineering_copilot.workers.tasks worker --loglevel=info`.
 - Launch FastAPI: `uvicorn api.routes:app --reload`.
-- Launch Streamlit UI (once refactored): `streamlit run data_engineering_copilot/ui/streamlit_app.py`.
+- Launch Streamlit UI: `streamlit run data_engineering_copilot/ui/streamlit_app.py`.
 
 ## 8. Testing Strategy
 - Existing unit tests remain valid (crawler, parser, chunker, settings).

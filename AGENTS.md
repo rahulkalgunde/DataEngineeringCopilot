@@ -1,5 +1,13 @@
 # Project: DataEngineeringCopilot
 
+# Package Management Constraints
+- NEVER use standard 'pip' or 'python -m venv' commands.
+- This project exclusively uses 'uv' as its Python package and environment manager.
+- To create or manage virtual environments, use: `uv venv dec_venv`
+- To install packages from requirements.txt, use: `uv pip install -r requirements.txt`
+- To add a single package to the environment, use: `uv pip install <package_name>`
+- Always ensure you target the correct local virtual environment binary path: `${workspaceFolder}/dec_venv/bin/python`
+
 ## 1. Purpose
 - Offline RAG assistant over data engineering documentation.
 - Crawls configured docs → chunks + embeds into local QdrantDB → answers questions via local Ollama/Qwen.
