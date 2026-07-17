@@ -1,5 +1,9 @@
 {
     "claudeCode.environmentVariables": [],
-    "python.defaultInterpreterPath": "C:\\Users\\Rahul\\PycharmProjects\\PythonVirtualEnvs\\data_eng_copilot_env\\Scripts\\python.exe",
-    "python.terminal.activateEnvironment": true
+    "python.defaultInterpreterPath": "${workspaceFolder}/dec_venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "chat.tools.terminal.autoApprove": {
+        "/home/rahul/workspace/DataEngineeringCopilot/dec_venv/bin/python": true,
+        "docker compose": true
+    }
 }
