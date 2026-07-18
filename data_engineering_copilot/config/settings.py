@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -69,15 +70,18 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
     return tuple(item.strip() for item in value)
 
 
-@dataclass(frozen=True)
-class AppSettings:
+class AppSettings(BaseSettings):
+    model_config = SettingsConfigDict(frozen=True)
+
     project_root: Path = PROJECT_ROOT
     # Legacy Chroma directory – retained for compatibility; not used in production.
     chroma_dir: Path = PROJECT_ROOT / "chroma_db"
-    documentation_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
+    documentation_sources_path: Path = (
+        PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
+    )
     embedding_cache_dir: Path = PROJECT_ROOT / "data" / "embedding_models"
     collection_name: str = "data_engineering_docs"
-    
+
     # URLs accessed from localhost
     qdrant_url: str = "http://localhost:6333"
     ollama_base_url: str = "http://localhost:11434"
@@ -85,20 +89,17 @@ class AppSettings:
     # URLs accessed within docker
     redis_url: str = "redis://redis:6379/0"
     langfuse_url: str = "http://langfuse:3000"
-    langfuse_public_key: str = field(
-        default_factory=lambda: os.environ.get(
-            "LANGFUSE_PUBLIC_KEY", "pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be"
-        )
+    langfuse_public_key: str = Field(
+        default="pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be",
+        validation_alias="LANGFUSE_PUBLIC_KEY",
     )
-    langfuse_secret_key: str = field(
-        default_factory=lambda: os.environ.get(
-            "LANGFUSE_SECRET_KEY", "sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1"
-        )
+    langfuse_secret_key: str = Field(
+        default="sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1",
+        validation_alias="LANGFUSE_SECRET_KEY",
     )
-    langfuse_host: str = field(
-        default_factory=lambda: os.environ.get(
-            "LANGFUSE_HOST", "http://langfuse:3000"
-        )
+    langfuse_host: str = Field(
+        default="http://langfuse:3000",
+        validation_alias="LANGFUSE_HOST",
     )
 
     embedding_model_name: str = "nomic-embed-text"
@@ -106,7 +107,7 @@ class AppSettings:
     embedding_dimension: int = 768
     embedding_batch_size: int = 32
     embedding_local_files_only: bool = True
-    
+
     ollama_model: str = "llama3.2:3b"
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
@@ -134,7 +135,13 @@ class AppSettings:
     max_pages_per_source: int = 80
     ingestion_batch_chunk_size: int = 256
     logging_enabled: bool = True
-    sources: tuple[DocumentationSource, ...] = load_documentation_sources(documentation_sources_path)
+    sources: tuple[DocumentationSource, ...] = ()
+
+    @model_validator(mode="after")
+    def _load_sources_from_json(self) -> AppSettings:
+        if not self.sources:
+            object.__setattr__(self, "sources", load_documentation_sources(self.documentation_sources_path))
+        return self
 
 
 settings = AppSettings()

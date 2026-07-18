@@ -6,12 +6,11 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
-
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
-from data_engineering_copilot.services.chunker import DocumentChunker, ChunkingStrategy
-from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
 from data_engineering_copilot.services.ingestion import IngestionService
 from data_engineering_copilot.services.rag import ProductionRagService
+from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +60,7 @@ def build_chunker(app_settings: AppSettings = settings):
                 embedding_model=embedding_model,
                 min_semantic_similarity=app_settings.min_semantic_similarity,
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),  # 10% of target
-                max_chunk_words=app_settings.max_chunk_words
-                or int(app_settings.chunk_size_words * 1.5),
+                max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
             )
 
     # For fixed_size or sentence_preserving

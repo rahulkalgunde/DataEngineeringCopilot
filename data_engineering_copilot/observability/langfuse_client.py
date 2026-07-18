@@ -1,7 +1,7 @@
-import logging
-import urllib.request
-import urllib.error
 import json
+import logging
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 
 from data_engineering_copilot.config.settings import settings
