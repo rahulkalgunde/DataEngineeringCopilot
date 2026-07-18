@@ -3,7 +3,6 @@
 import json
 import logging
 import urllib.request
-from pathlib import Path
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -13,21 +12,10 @@ from data_engineering_copilot.domain.exceptions import EmbeddingError
 logger = logging.getLogger(__name__)
 
 
-class SentenceTransformerEmbeddings:
-    """Ollama embedding provider using the /api/embed endpoint.
+class OllamaEmbeddings:
+    """Ollama embedding provider using the /api/embed endpoint."""
 
-    This class provides embeddings via Ollama's embedding API. It does not
-    use local sentence-transformers models.
-    """
-
-    def __init__(self, model_name: str, cache_dir: Path, local_files_only: bool) -> None:
-        """Initialize the embedding provider.
-
-        Args:
-            model_name: The embedding model name (must be "nomic-embed-text")
-            cache_dir: Directory for caching (unused, kept for compatibility)
-            local_files_only: Whether to use local files only (unused, kept for compatibility)
-        """
+    def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self.ollama_base_url = settings.ollama_base_url.rstrip("/")
         logger.info(

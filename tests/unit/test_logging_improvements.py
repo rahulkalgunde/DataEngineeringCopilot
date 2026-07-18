@@ -87,15 +87,15 @@ class TestWorkerLogging:
     def test_tasks_module_has_logger(self):
         """tasks.py must define a module-level logger."""
         from data_engineering_copilot.workers import tasks
-        assert hasattr(tasks, "logger"), "workers/tasks.py must define a 'logger' attribute"
+        assert hasattr(tasks, "log"), "workers/tasks.py must define a 'log' attribute (structlog)"
 
     def test_tasks_logger_is_correct_name(self):
-        """tasks.py logger name should be the module's __name__."""
+        """tasks.py 'log' attribute should be a structlog BoundLoggerLazyProxy."""
         from data_engineering_copilot.workers import tasks
-        assert tasks.logger.name == "data_engineering_copilot.workers.tasks"
+        assert type(tasks.log).__name__ == "BoundLoggerLazyProxy"
 
     def test_async_ingest_task_has_logging_calls(self):
-        """async_ingest_task function body should contain logger.info and logger.exception."""
+        """async_ingest_task function body should contain log.info and log.exception."""
         import ast
         from pathlib import Path
 
@@ -111,9 +111,9 @@ class TestWorkerLogging:
                 break
 
         func_text = "\n".join(func_source_lines)
-        assert "logger.info" in func_text, "async_ingest_task should call logger.info"
-        assert "logger.exception" in func_text or "logger.error" in func_text, \
-            "async_ingest_task should call logger.exception or logger.error"
+        assert "log.info" in func_text, "async_ingest_task should call log.info"
+        assert "log.exception" in func_text or "log.error" in func_text, \
+            "async_ingest_task should call log.exception or log.error"
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ class TestApiRoutesLogging:
     def test_routes_logger_used(self):
         """routes.py should log at least one message during dispatch."""
         from data_engineering_copilot.api import routes
-        assert hasattr(routes, "logger"), "routes.py must define a 'logger' attribute"
+        assert hasattr(routes, "log"), "routes.py must define a 'log' attribute (structlog)"
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task")

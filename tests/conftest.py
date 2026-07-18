@@ -177,12 +177,10 @@ def integration_settings():
 def embeddings_provider(integration_settings):
     """Real Ollama embeddings provider. Skips if Ollama is unreachable."""
     require_ollama()
-    from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+    from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 
-    return SentenceTransformerEmbeddings(
+    return OllamaEmbeddings(
         model_name=integration_settings.embedding_model_name,
-        cache_dir=integration_settings.embedding_cache_dir,
-        local_files_only=False,
     )
 
 

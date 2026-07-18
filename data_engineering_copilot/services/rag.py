@@ -194,7 +194,7 @@ class ProductionRagService(RagAnswerService):
     """
 
     def __init__(self):
-        from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+        from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
         from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
         from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 
@@ -202,10 +202,8 @@ class ProductionRagService(RagAnswerService):
             url=settings.qdrant_url,
             collection_name=settings.collection_name,
         )
-        self.embedder = SentenceTransformerEmbeddings(
+        self.embedder = OllamaEmbeddings(
             model_name=settings.embedding_model_name,
-            cache_dir=settings.embedding_cache_dir,
-            local_files_only=settings.embedding_local_files_only,
         )
         self.ollama_client = OllamaClient(
             base_url=settings.ollama_base_url,

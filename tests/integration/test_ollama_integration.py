@@ -1,4 +1,4 @@
-"""Integration tests for OllamaClient and SentenceTransformerEmbeddings.
+"""Integration tests for OllamaClient and OllamaEmbeddings.
 
 Tests embedding generation, text embedding batches, and LLM generation
 against a real Ollama instance.

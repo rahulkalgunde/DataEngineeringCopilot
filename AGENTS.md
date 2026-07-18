@@ -17,7 +17,7 @@ You must strictly adhere to Test-Driven Development (TDD) principles for all fea
 
 ## Package Management
 - **NEVER** use `pip` or `python -m venv`. This project uses **`uv`** exclusively.
-- Install deps: `uv pip install -e ".[dev]"` (or `uv pip install -e ".[worker,reranker,ui,dev]"` for all extras)
+- Install deps: `uv pip install -e ".[dev]"`
 - Target venv: `dec_venv/bin/python`
 
 ## Data Safety Rules
@@ -30,8 +30,7 @@ You must strictly adhere to Test-Driven Development (TDD) principles for all fea
 
 ## Makefile
 ```bash
-make install          # install core + dev deps
-make install-all      # install all extras (worker, reranker, ui, dev)
+make install          # install all deps
 make test             # run all tests
 make test-unit        # unit tests only
 make test-integration # integration tests only
@@ -179,9 +178,7 @@ python main.py ingest --source "Apache Spark Documentation"  # single source
 python main.py ingest --source X --source Y    # multiple sources
 python main.py ingest --max-pages 40           # cap pages per source
 python main.py ask "question"                  # RAG Q&A
-python main.py reset-index                     # delete qdrant_db/
-python main.py export-index --output out.zip  # zip qdrant_db/
-python main.py import-index archive.zip        # restore qdrant_db/
+python main.py reset-index                     # delete Qdrant collection
 python main.py ui                              # prints Streamlit launch command
 ```
 
@@ -201,7 +198,6 @@ python main.py ui                              # prints Streamlit launch command
 - `ARCHITECTURE.md` — architecture docs (partially stale; trust source code over it)
 - `PROJECT_CONTEXT.md` — older context doc (partially stale; ChromaDB refs fixed, but some details may be outdated)
 - `pyproject.toml` — project metadata, deps, pytest/coverage/ruff config
-- `requirements.txt` — legacy pinned deps (kept for reference; prefer pyproject.toml)
 - `data_engineering_copilot/config/logging.py` — root-level logging setup with file rolling (10MB, 5 backups)
 - `docker-compose.yml` — full infra stack (Redis, Qdrant, Langfuse, PG, ClickHouse, MinIO) with health checks
 - `Dockerfile` — multi-stage Python 3.12-slim with uv, default CMD: `python main.py --help`

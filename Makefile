@@ -1,13 +1,10 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
 
-.PHONY: install install-all test test-unit test-integration lint format clean docker-up docker-down
+.PHONY: install test test-unit test-integration lint format clean docker-up docker-down
 
 install:
 	uv pip install -e ".[dev]"
-
-install-all:
-	uv pip install -e ".[worker,reranker,ui,dev]"
 
 test:
 	$(PYTEST) tests/ -v

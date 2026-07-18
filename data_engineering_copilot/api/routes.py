@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import logging
 
+import structlog
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -13,7 +13,7 @@ from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import get_redis_client
 from data_engineering_copilot.workers.tasks import async_ingest_task
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -33,10 +33,7 @@ class TaskStatus(BaseModel):
 
 @router.post("/api/v1/ingest", response_model=TaskStatus)
 async def ingest_documents(request: IngestRequest):
-    logger.info(
-        "Ingest dispatch source_names=%s max_pages=%s",
-        request.source_names, request.max_pages,
-    )
+    log.info("ingest.dispatch", source_names=request.source_names, max_pages=request.max_pages)
     task = async_ingest_task.delay(request.source_names or [], request.max_pages or 0)
 
     # Write an initial status so the polling endpoint has something to
@@ -87,7 +84,7 @@ async def get_ingestion_status(task_id: str) -> dict:
 @router.post("/api/v1/ingest/{task_id}/cancel")
 async def cancel_ingestion(task_id: str) -> dict:
     """Cancel a running Celery ingestion task and update its Redis status."""
-    logger.info("Ingest cancel task_id=%s", task_id)
+    log.info("ingest.cancel", task_id=task_id)
     celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
 
     client = get_redis_client()
