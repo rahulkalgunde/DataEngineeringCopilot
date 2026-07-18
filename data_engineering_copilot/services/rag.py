@@ -1,19 +1,17 @@
 import logging
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.domain.models import Answer
-from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol, VectorStoreProtocol
+from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.reranker import CrossEncoderReranker
-from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
 logger = logging.getLogger(__name__)
 
 
 class RagAnswerService:
-    def __init__(self, vector_store, ollama_client, embedder):
+    def __init__(self, vector_store: VectorStoreProtocol, ollama_client: LLMClientProtocol, embedder: EmbedderProtocol):
         self.vector_store = vector_store
         self.ollama_client = ollama_client
         self.embedder = embedder
@@ -50,9 +48,7 @@ class RagAnswerService:
             if trace:
                 trace.update(output=str(exc))
             return Answer(
-                text="I cannot answer this question because embedding failed.",
-                sources=tuple(),
-                confidence=0.0
+                text="I cannot answer this question because embedding failed.", sources=tuple(), confidence=0.0
             )
 
         # Query the vector store and log retrieval details
@@ -61,7 +57,7 @@ class RagAnswerService:
             logger.info(
                 "Vector store query completed: retrieved_count=%d, threshold=%.2f",
                 len(retrieved_chunks),
-                settings.confidence_threshold
+                settings.confidence_threshold,
             )
 
             # Log details of each retrieved chunk
@@ -72,7 +68,7 @@ class RagAnswerService:
                     chunk.chunk.source_name,
                     chunk.confidence,
                     chunk.distance,
-                    chunk.chunk.title[:50] if chunk.chunk.title else "N/A"
+                    chunk.chunk.title[:50] if chunk.chunk.title else "N/A",
                 )
 
             if retrieval_span:
@@ -89,9 +85,7 @@ class RagAnswerService:
             if trace:
                 trace.update(output=str(exc))
             return Answer(
-                text="I cannot answer this question because vector store query failed.",
-                sources=tuple(),
-                confidence=0.0
+                text="I cannot answer this question because vector store query failed.", sources=tuple(), confidence=0.0
             )
 
         # Check if we have results and if they meet confidence threshold
@@ -102,7 +96,7 @@ class RagAnswerService:
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
-                confidence=0.0
+                confidence=0.0,
             )
 
         if retrieved_chunks[0].confidence < settings.confidence_threshold:
@@ -110,7 +104,7 @@ class RagAnswerService:
                 "Top chunk confidence below threshold: top_confidence=%.4f, threshold=%.4f, question=%r",
                 retrieved_chunks[0].confidence,
                 settings.confidence_threshold,
-                question[:100]
+                question[:100],
             )
             if trace:
                 trace.update(
@@ -119,7 +113,7 @@ class RagAnswerService:
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
-                confidence=0.0
+                confidence=0.0,
             )
 
         logger.info("Confidence check passed. Proceeding to retrieval reranking and answer generation.")
@@ -174,7 +168,7 @@ class RagAnswerService:
             return Answer(
                 text=answer_text,
                 sources=tuple(c.chunk for c in retrieved_chunks),
-                confidence=retrieved_chunks[0].confidence
+                confidence=retrieved_chunks[0].confidence,
             )
         except Exception as exc:
             logger.exception("Failed during Ollama generation: %s", exc)
@@ -186,7 +180,7 @@ class RagAnswerService:
             return Answer(
                 text=f"I encountered an error while generating the answer: {exc}",
                 sources=tuple(c.chunk for c in retrieved_chunks),
-                confidence=retrieved_chunks[0].confidence
+                confidence=retrieved_chunks[0].confidence,
             )
 
 
@@ -200,6 +194,10 @@ class ProductionRagService(RagAnswerService):
     """
 
     def __init__(self):
+        from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+        from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+        from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+
         self.db = QdrantVectorStore(
             url=settings.qdrant_url,
             collection_name=settings.collection_name,

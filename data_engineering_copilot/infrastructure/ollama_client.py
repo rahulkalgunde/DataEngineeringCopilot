@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import socket
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -55,32 +55,17 @@ class OllamaClient:
                 "num_predict": num_predict,
             },
         }
-        request = Request(
-            f"{self.base_url}/api/generate",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
+            body = self._http_post(payload)
         except TimeoutError as exc:
             logger.exception("Ollama generation timed out timeout_seconds=%s", self.timeout_seconds)
             raise OllamaError(
                 f"Ollama timed out after {self.timeout_seconds} seconds. "
                 "Try again after Ollama finishes loading the model, or reduce the configured context/output limits."
             ) from exc
-        except socket.timeout as exc:
-            logger.exception("Ollama generation socket timeout timeout_seconds=%s", self.timeout_seconds)
-            raise OllamaError(
-                f"Ollama timed out after {self.timeout_seconds} seconds. "
-                "Try again after Ollama finishes loading the model, or reduce the configured context/output limits."
-            ) from exc
         except URLError as exc:
             logger.exception("Ollama connection failed base_url=%s", self.base_url)
-            raise OllamaError(
-                "Could not reach Ollama. Start Ollama and run: ollama pull %s", self.model
-            ) from exc
+            raise OllamaError("Could not reach Ollama. Start Ollama and run: ollama pull %s", self.model) from exc
 
         response = self._extract_final_response(str(body.get("response", "")))
         done_reason = body.get("done_reason", "unknown")
@@ -100,6 +85,22 @@ class OllamaClient:
             )
         return response
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, OSError)),
+        reraise=True,
+    )
+    def _http_post(self, payload: dict) -> dict:
+        request = Request(
+            f"{self.base_url}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
+
     def _extract_final_response(self, response: str) -> str:
         response = response.strip()
         if not response:
@@ -112,7 +113,7 @@ class OllamaClient:
 
     def _format_raw_chat_prompt(self, user_prompt: str) -> str:
         """Format the user prompt with structured instructions for the LLM.
-        
+
         Uses a multi-part template that:
         1. Establishes role and constraints
         2. Provides explicit instructions

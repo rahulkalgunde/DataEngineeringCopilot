@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Iterable, List
+from collections.abc import Iterable
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -94,7 +94,7 @@ class QdrantVectorStore:
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
         """Convert a string chunk ID to a deterministic UUID.
-        
+
         Uses UUID5 (SHA-1 based) with the DNS namespace to generate a deterministic UUID
         from the chunk ID string. This ensures the same chunk ID always produces the same UUID.
         """
@@ -122,14 +122,14 @@ class QdrantVectorStore:
             logger.warning(
                 "Qdrant client not initialized. Cannot upsert chunks. "
                 "This may be because Qdrant is not running or not reachable at %s.",
-                self._url
+                self._url,
             )
             return
         try:
             chunks_list = list(chunks)
-            ids: List[str] = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in chunks_list]
-            vectors: List[List[float]] = [list(e) for e in embeddings]
-            payloads: List[dict] = [self._chunk_to_payload(chunk) for chunk in chunks_list]
+            ids: list[str] = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in chunks_list]
+            vectors: list[list[float]] = [list(e) for e in embeddings]
+            payloads: list[dict] = [self._chunk_to_payload(chunk) for chunk in chunks_list]
 
             self._client.upsert(
                 collection_name=self._collection_name,
@@ -143,7 +143,7 @@ class QdrantVectorStore:
             logger.exception("Failed to upsert chunks to Qdrant: %s", exc)
             raise
 
-    def query(self, query_embedding: List[float], top_k: int) -> List[RetrievedChunk]:
+    def query(self, query_embedding: list[float], top_k: int) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding.
 
         Returns a list of ``RetrievedChunk`` objects sorted by similarity
@@ -157,7 +157,7 @@ class QdrantVectorStore:
                 "Qdrant client not initialized. "
                 "This may be because Qdrant is not running or not reachable at %s. "
                 "Returning empty results.",
-                self._url
+                self._url,
             )
             return []
         try:
@@ -168,9 +168,9 @@ class QdrantVectorStore:
                 with_payload=True,
                 score_threshold=None,
             )
-            retrieved: List[RetrievedChunk] = []
+            retrieved: list[RetrievedChunk] = []
             # QueryResponse returns a QueryResponse object with a points attribute
-            points_list = results.points if hasattr(results, 'points') else results
+            points_list = results.points if hasattr(results, "points") else results
             for hit in points_list:
                 payload = hit.payload or {}
                 chunk = DocumentChunk(
@@ -183,9 +183,7 @@ class QdrantVectorStore:
                 # Qdrant returns cosine distance in [0, 2]; convert to confidence.
                 distance = hit.score if isinstance(hit.score, float) else 0.0
                 confidence = max(0.0, min(1.0, 1.0 - distance))
-                retrieved.append(
-                    RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence)
-                )
+                retrieved.append(RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence))
             return retrieved
         except Exception as exc:
             # Check if this is a 404 (collection not found) error
@@ -195,13 +193,13 @@ class QdrantVectorStore:
                     "Qdrant collection '%s' not found or empty. "
                     "This may be because no ingestion has been performed yet, "
                     "or Qdrant is not running. Returning empty results.",
-                    self._collection_name
+                    self._collection_name,
                 )
                 return []
             logger.exception("Failed to query Qdrant vector store: %s", exc)
             raise
 
-    def hybrid_query(self, query: str, top_k: int) -> List[RetrievedChunk]:
+    def hybrid_query(self, query: str, top_k: int) -> list[RetrievedChunk]:
         """Convenience method used by the reference RAG implementation.
 
         It embeds the raw query string using the project's embedding model
@@ -221,10 +219,10 @@ class QdrantVectorStore:
 
     def get_content_hash_for_url(self, url: str) -> str | None:
         """Retrieve the stored content_hash for a given URL.
-        
+
         Uses scroll with a payload filter on the ``url`` field.  This is efficient
         when a payload index on ``url`` exists (created at init time).
-        
+
         Returns ``None`` if no chunks exist for the URL or if the client is not
         initialised.
         """
@@ -250,21 +248,17 @@ class QdrantVectorStore:
                 return points[0].payload.get("content_hash")
             return None
         except Exception as exc:
-            logger.warning(
-                "Failed to retrieve content hash for url=%s: %s", url, exc
-            )
+            logger.warning("Failed to retrieve content hash for url=%s: %s", url, exc)
             return None
 
     def delete_by_url(self, url: str) -> None:
         """Delete all points whose payload ``url`` field matches the given URL.
-        
+
         This is used to purge ghost chunks before re-indexing a page whose
         content has changed (e.g., the page shrunk from 10 chunks to 5).
         """
         if self._client is None:
-            logger.warning(
-                "Qdrant client not initialized. Cannot delete by url=%s.", url
-            )
+            logger.warning("Qdrant client not initialized. Cannot delete by url=%s.", url)
             return
         try:
             self._client.delete(
@@ -291,7 +285,7 @@ class QdrantVectorStore:
             logger.warning(
                 "Qdrant client not initialized. Cannot get collection count. "
                 "This may be because Qdrant is not running or not reachable at %s.",
-                self._url
+                self._url,
             )
             return 0
         try:
