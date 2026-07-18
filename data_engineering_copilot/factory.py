@@ -4,7 +4,7 @@ import logging
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
@@ -49,10 +49,8 @@ def build_chunker(app_settings: AppSettings = settings):
                 strategy,
                 app_settings.min_semantic_similarity,
             )
-            embedding_model = SentenceTransformerEmbeddings(
+            embedding_model = OllamaEmbeddings(
                 model_name=app_settings.embedding_model_name,
-                cache_dir=app_settings.embedding_cache_dir,
-                local_files_only=app_settings.embedding_local_files_only,
             )
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
@@ -102,10 +100,8 @@ def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionSe
         ),
         parser=DocumentationHtmlParser(),
         chunker=build_chunker(app_settings),
-        embeddings=SentenceTransformerEmbeddings(
+        embeddings=OllamaEmbeddings(
             model_name=app_settings.embedding_model_name,
-            cache_dir=app_settings.embedding_cache_dir,
-            local_files_only=app_settings.embedding_local_files_only,
         ),
         vector_store=QdrantVectorStore(
             url=app_settings.qdrant_url,

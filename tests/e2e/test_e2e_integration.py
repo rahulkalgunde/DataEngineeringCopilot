@@ -13,7 +13,7 @@ import pytest
 
 from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import Answer, RawDocument
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
@@ -108,10 +108,8 @@ def _make_components():
         confidence_threshold=0.10,
         ingestion_batch_chunk_size=64,
     )
-    embedder = SentenceTransformerEmbeddings(
+    embedder = OllamaEmbeddings(
         model_name=settings.embedding_model_name,
-        cache_dir=settings.embedding_cache_dir,
-        local_files_only=False,
     )
     ollama = OllamaClient(
         base_url=settings.ollama_base_url,

@@ -39,11 +39,11 @@ RUN uv pip install --system --no-cache playwright
 USER appuser
 RUN playwright install chromium
 
-# Re-escalate to copy and install requirements.txt
+# Install project dependencies
 USER root
 
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+COPY pyproject.toml .
+RUN uv pip install --system --no-cache .
 
 # Copy remaining code files
 COPY . .
