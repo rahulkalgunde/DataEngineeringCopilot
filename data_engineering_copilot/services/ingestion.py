@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from data_engineering_copilot.config.settings import AppSettings
+from data_engineering_copilot.domain.exceptions import EmbeddingError, IngestionError, VectorStoreError
 from data_engineering_copilot.domain.models import DocumentChunk, IngestionEvent
-from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
-from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
-from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore
-from data_engineering_copilot.services.chunker import DocumentChunker
-
+from data_engineering_copilot.domain.protocols import (
+    ChunkerProtocol,
+    CrawlerProtocol,
+    EmbedderProtocol,
+    ParserProtocol,
+    VectorStoreProtocol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +22,11 @@ class IngestionService:
     def __init__(
         self,
         settings: AppSettings,
-        crawler: DocumentationCrawler,
-        parser: DocumentationHtmlParser,
-        chunker: DocumentChunker,
-        embeddings: SentenceTransformerEmbeddings,
-        vector_store: QdrantVectorStore,
+        crawler: CrawlerProtocol,
+        parser: ParserProtocol,
+        chunker: ChunkerProtocol,
+        embeddings: EmbedderProtocol,
+        vector_store: VectorStoreProtocol,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -40,6 +42,7 @@ class IngestionService:
         on_event: Callable[[IngestionEvent], None] | None = None,
     ) -> int:
         import time as time_module
+
         start_time = time_module.time()
         page_limit = max_pages_per_source or self.settings.max_pages_per_source
         total_chunks = 0
@@ -88,13 +91,13 @@ class IngestionService:
             )
             try:
                 batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
-            except RuntimeError as exc:
+            except EmbeddingError as exc:
                 logger.error(
                     "Ingestion failed to embed batch of %d chunks: %s",
                     len(batch_chunks),
                     exc,
                 )
-                raise
+                raise IngestionError(f"Embedding failed: {exc}") from exc
             self._emit(
                 on_event,
                 _make_event(
@@ -113,11 +116,11 @@ class IngestionService:
                     len(batch_chunks),
                     exc,
                 )
-                raise
+                raise VectorStoreError(f"Vector store upsert failed: {exc}") from exc
             batch_chunks.clear()
 
         for source in selected_sources:
-            print(f"Crawling {source.name}")
+            logger.info("Crawling %s", source.name)
             logger.info("Ingestion source started source=%s page_limit=%s", source.name, page_limit)
             source_pages_fetched = 0
             source_chunks_indexed = 0
@@ -135,7 +138,9 @@ class IngestionService:
                 global_pages_fetched += 1
                 parsed = self.parser.parse(raw_document)
                 if parsed is None:
-                    logger.info("Ingestion skipped unreadable page source=%s url=%s", raw_document.source_name, raw_document.url)
+                    logger.info(
+                        "Ingestion skipped unreadable page source=%s url=%s", raw_document.source_name, raw_document.url
+                    )
                     self._emit(
                         on_event,
                         _make_event(
@@ -182,10 +187,8 @@ class IngestionService:
                 chunks = self.chunker.chunk(parsed)
                 # Stamp content_hash onto every chunk for future dedup lookups
                 import dataclasses
-                chunks = [
-                    dataclasses.replace(chunk, content_hash=content_hash)
-                    for chunk in chunks
-                ]
+
+                chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
                 batch_chunks.extend(chunks)
 
                 if len(batch_chunks) >= self.settings.ingestion_batch_chunk_size:
@@ -193,7 +196,7 @@ class IngestionService:
 
                 total_chunks += len(chunks)
                 source_chunks_indexed += len(chunks)
-                print(f"Indexed {len(chunks):>3} chunks from {parsed.title}")
+                logger.info("Indexed %3d chunks from %s", len(chunks), parsed.title)
                 logger.info(
                     "Ingestion indexed page source=%s url=%s title=%r chunks=%s total_chunks=%s",
                     parsed.source_name,
@@ -258,8 +261,7 @@ class IngestionService:
             available_names = ", ".join(sources_by_name)
             logger.error("Ingestion source selection failed unknown=%s available=%s", unknown_names, available_names)
             raise ValueError(
-                f"Unknown documentation source(s): {', '.join(unknown_names)}. "
-                f"Available sources: {available_names}"
+                f"Unknown documentation source(s): {', '.join(unknown_names)}. Available sources: {available_names}"
             )
 
         return tuple(sources_by_name[name] for name in requested_names)

@@ -1,55 +1,103 @@
 # DataEngineeringCopilot — Agent Guide
 
+# OpenCode Development Rules - Strict TDD Policy
+
+You must strictly adhere to Test-Driven Development (TDD) principles for all feature requests, refactors, and bug fixes. Do not write implementation code before tests exist.
+
+## The TDD Protocol
+1. **Analyze:** Read existing files to map out architecture (use Plan Mode).
+2. **Write Tests First:** Write comprehensive unit/integration tests covering the happy path and edge cases (nulls, empty inputs, type mismatches).
+3. **Verify Failure:** Run the test suite using the `bash` tool to ensure the new tests fail. 
+4. **Implement:** Write the minimum production code required to make the tests pass (use Build Mode).
+5. **Execute & Iterate:** Run the test suite command immediately after editing files. If a test fails, analyze the output and fix the implementation. Repeat until tests pass.
+
+## Project Execution Commands
+- Python/PySpark Testing: `pytest`
+- Auto-run flag: After writing or updating code, you are permitted to run the test suite autonomously without asking for confirmation.
+
 ## Package Management
 - **NEVER** use `pip` or `python -m venv`. This project uses **`uv`** exclusively.
-- Install deps: `uv pip install -r requirements.txt`
-- Target venv: `${workspaceFolder}/dec_venv/bin/python`
+- Install deps: `uv pip install -e ".[dev]"` (or `uv pip install -e ".[worker,reranker,ui,dev]"` for all extras)
+- Target venv: `dec_venv/bin/python`
+
+## Data Safety Rules
+- **NEVER** delete any data — Docker volumes, databases, indexed content, user files, or any persistent state. This is an absolute rule with no exceptions.
+- **NEVER** run `docker volume rm`, `docker volume prune`, `docker system prune`, `docker compose down -v`, or any command that removes volumes or persistent data.
+- **NEVER** run `rm -rf` on any directory without explicit user approval first.
+- If a container is crash-looping or a service fails, **always ask the user** before taking any action that could affect data. Never assume deleting and recreating is acceptable.
+- When debugging issues, prefer checking logs (`docker logs <container>`), inspecting state, or updating image versions — never destructive remediation.
+- **When in doubt, ask.** Data loss is irreversible; restarting a container is not.
+
+## Makefile
+```bash
+make install          # install core + dev deps
+make install-all      # install all extras (worker, reranker, ui, dev)
+make test             # run all tests
+make test-unit        # unit tests only
+make test-integration # integration tests only
+make lint             # ruff check (requires ruff)
+make format           # ruff format (requires ruff)
+make clean            # remove __pycache__, .pytest_cache, .pyc files
+make docker-up        # docker compose up -d
+make docker-down      # docker compose down
+```
 
 ## Virtual Environment
 - The active venv is `dec_venv/` at the project root.
-- `.vscode/settings.json` sets the interpreter to `${workspaceFolder}/dec_venv/bin/python`.
+- `.vscode/settings.json` sets the interpreter to `dec_venv/bin/python`.
 - **Do NOT reference** `/home/rahul/PythonVenvs/data_eng_copilot_env` — it does not exist.
 
 ## Running Tests
 ```bash
 # Unit tests only (no external services needed)
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m "not integration"
+dec_venv/bin/python -m pytest tests/unit/ -v
 
 # Single test file
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/test_chunker.py -v
+dec_venv/bin/python -m pytest tests/unit/test_chunker_improved.py -v
 
 # Integration tests (require running Qdrant + Ollama + Langfuse)
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m integration
+dec_venv/bin/python -m pytest tests/integration/ -v
 
 # Integration tests by service
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m qdrant       # Qdrant only
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m ollama      # Ollama only
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m langfuse    # Langfuse only
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m rag         # Full RAG pipeline
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m ingestion   # Full ingestion pipeline
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m api         # FastAPI endpoints
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v -m "slow"      # Long-running tests
+dec_venv/bin/python -m pytest tests/integration/ -v -m qdrant       # Qdrant only
+dec_venv/bin/python -m pytest tests/integration/ -v -m ollama      # Ollama only
+dec_venv/bin/python -m pytest tests/integration/ -v -m langfuse    # Langfuse only
+dec_venv/bin/python -m pytest tests/integration/ -v -m rag         # Full RAG pipeline
+dec_venv/bin/python -m pytest tests/integration/ -v -m ingestion   # Full ingestion pipeline
+dec_venv/bin/python -m pytest tests/integration/ -v -m api         # FastAPI endpoints
+
+# E2E tests (full pipeline)
+dec_venv/bin/python -m pytest tests/e2e/ -v
 
 # Run everything (unit + integration)
-${workspaceFolder}/dec_venv/bin/python -m pytest tests/ -v
+dec_venv/bin/python -m pytest tests/ -v
 ```
-- `pytest.ini` markers: `integration`, `slow`, `qdrant`, `ollama`, `langfuse`, `rag`, `ingestion`, `api`.
+- `pyproject.toml` `[tool.pytest.ini_options]` defines markers: `integration`, `slow`, `qdrant`, `ollama`, `langfuse`, `rag`, `ingestion`, `api`.
 - Integration tests auto-skip when required services are unreachable.
-- `.coveragerc` omits `data_engineering_copilot/ui/*` from coverage.
-- No linting/typechecking tools are configured (no ruff, mypy, flake8).
+- `pyproject.toml` `[tool.coverage.run]` omits `data_engineering_copilot/ui/*` from coverage.
+- `pyproject.toml` `[tool.ruff]` configures ruff linting (E, F, W, I, UP, B, SIM rules) and formatting.
+
+## Test Structure
+```
+tests/
+├── conftest.py                 # shared fixtures, auto-skip hooks
+├── unit/                       # 172 tests, no external services
+├── integration/                # 6 test files, require Qdrant/Ollama/Langfuse
+└── e2e/                        # 1 test file, full pipeline
+```
 
 ## Running the App
 ```bash
 # CLI
-${workspaceFolder}/dec_venv/bin/python main.py ingest --max-pages 40
-${workspaceFolder}/dec_venv/bin/python main.py ask "your question"
-${workspaceFolder}/dec_venv/bin/python main.py reset-index
+dec_venv/bin/python main.py ingest --max-pages 40
+dec_venv/bin/python main.py ask "your question"
+dec_venv/bin/python main.py reset-index
 
 # Streamlit UI
-${workspaceFolder}/dec_venv/bin/python -m streamlit run data_engineering_copilot/ui/streamlit_app.py
+dec_venv/bin/python -m streamlit run data_engineering_copilot/ui/streamlit_app.py
 
 # FastAPI (for async ingestion via Celery)
-${workspaceFolder}/dec_venv/bin/python -m uvicorn data_engineering_copilot.api.app:app --reload --port 8000
+dec_venv/bin/python -m uvicorn data_engineering_copilot.api.app:app --reload --port 8000
 ```
 
 ## Infrastructure Dependencies (Docker Compose)
@@ -144,7 +192,6 @@ python main.py ui                              # prints Streamlit launch command
 
 ## Known Pitfalls
 - **Stale chunks**: No deletion/pruning for removed docs; upsert overwrites by chunk ID but stale chunks from changed pages may linger.
-- **No retry/backoff** for transient HTTP errors in crawler or Ollama.
 - **Ollama raw prompt**: Must use `raw=True` in OllamaClient to avoid Qwen models returning thinking-only empty responses.
 - **No canonical URL normalization** beyond fragments/slash dedupe — query-string variants may duplicate pages.
 - **UI refresh is synchronous** — long crawls block the Streamlit session.
@@ -152,9 +199,13 @@ python main.py ui                              # prints Streamlit launch command
 ## Project Files
 - `AGENTS.md` — this file
 - `ARCHITECTURE.md` — architecture docs (partially stale; trust source code over it)
-- `PROJECT_CONTEXT.md` — older context doc (stale; references ChromaDB, wrong models)
-- `logger_config.py` — root-level logging setup with file rolling (10MB, 5 backups)
-- `docker-compose.yml` — full infra stack (Redis, Qdrant, Langfuse, PG, ClickHouse, MinIO)
-- `Dockerfile` — Python 3.12-slim, Playwright Chromium, default CMD: `python main.py --help`
+- `PROJECT_CONTEXT.md` — older context doc (partially stale; ChromaDB refs fixed, but some details may be outdated)
+- `pyproject.toml` — project metadata, deps, pytest/coverage/ruff config
+- `requirements.txt` — legacy pinned deps (kept for reference; prefer pyproject.toml)
+- `data_engineering_copilot/config/logging.py` — root-level logging setup with file rolling (10MB, 5 backups)
+- `docker-compose.yml` — full infra stack (Redis, Qdrant, Langfuse, PG, ClickHouse, MinIO) with health checks
+- `Dockerfile` — multi-stage Python 3.12-slim with uv, default CMD: `python main.py --help`
+- `.dockerignore` — excludes tests, logs, .git, venvs from Docker context
+- `.pre-commit-config.yaml` — ruff linting + formatting, trailing whitespace, end-of-file fixer
 - `.env` — Langfuse credentials for local dev
 - `.streamlit/config.toml` — disables file watcher and usage stats

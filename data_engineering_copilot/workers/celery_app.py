@@ -1,8 +1,10 @@
 from celery import Celery
 
-# Celery configuration – broker and backend both use local Redis
+from data_engineering_copilot.config.settings import settings
+
+# Celery configuration – broker and backend both use Redis from settings
 celery_app = Celery(
     "data_engineering_copilot",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
 )

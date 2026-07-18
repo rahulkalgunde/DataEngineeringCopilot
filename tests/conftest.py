@@ -9,11 +9,10 @@ Provides:
 """
 
 import json
-import sys
 import pathlib
-import time
-import urllib.request
+import sys
 import urllib.error
+import urllib.request
 import uuid
 
 import pytest
@@ -28,6 +27,7 @@ if str(project_root) not in sys.path:
 # ---------------------------------------------------------------------------
 # Health-check helpers
 # ---------------------------------------------------------------------------
+
 
 def _qdrant_is_reachable(url: str = "http://localhost:6333", timeout: int = 3) -> bool:
     """Return True if Qdrant /collections endpoint responds."""
@@ -114,6 +114,7 @@ def require_qdrant_and_ollama():
 # Unique collection name generator
 # ---------------------------------------------------------------------------
 
+
 def unique_collection_name(prefix: str = "test") -> str:
     """Generate a unique collection name to isolate tests."""
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -123,40 +124,38 @@ def unique_collection_name(prefix: str = "test") -> str:
 # Pytest hooks – auto-skip integration tests when services are down
 # ---------------------------------------------------------------------------
 
+
 def pytest_collection_modifyitems(config, items):
     """Auto-skip integration-marked tests when required services are unreachable."""
     for item in items:
         markers = {m.name for m in item.iter_markers()}
 
-        if "qdrant" in markers or ("integration" in markers and "qdrant" in markers):
-            if not qdrant_available():
-                item.add_marker(pytest.mark.skip(reason="Qdrant is not reachable"))
+        if "qdrant" in markers and not qdrant_available():
+            item.add_marker(pytest.mark.skip(reason="Qdrant is not reachable"))
 
-        if "ollama" in markers or ("integration" in markers and "ollama" in markers):
-            if not ollama_available():
-                item.add_marker(pytest.mark.skip(reason="Ollama is not reachable"))
+        if "ollama" in markers and not ollama_available():
+            item.add_marker(pytest.mark.skip(reason="Ollama is not reachable"))
 
-        if "langfuse" in markers:
-            if not langfuse_available():
-                item.add_marker(pytest.mark.skip(reason="Langfuse is not reachable"))
+        if "langfuse" in markers and not langfuse_available():
+            item.add_marker(pytest.mark.skip(reason="Langfuse is not reachable"))
 
-        if "rag" in markers:
-            if not qdrant_available() or not ollama_available():
-                item.add_marker(pytest.mark.skip(reason="RAG tests require Qdrant + Ollama"))
+        if "rag" in markers and (not qdrant_available() or not ollama_available()):
+            item.add_marker(pytest.mark.skip(reason="RAG tests require Qdrant + Ollama"))
 
-        if "ingestion" in markers:
-            if not qdrant_available() or not ollama_available():
-                item.add_marker(pytest.mark.skip(reason="Ingestion tests require Qdrant + Ollama"))
+        if "ingestion" in markers and (not qdrant_available() or not ollama_available()):
+            item.add_marker(pytest.mark.skip(reason="Ingestion tests require Qdrant + Ollama"))
 
 
 # ---------------------------------------------------------------------------
 # Shared fixtures – Settings
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def integration_settings():
     """AppSettings tuned for integration testing."""
     from data_engineering_copilot.config.settings import AppSettings
+
     return AppSettings(
         embedding_batch_size=32,
         retrieval_top_k=5,
@@ -173,11 +172,13 @@ def integration_settings():
 # Shared fixtures – Embeddings
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def embeddings_provider(integration_settings):
     """Real Ollama embeddings provider. Skips if Ollama is unreachable."""
     require_ollama()
     from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+
     return SentenceTransformerEmbeddings(
         model_name=integration_settings.embedding_model_name,
         cache_dir=integration_settings.embedding_cache_dir,
@@ -189,6 +190,7 @@ def embeddings_provider(integration_settings):
 # Shared fixtures – Qdrant Vector Store (with unique collection + teardown)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def qdrant_store(integration_settings):
     """Create a QdrantVectorStore with a unique collection name.
@@ -196,8 +198,9 @@ def qdrant_store(integration_settings):
     Tears down the collection after the test.
     """
     require_qdrant()
-    from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
     from qdrant_client import QdrantClient
+
+    from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 
     coll_name = unique_collection_name("itest")
     store = QdrantVectorStore(
@@ -219,11 +222,13 @@ def qdrant_store(integration_settings):
 # Shared fixtures – Ollama Client
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def ollama_client(integration_settings):
     """Real Ollama client. Skips if Ollama is unreachable."""
     require_ollama()
     from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+
     return OllamaClient(
         base_url=integration_settings.ollama_base_url,
         model=integration_settings.ollama_model,
@@ -237,15 +242,18 @@ def ollama_client(integration_settings):
 # Shared fixtures – HTML Parser & Chunker
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def html_parser():
     from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
+
     return DocumentationHtmlParser()
 
 
 @pytest.fixture
 def chunker(integration_settings):
     from data_engineering_copilot.services.chunker import DocumentChunker
+
     return DocumentChunker(
         chunk_size_words=integration_settings.chunk_size_words,
         overlap_words=integration_settings.chunk_overlap_words,
@@ -256,6 +264,7 @@ def chunker(integration_settings):
 # Shared fixtures – Populated Vector Store
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def populated_store(qdrant_store, embeddings_provider):
     """Qdrant store pre-populated with 10 diverse chunks for RAG testing.
@@ -265,16 +274,46 @@ def populated_store(qdrant_store, embeddings_provider):
     from data_engineering_copilot.domain.models import DocumentChunk
 
     topics = [
-        ("Apache Spark", "Apache Spark is a unified analytics engine for large-scale data processing. It provides high-level APIs in Scala, Java, Python, and R."),
-        ("Spark SQL", "Spark SQL is a Spark module for structured data processing. It provides a programming abstraction called DataFrames and SQL."),
-        ("Spark Streaming", "Spark Streaming enables scalable, high-throughput, fault-tolerant stream processing of live data streams."),
-        ("Delta Lake", "Delta Lake is an open-source storage framework that brings ACID transactions to Apache Spark and big data workloads."),
-        ("Apache Airflow", "Apache Airflow is a platform to programmatically author, schedule and monitor workflows defined as code."),
-        ("Airflow DAGs", "A DAG (Directed Acyclic Graph) in Airflow is a collection of tasks organized with dependencies and scheduling logic."),
-        ("Databricks", "Databricks is a unified analytics platform built on top of Apache Spark that provides collaborative notebooks and data pipelines."),
-        ("Data Lakehouse", "The data lakehouse architecture combines the best features of data lakes and data warehouses into a single platform."),
-        ("Structured Streaming", "Structured Streaming is a scalable stream processing engine built on the Spark SQL engine."),
-        ("PySpark", "PySpark is the Python API for Apache Spark. It allows you to write Spark applications using Python."),
+        (
+            "Apache Spark",
+            "Apache Spark is a unified analytics engine for large-scale data processing. It provides high-level APIs in Scala, Java, Python, and R.",
+        ),
+        (
+            "Spark SQL",
+            "Spark SQL is a Spark module for structured data processing. It provides a programming abstraction called DataFrames and SQL.",
+        ),
+        (
+            "Spark Streaming",
+            "Spark Streaming enables scalable, high-throughput, fault-tolerant stream processing of live data streams.",
+        ),
+        (
+            "Delta Lake",
+            "Delta Lake is an open-source storage framework that brings ACID transactions to Apache Spark and big data workloads.",
+        ),
+        (
+            "Apache Airflow",
+            "Apache Airflow is a platform to programmatically author, schedule and monitor workflows defined as code.",
+        ),
+        (
+            "Airflow DAGs",
+            "A DAG (Directed Acyclic Graph) in Airflow is a collection of tasks organized with dependencies and scheduling logic.",
+        ),
+        (
+            "Databricks",
+            "Databricks is a unified analytics platform built on top of Apache Spark that provides collaborative notebooks and data pipelines.",
+        ),
+        (
+            "Data Lakehouse",
+            "The data lakehouse architecture combines the best features of data lakes and data warehouses into a single platform.",
+        ),
+        (
+            "Structured Streaming",
+            "Structured Streaming is a scalable stream processing engine built on the Spark SQL engine.",
+        ),
+        (
+            "PySpark",
+            "PySpark is the Python API for Apache Spark. It allows you to write Spark applications using Python.",
+        ),
     ]
 
     chunks = []
@@ -301,10 +340,12 @@ def populated_store(qdrant_store, embeddings_provider):
 # Shared fixtures – RAG Service
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def rag_service(integration_settings, embeddings_provider, ollama_client, qdrant_store):
     """RagAnswerService wired to real components."""
     from data_engineering_copilot.services.rag import RagAnswerService
+
     return RagAnswerService(
         vector_store=qdrant_store,
         ollama_client=ollama_client,
@@ -316,9 +357,12 @@ def rag_service(integration_settings, embeddings_provider, ollama_client, qdrant
 # Shared fixtures – FastAPI TestClient
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def api_client():
     """FastAPI TestClient for API endpoint tests."""
     from fastapi.testclient import TestClient
+
     from data_engineering_copilot.api.app import app
+
     return TestClient(app)

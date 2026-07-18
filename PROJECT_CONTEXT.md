@@ -15,7 +15,7 @@
 - Entry points: `main.py` CLI; `data_engineering_copilot/ui/streamlit_app.py`
 - Layers: config → domain dataclasses → infrastructure adapters → services/workflows → CLI/UI
 - RAG design: no LangChain/LlamaIndex; direct crawler/parser/chunker/embed/vector/query/generate pipeline
-- Persistence: local `chroma_db/`; embedding cache under `data/embedding_models`
+- Persistence: local `qdrant_db/`; embedding cache under `data/embedding_models`
 
 ## 4. Folder Map (Compressed)
 - `main.py` → CLI commands: `ingest`, `ask`, `reset-index`, `ui`
@@ -342,7 +342,7 @@
 - `AppSettings`:
   - `project_root`
   - `data_dir`
-  - `chroma_dir`
+  - `qdrant_url`
   - `documentation_sources_path`
   - `embedding_cache_dir`
   - `collection_name`
@@ -420,11 +420,11 @@
 - RAG Answer:
   - question → `embed_query` → `QdrantVectorStore.query(top_k)` → confidence threshold → `_build_prompt` → `OllamaClient.generate` → `Answer`
 - Vector Retrieval:
-  - query vector → Chroma cosine query → docs/metadatas/distances → confidence=`clamp(1-distance)` → `RetrievedChunk[]`
+  - query vector → Qdrant cosine search → docs/metadatas/scores → confidence from score threshold → `RetrievedChunk[]`
 - Ollama Generation:
-  - repository context + question → raw Qwen chat prompt → POST `OLLAMA/api/generate` → response text
+  - repository context + question → raw prompt → POST `OLLAMA/api/generate` → response text
 - Reset Index:
-  - `python main.py reset-index` → delete `settings.chroma_dir` if exists → recreate empty directory
+  - `python main.py reset-index` → delete `qdrant_db/` directory if exists
 - Setup Embeddings:
   - `python scripts/download_embedding_model.py` → cache sentence-transformers model → runtime embedding load succeeds with `local_files_only=True`
 

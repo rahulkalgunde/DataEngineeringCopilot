@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Callable
 
 import numpy as np
 from nltk.tokenize import sent_tokenize
@@ -21,7 +20,6 @@ from nltk.tokenize import sent_tokenize
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.utils.text import slugify
-
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +125,7 @@ class SemanticChunker:
         sentence_groups = self._cluster_sentences(sentences, embeddings)
 
         # Merge clusters into chunks respecting size constraints
-        chunks = self._merge_clusters_into_chunks(
-            document, sentence_groups
-        )
+        chunks = self._merge_clusters_into_chunks(document, sentence_groups)
 
         logger.info(
             "Chunked document (semantic) source=%s url=%s title=%r sentences=%s clusters=%s chunks=%s",
@@ -182,13 +178,9 @@ class SemanticChunker:
             cluster_similarities = []
             for cluster_idx in range(len(clusters)):
                 # Cluster center: mean of all embeddings in cluster
-                cluster_embedding = np.mean(
-                    embedding_array[clusters[cluster_idx]], axis=0
-                )
+                cluster_embedding = np.mean(embedding_array[clusters[cluster_idx]], axis=0)
                 # Normalize cluster center
-                cluster_embedding = cluster_embedding / (
-                    np.linalg.norm(cluster_embedding) + 1e-10
-                )
+                cluster_embedding = cluster_embedding / (np.linalg.norm(cluster_embedding) + 1e-10)
                 # Cosine similarity
                 similarity = np.dot(embedding_array[i], cluster_embedding)
                 cluster_similarities.append(similarity)
@@ -230,9 +222,7 @@ class SemanticChunker:
 
         # Group sentences by their cluster
         sentences = sent_tokenize(document.text)
-        sentences_by_cluster = [
-            [sentences[i] for i in cluster] for cluster in sentence_groups
-        ]
+        sentences_by_cluster = [[sentences[i] for i in cluster] for cluster in sentence_groups]
 
         chunks: list[DocumentChunk] = []
         current_chunk_clusters: list[list[str]] = []
@@ -243,13 +233,8 @@ class SemanticChunker:
             cluster_words = len(cluster_text.split())
 
             # If adding this cluster exceeds target size and we have content, finalize chunk
-            if (
-                current_chunk_words + cluster_words > self.chunk_size_words
-                and current_chunk_clusters
-            ):
-                chunk_text = " ".join(
-                    " ".join(cluster) for cluster in current_chunk_clusters
-                ).strip()
+            if current_chunk_words + cluster_words > self.chunk_size_words and current_chunk_clusters:
+                chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
                 if self._is_valid_chunk(chunk_text):
                     chunk_id = self._chunk_id(document, len(chunks))
                     chunks.append(
@@ -280,9 +265,7 @@ class SemanticChunker:
 
             # Hard limit: if we exceed max_chunk_words, finalize even mid-cluster
             if current_chunk_words > self.max_chunk_words:
-                chunk_text = " ".join(
-                    " ".join(cluster) for cluster in current_chunk_clusters
-                ).strip()
+                chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
                 if self._is_valid_chunk(chunk_text):
                     chunk_id = self._chunk_id(document, len(chunks))
                     chunks.append(
@@ -299,9 +282,7 @@ class SemanticChunker:
 
         # Handle final chunk
         if current_chunk_clusters:
-            chunk_text = " ".join(
-                " ".join(cluster) for cluster in current_chunk_clusters
-            ).strip()
+            chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
             if self._is_valid_chunk(chunk_text):
                 chunk_id = self._chunk_id(document, len(chunks))
                 chunks.append(
@@ -341,10 +322,7 @@ class SemanticChunker:
 
         # Ensure chunk has meaningful content
         has_alphanumeric = any(c.isalnum() for c in text)
-        if not has_alphanumeric:
-            return False
-
-        return True
+        return has_alphanumeric
 
     def _chunk_id(self, document: ParsedDocument, index: int) -> str:
         """

@@ -43,7 +43,7 @@ DataEngineeringCopilot/
 - To create or manage virtual environments, use: `uv venv dec_venv`
 - To install packages from requirements.txt, use: `uv pip install -r requirements.txt`
 - To add a single package to the environment, use: `uv pip install <package_name>`
-- Always ensure you target the correct local virtual environment binary path: `${workspaceFolder}/dec_venv/bin/python`
+- Always ensure you target the correct local virtual environment binary path: `dec_venv/bin/python`
 
 On windows machine, Install and start Ollama, then run the models:
 
@@ -56,17 +56,17 @@ ollama pull qwen3.5:9b
 Docker
 
 1. Start Docker Desktop on windows machine
-2. Login to wsl and go to Project Directory `/home/rahul/PycharmProjects/DataEngineeringCopilot`
-3. Activate python venv `source /home/rahul/PythonVenvs/data_eng_copilot_env/bin/activate`
+2. Login to wsl and go to Project Directory
+3. Activate python venv `source dec_venv/bin/activate`
 3. Run: `docker compose up -d`
 
-Always Use Python virtual environment located at `/home/rahul/PythonVenvs/data_eng_copilot_env`
+Always Use Python virtual environment located at `dec_venv/` at the project root.
 
 Linux/macOS:
 
 ```bash
 uv venv dec_venv
-source ${workspaceFolder}/dec_venv/bin/activate
+source dec_venv/bin/activate
 uv pip install -r requirements.txt
 ```
 

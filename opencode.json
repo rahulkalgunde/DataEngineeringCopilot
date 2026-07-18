@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "docker volume rm *": "deny",
+      "docker volume prune *": "deny",
+      "docker compose down -v*": "deny",
+      "docker system prune *": "deny",
+      "docker rm *": "deny",
+      "docker rmi *": "deny",
+      "rm -rf *": "ask"
+    }
+  }
+}

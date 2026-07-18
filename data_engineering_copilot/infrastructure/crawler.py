@@ -3,14 +3,15 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from collections.abc import Callable, Iterable
 from html.parser import HTMLParser
-from typing import Callable, Iterable
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
 from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.domain.models import IngestionEvent, RawDocument
-
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,6 @@ class DocumentationCrawler:
             except Exception as exc:
                 visited.add(url_key)
                 message = f"Skipping {url}: {exc}"
-                print(message)
                 logger.warning(
                     "Crawler fetch failed source=%s url=%s pages_fetched=%s error=%s",
                     source.name,
@@ -120,6 +120,12 @@ class DocumentationCrawler:
             len(queue),
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((TimeoutError, ConnectionError, OSError)),
+        reraise=True,
+    )
     def _download(self, url: str) -> str:
         request = Request(url, headers={"User-Agent": "DataEngineeringCopilot/1.0"})
         with urlopen(request, timeout=self.timeout_seconds) as response:
@@ -157,9 +163,9 @@ class DocumentationCrawler:
             return False
         if parsed.netloc not in source.allowed_domains:
             return False
-        if source.url_prefixes and not any(url.startswith(prefix.rstrip("/")) for prefix in source.url_prefixes):
-            return False
-        return True
+        return not (
+            source.url_prefixes and not any(url.startswith(prefix.rstrip("/")) for prefix in source.url_prefixes)
+        )
 
     def _emit(self, on_event: Callable[[IngestionEvent], None] | None, event: IngestionEvent) -> None:
         if on_event is not None:

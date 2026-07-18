@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv package manager
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Create security user early
 RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app
@@ -32,7 +35,7 @@ ENV PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
 
 # Install Playwright binaries inside a cached layer to avoid redownloads on package updates
-RUN pip install --no-cache-dir playwright
+RUN uv pip install --system --no-cache playwright
 USER appuser
 RUN playwright install chromium
 
@@ -40,8 +43,7 @@ RUN playwright install chromium
 USER root
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
 # Copy remaining code files
 COPY . .

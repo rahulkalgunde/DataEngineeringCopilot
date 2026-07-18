@@ -191,11 +191,12 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
+      - ./logs:/app/logs
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - LOG_LEVEL=INFO
       - LANGFUSE_SECRET_KEY=sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1
       - LANGFUSE_PUBLIC_KEY=pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be
       - LANGFUSE_HOST=http://langfuse:3000
@@ -221,11 +222,12 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
+      - ./logs:/app/logs
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - LOG_LEVEL=INFO
     networks:
       - de_copilot_net
     restart: unless-stopped

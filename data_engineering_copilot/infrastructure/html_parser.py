@@ -7,7 +7,6 @@ from bs4 import BeautifulSoup
 from data_engineering_copilot.domain.models import ParsedDocument, RawDocument
 from data_engineering_copilot.utils.text import normalize_whitespace
 
-
 logger = logging.getLogger(__name__)
 
 

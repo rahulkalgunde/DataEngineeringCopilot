@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "data-engineering-copilot"
+version = "0.1.0"
+description = "RAG-powered documentation assistant for data engineering frameworks"
+requires-python = ">=3.12"
+license = "MIT"
+
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "nltk>=3.8",
+    "numpy>=1.26",
+    "qdrant-client>=1.7",
+    "fastapi>=0.110",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "uvicorn>=0.27",
+    "langfuse>=2.0",
+]
+
+[project.optional-dependencies]
+worker = [
+    "celery>=5.3",
+    "redis>=5.0",
+    "crawl4ai>=0.2",
+]
+reranker = [
+    "sentence-transformers>=3.0",
+]
+ui = [
+    "streamlit>=1.31",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "pre-commit>=3.5",
+]
+
+[project.scripts]
+dec = "main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["data_engineering_copilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require live external services (Qdrant, Ollama, Langfuse)",
+    "slow: marks tests that take a long time to run",
+    "qdrant: marks tests that require a running Qdrant instance",
+    "ollama: marks tests that require a running Ollama instance",
+    "langfuse: marks tests that require a running Langfuse instance",
+    "rag: marks tests that exercise the full RAG pipeline (Qdrant + Ollama)",
+    "ingestion: marks tests that exercise the full ingestion pipeline (Qdrant + Ollama)",
+    "api: marks tests that exercise FastAPI endpoints (may require Celery/Redis)",
+]
+
+[tool.coverage.run]
+omit = ["data_engineering_copilot/ui/*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["data_engineering_copilot"]
