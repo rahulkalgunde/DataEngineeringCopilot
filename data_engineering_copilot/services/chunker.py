@@ -102,7 +102,6 @@ class DocumentChunker:
         words = document.text.split()
         chunks: list[DocumentChunk] = []
         start = 0
-        index = 0
         step = self.chunk_size_words - self.overlap_words
 
         while start < len(words):
@@ -125,7 +124,6 @@ class DocumentChunker:
             if end == len(words):
                 break
             start += step
-            index += 1
 
         logger.info(
             "Chunked document (fixed-size) source=%s url=%s title=%r words=%s chunks=%s",

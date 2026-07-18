@@ -249,26 +249,3 @@ def get_langfuse_instance():
     except Exception as e:
         logger.info("Langfuse client not available: %s", e)
         return None
-
-
-# Helper functions for tracing (v3 API)
-def start_trace(name: str, **kwargs):
-    """Start a Langfuse v3 trace observation."""
-    lf = get_langfuse_instance()
-    if lf:
-        return lf.start_observation(name=name, as_type="trace", **kwargs)
-    return None
-
-
-def end_trace(trace, **kwargs):
-    """End a Langfuse v3 trace observation."""
-    if trace:
-        trace.update(**kwargs)
-        trace.end()
-
-
-def log_event(trace, name: str, **kwargs):
-    """Log a span event within a Langfuse v3 trace."""
-    if trace:
-        span = trace.start_observation(name=name, as_type="span", **kwargs)
-        span.end()

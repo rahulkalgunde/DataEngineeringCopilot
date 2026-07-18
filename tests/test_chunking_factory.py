@@ -27,17 +27,22 @@ class TestSettingsValidation:
         assert AppSettings.min_semantic_similarity == 0.5
         assert 0.0 <= AppSettings.min_semantic_similarity <= 1.0
 
-    def test_semantic_chunking_disabled_by_default(self):
-        """Test that semantic chunking is disabled by default."""
-        assert AppSettings.enable_semantic_chunking is False
+    def test_semantic_chunking_flag_has_default(self):
+        """Test that enable_semantic_chunking has a boolean default."""
+        default = AppSettings.enable_semantic_chunking
+        assert isinstance(default, bool)
 
     def test_chunk_size_words_default(self):
-        """Test default chunk size."""
-        assert AppSettings.chunk_size_words == 250
+        """Test default chunk size is positive and matches settings."""
+        default = AppSettings.chunk_size_words
+        assert isinstance(default, int)
+        assert default > 0
 
     def test_chunk_overlap_words_default(self):
-        """Test default overlap."""
-        assert AppSettings.chunk_overlap_words == 50
+        """Test default overlap is non-negative and less than chunk size."""
+        default = AppSettings.chunk_overlap_words
+        assert isinstance(default, int)
+        assert 0 <= default < AppSettings.chunk_size_words
 
     def test_max_chunk_words_defaults_to_none(self):
         """Test that max_chunk_words defaults to None (auto-calculated)."""

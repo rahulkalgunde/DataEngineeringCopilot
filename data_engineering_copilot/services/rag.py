@@ -1,37 +1,15 @@
 import logging
-import requests
-from typing import List, Dict
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
-from data_engineering_copilot.domain.models import RetrievedChunk, Answer
+from data_engineering_copilot.domain.models import Answer
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.reranker import CrossEncoderReranker
 from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
 logger = logging.getLogger(__name__)
-
-try:
-    from langfuse import Langfuse
-except ImportError:
-    # No-op fallback when langfuse is not installed (v3 API)
-    class _NoopObservation:
-        def update(self, *args, **kwargs):
-            pass
-        def end(self, *args, **kwargs):
-            pass
-        def start_observation(self, *args, **kwargs):
-            return _NoopObservation()
-
-    class Langfuse:
-        def __init__(self, *args, **kwargs):
-            pass
-        def start_observation(self, *args, **kwargs):
-            return _NoopObservation()
-        def flush(self, *args, **kwargs):
-            pass
 
 
 class RagAnswerService:
@@ -246,125 +224,3 @@ class ProductionRagService(RagAnswerService):
         self.langfuse = get_langfuse_instance()
         if self.langfuse is None:
             logger.warning("Langfuse tracing is disabled because the client could not be initialized")
-
-    def answer_question(
-        self,
-        user_id: str,
-        session_id: str,
-        question: str,
-        top_k: int = 4,
-    ) -> Dict:
-        """Execute the full RAG pipeline: retrieve -> generate -> stream.
-
-        The function:
-        1. Embeds the question using the SentenceTransformerEmbeddings model.
-        2. Queries Qdrant for the top-K most relevant chunks.
-        3. Uses the context to generate an answer via local Ollama HTTP API.
-        4. Returns the answer with metadata and sources.
-        """
-        logger.info(
-            "answer_question() called: user_id=%r, session_id=%r, question_preview=%r",
-            user_id,
-            session_id,
-            question[:100]
-        )
-
-        if not self.langfuse:
-            # Fallback: answer without tracing
-            logger.warning("Langfuse not available; answering without tracing")
-            answer_result = self.answer(question)
-            return {
-                "answer": answer_result.text,
-                "sources": [c.source_name for c in answer_result.sources],
-                "confidence": answer_result.confidence,
-            }
-
-        trace = self.langfuse.start_observation(
-            name="rag-query-pipeline",
-            input=question,
-            as_type="trace",
-        )
-
-        # Retrieval Phase
-        retrieval_span = trace.start_observation(name="retrieval", as_type="span")
-        try:
-            logger.info("Starting retrieval phase: embedding query...")
-            query_emb = self.embedder.embed_query(question)
-            logger.info("Query embedding successful: dimension=%d", len(query_emb))
-
-            logger.info("Querying Qdrant vector store with top_k=%d", top_k)
-            retrieved_chunks: List[RetrievedChunk] = self.db.query(query_emb, top_k=top_k)
-            logger.info("Qdrant query returned %d chunks", len(retrieved_chunks))
-
-            # Log retrieved chunks details
-            for idx, chunk in enumerate(retrieved_chunks, start=1):
-                logger.info(
-                    "Retrieved chunk #%d: source=%r, confidence=%.4f, title=%r (first 80 chars of text: %r)",
-                    idx,
-                    chunk.chunk.source_name,
-                    chunk.confidence,
-                    chunk.chunk.title[:50] if chunk.chunk.title else "N/A",
-                    chunk.chunk.text[:80]
-                )
-
-            retrieval_span.update(output=[c.chunk.text for c in retrieved_chunks])
-            retrieval_span.end()
-        except Exception as exc:
-            logger.exception("Retrieval failed: %s", exc)
-            retrieval_span.update(output=str(exc), level="ERROR")
-            retrieval_span.end()
-            raise
-
-        # Context Construction for Ollama Generation
-        # Sort chunks by confidence (highest first) for better context ordering
-        sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
-
-        # Assemble intelligent context with deduplication and truncation
-        assembler = ContextAssembler(max_context_chars=settings.max_context_chars)
-        context_str, source_names = assembler.assemble(sorted_chunks)
-
-        prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
-        logger.debug("Constructed prompt with context_length=%d, prompt_preview=%r", len(context_str), prompt[:150])
-
-        # Generation Phase (Ollama HTTP API)
-        generation_span = trace.start_observation(
-            name="ollama-generation",
-            model=settings.ollama_model,
-            input=prompt,
-            as_type="generation",
-        )
-
-        try:
-            logger.info("Starting Ollama generation: model=%s, timeout=%d", settings.ollama_model, settings.ollama_timeout_seconds)
-            response = requests.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_model,
-                    "prompt": prompt,
-                    "stream": False,
-                },
-                timeout=settings.ollama_timeout_seconds,
-            )
-            response.raise_for_status()
-            answer_text = response.json().get("response", "")
-            logger.info("Ollama generation successful: answer_length=%d, answer_preview=%r", len(answer_text), answer_text[:150])
-            generation_span.update(output=answer_text)
-            generation_span.end()
-        except Exception as exc:
-            logger.exception("Ollama generation failed: %s", exc)
-            generation_span.update(output=str(exc), level="ERROR")
-            generation_span.end()
-            raise
-
-        # Finalization
-        trace.update(output=answer_text)
-        trace.end()
-        if self.langfuse:
-            self.langfuse.flush()
-
-        logger.info("answer_question() completed successfully")
-        return {
-            "answer": answer_text,
-            "sources": [c.chunk.source_name for c in retrieved_chunks],
-            "confidence": min(c.confidence for c in retrieved_chunks) if retrieved_chunks else 0.0,
-        }
