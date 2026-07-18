@@ -1,6 +1,6 @@
 # DataEngineeringCopilot
 
-Offline question answering for data engineering documentation using Ollama, deepseek-coder:6.7b, Qdrant, and Streamlit.
+Offline question answering for data engineering documentation using Ollama, llama3.2:3b, Qdrant, and Streamlit.
 
 ## Project Structure
 
@@ -37,6 +37,14 @@ DataEngineeringCopilot/
 
 ## Setup
 
+# Package Management Constraints
+- NEVER use standard 'pip' or 'python -m venv' commands.
+- This project exclusively uses 'uv' as its Python package and environment manager.
+- To create or manage virtual environments, use: `uv venv dec_venv`
+- To install packages from requirements.txt, use: `uv pip install -r requirements.txt`
+- To add a single package to the environment, use: `uv pip install <package_name>`
+- Always ensure you target the correct local virtual environment binary path: `${workspaceFolder}/dec_venv/bin/python`
+
 On windows machine, Install and start Ollama, then run the models:
 
 ```bash
@@ -57,18 +65,16 @@ Always Use Python virtual environment located at `/home/rahul/PythonVenvs/data_e
 Linux/macOS:
 
 ```bash
-python3 -m venv /home/rahul/PythonVenvs/data_eng_copilot_env
-source /home/rahul/PythonVenvs/data_eng_copilot_env/bin/activate
-python -m pip install -r /home/rahul/PycharmProjects/DataEngineeringCopilot/requirements.txt
+uv venv dec_venv
+source ${workspaceFolder}/dec_venv/bin/activate
+uv pip install -r requirements.txt
 ```
-
-
 
 No additional embedding model download is required. The system uses Ollama's `nomic-embed-text` model via HTTP API.
 
 ## Build the Local Repository
 
-The crawler downloads documentation pages and stores chunks in local Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, Ollama runs `nomic-embed-text` and `qwen3.5:9b` locally.
+The crawler downloads documentation pages and stores chunks in local Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, Ollama runs `nomic-embed-text` and `llama3.2:3b` locally.
 
 ```bash
 python main.py ingest --max-pages 40
@@ -80,11 +86,6 @@ If Qdrant reports an incomplete local index, reset and ingest again:
 python main.py reset-index
 python main.py ingest --max-pages 40
 ```
-
-Note about reusing the index across machines:
-
-If you switch between Windows and Unix environments, the local `qdrant_db/` folder contains the persisted index. To avoid re-ingesting the documentation (which is time‑consuming), copy or sync the `qdrant_db/` directory between machines (for example using `rsync`, a shared drive, or a git‑annex‑like solution). Keeping a single shared `qdrant_db/` avoids duplicate re‑indexing when moving the project.
-
 
 The configured documentation sources are:
 
@@ -152,21 +153,4 @@ Default retry settings in `data_engineering_copilot/config/settings.py`:
 ollama_retry_context_ratio = 0.6
 ollama_retry_extra_num_predict = 2048
 ollama_retry_max_num_predict = 4096
-```
-
----
-
-CLI helpers to export/import the index
-
-You can export the local `qdrant_db/` to a zip archive and import it on another machine using the included CLI commands:
-
-```bash
-# Export to qdrant_db_export.zip (defaults):
-python main.py export-index
-
-# Export to a specific path:
-python main.py export-index --output /tmp/my_chroma.zip
-
-# On the target machine, import the archive:
-python main.py import-index /tmp/my_chroma.zip
 ```
