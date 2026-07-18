@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 from collections.abc import Callable, Iterable
+
+import structlog
 
 from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.exceptions import EmbeddingError, IngestionError, VectorStoreError
@@ -15,7 +16,7 @@ from data_engineering_copilot.domain.protocols import (
     VectorStoreProtocol,
 )
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class IngestionService:
@@ -48,10 +49,10 @@ class IngestionService:
         total_chunks = 0
         global_pages_fetched = 0
         selected_sources = self._selected_sources(source_names)
-        logger.info(
-            "Ingestion started page_limit=%s sources=%s",
-            page_limit,
-            [source.name for source in selected_sources],
+        log.info(
+            "ingestion.started",
+            page_limit=page_limit,
+            sources=[source.name for source in selected_sources],
         )
 
         batch_chunks: list[DocumentChunk] = []
@@ -92,10 +93,10 @@ class IngestionService:
             try:
                 batch_vectors = self.embeddings.embed_texts([chunk.text for chunk in batch_chunks])
             except EmbeddingError as exc:
-                logger.error(
-                    "Ingestion failed to embed batch of %d chunks: %s",
-                    len(batch_chunks),
-                    exc,
+                log.error(
+                    "ingestion.embed_batch_failed",
+                    batch_size=len(batch_chunks),
+                    error=str(exc),
                 )
                 raise IngestionError(f"Embedding failed: {exc}") from exc
             self._emit(
@@ -111,17 +112,17 @@ class IngestionService:
             try:
                 self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
             except Exception as exc:
-                logger.error(
-                    "Ingestion failed to upsert batch of %d chunks to vector store: %s",
-                    len(batch_chunks),
-                    exc,
+                log.error(
+                    "ingestion.upsert_batch_failed",
+                    batch_size=len(batch_chunks),
+                    error=str(exc),
                 )
                 raise VectorStoreError(f"Vector store upsert failed: {exc}") from exc
             batch_chunks.clear()
 
         for source in selected_sources:
-            logger.info("Crawling %s", source.name)
-            logger.info("Ingestion source started source=%s page_limit=%s", source.name, page_limit)
+            log.info("ingestion.crawling_source", source=source.name)
+            log.info("ingestion.source_started", source=source.name, page_limit=page_limit)
             source_pages_fetched = 0
             source_chunks_indexed = 0
             self._emit(
@@ -138,8 +139,10 @@ class IngestionService:
                 global_pages_fetched += 1
                 parsed = self.parser.parse(raw_document)
                 if parsed is None:
-                    logger.info(
-                        "Ingestion skipped unreadable page source=%s url=%s", raw_document.source_name, raw_document.url
+                    log.info(
+                        "ingestion.page_skipped",
+                        source=raw_document.source_name,
+                        url=raw_document.url,
                     )
                     self._emit(
                         on_event,
@@ -157,11 +160,11 @@ class IngestionService:
                 content_hash = self._compute_content_hash(parsed.text)
                 stored_hash = self._get_stored_content_hash(parsed.url)
                 if stored_hash is not None and stored_hash == content_hash:
-                    logger.info(
-                        "Ingestion skipped duplicate page source=%s url=%s hash=%s",
-                        parsed.source_name,
-                        parsed.url,
-                        content_hash[:12],
+                    log.info(
+                        "ingestion.page_skipped_duplicate",
+                        source=parsed.source_name,
+                        url=parsed.url,
+                        hash=content_hash[:12],
                     )
                     self._emit(
                         on_event,
@@ -178,9 +181,9 @@ class IngestionService:
 
                 # --- Ghost-chunk cleanup: if content changed, purge old chunks ---
                 if stored_hash is not None:
-                    logger.info(
-                        "Ingestion content hash changed for url=%s, purging old chunks",
-                        parsed.url,
+                    log.info(
+                        "ingestion.content_changed",
+                        url=parsed.url,
                     )
                     self._delete_chunks_for_url(parsed.url)
 
@@ -196,14 +199,14 @@ class IngestionService:
 
                 total_chunks += len(chunks)
                 source_chunks_indexed += len(chunks)
-                logger.info("Indexed %3d chunks from %s", len(chunks), parsed.title)
-                logger.info(
-                    "Ingestion indexed page source=%s url=%s title=%r chunks=%s total_chunks=%s",
-                    parsed.source_name,
-                    parsed.url,
-                    parsed.title,
-                    len(chunks),
-                    total_chunks,
+                log.info("ingestion.chunks_indexed", count=len(chunks), title=parsed.title)
+                log.info(
+                    "ingestion.page_indexed",
+                    source=parsed.source_name,
+                    url=parsed.url,
+                    title=parsed.title,
+                    chunks=len(chunks),
+                    total_chunks=total_chunks,
                 )
                 self._emit(
                     on_event,
@@ -233,17 +236,17 @@ class IngestionService:
                     current_phase="crawling",
                 ),
             )
-            logger.info(
-                "Ingestion source completed source=%s pages=%s chunks=%s",
-                source.name,
-                source_pages_fetched,
-                source_chunks_indexed,
+            log.info(
+                "ingestion.source_completed",
+                source=source.name,
+                pages=source_pages_fetched,
+                chunks=source_chunks_indexed,
             )
 
         flush_batch()
 
         total_elapsed = time_module.time() - start_time
-        logger.info("Ingestion completed total_chunks=%s elapsed=%.1fs", total_chunks, total_elapsed)
+        log.info("ingestion.completed", total_chunks=total_chunks, elapsed=round(total_elapsed, 1))
         return total_chunks
 
     def _selected_sources(self, source_names: Iterable[str] | None):
@@ -252,14 +255,14 @@ class IngestionService:
 
         requested_names = tuple(name.strip() for name in source_names if name.strip())
         if not requested_names:
-            logger.error("Ingestion source selection failed because no source names were selected")
+            log.error("ingestion.source_selection.no_sources")
             raise ValueError("At least one documentation source must be selected.")
 
         sources_by_name = {source.name: source for source in self.settings.sources}
         unknown_names = sorted(set(requested_names) - set(sources_by_name))
         if unknown_names:
             available_names = ", ".join(sources_by_name)
-            logger.error("Ingestion source selection failed unknown=%s available=%s", unknown_names, available_names)
+            log.error("ingestion.source_selection.unknown", unknown=unknown_names, available=available_names)
             raise ValueError(
                 f"Unknown documentation source(s): {', '.join(unknown_names)}. Available sources: {available_names}"
             )
@@ -292,9 +295,9 @@ class IngestionService:
         if deleter is not None:
             deleter(url)
         else:
-            logger.debug(
-                "Vector store does not support delete_by_url; skipping ghost cleanup for %s",
-                url,
+            log.debug(
+                "vector_store.no_delete_by_url",
+                url=url,
             )
 
     def _emit(self, on_event: Callable[[IngestionEvent], None] | None, event: IngestionEvent) -> None:

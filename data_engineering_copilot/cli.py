@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
-import shutil
+import urllib.request
 
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
@@ -36,45 +37,19 @@ def ask(question: str) -> None:
 
 
 def reset_index() -> None:
-    logger.warning("Resetting QdrantDB index path=%s", settings.chroma_dir)
-    if settings.chroma_dir.exists():
-        shutil.rmtree(settings.chroma_dir)
-    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("QdrantDB index reset path=%s", settings.chroma_dir)
-    print(f"Reset QdrantDB index at: {settings.chroma_dir}")
-
-
-def export_index(output_path: str | None) -> None:
-    import shutil
-    from pathlib import Path
-
-    out = Path(output_path) if output_path else Path("qdrant_db_export.zip")
-    logger.info("Exporting QdrantDB index from %s to %s", settings.chroma_dir, out)
-    if not settings.chroma_dir.exists():
-        print(f"QdrantDB directory does not exist: {settings.chroma_dir}")
-        return
-    # shutil.make_archive expects a base name without extension
-    base = out.with_suffix("")
-    archive = shutil.make_archive(str(base), "zip", root_dir=str(settings.chroma_dir))
-    print(f"Exported QdrantDB to: {archive}")
-
-
-def import_index(archive_path: str) -> None:
-    import zipfile
-    from pathlib import Path
-
-    archive = Path(archive_path)
-    if not archive.exists():
-        print(f"Archive not found: {archive}")
-        return
-    logger.info("Importing QdrantDB index from %s to %s", archive, settings.chroma_dir)
-    # Remove existing dir first
-    if settings.chroma_dir.exists():
-        shutil.rmtree(settings.chroma_dir)
-    settings.chroma_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(str(archive), "r") as zf:
-        zf.extractall(path=str(settings.chroma_dir))
-    print(f"Imported QdrantDB to: {settings.chroma_dir}")
+    url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
+    logger.warning("Resetting Qdrant collection=%s url=%s", settings.collection_name, url)
+    try:
+        req = urllib.request.Request(url, method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode())
+            print(f"Deleted collection '{settings.collection_name}': {body}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Collection '{settings.collection_name}' does not exist (nothing to reset).")
+        else:
+            raise
+    logger.info("Qdrant collection reset completed collection=%s", settings.collection_name)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,11 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the local repository.")
     ask_parser.add_argument("question", help="Question to answer.")
 
-    subparsers.add_parser("reset-index", help="Delete the local QdrantDB index so ingestion can rebuild it.")
-    export_parser = subparsers.add_parser("export-index", help="Export the QdrantDB directory to a zip archive.")
-    export_parser.add_argument("--output", help="Output zip path. Defaults to qdrant_db_export.zip.")
-    import_parser = subparsers.add_parser("import-index", help="Import a QdrantDB zip archive into local qdrant_db.")
-    import_parser.add_argument("archive", help="Path to the qdrant_db zip archive to import.")
+    subparsers.add_parser("reset-index", help="Delete the Qdrant collection so ingestion can rebuild it.")
     subparsers.add_parser("ui", help="Print the Streamlit command.")
     return parser
 
@@ -116,10 +87,6 @@ def main() -> None:
             ask(question=args.question)
         elif args.command == "reset-index":
             reset_index()
-        elif args.command == "export-index":
-            export_index(output_path=args.output)
-        elif args.command == "import-index":
-            import_index(args.archive)
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")

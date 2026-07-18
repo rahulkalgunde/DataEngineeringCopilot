@@ -106,10 +106,10 @@ def test_setup_logging_formats_include_both_handlers(tmp_path: Path) -> None:
     assert len(stream_handlers) >= 1
     assert len(file_handlers) >= 1
 
-    # Verify stream handler uses simple formatter
+    # Verify stream handler uses structlog ProcessorFormatter
     assert stream_handlers[0].formatter is not None
-    assert stream_handlers[0].formatter._fmt == "[%(levelname)s] - %(message)s"
+    assert hasattr(stream_handlers[0].formatter, "processors")
 
-    # Verify file handler uses standard formatter (with timestamp, module, etc.)
+    # Verify file handler uses structlog ProcessorFormatter with JSON rendering
     assert file_handlers[0].formatter is not None
-    assert "asctime" in file_handlers[0].formatter._fmt
+    assert hasattr(file_handlers[0].formatter, "processors")

@@ -23,7 +23,7 @@ async def test_run_async_crawl(mock_crawler_class):
     mock_crawler.arun.assert_called_once_with(url="http://test.com")
 
 
-@patch("data_engineering_copilot.workers.tasks.SentenceTransformerEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.OllamaEmbeddings")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.QdrantVectorStore")
 def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embedder):
@@ -52,7 +52,7 @@ def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embe
         mock_qdrant.return_value.upsert_chunks.assert_called_once()
 
 
-@patch("data_engineering_copilot.workers.tasks.SentenceTransformerEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.OllamaEmbeddings")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.QdrantVectorStore")
 def test_execute_background_ingestion_failure(mock_qdrant, mock_chunker_class, mock_embedder):

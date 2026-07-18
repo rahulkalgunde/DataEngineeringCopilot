@@ -1,25 +1,22 @@
 """Test suite for embeddings module."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 
 
-class TestSentenceTransformerEmbeddingsOllama:
+class TestOllamaEmbeddings:
     """Test Ollama embedding provider."""
 
     @pytest.fixture
     def ollama_embeddings(self):
         """Create an Ollama embeddings instance."""
-        return SentenceTransformerEmbeddings(
+        return OllamaEmbeddings(
             model_name="nomic-embed-text",
-            cache_dir=Path("/tmp/cache"),
-            local_files_only=True,
         )
 
     def test_ollama_initialization(self, ollama_embeddings):

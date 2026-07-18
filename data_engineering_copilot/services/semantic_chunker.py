@@ -18,7 +18,7 @@ import numpy as np
 from nltk.tokenize import sent_tokenize
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.utils.text import slugify
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class SemanticChunker:
     Attributes:
         chunk_size_words: Target chunk size in words
         overlap_words: Overlap between chunks in words (semantic overlap)
-        embedding_model: SentenceTransformerEmbeddings instance for encoding
+        embedding_model: OllamaEmbeddings instance for encoding
         min_semantic_similarity: Minimum cosine similarity to group sentences (0.0-1.0)
         min_chunk_words: Minimum chunk size to avoid empty/tiny chunks
         max_chunk_words: Maximum chunk size (hard limit)
@@ -44,7 +44,7 @@ class SemanticChunker:
         self,
         chunk_size_words: int,
         overlap_words: int,
-        embedding_model: SentenceTransformerEmbeddings,
+        embedding_model: OllamaEmbeddings,
         min_semantic_similarity: float = 0.5,
         min_chunk_words: int = 20,
         max_chunk_words: int | None = None,
@@ -55,7 +55,7 @@ class SemanticChunker:
         Args:
             chunk_size_words: Target chunk size in words
             overlap_words: Overlap between chunks in words
-            embedding_model: SentenceTransformerEmbeddings instance
+            embedding_model: OllamaEmbeddings instance
             min_semantic_similarity: Min cosine similarity threshold for grouping (0-1)
             min_chunk_words: Minimum chunk size
             max_chunk_words: Maximum chunk size (optional, defaults to chunk_size_words * 1.5)

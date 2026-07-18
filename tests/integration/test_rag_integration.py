@@ -14,7 +14,7 @@ import pytest
 
 from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import Answer, DocumentChunk
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.rag import RagAnswerService
@@ -42,10 +42,8 @@ def _settings():
 @pytest.fixture(scope="module")
 def _embedder(_settings):
     require_qdrant_and_ollama()
-    return SentenceTransformerEmbeddings(
+    return OllamaEmbeddings(
         model_name=_settings.embedding_model_name,
-        cache_dir=_settings.embedding_cache_dir,
-        local_files_only=False,
     )
 
 

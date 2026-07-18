@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -8,12 +7,13 @@ from html.parser import HTMLParser
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.domain.models import IngestionEvent, RawDocument
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class LinkExtractor(HTMLParser):
@@ -44,11 +44,11 @@ class DocumentationCrawler:
         queued: set[str] = set()
         queue: deque[str] = deque(self._clean_url(url) for url in source.start_urls)
         queued.update(self._dedupe_key(url) for url in queue)
-        logger.info(
-            "Crawler started source=%s max_pages=%s start_urls=%s",
-            source.name,
-            max_pages,
-            len(source.start_urls),
+        log.info(
+            "crawler.started",
+            source=source.name,
+            max_pages=max_pages,
+            start_urls=len(source.start_urls),
         )
 
         while queue and len(visited) < max_pages:
@@ -71,12 +71,12 @@ class DocumentationCrawler:
             except Exception as exc:
                 visited.add(url_key)
                 message = f"Skipping {url}: {exc}"
-                logger.warning(
-                    "Crawler fetch failed source=%s url=%s pages_fetched=%s error=%s",
-                    source.name,
-                    url,
-                    len(visited),
-                    exc,
+                log.warning(
+                    "crawler.fetch_failed",
+                    source=source.name,
+                    url=url,
+                    pages_fetched=len(visited),
+                    error=str(exc),
                 )
                 self._emit(
                     on_event,
@@ -92,7 +92,7 @@ class DocumentationCrawler:
                 continue
 
             visited.add(url_key)
-            logger.info("Crawler fetch succeeded source=%s url=%s pages_fetched=%s", source.name, url, len(visited))
+            log.info("crawler.fetch_succeeded", source=source.name, url=url, pages_fetched=len(visited))
             self._emit(
                 on_event,
                 IngestionEvent(
@@ -113,11 +113,11 @@ class DocumentationCrawler:
 
             time.sleep(self.delay_seconds)
 
-        logger.info(
-            "Crawler completed source=%s pages_visited=%s queued_remaining=%s",
-            source.name,
-            len(visited),
-            len(queue),
+        log.info(
+            "crawler.completed",
+            source=source.name,
+            pages_visited=len(visited),
+            queued_remaining=len(queue),
         )
 
     @retry(

@@ -22,7 +22,7 @@ from qdrant_client.http import models
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
-from data_engineering_copilot.infrastructure.embeddings import SentenceTransformerEmbeddings
+from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -206,10 +206,8 @@ class QdrantVectorStore:
         and then delegates to ``query``.
         """
         try:
-            embedder = SentenceTransformerEmbeddings(
+            embedder = OllamaEmbeddings(
                 model_name=settings.embedding_model_name,
-                cache_dir=settings.embedding_cache_dir,
-                local_files_only=settings.embedding_local_files_only,
             )
             query_emb = embedder.embed_query(query)
             return self.query(query_emb, top_k)

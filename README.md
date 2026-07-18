@@ -7,7 +7,6 @@ Offline question answering for data engineering documentation using Ollama, llam
 ```text
 DataEngineeringCopilot/
   main.py
-  requirements.txt
   README.md
   qdrant_db/ -> qdrant_db/
   data/
@@ -41,7 +40,7 @@ DataEngineeringCopilot/
 - NEVER use standard 'pip' or 'python -m venv' commands.
 - This project exclusively uses 'uv' as its Python package and environment manager.
 - To create or manage virtual environments, use: `uv venv dec_venv`
-- To install packages from requirements.txt, use: `uv pip install -r requirements.txt`
+- To install packages, use: `uv pip install -e ".[dev]"`
 - To add a single package to the environment, use: `uv pip install <package_name>`
 - Always ensure you target the correct local virtual environment binary path: `dec_venv/bin/python`
 
@@ -67,7 +66,7 @@ Linux/macOS:
 ```bash
 uv venv dec_venv
 source dec_venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install -e ".[dev]"
 ```
 
 No additional embedding model download is required. The system uses Ollama's `nomic-embed-text` model via HTTP API.
@@ -130,7 +129,7 @@ The sidebar includes a `Refresh Documentation` button. It crawls the configured 
 
 Runtime logs are written under `logs/` in the project workspace:
 
-- `logs/application.log` captures CLI, Streamlit, ingestion, retrieval, vector store, and Ollama events for troubleshooting.
+- `logs/app.log` captures CLI, Streamlit, ingestion, retrieval, vector store, and Ollama events for troubleshooting.
 - `logs/ingestion_refresh.log` captures detailed UI refresh events and fetched documentation URLs.
 
 ## Architecture
@@ -150,7 +149,7 @@ If Ollama fails due to prompt or output length, the service automatically retrie
 Default retry settings in `data_engineering_copilot/config/settings.py`:
 
 ```python
-ollama_retry_context_ratio = 0.6
-ollama_retry_extra_num_predict = 2048
-ollama_retry_max_num_predict = 4096
+ollama_retry_context_ratio = 0.5
+ollama_retry_extra_num_predict = 512
+ollama_retry_max_num_predict = 1024
 ```
