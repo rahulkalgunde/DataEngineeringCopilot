@@ -2,12 +2,12 @@
 
 ## 1. Purpose
 - Offline RAG assistant over data engineering documentation.
-- Crawls configured docs → chunks + embeds into local ChromaDB → answers questions via local Ollama/Qwen.
+- Crawls configured docs → chunks + embeds into local Qdrant DB → answers questions via local Ollama/Qwen.
 
 ## 2. Stack
 - FE: Streamlit
 - BE: Python CLI + service layer
-- DB: ChromaDB persistent local vector store
+- DB: Qdrant DB persistent local vector store
 - Infra: urllib HTTP crawling, BeautifulSoup HTML parsing, sentence-transformers embeddings, Ollama local LLM
 
 ## 3. Architecture
@@ -175,7 +175,7 @@
 
 ### Vector Store: `infrastructure/vector_store.py`
 - Role:
-  - ChromaDB persistent vector index adapter.
+  
 - Classes:
   - `QdrantVectorStore`
   - `VectorStoreReadError`
@@ -188,7 +188,6 @@
   - Converts Chroma `InternalError` containing `Nothing found on disk` to `VectorStoreReadError`
   - Validates chunks/embeddings length equality
 - Uses:
-  - `chromadb.PersistentClient`
   - `DocumentChunk`, `RetrievedChunk`
 
 ### Ollama Client: `infrastructure/ollama_client.py`

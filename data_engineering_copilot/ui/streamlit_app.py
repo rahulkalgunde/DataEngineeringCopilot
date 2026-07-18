@@ -1,10 +1,14 @@
 from __future__ import annotations
 from datetime import datetime
+import json
 import logging
+import socket
 import sys
+import urllib.request
+import urllib.error
 from pathlib import Path
-from typing import Callable
 import threading
+import time as _time
 
 from dataclasses import dataclass, field
 import streamlit as st
@@ -16,13 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import IngestionEvent
 from data_engineering_copilot.factory import build_ingestion_service, build_rag_service
-from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore, VectorStoreReadError
-from data_engineering_copilot.services.metrics import (
-    MetricsCollector,
-    QueryMetrics,
-    RetrievalMetrics,
-    AnswerMetrics,
-)
+from data_engineering_copilot.infrastructure.vector_store import QdrantVectorStore
+from data_engineering_copilot.services.metrics import MetricsCollector
 from logger_config import setup_logging
 
 if settings.logging_enabled:
@@ -30,15 +29,107 @@ if settings.logging_enabled:
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Service health checks
+# ---------------------------------------------------------------------------
+
+def _check_qdrant_reachable(timeout: float = 2.0) -> tuple[bool, str]:
+    """Check if Qdrant is reachable. Returns (ok, message)."""
+    try:
+        url = f"{settings.qdrant_url}/health"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                return True, f"Qdrant is running at {settings.qdrant_url}"
+            return False, f"Qdrant returned HTTP {resp.status}"
+    except urllib.error.URLError:
+        return False, (
+            f"Qdrant is not reachable at {settings.qdrant_url}.\n\n"
+            "**Start it with:**\n```\ndocker compose up -d qdrant\n```"
+        )
+    except (socket.timeout, OSError) as exc:
+        return False, f"Qdrant connection failed: {exc}"
+
+
+def _check_ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
+    """Check if Ollama is reachable. Returns (ok, message)."""
+    try:
+        url = f"{settings.ollama_base_url}/api/tags"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [m.get("name", "") for m in data.get("models", [])]
+                has_embed = any(settings.embedding_model_name in m for m in models)
+                has_llm = any(settings.ollama_model in m for m in models)
+                missing = []
+                if not has_embed:
+                    missing.append(settings.embedding_model_name)
+                if not has_llm:
+                    missing.append(settings.ollama_model)
+                if missing:
+                    return False, (
+                        f"Ollama is running but missing models: **{', '.join(missing)}**\n\n"
+                        "**Pull them with:**\n```\n"
+                        + "\n".join(f"ollama pull {m}" for m in missing)
+                        + "\n```"
+                    )
+                return True, "Ollama is running with all required models"
+            return False, f"Ollama returned HTTP {resp.status}"
+    except urllib.error.URLError:
+        return False, (
+            f"Ollama is not reachable at {settings.ollama_base_url}.\n\n"
+            "**Start it with:**\n```\nollama serve\n```\n\n"
+            "Then pull the required models:\n```\n"
+            f"ollama pull {settings.embedding_model_name}\n"
+            f"ollama pull {settings.ollama_model}\n```"
+        )
+    except (socket.timeout, OSError) as exc:
+        return False, f"Ollama connection failed: {exc}"
+
+
+def _check_langfuse_reachable(timeout: float = 2.0) -> tuple[bool, str]:
+    """Check if Langfuse is reachable. Returns (ok, message)."""
+    try:
+        url = f"{settings.langfuse_host}/api/public/health"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("status") == "OK":
+                    return True, "Langfuse is running"
+                return False, f"Langfuse health returned status: {data.get('status')}"
+            return False, f"Langfuse returned HTTP {resp.status}"
+    except (urllib.error.URLError, socket.timeout, OSError):
+        return False, (
+            "Langfuse is not reachable. Tracing will be disabled.\n\n"
+            "**Start it with:**\n```\ndocker compose up -d langfuse langfuse-postgres clickhouse minio\n```"
+        )
+
 @st.cache_resource
-def rag_service():
-    logger.info("Streamlit cached RAG service requested")
+def _build_rag_service():
     return build_rag_service()
 
 @st.cache_resource
-def vector_store():
-    logger.info("Streamlit cached vector store requested")
+def _build_vector_store():
     return QdrantVectorStore(settings.qdrant_url, settings.collection_name)
+
+def rag_service():
+    """Return cached RAG service, or None if Qdrant/Ollama are unavailable."""
+    try:
+        return _build_rag_service()
+    except Exception as exc:
+        logger.warning("Failed to create RAG service: %s", exc)
+        return None
+
+def vector_store():
+    """Return cached vector store, or None if Qdrant is unavailable."""
+    try:
+        return _build_vector_store()
+    except Exception as exc:
+        logger.warning("Failed to create vector store: %s", exc)
+        return None
 
 _log_lock = threading.Lock()
 
@@ -258,27 +349,20 @@ class IngestionManager:
             logger.info("Ingestion cancelled in background thread.")
         except Exception as exc:
             logger.exception("Ingestion failed in background thread")
+            error_msg = str(exc)
+            if "Connection refused" in error_msg or "connect" in error_msg.lower():
+                error_msg = (
+                    "Could not connect to a required service.\n\n"
+                    "**Ensure these services are running:**\n"
+                    "- Qdrant: `docker compose up -d qdrant`\n"
+                    "- Ollama: `ollama serve`"
+                )
             with cls._lock:
                 cls._progress.is_running = False
                 cls._progress.current_phase = "error"
                 cls._progress.elapsed_seconds = time.time() - cls._progress.start_time
-                cls._progress.error = str(exc)
-                cls._progress.last_message = f"Ingestion failed: {exc}"
-
-    def run_ingestion_refresh(
-        max_pages_per_source: int,
-        source_names: tuple[str, ...],
-        on_event: Callable[[IngestionEvent], None] | None = None,
-    ) -> int:
-        logger.info("Streamlit ingestion refresh started max_pages=%s sources=%s", max_pages_per_source, source_names)
-        service = build_ingestion_service()
-        total_chunks = service.ingest(
-            max_pages_per_source=max_pages_per_source,
-            source_names=source_names,
-            on_event=on_event,
-        )
-        logger.info("Streamlit ingestion refresh completed chunks=%s", total_chunks)
-        return total_chunks
+                cls._progress.error = error_msg
+                cls._progress.last_message = f"Ingestion failed: {error_msg}"
 
     @staticmethod
     def ingestion_log_path() -> Path:
@@ -405,6 +489,19 @@ def render_ingestion_progress() -> None:
 def render_qa_tab() -> None:
     """Q&A tab: ask questions against the knowledge base."""
     st.subheader("Ask a Question")
+
+    # Pre-flight: check services before showing the input
+    qdrant_ok, qdrant_msg = _check_qdrant_reachable()
+    ollama_ok, ollama_msg = _check_ollama_reachable()
+
+    if not qdrant_ok or not ollama_ok:
+        if not qdrant_ok:
+            st.error(f"**Qdrant unavailable**\n\n{qdrant_msg}")
+        if not ollama_ok:
+            st.error(f"**Ollama unavailable**\n\n{ollama_msg}")
+        st.info("Fix the issues above and refresh the page to use Q&A.")
+        return
+
     question = st.text_area(
         "Question",
         placeholder="How do I configure Spark dynamic allocation?",
@@ -416,9 +513,30 @@ def render_qa_tab() -> None:
         if not question.strip():
             st.warning("Enter a question.")
         else:
+            service = rag_service()
+            if service is None:
+                st.error(
+                    "Could not connect to the RAG service.\n\n"
+                    "**Check that Qdrant and Ollama are running.**\n"
+                    "See the **System Health** tab for details."
+                )
+                return
+
             logger.info("Streamlit ask started question=%r", question.strip()[:200])
             with st.spinner("Searching local repository and asking Ollama..."):
-                answer = rag_service().answer(question.strip())
+                try:
+                    answer = service.answer(question.strip())
+                except Exception as exc:
+                    logger.exception("RAG answer failed")
+                    st.error(
+                        f"**Failed to get answer:** {exc}\n\n"
+                        "**Possible causes:**\n"
+                        "- Ollama may have timed out or the model is still loading\n"
+                        "- Qdrant may have lost connectivity\n\n"
+                        "Check the **System Health** tab and try again."
+                    )
+                    return
+
             logger.info(
                 "Streamlit ask completed confidence=%.4f sources=%s answer_chars=%s",
                 answer.confidence,
@@ -446,7 +564,7 @@ def render_qa_tab() -> None:
                         st.caption(f"Source: {source.source_name}")
 
             # Per-answer detailed metrics
-            with st.expander("📊 Answer Metrics", expanded=False):
+            with st.expander("Answer Metrics", expanded=False):
                 qm = collector.queries[-1] if collector.queries else None
                 if qm:
                     col_a1, col_a2 = st.columns(2)
@@ -458,15 +576,13 @@ def render_qa_tab() -> None:
                         st.metric("Sources Cited", qm.answer_metrics.source_count if qm.answer_metrics else "N/A")
 
                     if qm.answer_metrics:
-                        sec_status = "✅ Yes" if qm.answer_metrics.has_key_sections else "❌ No"
-                        unc_status = "⚠️ Yes" if qm.answer_metrics.has_uncertainty_markers else "✅ No"
+                        sec_status = "Yes" if qm.answer_metrics.has_key_sections else "No"
+                        unc_status = "Yes" if qm.answer_metrics.has_uncertainty_markers else "No"
                         st.caption(f"Structured sections: {sec_status}  |  Uncertainty markers: {unc_status}")
 
 
 def render_ingestion_tab() -> None:
     """Ingestion Dashboard tab: controls, progress, and results."""
-    import time as time_module
-
     st.subheader("Ingestion Controls")
 
     # Controls row
@@ -496,14 +612,19 @@ def render_ingestion_tab() -> None:
         if not selected_sources:
             st.warning("Please select at least one source.")
         else:
-            started = IngestionManager.start(
-                max_pages_per_source=int(max_pages) if max_pages > 0 else 0,
-                source_names=tuple(selected_sources),
-            )
-            if not started:
-                st.warning("Ingestion is already running.")
+            # Pre-flight check
+            qdrant_ok, qdrant_msg = _check_qdrant_reachable()
+            if not qdrant_ok:
+                st.error(f"**Cannot start ingestion**\n\n{qdrant_msg}")
             else:
-                st.success("Ingestion started!")
+                started = IngestionManager.start(
+                    max_pages_per_source=int(max_pages) if max_pages > 0 else 0,
+                    source_names=tuple(selected_sources),
+                )
+                if not started:
+                    st.warning("Ingestion is already running.")
+                else:
+                    st.success("Ingestion started!")
 
     # Progress display
     progress = IngestionManager.get_progress()
@@ -536,14 +657,53 @@ def render_health_tab() -> None:
     """System Health tab: vector store, Ollama, configuration."""
     st.subheader("System Health")
 
+    # Live service status
+    st.markdown("### Service Status")
+    qdrant_ok, qdrant_msg = _check_qdrant_reachable()
+    ollama_ok, ollama_msg = _check_ollama_reachable()
+    langfuse_ok, langfuse_msg = _check_langfuse_reachable()
+
+    col_q, col_o, col_l = st.columns(3)
+    with col_q:
+        if qdrant_ok:
+            st.success("Qdrant")
+            st.caption(qdrant_msg)
+        else:
+            st.error("Qdrant")
+            st.caption(qdrant_msg)
+    with col_o:
+        if ollama_ok:
+            st.success("Ollama")
+            st.caption(ollama_msg)
+        else:
+            st.error("Ollama")
+            st.caption(ollama_msg)
+    with col_l:
+        if langfuse_ok:
+            st.success("Langfuse")
+            st.caption(langfuse_msg)
+        else:
+            st.warning("Langfuse")
+            st.caption(langfuse_msg)
+
+    st.divider()
+
     # Repository stats
     st.markdown("### Vector Store")
-    try:
-        chunk_count = vector_store().count()
-        st.metric("Total Chunks Indexed", chunk_count)
-    except VectorStoreReadError:
-        st.warning("Vector store is not readable. Try running ingestion first.")
+    store = vector_store()
+    if store is not None:
+        try:
+            chunk_count = store.count()
+            st.metric("Total Chunks Indexed", chunk_count)
+        except Exception:
+            st.warning("Vector store is connected but returned an error.")
+            chunk_count = 0
+    else:
         chunk_count = 0
+        st.warning(
+            "Vector store is not available.\n\n"
+            f"**Start Qdrant:**\n```\ndocker compose up -d qdrant\n```"
+        )
 
     st.divider()
 
@@ -713,14 +873,32 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### System Status")
         if progress.is_running:
-            st.warning(f"🔄 Ingestion running ({_format_duration(progress.elapsed_seconds)})")
+            st.warning(f"Ingestion running ({_format_duration(progress.elapsed_seconds)})")
         else:
-            st.success("✅ Idle")
-        try:
-            chunk_count = vector_store().count()
-            st.metric("Chunks in Store", chunk_count)
-        except VectorStoreReadError:
-            st.metric("Chunks in Store", 0)
+            st.success("Idle")
+
+        # Service indicators
+        qdrant_ok, _ = _check_qdrant_reachable(timeout=1.0)
+        ollama_ok, _ = _check_ollama_reachable(timeout=1.0)
+        if qdrant_ok:
+            st.success("Qdrant: up")
+        else:
+            st.error("Qdrant: down")
+        if ollama_ok:
+            st.success("Ollama: up")
+        else:
+            st.error("Ollama: down")
+
+        # Chunk count
+        store = vector_store()
+        if store is not None:
+            try:
+                chunk_count = store.count()
+                st.metric("Chunks in Store", chunk_count)
+            except Exception:
+                st.metric("Chunks in Store", "error")
+        else:
+            st.metric("Chunks in Store", "unavailable")
 
         # Mini metrics summary in sidebar
         collector: MetricsCollector = st.session_state.metrics_collector

@@ -72,11 +72,8 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
 @dataclass(frozen=True)
 class AppSettings:
     project_root: Path = PROJECT_ROOT
-    data_dir: Path = PROJECT_ROOT / "data"
     # Legacy Chroma directory – retained for compatibility; not used in production.
     chroma_dir: Path = PROJECT_ROOT / "chroma_db"
-    # Qdrant persistence directory (mounted volume for Docker). Used by Qdrant container.
-    qdrant_dir: Path = PROJECT_ROOT / "qdrant_db"
     documentation_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
     embedding_cache_dir: Path = PROJECT_ROOT / "data" / "embedding_models"
     collection_name: str = "data_engineering_docs"
