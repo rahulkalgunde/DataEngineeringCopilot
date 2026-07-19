@@ -48,7 +48,8 @@ async def ingest_documents(request: IngestRequest):
         "current_url": "",
         "error": None,
     })
-    client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status)
+    client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
+    client.set("ingestion:latest_task_id", task.id, ex=86400)
 
     return TaskStatus(task_id=task.id, state=task.state)
 
@@ -78,6 +79,21 @@ async def get_ingestion_status(task_id: str) -> dict:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
 
+    return json.loads(raw)
+
+
+@router.get("/api/v1/ingest/latest")
+async def get_latest_ingestion() -> dict:
+    """Return the status of the most recently dispatched ingestion task."""
+    client = get_redis_client()
+    raw_task_id = client.get("ingestion:latest_task_id")
+    if not raw_task_id:
+        raise HTTPException(status_code=404, detail="No ingestion task found.")
+    task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else raw_task_id
+    raw = client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail="Task status expired.")
+    raw = raw.decode() if isinstance(raw, bytes) else raw
     return json.loads(raw)
 
 

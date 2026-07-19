@@ -137,19 +137,34 @@ def _post_ingest(source_names: list[str], max_pages: int) -> tuple[str | None, s
         return None, str(exc)
 
 
-def _get_ingest_status(task_id: str) -> dict | None:
+def _get_ingest_status(task_id: str) -> tuple[dict | None, str | None]:
     """GET /api/v1/ingest/status/{task_id} to poll progress from Redis.
 
-    Returns the status dict, or None if the task is not found.
+    Returns ``(status_dict, None)`` on success, ``(None, None)`` when the
+    task is genuinely not found (HTTP 404), or ``(None, error_message)`` for
+    any other failure (connection refused, timeout, server error, etc.).
     """
     try:
         req = urllib.request.Request(f"{API_BASE_URL}/api/v1/ingest/status/{task_id}")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(resp.read().decode()), None
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            return None
-        return None
+            return None, None
+        return None, f"HTTP {exc.code}: {exc.reason}"
+    except (ConnectionRefusedError, TimeoutError, OSError) as exc:
+        return None, f"Cannot reach API: {exc}"
+    except Exception as exc:
+        return None, f"Unexpected error: {exc}"
+
+
+def _get_latest_task_id() -> str | None:
+    """GET /api/v1/ingest/latest to discover a running task from any session."""
+    try:
+        req = urllib.request.Request(f"{API_BASE_URL}/api/v1/ingest/latest")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("task_id")
     except Exception:
         return None
 
@@ -253,12 +268,22 @@ class IngestionManager:
         """Read progress from Redis via the API polling endpoint."""
         task_id = st.session_state.get("ingestion_task_id")
         if not task_id:
+            latest_task_id = _get_latest_task_id()
+            if latest_task_id:
+                task_id = latest_task_id
+                st.session_state.ingestion_task_id = task_id
+                st.session_state.ingestion_start_time = time.time()
+        if not task_id:
             return IngestionProgress()
 
-        status = _get_ingest_status(task_id)
+        status, api_error = _get_ingest_status(task_id)
+        if status is None and api_error is not None:
+            return IngestionProgress(
+                error=f"API unreachable: {api_error}. Ingestion may still be running in the background.",
+            )
         if status is None:
             return IngestionProgress(
-                error="Ingestion task not found. It may have expired.",
+                error="Ingestion task not found. It may have expired or the session was refreshed.",
             )
 
         api_status = status.get("status", "")
@@ -804,6 +829,9 @@ def main() -> None:
         st.markdown("### System Status")
         if progress.is_running:
             st.warning(f"Ingestion running ({_format_duration(progress.elapsed_seconds)})")
+            task_id = st.session_state.get("ingestion_task_id")
+            if task_id:
+                st.caption(f"Task: `{task_id[:8]}`")
         elif progress.error:
             st.error("Ingestion failed")
         else:
