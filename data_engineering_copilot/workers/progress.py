@@ -19,10 +19,23 @@ from data_engineering_copilot.domain.models import IngestionEvent
 
 logger = logging.getLogger(__name__)
 
+# Redis key TTL: 24 hours.  Prevents stale keys from accumulating when tasks
+# complete or are abandoned.
+_STATUS_KEY_TTL_SECONDS = 86400
+
+# Shared connection pool to avoid opening a new TCP connection on every call.
+_connection_pool: redis.ConnectionPool | None = None
+
 
 def get_redis_client() -> redis.Redis:
-    """Return a Redis client connected to the application Redis instance."""
-    return redis.Redis.from_url(settings.redis_url, decode_responses=False)
+    """Return a Redis client connected via a shared connection pool."""
+    global _connection_pool
+    if _connection_pool is None:
+        _connection_pool = redis.ConnectionPool.from_url(
+            settings.redis_url,
+            decode_responses=False,
+        )
+    return redis.Redis(connection_pool=_connection_pool)
 
 
 class IngestionProgressTracker:
@@ -92,4 +105,4 @@ class IngestionProgressTracker:
         return dict(self._state)
 
     def _sync(self) -> None:
-        self._redis.set(self._redis_key, json.dumps(self._state))
+        self._redis.set(self._redis_key, json.dumps(self._state), ex=_STATUS_KEY_TTL_SECONDS)
