@@ -194,26 +194,35 @@ class TestGetRedisClient:
 
     @patch("data_engineering_copilot.workers.progress.redis")
     def test_returns_redis_instance(self, mock_redis_module: MagicMock):
-        """get_redis_client returns a Redis client configured from settings."""
+        """get_redis_client returns a Redis client from the shared pool."""
+        from data_engineering_copilot.workers import progress as progress_mod
         from data_engineering_copilot.workers.progress import get_redis_client
 
+        mock_pool = MagicMock()
         mock_client = MagicMock()
-        mock_redis_module.Redis.from_url.return_value = mock_client
+        mock_redis_module.ConnectionPool.from_url.return_value = mock_pool
+        mock_redis_module.Redis.return_value = mock_client
 
-        result = get_redis_client()
+        with patch.object(progress_mod, "_connection_pool", None):
+            result = get_redis_client()
 
         assert result is mock_client
-        mock_redis_module.Redis.from_url.assert_called_once()
 
     @patch("data_engineering_copilot.workers.progress.redis")
     def test_uses_settings_url(self, mock_redis_module: MagicMock):
         """Redis client is constructed with the URL from settings."""
+        from data_engineering_copilot.workers import progress as progress_mod
         from data_engineering_copilot.workers.progress import get_redis_client
 
-        get_redis_client()
+        mock_pool = MagicMock()
+        mock_client = MagicMock()
+        mock_redis_module.ConnectionPool.from_url.return_value = mock_pool
+        mock_redis_module.Redis.return_value = mock_client
 
-        call_kwargs = mock_redis_module.Redis.from_url.call_args
-        assert "url" in call_kwargs.kwargs or len(call_kwargs[0]) > 0
+        with patch.object(progress_mod, "_connection_pool", None):
+            get_redis_client()
+
+        mock_redis_module.ConnectionPool.from_url.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
