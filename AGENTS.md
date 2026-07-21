@@ -29,7 +29,6 @@ All implementation plans and session records are persisted to disk for traceabil
 
 ### Git Safety
 - Check `git status` at session start. Alert user if uncommitted changes exist.
-- Before multi-file change: `git checkout -b refactor/<description>`
 - After each milestone, remind user to commit and push.
 
 ## Project Execution Commands
