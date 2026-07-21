@@ -31,17 +31,17 @@ class OllamaClient:
         self.num_predict = num_predict
 
     def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
-        logger.info(
-            "Ollama generation started model=%s prompt_chars=%s num_ctx=%s num_predict=%s",
-            self.model,
-            len(prompt),
-            self.num_ctx,
-            self.num_predict,
-        )
         if num_predict is None:
             num_predict = self.num_predict
         if num_ctx is None:
             num_ctx = self.num_ctx
+        logger.info(
+            "Ollama generation started model=%s prompt_chars=%s num_ctx=%s num_predict=%s",
+            self.model,
+            len(prompt),
+            num_ctx,
+            num_predict,
+        )
 
         payload = {
             "model": self.model,

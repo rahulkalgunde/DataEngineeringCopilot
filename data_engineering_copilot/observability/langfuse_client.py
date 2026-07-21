@@ -109,13 +109,19 @@ class LangfuseCompat:
         observation = method(name=name, **kwargs)
         return _ObservationCompat(self, observation, kind=as_type, trace_id=None, parent_observation_id=None)
 
-    def trace(self, **kwargs):
+    def trace(self, name: str | None = None, **kwargs):
+        if name is not None:
+            kwargs["name"] = name
         return self.start_observation(as_type="trace", **kwargs)
 
-    def span(self, **kwargs):
+    def span(self, name: str | None = None, **kwargs):
+        if name is not None:
+            kwargs["name"] = name
         return self.start_observation(as_type="span", **kwargs)
 
-    def generation(self, **kwargs):
+    def generation(self, name: str | None = None, **kwargs):
+        if name is not None:
+            kwargs["name"] = name
         return self.start_observation(as_type="generation", **kwargs)
 
     def auth_check(self):
