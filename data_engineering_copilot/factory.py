@@ -3,10 +3,14 @@ from __future__ import annotations
 import logging
 
 from data_engineering_copilot.config.settings import AppSettings, settings
+from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
+from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
+from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
 from data_engineering_copilot.services.ingestion import IngestionService
 from data_engineering_copilot.services.rag import ProductionRagService
@@ -103,6 +107,50 @@ def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionSe
         embeddings=OllamaEmbeddings(
             model_name=app_settings.embedding_model_name,
         ),
+        vector_store=QdrantVectorStore(
+            url=app_settings.qdrant_url,
+            collection_name=app_settings.collection_name,
+        ),
+    )
+
+
+def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
+    logger.info(
+        "Building async crawler db=%s concurrency=%s max_concurrency=%s",
+        app_settings.crawl_db_path,
+        app_settings.crawl_async_concurrency,
+        app_settings.crawl_async_max_concurrency,
+    )
+    db_path = str(app_settings.crawl_db_path)
+    frontier = CrawlFrontierDB(db_path)
+    cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
+    cache = CrawlCache(cache_url)
+    return AsyncDocumentationCrawler(
+        frontier=frontier,
+        cache=cache,
+        timeout_seconds=app_settings.request_timeout_seconds,
+        delay_seconds=app_settings.crawl_delay_seconds,
+        concurrency=app_settings.crawl_async_concurrency,
+        max_concurrency=app_settings.crawl_async_max_concurrency,
+        conditional_get=app_settings.crawl_async_conditional_get,
+        thread_pool_size=app_settings.crawl_async_thread_pool_size,
+        user_agent="DataEngineeringCopilot/1.0",
+    )
+
+
+def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
+    logger.info(
+        "Building async ingestion service sources=%s qdrant_url=%s collection=%s",
+        len(app_settings.sources),
+        app_settings.qdrant_url,
+        app_settings.collection_name,
+    )
+    return AsyncIngestionService(
+        settings=app_settings,
+        crawler=build_async_crawler(app_settings),
+        parser=DocumentationHtmlParser(),
+        chunker=build_chunker(app_settings),
+        embeddings=OllamaEmbeddings(model_name=app_settings.embedding_model_name),
         vector_store=QdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,

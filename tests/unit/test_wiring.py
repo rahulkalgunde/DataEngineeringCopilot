@@ -214,3 +214,36 @@ class TestCeleryAppWiring:
         # The broker URL should match the settings value
         assert celery_app.conf.broker_url == settings.redis_url
         assert celery_app.conf.result_backend == settings.redis_url
+
+
+class TestAsyncFactoryWiring:
+    """Verify async factory functions return correctly typed objects."""
+
+    def test_build_async_crawler_returns_crawler(self):
+        from data_engineering_copilot.factory import build_async_crawler
+        from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
+
+        crawler = build_async_crawler()
+        assert isinstance(crawler, AsyncDocumentationCrawler)
+
+    def test_build_async_ingestion_service_returns_service(self):
+        from data_engineering_copilot.factory import build_async_ingestion_service
+        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+
+        service = build_async_ingestion_service()
+        assert isinstance(service, AsyncIngestionService)
+
+    def test_async_crawler_has_crawl_method(self):
+        from data_engineering_copilot.factory import build_async_crawler
+
+        crawler = build_async_crawler()
+        assert hasattr(crawler, "crawl")
+        import inspect
+        assert inspect.isasyncgenfunction(crawler.crawl)
+
+    def test_async_crawler_has_shutdown_method(self):
+        from data_engineering_copilot.factory import build_async_crawler
+
+        crawler = build_async_crawler()
+        assert hasattr(crawler, "shutdown")
+        assert callable(crawler.shutdown)

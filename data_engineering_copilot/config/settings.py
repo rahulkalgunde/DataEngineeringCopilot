@@ -16,6 +16,7 @@ class DocumentationSource:
     start_urls: tuple[str, ...]
     allowed_domains: tuple[str, ...]
     url_prefixes: tuple[str, ...] = ()
+    priority: int = 1  # Crawl priority (higher = more concurrency slots)
 
 
 def load_documentation_sources(config_path: Path) -> tuple[DocumentationSource, ...]:
@@ -131,6 +132,15 @@ class AppSettings(BaseSettings):
     max_pages_per_source: int = 80
     crawl_thread_pool_size: int = 4
     ingestion_batch_chunk_size: int = 256
+    processing_concurrency: int = 4
+    # Async crawler settings
+    crawl_db_path: Path = PROJECT_ROOT / "data" / "crawl_frontier.db"
+    crawl_async_concurrency: int = 20
+    crawl_async_max_concurrency: int = 40
+    crawl_async_per_domain_concurrency: int = 3
+    crawl_async_conditional_get: bool = True
+    crawl_async_cache_url: str = ""
+    crawl_async_thread_pool_size: int = 4
     logging_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = ()
 
