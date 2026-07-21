@@ -11,6 +11,34 @@ You must strictly adhere to Test-Driven Development (TDD) principles for all fea
 4. **Implement:** Write the minimum production code required to make the tests pass (use Build Mode).
 5. **Execute & Iterate:** Run the test suite command immediately after editing files. If a test fails, analyze the output and fix the implementation. Repeat until tests pass.
 
+## Session & Plan Guardrails
+
+All implementation plans and session records must be persisted to disk for traceability.
+
+### Session Start Protocol
+- **At the start of every session**, run `git status`. If uncommitted changes exist, alert the user immediately before doing any work.
+- Check for stale plan/session files in `plans/` and `sessions/` — resume from where the last session left off if applicable.
+
+### Plan Files
+- **Before presenting any implementation plan**, save it to `plans/` with a timestamped filename: `plans/PLAN_<short_description>_<YYYY-MM-DD_HHmm>.md`
+- **Before starting implementation**, update the plan file with status = IN PROGRESS.
+- **As implementation progresses**, update the same plan file with status changes, decisions made, and outcomes.
+- The plan file is the single source of truth for what was planned vs what was actually done.
+
+### Session Files
+- **After session compaction or context loss**, save session details to `sessions/` with a timestamped filename: `sessions/SESSION_<short_description>_<YYYY-MM-DD_HHmm>.md`
+- **Before closing any session**, save a session summary to `sessions/`: `sessions/SESSION_SUMMARY_<YYYY-MM-DD_HHmm>.md`
+- Session summaries should include: what files changed, what tests were run and their results, decisions made, blockers encountered, and current state of implementation.
+
+### Git Safety
+- **At session start**, check `git status`. If uncommitted changes exist, alert the user.
+- **Before any major refactor or multi-file change**, create a branch: `git checkout -b refactor/<description>`
+- **After each major code change, refactor, or milestone**, remind the user to `git add`, `git commit`, and `git push` to avoid accidental data loss.
+- A "major change" includes: new files, modified source code, test additions, config changes, or any completed plan step.
+
+### Timestamp Format
+All plan and session files must use the format: `<YYYY-MM-DD_HHmm>` (date, hour, minute in 24h format).
+
 ## Project Execution Commands
 - Python/PySpark Testing: `pytest`
 - Auto-run flag: After writing or updating code, you are permitted to run the test suite autonomously without asking for confirmation.
