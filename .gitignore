@@ -9,6 +9,7 @@ data/
 logs/
 qdrant_db/
 dec_venv/
+*.db
 *.sqlite3
 *.log
 *.log.*
@@ -34,3 +35,5 @@ node_modules/
 Thumbs.db
 .idea/
 .vscode/
+.opencode/
+profiling/
