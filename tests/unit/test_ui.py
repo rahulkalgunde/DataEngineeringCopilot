@@ -168,7 +168,8 @@ class TestIngestionManager:
         assert started is False
         assert "Connection refused" in error
 
-    def test_get_progress_returns_empty_when_no_task(self):
+    @patch("data_engineering_copilot.ui.streamlit_app._get_latest_task_id", return_value=None)
+    def test_get_progress_returns_empty_when_no_task(self, _mock_discover):
         progress = IngestionManager.get_progress()
 
         assert progress.is_running is False

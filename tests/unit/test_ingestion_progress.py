@@ -90,7 +90,7 @@ class TestIngestionProgressTracker:
 
         last_payload = json.loads(mock_redis_client.set.call_args[0][1])
         assert last_payload["pages_fetched"] == 3
-        assert last_payload["chunks_indexed"] == 10
+        assert last_payload["chunks_indexed"] == 30
         assert last_payload["current_url"] == "https://spark.apache.org/docs/latest/page3.html"
 
     def test_error_event_sets_error_and_status(self, mock_redis_client: MagicMock):

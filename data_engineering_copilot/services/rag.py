@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import Answer
@@ -19,8 +20,10 @@ class RagAnswerService:
         # ProductionRagService overrides this after super().__init__().
         self.langfuse = None
 
-    def answer(self, question: str) -> Answer:
+    def answer(self, question: str, on_step: Callable[[str], None] | None = None) -> Answer:
         # Log the incoming question
+        if on_step:
+            on_step("Embedding query")
         logger.info("RAG answer() called with question: %r", question[:100])
 
         # Start a Langfuse trace for this query (v3 API)
@@ -52,6 +55,8 @@ class RagAnswerService:
             )
 
         # Query the vector store and log retrieval details
+        if on_step:
+            on_step("Retrieving chunks")
         try:
             retrieved_chunks = self.vector_store.query(query_emb, top_k=settings.retrieval_top_k)
             logger.info(
@@ -128,6 +133,8 @@ class RagAnswerService:
             )
 
         try:
+            if on_step:
+                on_step("Reranking results")
             # Apply reranking if enabled
             if settings.reranker_enabled:
                 reranker = CrossEncoderReranker(model_name=settings.reranker_model)
@@ -146,6 +153,8 @@ class RagAnswerService:
             assembler = ContextAssembler(max_context_chars=settings.max_context_chars)
             context_str, source_names = assembler.assemble(sorted_chunks)
 
+            if on_step:
+                on_step("Generating answer")
             prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
             logger.debug("Ollama prompt (first 200 chars): %r", prompt[:200])
 
