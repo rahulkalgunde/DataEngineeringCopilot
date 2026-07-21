@@ -20,3 +20,17 @@ build/
 .env
 plans/
 sessions/
+resources_*.csv
+*.csv
+*.parquet
+celerybeat-schedule
+*.pid
+node_modules/
+.env.local
+.env.*.local
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
