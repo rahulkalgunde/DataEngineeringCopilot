@@ -9,7 +9,7 @@
       "docker system prune *": "deny",
       "docker rm *": "deny",
       "docker rmi *": "deny",
-      "rm -rf *": "ask"
+      "rm -rf *": "deny"
     }
   }
 }
