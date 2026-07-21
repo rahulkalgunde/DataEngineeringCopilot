@@ -134,6 +134,8 @@ class AsyncDocumentationCrawler:
         max_pages: int = 80,
         on_event: Callable[[IngestionEvent], None] | None = None,
     ) -> AsyncIterator[RawDocument]:
+        if self.frontier._db is None:
+            await self.frontier.initialize()
         await self._seed_frontier(source, max_pages)
 
         # Single persistent network session context maximizes connection pooling efficiency

@@ -11,12 +11,22 @@ from data_engineering_copilot.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
-    from data_engineering_copilot.factory import build_ingestion_service
+def ingest(max_pages: int | None, source_names: tuple[str, ...] | None, use_sync: bool = False) -> None:
+    if use_sync:
+        from data_engineering_copilot.factory import build_ingestion_service
 
-    logger.info("CLI ingest started max_pages=%s sources=%s", max_pages, source_names or "all")
-    service = build_ingestion_service()
-    total_chunks = service.ingest(max_pages_per_source=max_pages, source_names=source_names)
+        logger.info("CLI sync ingest started max_pages=%s sources=%s", max_pages, source_names or "all")
+        service = build_ingestion_service()
+        total_chunks = service.ingest(max_pages_per_source=max_pages, source_names=source_names)
+    else:
+        import asyncio
+
+        from data_engineering_copilot.factory import build_async_ingestion_service
+
+        logger.info("CLI async ingest started max_pages=%s sources=%s", max_pages, source_names or "all")
+        service = build_async_ingestion_service()
+        total_chunks = asyncio.run(service.ingest(max_pages_per_source=max_pages, source_names=source_names))
+
     logger.info("CLI ingest completed chunks=%s", total_chunks)
     print(f"Indexed {total_chunks} chunks.")
 
@@ -63,6 +73,12 @@ def reset_index() -> None:
     except Exception:
         logger.debug("Could not clear crawl registry keys (Redis may be unavailable)")
 
+    # Delete the crawl frontier SQLite database
+    db_path = settings.crawl_db_path
+    if db_path.exists():
+        db_path.unlink()
+        logger.info("Deleted crawl frontier database: %s", db_path)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")
@@ -70,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_parser = subparsers.add_parser("ingest", help="Crawl documentation and build the QdrantDB index.")
     ingest_parser.add_argument("--max-pages", type=int, default=None, help="Maximum pages to crawl per source.")
+    ingest_parser.add_argument(
+        "--sync",
+        action="store_true",
+        default=False,
+        help="Use sync crawler (legacy). Default is async.",
+    )
     ingest_parser.add_argument(
         "--source",
         action="append",
@@ -94,7 +116,11 @@ def main() -> None:
 
     try:
         if args.command == "ingest":
-            ingest(max_pages=args.max_pages, source_names=tuple(args.source) if args.source else None)
+            ingest(
+                max_pages=args.max_pages,
+                source_names=tuple(args.source) if args.source else None,
+                use_sync=args.sync,
+            )
         elif args.command == "ask":
             ask(question=args.question)
         elif args.command == "reset-index":

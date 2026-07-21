@@ -23,6 +23,7 @@ REDIS_KEY_PREFIX = "ingestion:status"
 class IngestRequest(BaseModel):
     source_names: list[str] | None = None
     max_pages: int | None = None
+    use_async: bool = True
 
 
 class TaskStatus(BaseModel):
@@ -33,8 +34,13 @@ class TaskStatus(BaseModel):
 
 @router.post("/api/v1/ingest", response_model=TaskStatus)
 async def ingest_documents(request: IngestRequest):
-    log.info("ingest.dispatch", source_names=request.source_names, max_pages=request.max_pages)
-    task = async_ingest_task.delay(request.source_names or [], request.max_pages or 0)
+    log.info(
+        "ingest.dispatch",
+        source_names=request.source_names,
+        max_pages=request.max_pages,
+        use_async=request.use_async,
+    )
+    task = async_ingest_task.delay(request.source_names, request.max_pages or 0, request.use_async)
 
     # Write an initial status so the polling endpoint has something to
     # return immediately, before the worker picks up the task.

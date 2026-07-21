@@ -70,7 +70,7 @@ class TestSourceStats:
         assert stats["chunks_indexed"] == 12
 
     def test_multiple_events_accumulate(self, tracker, redis):
-        for i in range(5):
+        for i in range(1, 6):
             tracker.on_event(
                 IngestionEvent(
                     event_type="page_indexed",
@@ -79,7 +79,7 @@ class TestSourceStats:
                     url=f"https://spark.apache.org/docs/latest/page{i}.html",
                     title=f"Page {i}",
                     chunks_indexed=3,
-                    pages_fetched=1,
+                    pages_fetched=i,
                 )
             )
         state = _get_state(redis)
@@ -336,3 +336,162 @@ class TestPagesSkipped:
         )
         state = _get_state(redis)
         assert state["pages_skipped"] == 4
+
+
+class TestCumulativeEventSemantics:
+    """Tests that the tracker correctly handles cumulative pages_fetched
+    and per-page-delta chunks_indexed as emitted by both IngestionService
+    and AsyncIngestionService.
+
+    Bug context: page_indexed events emit pages_fetched as a cumulative
+    count (1, 2, 3, ...) and chunks_indexed as a per-page delta.
+    source_complete events emit both as cumulative totals for the source.
+    """
+
+    def test_top_level_chunks_indexed_accumulates_from_page_events(self, tracker, redis):
+        """Top-level chunks_indexed must sum per-page deltas, not overwrite."""
+        for i in range(3):
+            tracker.on_event(
+                IngestionEvent(
+                    event_type="page_indexed",
+                    source_name="Apache Spark",
+                    message=f"Page {i}",
+                    url=f"https://spark.apache.org/docs/page{i}.html",
+                    chunks_indexed=8,
+                    pages_fetched=i + 1,
+                )
+            )
+        state = _get_state(redis)
+        assert state["chunks_indexed"] == 24
+
+    def test_top_level_pages_fetched_overwrites_with_cumulative(self, tracker, redis):
+        """Top-level pages_fetched uses the latest cumulative value."""
+        for i in range(3):
+            tracker.on_event(
+                IngestionEvent(
+                    event_type="page_indexed",
+                    source_name="Apache Spark",
+                    message=f"Page {i}",
+                    url=f"https://spark.apache.org/docs/page{i}.html",
+                    chunks_indexed=5,
+                    pages_fetched=i + 1,
+                )
+            )
+        state = _get_state(redis)
+        assert state["pages_fetched"] == 3
+
+    def test_per_source_pages_fetched_overwrites_not_accumulates(self, tracker, redis):
+        """Per-source pages_fetched must overwrite with cumulative, not +=."""
+        for i in range(3):
+            tracker.on_event(
+                IngestionEvent(
+                    event_type="page_indexed",
+                    source_name="Apache Spark",
+                    message=f"Page {i}",
+                    url=f"https://spark.apache.org/docs/page{i}.html",
+                    chunks_indexed=5,
+                    pages_fetched=i + 1,
+                )
+            )
+        state = _get_state(redis)
+        assert state["source_stats"]["Apache Spark"]["pages_fetched"] == 3
+
+    def test_per_source_chunks_indexed_accumulates_from_page_events(self, tracker, redis):
+        """Per-source chunks_indexed sums per-page deltas."""
+        for i in range(3):
+            tracker.on_event(
+                IngestionEvent(
+                    event_type="page_indexed",
+                    source_name="Apache Spark",
+                    message=f"Page {i}",
+                    url=f"https://spark.apache.org/docs/page{i}.html",
+                    chunks_indexed=7,
+                    pages_fetched=i + 1,
+                )
+            )
+        state = _get_state(redis)
+        assert state["source_stats"]["Apache Spark"]["chunks_indexed"] == 21
+
+    def test_source_complete_does_not_double_count_chunks(self, tracker, redis):
+        """source_complete sends cumulative chunks_indexed which must not
+        be added on top of already-accumulated page_indexed deltas."""
+        for i in range(3):
+            tracker.on_event(
+                IngestionEvent(
+                    event_type="page_indexed",
+                    source_name="Apache Spark",
+                    message=f"Page {i}",
+                    url=f"https://spark.apache.org/docs/page{i}.html",
+                    chunks_indexed=8,
+                    pages_fetched=i + 1,
+                )
+            )
+        tracker.on_event(
+            IngestionEvent(
+                event_type="source_complete",
+                source_name="Apache Spark",
+                message="Done",
+                chunks_indexed=24,
+                pages_fetched=3,
+            )
+        )
+        state = _get_state(redis)
+        assert state["chunks_indexed"] == 24
+        assert state["source_stats"]["Apache Spark"]["chunks_indexed"] == 24
+
+    def test_source_complete_sets_status_completed(self, tracker, redis):
+        """source_complete event transitions status to COMPLETED."""
+        tracker.on_event(
+            IngestionEvent(
+                event_type="source_complete",
+                source_name="Apache Spark",
+                message="Done",
+                chunks_indexed=10,
+                pages_fetched=5,
+            )
+        )
+        state = _get_state(redis)
+        assert state["status"] == "PROCESSING"  # source_complete does NOT set COMPLETED
+
+    def test_multi_source_cumulative_events(self, tracker, redis):
+        """Multiple sources with cumulative events are tracked correctly."""
+        tracker.on_event(
+            IngestionEvent(
+                event_type="page_indexed",
+                source_name="Apache Spark",
+                message="Page 1",
+                url="https://spark.apache.org/page1.html",
+                chunks_indexed=10,
+                pages_fetched=1,
+                total_pages_fetched=1,
+            )
+        )
+        tracker.on_event(
+            IngestionEvent(
+                event_type="page_indexed",
+                source_name="Apache Spark",
+                message="Page 2",
+                url="https://spark.apache.org/page2.html",
+                chunks_indexed=12,
+                pages_fetched=2,
+                total_pages_fetched=2,
+            )
+        )
+        tracker.on_event(
+            IngestionEvent(
+                event_type="page_indexed",
+                source_name="Apache Airflow",
+                message="Page 1",
+                url="https://airflow.apache.org/page1.html",
+                chunks_indexed=5,
+                pages_fetched=1,
+                total_pages_fetched=3,
+            )
+        )
+        state = _get_state(redis)
+        assert state["pages_fetched"] == 3
+        assert state["chunks_indexed"] == 27
+        assert state["source_stats"]["Apache Spark"]["pages_fetched"] == 2
+        assert state["source_stats"]["Apache Spark"]["chunks_indexed"] == 22
+        assert state["source_stats"]["Apache Airflow"]["pages_fetched"] == 1
+        assert state["source_stats"]["Apache Airflow"]["chunks_indexed"] == 5

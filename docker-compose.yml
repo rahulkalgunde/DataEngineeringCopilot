@@ -8,6 +8,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "local_secure_password_123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -20,6 +26,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   minio:
     image: minio/minio:latest
@@ -70,6 +82,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -4 http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   langfuse-postgres:
     image: postgres:16-alpine
@@ -177,14 +195,14 @@ services:
       dockerfile: Dockerfile
     image: de_copilot_base_image:latest  # Tags the image to reuse it
     container_name: de_copilot_api
-    command: bash -c "pip install -q structlog && uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload"
+    command: uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       langfuse:
         condition: service_healthy
     extra_hosts:
@@ -207,15 +225,15 @@ services:
   celery_worker:
     image: de_copilot_base_image:latest  # Reuses backend-api build instantly
     container_name: de_copilot_worker
-    command: bash -c "pip install -q structlog && celery -A data_engineering_copilot.workers.tasks worker --loglevel=info"
+    command: celery -A data_engineering_copilot.workers.tasks worker --loglevel=info
     shm_size: "2gb"
     depends_on:
-      backend-api:                       # Waits for backend-api build to finish
+      backend-api:
         condition: service_started
       redis:
-        condition: service_started
+        condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       langfuse:
         condition: service_healthy
     extra_hosts:

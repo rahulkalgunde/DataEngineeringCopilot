@@ -111,13 +111,13 @@ def _check_langfuse_reachable(timeout: float = 2.0) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def _post_ingest(source_names: list[str], max_pages: int) -> tuple[str | None, str | None]:
+def _post_ingest(source_names: list[str], max_pages: int, use_async: bool = True) -> tuple[str | None, str | None]:
     """POST to /api/v1/ingest to start a background Celery task.
 
     Returns (task_id, error_message).
     """
     try:
-        payload = json.dumps({"source_names": source_names, "max_pages": max_pages}).encode()
+        payload = json.dumps({"source_names": source_names, "max_pages": max_pages, "use_async": use_async}).encode()
         req = urllib.request.Request(
             f"{API_BASE_URL}/api/v1/ingest",
             data=payload,
@@ -238,6 +238,8 @@ class IngestionProgress:
     total_errors: int = 0
     total_chunks_indexed: int = 0
     sources: dict[str, SourceProgress] = field(default_factory=dict)
+    recent_events: list[dict] = field(default_factory=list)
+    current_url: str = ""
     last_message: str = ""
     error: str | None = None
     success_message: str | None = None
@@ -247,12 +249,12 @@ class IngestionManager:
     """Manages ingestion lifecycle via Celery task + Redis polling."""
 
     @classmethod
-    def start(cls, source_names: tuple[str, ...], max_pages: int) -> tuple[bool, str]:
+    def start(cls, source_names: tuple[str, ...], max_pages: int, use_async: bool = True) -> tuple[bool, str]:
         """Start ingestion via the FastAPI API.
 
         Returns (started, error_message).
         """
-        task_id, error = _post_ingest(list(source_names), max_pages)
+        task_id, error = _post_ingest(list(source_names), max_pages, use_async=use_async)
         if error:
             return False, error
         if task_id:
@@ -292,17 +294,18 @@ class IngestionManager:
         start_time = st.session_state.get("ingestion_start_time", time.time())
         elapsed = time.time() - start_time if is_running else 0
 
-        # Build per-source detail (Redis stores aggregates; distribute evenly)
+        # Build per-source detail from real Redis source_stats
         sources: dict[str, SourceProgress] = {}
-        num_sources = max(len(source_names), 1)
-        pages_each = status.get("pages_fetched", 0) // num_sources
-        chunks_each = status.get("chunks_indexed", 0) // num_sources
+        raw_source_stats = status.get("source_stats", {})
         for name in source_names:
+            s = raw_source_stats.get(name, {})
             sources[name] = SourceProgress(
                 name=name,
                 status="complete" if not is_running else "crawling",
-                pages_fetched=pages_each,
-                chunks_indexed=chunks_each,
+                pages_fetched=s.get("pages_fetched", 0),
+                pages_skipped=s.get("pages_skipped", 0),
+                chunks_indexed=s.get("chunks_indexed", 0),
+                errors=s.get("errors", 0),
             )
 
         error_msg = status.get("error")
@@ -319,6 +322,7 @@ class IngestionManager:
             success_msg = f"Refresh complete. Indexed or updated {total_chunks} chunks."
 
         current_url = status.get("current_url", "")
+        recent_events = status.get("recent_events", [])
         last_msg = current_url if is_running else ("Ingestion complete." if is_completed else "")
 
         return IngestionProgress(
@@ -332,6 +336,8 @@ class IngestionManager:
             total_chunks_indexed=status.get("chunks_indexed", 0),
             total_errors=1 if is_failed else 0,
             sources=sources,
+            recent_events=recent_events,
+            current_url=current_url,
             error=error_msg if is_failed else None,
             success_message=success_msg,
             last_message=last_msg,
@@ -431,6 +437,33 @@ def render_ingestion_progress() -> None:
                         f"Pages: {src.pages_fetched} | Chunks: {src.chunks_indexed}"
                     )
 
+    # Current URL + Throughput + ETA
+    if progress.current_url:
+        st.caption(f"Crawling: `{progress.current_url}`")
+    elapsed = progress.elapsed_seconds
+    throughput = progress.total_pages_fetched / elapsed if elapsed > 0 else 0
+    remaining = estimated_pages - progress.total_pages_fetched
+    eta = remaining / throughput if throughput > 0 else 0
+    col_t1, col_t2 = st.columns(2)
+    col_t1.metric("Throughput", f"{throughput:.1f} pages/sec")
+    col_t2.metric("Est. Remaining", _format_duration(eta))
+
+    # Live event feed
+    if progress.recent_events:
+        with st.expander("📡 Live Feed (last 15 events)", expanded=True):
+            for evt in reversed(progress.recent_events):
+                icon_map = {
+                    "fetch_success": "📥",
+                    "page_indexed": "✅",
+                    "page_skipped_cached": "⏭️",
+                    "page_skipped_duplicate": "⏭️",
+                    "batch_embedding": "📦",
+                    "batch_indexing": "💾",
+                }
+                icon = icon_map.get(evt.get("type", ""), "ℹ️")
+                label = evt.get("title", "") or evt.get("url", "")
+                st.caption(f"{icon} {label}")
+
     # Stop button
     if st.button("Stop Refresh", type="primary", use_container_width=True, key="stop_refresh_btn"):
         IngestionManager.stop()
@@ -474,19 +507,26 @@ def render_qa_tab() -> None:
                 return
 
             logger.info("Streamlit ask started question=%r", question.strip()[:200])
-            with st.spinner("Searching local repository and asking Ollama..."):
-                try:
-                    answer = service.answer(question.strip())
-                except Exception as exc:
-                    logger.exception("RAG answer failed")
-                    st.error(
-                        f"**Failed to get answer:** {exc}\n\n"
-                        "**Possible causes:**\n"
-                        "- Ollama may have timed out or the model is still loading\n"
-                        "- Qdrant may have lost connectivity\n\n"
-                        "Check the **System Health** tab and try again."
-                    )
-                    return
+            completed_steps: list[str] = []
+            try:
+                with st.status("Searching...", expanded=True) as status:
+                    def on_step(step_name: str) -> None:
+                        completed_steps.append(step_name)
+                        label = f"Step {len(completed_steps)}/4: {step_name}"
+                        status.update(label=label, state="running")
+
+                    answer = service.answer(question.strip(), on_step=on_step)
+                    status.update(label="✅ Answer ready", state="complete")
+            except Exception as exc:
+                logger.exception("RAG answer failed")
+                st.error(
+                    f"**Failed to get answer:** {exc}\n\n"
+                    "**Possible causes:**\n"
+                    "- Ollama may have timed out or the model is still loading\n"
+                    "- Qdrant may have lost connectivity\n\n"
+                    "Check the **System Health** tab and try again."
+                )
+                return
 
             logger.info(
                 "Streamlit ask completed confidence=%.4f sources=%s answer_chars=%s",
@@ -539,7 +579,7 @@ def render_ingestion_tab() -> None:
     st.subheader("Ingestion Controls")
 
     # Controls row
-    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
+    ctrl_col1, ctrl_col2 = st.columns([2, 1])
     with ctrl_col1:
         selected_sources = st.multiselect(
             "Select sources to ingest",
@@ -556,10 +596,9 @@ def render_ingestion_tab() -> None:
             help="0 = unlimited (capped by config max_pages_per_source)",
             key="ingest_max_pages",
         )
-    with ctrl_col3:
-        st.write("")  # spacer
-        st.write("")  # spacer
-        refresh_clicked = st.button("🔄 Refresh Documentation", type="primary", use_container_width=True)
+
+    use_async = st.checkbox("Use async crawler (recommended)", value=True, key="use_async_toggle")
+    refresh_clicked = st.button("🔄 Refresh Documentation", type="primary", use_container_width=True)
 
     if refresh_clicked:
         if not selected_sources:
@@ -573,6 +612,7 @@ def render_ingestion_tab() -> None:
                 started, error = IngestionManager.start(
                     source_names=tuple(selected_sources),
                     max_pages=int(max_pages) if max_pages > 0 else 0,
+                    use_async=use_async,
                 )
                 if not started:
                     st.warning(error or "Ingestion is already running.")
@@ -585,8 +625,12 @@ def render_ingestion_tab() -> None:
     if progress.is_running:
         render_ingestion_progress()
     elif progress.success_message:
-        st.success(progress.success_message)
-        st.caption(f"Finished in {_format_duration(progress.elapsed_seconds)}")
+        with st.container(border=True):
+            st.success("✅ Ingestion Complete")
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric("Duration", _format_duration(progress.elapsed_seconds))
+            col_b.metric("Pages Fetched", progress.total_pages_fetched)
+            col_c.metric("Chunks Indexed", progress.total_chunks_indexed)
         # Per-source summary
         if progress.sources:
             with st.expander("Per-Source Summary"):
@@ -668,27 +712,24 @@ def render_health_tab() -> None:
     col_o4.metric("Timeout", f"{settings.ollama_timeout_seconds}s")
     col_o5.metric("Output Limit", f"{settings.ollama_num_predict} tokens")
 
-    st.divider()
+    with st.expander("Advanced Configuration", expanded=False):
+        col_r1, col_r2, col_r3 = st.columns(3)
+        col_r1.metric("Retrieval Top-K", settings.retrieval_top_k)
+        col_r2.metric("Confidence Threshold", f"{settings.confidence_threshold:.0%}")
+        col_r3.metric("Max Context Chars", settings.max_context_chars)
 
-    # RAG Configuration
-    st.markdown("### RAG Configuration")
-    col_r1, col_r2, col_r3 = st.columns(3)
-    col_r1.metric("Retrieval Top-K", settings.retrieval_top_k)
-    col_r2.metric("Confidence Threshold", f"{settings.confidence_threshold:.0%}")
-    col_r3.metric("Max Context Chars", settings.max_context_chars)
+        col_r4, col_r5, col_r6 = st.columns(3)
+        col_r4.metric("Chunk Strategy", settings.chunking_strategy)
+        col_r5.metric("Chunk Size (words)", settings.chunk_size_words)
+        col_r6.metric("Overlap (words)", settings.chunk_overlap_words)
 
-    col_r4, col_r5, col_r6 = st.columns(3)
-    col_r4.metric("Chunk Strategy", settings.chunking_strategy)
-    col_r5.metric("Chunk Size (words)", settings.chunk_size_words)
-    col_r6.metric("Overlap (words)", settings.chunk_overlap_words)
+        if settings.reranker_enabled:
+            col_r7, col_r8 = st.columns(2)
+            col_r7.metric("Reranker", "Enabled")
+            col_r8.metric("Reranker k", settings.reranker_top_k)
 
-    if settings.reranker_enabled:
-        col_r7, col_r8 = st.columns(2)
-        col_r7.metric("Reranker", "Enabled")
-        col_r8.metric("Reranker k", settings.reranker_top_k)
-
-    if settings.logging_enabled:
-        st.caption(f"Application log: `{settings.project_root / 'logs' / 'app.log'}`")
+        if settings.logging_enabled:
+            st.caption(f"Application log: `{settings.project_root / 'logs' / 'app.log'}`")
 
     st.divider()
 
@@ -697,13 +738,45 @@ def render_health_tab() -> None:
     log_path = settings.project_root / "logs" / "app.log"
     if log_path.exists():
         try:
+
             lines = log_path.read_text(encoding="utf-8").strip().split("\n")
             ingestion_lines = [line for line in lines if "ngestion" in line.lower()]
             if ingestion_lines:
-                last_20 = ingestion_lines[-20:]
-                with st.expander(f"Last {len(last_20)} ingestion log entries", expanded=False):
-                    for line in reversed(last_20):
-                        st.caption(line[:200])
+                history_rows = []
+                for line in reversed(ingestion_lines[-50:]):
+                    row = {"raw": line[:200]}
+                    # Try to parse JSON-structured log lines
+                    try:
+                        parts = line.split(" | ", 1)
+                        if len(parts) == 2:
+                            row["timestamp"] = parts[0].strip()
+                            maybe_json = parts[1].strip()
+                            if maybe_json.startswith("{"):
+                                data = json.loads(maybe_json)
+                                row["event"] = data.get("event", data.get("msg", data.get("message", "")))
+                                row["chunks"] = data.get("chunks_indexed", data.get("total_chunks", ""))
+                                row["pages"] = data.get("pages_fetched", data.get("total_pages", ""))
+                                row["source"] = data.get("source_name", data.get("source", ""))
+                    except (json.JSONDecodeError, IndexError):
+                        pass
+                    if "event" not in row:
+                        row["event"] = row["raw"][:100]
+                    history_rows.append(row)
+                st.dataframe(
+                    [
+                        {
+                            "Time": r.get("timestamp", ""),
+                            "Event": r.get("event", ""),
+                            "Pages": r.get("pages", ""),
+                            "Chunks": r.get("chunks", ""),
+                            "Source": r.get("source", ""),
+                        }
+                        for r in history_rows
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(len(history_rows) * 35 + 38, 400),
+                )
             else:
                 st.caption("No ingestion history yet.")
         except Exception:
@@ -832,6 +905,11 @@ def main() -> None:
             task_id = st.session_state.get("ingestion_task_id")
             if task_id:
                 st.caption(f"Task: `{task_id[:8]}`")
+            total_sources = len(progress.source_names) or 1
+            estimated_pages = progress.max_pages_per_source * total_sources or 1
+            mini_ratio = min(progress.total_pages_fetched / max(estimated_pages, 1), 1.0)
+            st.progress(mini_ratio)
+            st.caption(f"{progress.total_pages_fetched} / {estimated_pages} pages  |  {progress.total_chunks_indexed} chunks")
         elif progress.error:
             st.error("Ingestion failed")
         else:

@@ -66,10 +66,11 @@ class IngestionProgressTracker:
         self._redis = redis_client
         self._redis_key = f"{self.REDIS_KEY_PREFIX}:{task_id}"
 
+        resolved_names = source_names if source_names else [s.name for s in settings.sources]
         self._state: dict[str, Any] = {
             "task_id": task_id,
             "status": "PROCESSING",
-            "source_names": source_names or [],
+            "source_names": resolved_names,
             "pages_fetched": 0,
             "chunks_indexed": 0,
             "current_url": "",
@@ -86,10 +87,21 @@ class IngestionProgressTracker:
 
     def on_event(self, event: IngestionEvent) -> None:
         """Callback wired into ``IngestionService.ingest(on_event=...)``."""
-        if event.pages_fetched:
+        # --- pages_fetched: use global total when available, else per-source ---
+        if event.total_pages_fetched:
+            self._state["pages_fetched"] = event.total_pages_fetched
+        elif event.pages_fetched:
             self._state["pages_fetched"] = event.pages_fetched
-        if event.chunks_indexed:
+
+        # --- chunks_indexed: page_indexed events carry per-page deltas ---
+        # Accumulate only page_indexed deltas at top-level (source_complete
+        # carries the cumulative per-source total which would double-count).
+        # ingestion_complete carries the grand total and overwrites.
+        if event.event_type == "page_indexed" and event.chunks_indexed:
+            self._state["chunks_indexed"] += event.chunks_indexed
+        elif event.event_type == "ingestion_complete" and event.chunks_indexed:
             self._state["chunks_indexed"] = event.chunks_indexed
+
         if event.url:
             self._state["current_url"] = event.url
         if event.error:
@@ -118,10 +130,15 @@ class IngestionProgressTracker:
                     "current_url": "",
                 }
             src = stats[source]
+            # pages_fetched is cumulative — overwrite, don't accumulate
             if event.pages_fetched:
-                src["pages_fetched"] += event.pages_fetched
-            if event.chunks_indexed:
+                src["pages_fetched"] = event.pages_fetched
+            # chunks_indexed: accumulate per-page deltas; use cumulative
+            # from source_complete as the authoritative final count
+            if event.event_type == "page_indexed" and event.chunks_indexed:
                 src["chunks_indexed"] += event.chunks_indexed
+            elif event.event_type == "source_complete" and event.chunks_indexed:
+                src["chunks_indexed"] = event.chunks_indexed
             if event.url:
                 src["current_url"] = event.url
             if event.error:
