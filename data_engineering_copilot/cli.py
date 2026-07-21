@@ -51,6 +51,18 @@ def reset_index() -> None:
             raise
     logger.info("Qdrant collection reset completed collection=%s", settings.collection_name)
 
+    # Clear crawl URL registry keys from Redis
+    from data_engineering_copilot.workers.progress import get_redis_client
+
+    try:
+        redis_client = get_redis_client()
+        registry_keys = list(redis_client.scan_iter("crawl:url_registry:*"))
+        if registry_keys:
+            redis_client.delete(*registry_keys)
+            logger.info("Cleared %d crawl registry keys", len(registry_keys))
+    except Exception:
+        logger.debug("Could not clear crawl registry keys (Redis may be unavailable)")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")

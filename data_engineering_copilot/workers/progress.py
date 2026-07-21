@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 import redis
@@ -22,6 +23,12 @@ logger = logging.getLogger(__name__)
 # Redis key TTL: 24 hours.  Prevents stale keys from accumulating when tasks
 # complete or are abandoned.
 _STATUS_KEY_TTL_SECONDS = 86400
+
+# Maximum number of recent events to retain in the rolling buffer.
+_MAX_RECENT_EVENTS = 15
+
+# Event types that count as "page skipped" for the top-level counter.
+_SKIP_EVENT_TYPES = {"page_skipped", "page_skipped_duplicate", "page_skipped_cached"}
 
 # Shared connection pool to avoid opening a new TCP connection on every call.
 _connection_pool: redis.ConnectionPool | None = None
@@ -67,6 +74,9 @@ class IngestionProgressTracker:
             "chunks_indexed": 0,
             "current_url": "",
             "error": None,
+            "source_stats": {},
+            "recent_events": [],
+            "pages_skipped": 0,
         }
         self._sync()
 
@@ -89,6 +99,50 @@ class IngestionProgressTracker:
             self._state["status"] = "FAILED"
         elif event.event_type == "ingestion_complete":
             self._state["status"] = "COMPLETED"
+
+        # --- pages_skipped top-level counter ---
+        if event.event_type in _SKIP_EVENT_TYPES:
+            self._state["pages_skipped"] = self._state.get("pages_skipped", 0) + 1
+
+        # --- per-source stats ---
+        source = event.source_name
+        known_sources = set(self._state.get("source_names", []))
+        if source and source in known_sources:
+            stats = self._state["source_stats"]
+            if source not in stats:
+                stats[source] = {
+                    "pages_fetched": 0,
+                    "chunks_indexed": 0,
+                    "pages_skipped": 0,
+                    "errors": 0,
+                    "current_url": "",
+                }
+            src = stats[source]
+            if event.pages_fetched:
+                src["pages_fetched"] += event.pages_fetched
+            if event.chunks_indexed:
+                src["chunks_indexed"] += event.chunks_indexed
+            if event.url:
+                src["current_url"] = event.url
+            if event.error:
+                src["errors"] = src.get("errors", 0) + 1
+            if event.event_type in _SKIP_EVENT_TYPES:
+                src["pages_skipped"] = src.get("pages_skipped", 0) + 1
+
+        # --- recent events (rolling max 15) ---
+        recent: list[dict[str, Any]] = self._state["recent_events"]
+        recent.append({
+            "type": event.event_type,
+            "source": event.source_name,
+            "url": event.url or "",
+            "title": event.title or "",
+            "chunks": event.chunks_indexed,
+            "ts": time.time(),
+            "error": event.error or "",
+            "batch_size": event.batch_size,
+        })
+        if len(recent) > _MAX_RECENT_EVENTS:
+            self._state["recent_events"] = recent[-_MAX_RECENT_EVENTS:]
 
         self._sync()
 
