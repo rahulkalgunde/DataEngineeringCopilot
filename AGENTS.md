@@ -80,7 +80,7 @@ dec_venv/bin/python -m pytest tests/ -v
 ```
 tests/
 ├── conftest.py                 # shared fixtures, auto-skip hooks
-├── unit/                       # 172 tests, no external services
+├── unit/                       # ~170 tests, no external services
 ├── integration/                # 6 test files, require Qdrant/Ollama/Langfuse
 └── e2e/                        # 1 test file, full pipeline
 ```
@@ -115,7 +115,7 @@ dec_venv/bin/python -m uvicorn data_engineering_copilot.api.app:app --reload --p
 ### Key Components
 - **Crawler** (`infrastructure/crawler.py`): BFS HTML crawler with domain/prefix allowlisting. Preserves trailing slashes for correct relative-link resolution.
 - **HTML Parser** (`infrastructure/html_parser.py`): BeautifulSoup-based. Removes nav/footer/header/aside. Skips pages < 40 words.
-- **Embeddings** (`infrastructure/embeddings.py`): Ollama `/api/embed` endpoint only. Class is `SentenceTransformerEmbeddings` (historical name).
+- **Embeddings** (`infrastructure/embeddings.py`): Ollama `/api/embed` endpoint only. Class is `OllamaEmbeddings`.
 - **Vector Store** (`infrastructure/qdrant_store.py`): Primary storage backend. Uses `qdrant-client` HTTP API. `hybrid_query` embeds + queries in one call.
 - **Ollama Client** (`infrastructure/ollama_client.py`): HTTP POST to `/api/generate`. Uses `raw=True` to avoid Qwen thinking-only empty responses.
 - **Chunker** (`services/chunker.py`): Supports `fixed_size`, `sentence_preserving`, and `semantic` strategies. Deterministic chunk IDs: `<slug(source)>:<sha1(url)[:10]>:<0000-index>`.
@@ -144,6 +144,8 @@ These are the **real** defaults — the ARCHITECTURE.md and older docs may be st
 | `chunk_size_words` | `375` | |
 | `chunk_overlap_words` | `90` | |
 | `chunking_strategy` | `sentence_preserving` | Options: `fixed_size`, `sentence_preserving`, `semantic` |
+| `min_semantic_similarity` | `0.5` | Semantic chunker only |
+| `max_chunk_words` | `None` (auto: 1.5x chunk_size_words) | Semantic chunker only |
 | `retrieval_top_k` | `15` | |
 | `reranker_enabled` | `True` | |
 | `reranker_top_k` | `5` | |
@@ -152,8 +154,12 @@ These are the **real** defaults — the ARCHITECTURE.md and older docs may be st
 | `qdrant_url` | `http://localhost:6333` | |
 | `crawl_delay_seconds` | `0.2` | |
 | `max_pages_per_source` | `80` | |
+| `ingestion_batch_chunk_size` | `256` | |
 | `ollama_num_ctx` | `4096` | |
 | `ollama_num_predict` | `512` | |
+| `ollama_retry_context_ratio` | `0.5` | Retry with reduced context on failure |
+| `ollama_retry_extra_num_predict` | `512` | Extra output budget on retry |
+| `ollama_retry_max_num_predict` | `1024` | Max output budget on retry |
 
 ## Documentation Sources
 Configured in `data_engineering_copilot/config/documentation_sources.json`:

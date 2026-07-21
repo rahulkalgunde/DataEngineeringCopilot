@@ -129,6 +129,7 @@ class AppSettings(BaseSettings):
     ollama_retry_max_num_predict: int = 1024
     crawl_delay_seconds: float = 0.2
     max_pages_per_source: int = 80
+    crawl_thread_pool_size: int = 4
     ingestion_batch_chunk_size: int = 256
     logging_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = ()
