@@ -16,10 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: ${{ env.PYTHON_VERSION }}
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make lint
 
@@ -27,10 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: ${{ env.PYTHON_VERSION }}
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-ci-unit
 
@@ -45,10 +49,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache Ollama models
         uses: actions/cache@v4
@@ -73,10 +79,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache Ollama models
         uses: actions/cache@v4
