@@ -428,10 +428,7 @@ def _render_state_bar(progress: IngestionProgress) -> None:
 
     cols = st.columns([1, 3, 8])
     cols[0].markdown(f"# {icon}")
-    cols[1].markdown(
-        f"#### :{color}[{status_label}]\n"
-        f":{color}[{_format_duration(progress.elapsed_seconds)}]"
-    )
+    cols[1].markdown(f"#### :{color}[{status_label}]\n:{color}[{_format_duration(progress.elapsed_seconds)}]")
     stats = []
     if progress.total_pages_fetched > 0:
         stats.append(f"**{progress.total_pages_fetched}** pages")
@@ -464,9 +461,7 @@ def _render_progress_panel() -> None:
 
     _render_state_bar(progress)
 
-    tab_overview, tab_sources, tab_log, tab_history = st.tabs(
-        ["Overview", "Sources", "Live Log", "History"]
-    )
+    tab_overview, tab_sources, tab_log, tab_history = st.tabs(["Overview", "Sources", "Live Log", "History"])
 
     with tab_overview:
         _render_overview_tab(progress)
@@ -522,14 +517,16 @@ def _render_sources_tab(progress: IngestionProgress) -> None:
     for name in progress.source_names:
         src = progress.sources.get(name)
         if src is None:
-            rows.append({
-                "Source": name,
-                "Status": "⏳ pending",
-                "Pages": 0,
-                "Chunks": 0,
-                "Errors": 0,
-                "Progress": 0.0,
-            })
+            rows.append(
+                {
+                    "Source": name,
+                    "Status": "⏳ pending",
+                    "Pages": 0,
+                    "Chunks": 0,
+                    "Errors": 0,
+                    "Progress": 0.0,
+                }
+            )
         else:
             effective_max = progress.max_pages_per_source or settings.max_pages_per_source
             pct = min(src.pages_fetched / max(effective_max, 1), 1.0)
@@ -539,21 +536,21 @@ def _render_sources_tab(progress: IngestionProgress) -> None:
                 status_icon = "❌"
             else:
                 status_icon = "✅"
-            rows.append({
-                "Source": name,
-                "Status": f"{status_icon} {src.status}",
-                "Pages": src.pages_fetched,
-                "Chunks": src.chunks_indexed,
-                "Errors": src.errors,
-                "Progress": pct,
-            })
+            rows.append(
+                {
+                    "Source": name,
+                    "Status": f"{status_icon} {src.status}",
+                    "Pages": src.pages_fetched,
+                    "Chunks": src.chunks_indexed,
+                    "Errors": src.errors,
+                    "Progress": pct,
+                }
+            )
 
     st.dataframe(
         rows,
         column_config={
-            "Progress": st.column_config.ProgressColumn(
-                "Progress", min_value=0, max_value=1, format="%.0f%%"
-            ),
+            "Progress": st.column_config.ProgressColumn("Progress", min_value=0, max_value=1, format="%.0f%%"),
             "Status": st.column_config.TextColumn("Status", width="small"),
             "Pages": st.column_config.NumberColumn("Pages", width="small"),
             "Chunks": st.column_config.NumberColumn("Chunks", width="small"),
@@ -577,9 +574,17 @@ def _render_live_log_tab(progress: IngestionProgress) -> None:
     source_names = list(dict.fromkeys(e.get("source", "") for e in events if e.get("source")))
     filter_source = st.selectbox("Filter by source", ["All"] + source_names, key="log_source_filter")
     filter_types = st.multiselect(
-        "Event types", 
-        ["fetch_success", "page_indexed", "page_skipped_cached", "page_skipped_duplicate", 
-         "batch_embedding", "batch_indexing", "source_complete", "error"],
+        "Event types",
+        [
+            "fetch_success",
+            "page_indexed",
+            "page_skipped_cached",
+            "page_skipped_duplicate",
+            "batch_embedding",
+            "batch_indexing",
+            "source_complete",
+            "error",
+        ],
         default=[],
         key="log_type_filter",
     )
@@ -646,6 +651,7 @@ def _format_timestamp(ts: float) -> str:
     if not ts:
         return ""
     import datetime
+
     return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
@@ -689,6 +695,7 @@ def render_qa_tab() -> None:
             completed_steps: list[str] = []
             try:
                 with st.status("Searching...", expanded=True) as status:
+
                     def on_step(step_name: str) -> None:
                         completed_steps.append(step_name)
                         label = f"Step {len(completed_steps)}/4: {step_name}"
@@ -792,13 +799,15 @@ def render_ingestion_tab() -> None:
                         # Save to history before clearing
                         if progress.success_message:
                             history = st.session_state.get("ingestion_history", [])
-                            history.append({
-                                "Time": time.strftime("%H:%M:%S"),
-                                "Status": "✅ Completed",
-                                "Pages": progress.total_pages_fetched,
-                                "Chunks": progress.total_chunks_indexed,
-                                "Duration": _format_duration(progress.elapsed_seconds),
-                            })
+                            history.append(
+                                {
+                                    "Time": time.strftime("%H:%M:%S"),
+                                    "Status": "✅ Completed",
+                                    "Pages": progress.total_pages_fetched,
+                                    "Chunks": progress.total_chunks_indexed,
+                                    "Duration": _format_duration(progress.elapsed_seconds),
+                                }
+                            )
                             st.session_state.ingestion_history = history[-20:]
                         IngestionManager.reset_status()
                         st.session_state.pop("ingestion_started", None)
@@ -924,7 +933,6 @@ def render_health_tab() -> None:
     log_path = settings.project_root / "logs" / "app.log"
     if log_path.exists():
         try:
-
             lines = log_path.read_text(encoding="utf-8").strip().split("\n")
             ingestion_lines = [line for line in lines if "ngestion" in line.lower()]
             if ingestion_lines:
@@ -1096,7 +1104,9 @@ def main() -> None:
             sidebar_estimated = effective_max_pages * total_sources
             mini_ratio = min(progress.total_pages_fetched / max(sidebar_estimated, 1), 1.0)
             st.progress(mini_ratio)
-            st.caption(f"{progress.total_pages_fetched} / {sidebar_estimated} pages  |  {progress.total_chunks_indexed} chunks")
+            st.caption(
+                f"{progress.total_pages_fetched} / {sidebar_estimated} pages  |  {progress.total_chunks_indexed} chunks"
+            )
         elif progress.error:
             st.error("Ingestion failed")
         else:

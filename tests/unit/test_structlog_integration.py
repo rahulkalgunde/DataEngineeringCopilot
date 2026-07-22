@@ -156,16 +156,20 @@ class TestStructuredFields:
 
     def test_worker_uses_structlog(self) -> None:
         from data_engineering_copilot.workers import tasks
+
         assert hasattr(tasks, "log"), "tasks.py should define a 'log' structlog logger"
 
     def test_api_routes_uses_structlog(self) -> None:
         from data_engineering_copilot.api import routes
+
         assert hasattr(routes, "log"), "routes.py should define a 'log' structlog logger"
 
     def test_async_crawler_uses_structlog(self) -> None:
         from data_engineering_copilot.infrastructure import async_crawler
+
         assert hasattr(async_crawler, "log"), "async_crawler.py should define a 'log' structlog logger"
 
     def test_async_ingestion_uses_structlog(self) -> None:
         from data_engineering_copilot.services import async_ingestion
+
         assert hasattr(async_ingestion, "log"), "async_ingestion.py should define a 'log' structlog logger"

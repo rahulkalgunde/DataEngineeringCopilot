@@ -8,6 +8,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import EmbeddingError
+from data_engineering_copilot.infrastructure.resilience import Bulkhead, CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class OllamaEmbeddings:
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self.ollama_base_url = settings.ollama_base_url.rstrip("/")
+        self._circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
+        self._bulkhead = Bulkhead(max_concurrency=8)
         logger.info(
             "Using Ollama embedding model %s at %s",
             model_name,
@@ -61,55 +64,65 @@ class OllamaEmbeddings:
 
         Returns a list of vectors for each input text.
         """
-        payload = json.dumps({"model": self.model_name, "input": texts}).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.ollama_base_url}/api/embed",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        self._circuit_breaker.execute()
+        self._bulkhead.acquire(blocking=False)
         try:
-            with urllib.request.urlopen(request, timeout=self._embed_timeout()) as response:
-                resp_data = json.load(response)
-        except Exception as exc:
-            raise EmbeddingError(f"Failed to get embeddings from Ollama: {exc}") from exc
+            payload = json.dumps({"model": self.model_name, "input": texts}).encode("utf-8")
+            request = urllib.request.Request(
+                f"{self.ollama_base_url}/api/embed",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self._embed_timeout()) as response:
+                    resp_data = json.load(response)
+            except Exception as exc:
+                self._circuit_breaker.record_failure()
+                raise EmbeddingError(f"Failed to get embeddings from Ollama: {exc}") from exc
 
-        # Log response structure for debugging
-        logger.debug(
-            "Ollama embeddings response keys=%s",
-            sorted(resp_data.keys()) if isinstance(resp_data, dict) else "not a dict",
-        )
-
-        # Ollama /api/embed endpoint returns {"embeddings": [[...], [...], ...]}
-        if "embeddings" not in resp_data:
-            raise EmbeddingError(
-                f"Ollama embeddings response missing 'embeddings' key. "
-                f"Response keys: {sorted(resp_data.keys()) if isinstance(resp_data, dict) else 'invalid response'}. "
-                f"Response: {json.dumps(resp_data)[:500]}"
+            # Log response structure for debugging
+            logger.debug(
+                "Ollama embeddings response keys=%s",
+                sorted(resp_data.keys()) if isinstance(resp_data, dict) else "not a dict",
             )
 
-        embeddings = resp_data["embeddings"]
+            # Ollama /api/embed endpoint returns {"embeddings": [[...], [...], ...]}
+            if "embeddings" not in resp_data:
+                self._circuit_breaker.record_failure()
+                raise EmbeddingError(
+                    f"Ollama embeddings response missing 'embeddings' key. "
+                    f"Response keys: {sorted(resp_data.keys()) if isinstance(resp_data, dict) else 'invalid response'}. "
+                    f"Response: {json.dumps(resp_data)[:500]}"
+                )
 
-        # Validate embeddings is a list
-        if not isinstance(embeddings, list):
-            raise EmbeddingError(
-                f"Ollama 'embeddings' value is not a list. Got type {type(embeddings).__name__}. "
-                f"Response: {json.dumps(resp_data)[:500]}"
-            )
+            embeddings = resp_data["embeddings"]
 
-        # Validate that we got embeddings for all input texts
-        if len(embeddings) != len(texts):
-            raise EmbeddingError(
-                f"Ollama returned {len(embeddings)} embeddings for {len(texts)} input texts. "
-                f"Expected one embedding per input text. "
-                f"Check that the Ollama embedding model is properly configured and responding. "
-                f"Response keys: {sorted(resp_data.keys())}"
-            )
+            # Validate embeddings is a list
+            if not isinstance(embeddings, list):
+                self._circuit_breaker.record_failure()
+                raise EmbeddingError(
+                    f"Ollama 'embeddings' value is not a list. Got type {type(embeddings).__name__}. "
+                    f"Response: {json.dumps(resp_data)[:500]}"
+                )
 
-        # Validate embedding dimensions
-        self._validate_embedding_dimensions(embeddings, texts)
+            # Validate that we got embeddings for all input texts
+            if len(embeddings) != len(texts):
+                self._circuit_breaker.record_failure()
+                raise EmbeddingError(
+                    f"Ollama returned {len(embeddings)} embeddings for {len(texts)} input texts. "
+                    f"Expected one embedding per input text. "
+                    f"Check that the Ollama embedding model is properly configured and responding. "
+                    f"Response keys: {sorted(resp_data.keys())}"
+                )
 
-        return embeddings
+            # Validate embedding dimensions
+            self._validate_embedding_dimensions(embeddings, texts)
+
+            self._circuit_breaker.record_success()
+            return embeddings
+        finally:
+            self._bulkhead.release()
 
     def _ollama_embed(self, texts: list[str]) -> list[list[float]]:
         """Call Ollama embeddings endpoint with automatic batch slicing.

@@ -23,6 +23,7 @@ from data_engineering_copilot.ui.streamlit_app import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _reset_session():
     """Clear Streamlit session state before and after each test."""
@@ -34,6 +35,7 @@ def _reset_session():
 # ---------------------------------------------------------------------------
 # _post_ingest tests
 # ---------------------------------------------------------------------------
+
 
 class TestPostIngest:
     """Tests for the HTTP helper that starts a Celery ingestion task."""
@@ -66,6 +68,7 @@ class TestPostIngest:
 # _get_ingest_status tests
 # ---------------------------------------------------------------------------
 
+
 class TestGetIngestStatus:
     """Tests for the HTTP helper that polls task status from Redis."""
 
@@ -95,9 +98,8 @@ class TestGetIngestStatus:
     @patch("data_engineering_copilot.ui.streamlit_app.urllib.request.urlopen")
     def test_returns_none_on_404(self, mock_urlopen):
         import urllib.error
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="", code=404, msg="Not Found", hdrs=None, fp=None
-        )
+
+        mock_urlopen.side_effect = urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
 
         result = _get_ingest_status("nonexistent")
 
@@ -119,6 +121,7 @@ class TestGetIngestStatus:
 # ---------------------------------------------------------------------------
 # _post_cancel_ingest tests
 # ---------------------------------------------------------------------------
+
 
 class TestPostCancelIngest:
     """Tests for the HTTP helper that cancels a Celery task."""
@@ -143,6 +146,7 @@ class TestPostCancelIngest:
 # ---------------------------------------------------------------------------
 # IngestionManager tests
 # ---------------------------------------------------------------------------
+
 
 class TestIngestionManager:
     """Tests for the IngestionManager class methods."""
@@ -181,15 +185,18 @@ class TestIngestionManager:
         st.session_state.ingestion_source_names = ["Spark"]
         st.session_state.ingestion_max_pages = 40
         st.session_state.ingestion_start_time = 1000.0
-        mock_status.return_value = ({
-            "task_id": "task-abc",
-            "status": "PROCESSING",
-            "source_names": ["Spark"],
-            "pages_fetched": 10,
-            "chunks_indexed": 80,
-            "current_url": "https://example.com",
-            "error": None,
-        }, None)
+        mock_status.return_value = (
+            {
+                "task_id": "task-abc",
+                "status": "PROCESSING",
+                "source_names": ["Spark"],
+                "pages_fetched": 10,
+                "chunks_indexed": 80,
+                "current_url": "https://example.com",
+                "error": None,
+            },
+            None,
+        )
 
         progress = IngestionManager.get_progress()
 
@@ -204,15 +211,18 @@ class TestIngestionManager:
         st.session_state.ingestion_source_names = ["Spark"]
         st.session_state.ingestion_max_pages = 40
         st.session_state.ingestion_start_time = 1000.0
-        mock_status.return_value = ({
-            "task_id": "task-abc",
-            "status": "COMPLETED",
-            "source_names": ["Spark"],
-            "pages_fetched": 40,
-            "chunks_indexed": 320,
-            "current_url": "",
-            "error": None,
-        }, None)
+        mock_status.return_value = (
+            {
+                "task_id": "task-abc",
+                "status": "COMPLETED",
+                "source_names": ["Spark"],
+                "pages_fetched": 40,
+                "chunks_indexed": 320,
+                "current_url": "",
+                "error": None,
+            },
+            None,
+        )
 
         progress = IngestionManager.get_progress()
 
@@ -227,15 +237,18 @@ class TestIngestionManager:
         st.session_state.ingestion_source_names = ["Spark"]
         st.session_state.ingestion_max_pages = 40
         st.session_state.ingestion_start_time = 1000.0
-        mock_status.return_value = ({
-            "task_id": "task-abc",
-            "status": "FAILED",
-            "source_names": ["Spark"],
-            "pages_fetched": 3,
-            "chunks_indexed": 24,
-            "current_url": "https://example.com/bad",
-            "error": "Connection refused",
-        }, None)
+        mock_status.return_value = (
+            {
+                "task_id": "task-abc",
+                "status": "FAILED",
+                "source_names": ["Spark"],
+                "pages_fetched": 3,
+                "chunks_indexed": 24,
+                "current_url": "https://example.com/bad",
+                "error": "Connection refused",
+            },
+            None,
+        )
 
         progress = IngestionManager.get_progress()
 
@@ -248,15 +261,18 @@ class TestIngestionManager:
         st.session_state.ingestion_source_names = ["Spark"]
         st.session_state.ingestion_max_pages = 40
         st.session_state.ingestion_start_time = 1000.0
-        mock_status.return_value = ({
-            "task_id": "task-abc",
-            "status": "CANCELLED",
-            "source_names": ["Spark"],
-            "pages_fetched": 5,
-            "chunks_indexed": 40,
-            "current_url": "",
-            "error": None,
-        }, None)
+        mock_status.return_value = (
+            {
+                "task_id": "task-abc",
+                "status": "CANCELLED",
+                "source_names": ["Spark"],
+                "pages_fetched": 5,
+                "chunks_indexed": 40,
+                "current_url": "",
+                "error": None,
+            },
+            None,
+        )
 
         progress = IngestionManager.get_progress()
 
@@ -310,15 +326,18 @@ class TestIngestionManager:
         st.session_state.ingestion_source_names = ["Spark"]
         st.session_state.ingestion_max_pages = 40
         st.session_state.ingestion_start_time = 1000.0
-        mock_status.return_value = ({
-            "task_id": "task-xyz",
-            "status": "PROCESSING",
-            "source_names": ["Spark"],
-            "pages_fetched": 0,
-            "chunks_indexed": 0,
-            "current_url": "",
-            "error": None,
-        }, None)
+        mock_status.return_value = (
+            {
+                "task_id": "task-xyz",
+                "status": "PROCESSING",
+                "source_names": ["Spark"],
+                "pages_fetched": 0,
+                "chunks_indexed": 0,
+                "current_url": "",
+                "error": None,
+            },
+            None,
+        )
 
         IngestionManager.get_progress()
 

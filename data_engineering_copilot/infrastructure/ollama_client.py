@@ -8,6 +8,8 @@ from urllib.request import Request, urlopen
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from data_engineering_copilot.infrastructure.resilience import Bulkhead, CircuitBreaker
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,61 +31,72 @@ class OllamaClient:
         self.timeout_seconds = timeout_seconds
         self.num_ctx = num_ctx
         self.num_predict = num_predict
+        self._circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
+        self._bulkhead = Bulkhead(max_concurrency=4)
 
     def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
-        if num_predict is None:
-            num_predict = self.num_predict
-        if num_ctx is None:
-            num_ctx = self.num_ctx
-        logger.info(
-            "Ollama generation started model=%s prompt_chars=%s num_ctx=%s num_predict=%s",
-            self.model,
-            len(prompt),
-            num_ctx,
-            num_predict,
-        )
-
-        payload = {
-            "model": self.model,
-            "prompt": self._format_raw_chat_prompt(prompt),
-            "raw": True,
-            "stream": False,
-            "options": {
-                "temperature": 0.05,
-                "top_p": 0.8,
-                "num_ctx": num_ctx,
-                "num_predict": num_predict,
-            },
-        }
+        self._circuit_breaker.execute()
+        self._bulkhead.acquire(blocking=False)
         try:
-            body = self._http_post(payload)
-        except TimeoutError as exc:
-            logger.exception("Ollama generation timed out timeout_seconds=%s", self.timeout_seconds)
-            raise OllamaError(
-                f"Ollama timed out after {self.timeout_seconds} seconds. "
-                "Try again after Ollama finishes loading the model, or reduce the configured context/output limits."
-            ) from exc
-        except URLError as exc:
-            logger.exception("Ollama connection failed base_url=%s", self.base_url)
-            raise OllamaError("Could not reach Ollama. Start Ollama and run: ollama pull %s", self.model) from exc
-
-        response = self._extract_final_response(str(body.get("response", "")))
-        done_reason = body.get("done_reason", "unknown")
-        logger.info(
-            "Ollama generation completed done_reason=%s raw_response_chars=%s final_response_chars=%s",
-            done_reason,
-            len(str(body.get("response", ""))),
-            len(response),
-        )
-        if not response:
-            logger.warning("Ollama returned no final answer done_reason=%s body_keys=%s", done_reason, sorted(body))
-            raise OllamaError(
-                "Ollama returned no final answer. "
-                f"Generation stopped with reason `{done_reason}`. "
-                "The model likely spent its output budget on reasoning. "
-                "Try again, or increase `ollama_num_predict` in settings.py."
+            if num_predict is None:
+                num_predict = self.num_predict
+            if num_ctx is None:
+                num_ctx = self.num_ctx
+            logger.info(
+                "Ollama generation started model=%s prompt_chars=%s num_ctx=%s num_predict=%s",
+                self.model,
+                len(prompt),
+                num_ctx,
+                num_predict,
             )
-        return response
+
+            payload = {
+                "model": self.model,
+                "prompt": self._format_raw_chat_prompt(prompt),
+                "raw": True,
+                "stream": False,
+                "options": {
+                    "temperature": 0.05,
+                    "top_p": 0.8,
+                    "num_ctx": num_ctx,
+                    "num_predict": num_predict,
+                },
+            }
+            try:
+                body = self._http_post(payload)
+            except TimeoutError as exc:
+                self._circuit_breaker.record_failure()
+                logger.exception("Ollama generation timed out timeout_seconds=%s", self.timeout_seconds)
+                raise OllamaError(
+                    f"Ollama timed out after {self.timeout_seconds} seconds. "
+                    "Try again after Ollama finishes loading the model, or reduce the configured context/output limits."
+                ) from exc
+            except URLError as exc:
+                self._circuit_breaker.record_failure()
+                logger.exception("Ollama connection failed base_url=%s", self.base_url)
+                raise OllamaError("Could not reach Ollama. Start Ollama and run: ollama pull %s", self.model) from exc
+
+            response = self._extract_final_response(str(body.get("response", "")))
+            done_reason = body.get("done_reason", "unknown")
+            logger.info(
+                "Ollama generation completed done_reason=%s raw_response_chars=%s final_response_chars=%s",
+                done_reason,
+                len(str(body.get("response", ""))),
+                len(response),
+            )
+            if not response:
+                self._circuit_breaker.record_failure()
+                logger.warning("Ollama returned no final answer done_reason=%s body_keys=%s", done_reason, sorted(body))
+                raise OllamaError(
+                    "Ollama returned no final answer. "
+                    f"Generation stopped with reason `{done_reason}`. "
+                    "The model likely spent its output budget on reasoning. "
+                    "Try again, or increase `ollama_num_predict` in settings.py."
+                )
+            self._circuit_breaker.record_success()
+            return response
+        finally:
+            self._bulkhead.release()
 
     @retry(
         stop=stop_after_attempt(3),

@@ -10,10 +10,10 @@ from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-from data_engineering_copilot.workers.progress import get_redis_client
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
 from data_engineering_copilot.services.rag import ProductionRagService
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.workers.progress import get_redis_client
 
 logger = logging.getLogger(__name__)
 

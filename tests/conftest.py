@@ -248,6 +248,7 @@ def html_parser():
 
     return MarkdownParser()
 
+
 @pytest.fixture
 def chunker(integration_settings):
     from data_engineering_copilot.services.chunker import DocumentChunker

@@ -80,7 +80,7 @@ def execute_background_ingestion(urls: list[str]):
     return {"status": "INGESTION_COMPLETED", "processed_count": processed}
 
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, queue="ingestion")
 def async_ingest_task(self, source_names: list[str], max_pages: int):
     """Production ingestion task using the full AsyncIngestionService pipeline.
 
@@ -100,11 +100,13 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         from data_engineering_copilot.factory import build_async_ingestion_service
 
         service = build_async_ingestion_service()
-        asyncio.run(service.ingest(
-            source_names=source_names,
-            max_pages_per_source=max_pages,
-            on_event=tracker.on_event,
-        ))
+        asyncio.run(
+            service.ingest(
+                source_names=source_names,
+                max_pages_per_source=max_pages,
+                on_event=tracker.on_event,
+            )
+        )
         tracker.mark_completed()
         log.info("async_ingest_task.completed", task_id=task_id)
     except Exception as e:

@@ -18,6 +18,7 @@ import pytest
 # 1. LOG_LEVEL env var support in setup_logging()
 # ---------------------------------------------------------------------------
 
+
 class TestLogLevelEnvVar:
     """setup_logging() should respect the LOG_LEVEL environment variable."""
 
@@ -28,6 +29,7 @@ class TestLogLevelEnvVar:
         try:
             os.environ.pop("LOG_LEVEL", None)
             from data_engineering_copilot.config.logging import setup_logging
+
             setup_logging(log_dir=str(tmp_path), log_filename="test.log")
             assert root.level == logging.INFO
         finally:
@@ -42,6 +44,7 @@ class TestLogLevelEnvVar:
             os.environ["LOG_LEVEL"] = "DEBUG"
             importlib.reload(importlib.import_module("data_engineering_copilot.config.logging"))
             from data_engineering_copilot.config.logging import setup_logging as reload_setup
+
             reload_setup(log_dir=str(tmp_path), log_filename="test.log")
             assert root.level == logging.DEBUG
         finally:
@@ -56,6 +59,7 @@ class TestLogLevelEnvVar:
             os.environ["LOG_LEVEL"] = "WARNING"
             importlib.reload(importlib.import_module("data_engineering_copilot.config.logging"))
             from data_engineering_copilot.config.logging import setup_logging as reload_setup
+
             reload_setup(log_dir=str(tmp_path), log_filename="test.log")
             assert root.level == logging.WARNING
         finally:
@@ -70,6 +74,7 @@ class TestLogLevelEnvVar:
             os.environ["LOG_LEVEL"] = "debug"
             importlib.reload(importlib.import_module("data_engineering_copilot.config.logging"))
             from data_engineering_copilot.config.logging import setup_logging as reload_setup
+
             reload_setup(log_dir=str(tmp_path), log_filename="test.log")
             assert root.level == logging.DEBUG
         finally:
@@ -81,17 +86,20 @@ class TestLogLevelEnvVar:
 # 2. Worker module logging
 # ---------------------------------------------------------------------------
 
+
 class TestWorkerLogging:
     """workers/tasks.py should have a logger and use it at key points."""
 
     def test_tasks_module_has_logger(self):
         """tasks.py must define a module-level logger."""
         from data_engineering_copilot.workers import tasks
+
         assert hasattr(tasks, "log"), "workers/tasks.py must define a 'log' attribute (structlog)"
 
     def test_tasks_logger_is_correct_name(self):
         """tasks.py 'log' attribute should be a structlog BoundLoggerLazyProxy."""
         from data_engineering_copilot.workers import tasks
+
         assert type(tasks.log).__name__ == "BoundLoggerLazyProxy"
 
     def test_async_ingest_task_has_logging_calls(self):
@@ -112,13 +120,15 @@ class TestWorkerLogging:
 
         func_text = "\n".join(func_source_lines)
         assert "log.info" in func_text, "async_ingest_task should call log.info"
-        assert "log.exception" in func_text or "log.error" in func_text, \
+        assert "log.exception" in func_text or "log.error" in func_text, (
             "async_ingest_task should call log.exception or log.error"
+        )
 
 
 # ---------------------------------------------------------------------------
 # 3. API routes logging
 # ---------------------------------------------------------------------------
+
 
 class TestApiRoutesLogging:
     """api/routes.py should log key operations."""
@@ -126,6 +136,7 @@ class TestApiRoutesLogging:
     def test_routes_logger_used(self):
         """routes.py should log at least one message during dispatch."""
         from data_engineering_copilot.api import routes
+
         assert hasattr(routes, "log"), "routes.py must define a 'log' attribute (structlog)"
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
@@ -138,15 +149,18 @@ class TestApiRoutesLogging:
         from fastapi.testclient import TestClient
 
         from data_engineering_copilot.api.app import app
+
         client = TestClient(app)
 
         with caplog.at_level(logging.INFO, logger="data_engineering_copilot.api.routes"):
             client.post("/api/v1/ingest", json={"source_names": ["Test"], "max_pages": 10})
 
-        assert any("ingest" in record.message.lower() or "dispatch" in record.message.lower()
-                    or "task" in record.message.lower()
-                    for record in caplog.records), \
-            "Ingest dispatch should be logged"
+        assert any(
+            "ingest" in record.message.lower()
+            or "dispatch" in record.message.lower()
+            or "task" in record.message.lower()
+            for record in caplog.records
+        ), "Ingest dispatch should be logged"
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.celery_app")
@@ -159,29 +173,34 @@ class TestApiRoutesLogging:
         from fastapi.testclient import TestClient
 
         from data_engineering_copilot.api.app import app
+
         client = TestClient(app)
 
         with caplog.at_level(logging.INFO, logger="data_engineering_copilot.api.routes"):
             client.post("/api/v1/ingest/some-task-id/cancel")
 
-        assert any("cancel" in record.message.lower() for record in caplog.records), \
-            "Cancel should be logged"
+        assert any("cancel" in record.message.lower() for record in caplog.records), "Cancel should be logged"
 
 
 # ---------------------------------------------------------------------------
 # 4. print() removal from production code
 # ---------------------------------------------------------------------------
 
+
 class TestNoPrintInProduction:
     """Production modules should use logger, not print()."""
 
-    @pytest.mark.parametrize("module_path", [
-        "data_engineering_copilot/services/async_ingestion.py",
-        "data_engineering_copilot/infrastructure/async_crawler.py",
-    ])
+    @pytest.mark.parametrize(
+        "module_path",
+        [
+            "data_engineering_copilot/services/async_ingestion.py",
+            "data_engineering_copilot/infrastructure/async_crawler.py",
+        ],
+    )
     def test_no_print_calls(self, module_path: str) -> None:
         """These modules should have no print() calls."""
         import ast
+
         full_path = Path(__file__).parent.parent.parent / module_path
         source = full_path.read_text()
         tree = ast.parse(source)
@@ -190,18 +209,21 @@ class TestNoPrintInProduction:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
-                if isinstance(func, ast.Name) and func.id == "print" or isinstance(func, ast.Attribute) and func.attr == "print":
+                if (
+                    isinstance(func, ast.Name)
+                    and func.id == "print"
+                    or isinstance(func, ast.Attribute)
+                    and func.attr == "print"
+                ):
                     print_calls.append(node.lineno)
 
-        assert not print_calls, (
-            f"{module_path} has print() calls at lines {print_calls}. "
-            "Use logger instead."
-        )
+        assert not print_calls, f"{module_path} has print() calls at lines {print_calls}. Use logger instead."
 
 
 # ---------------------------------------------------------------------------
 # 5. CLI logger naming
 # ---------------------------------------------------------------------------
+
 
 class TestCliLoggerName:
     """cli.py should use __name__ for its logger, not a hardcoded string."""
@@ -209,12 +231,14 @@ class TestCliLoggerName:
     def test_cli_uses_module_logger_name(self):
         """The logger name should be 'data_engineering_copilot.cli', not 'data_engineering_copilot.main'."""
         from data_engineering_copilot import cli
+
         assert cli.logger.name == "data_engineering_copilot.cli"
 
 
 # ---------------------------------------------------------------------------
 # 6. UI dead code and wrong filename
 # ---------------------------------------------------------------------------
+
 
 class TestUiCleanup:
     """streamlit_app.py should reference the correct log filename."""
@@ -224,6 +248,7 @@ class TestUiCleanup:
         import inspect
 
         from data_engineering_copilot.ui import streamlit_app
+
         source = inspect.getsource(streamlit_app)
         assert "application.log" not in source, (
             "streamlit_app.py references 'application.log' but the actual file is 'app.log'"
@@ -232,6 +257,7 @@ class TestUiCleanup:
     def test_ingestion_log_path_removed(self) -> None:
         """IngestionManager should no longer have ingestion_log_path method."""
         from data_engineering_copilot.ui.streamlit_app import IngestionManager
+
         assert not hasattr(IngestionManager, "ingestion_log_path"), (
             "IngestionManager.ingestion_log_path is dead code — remove it"
         )

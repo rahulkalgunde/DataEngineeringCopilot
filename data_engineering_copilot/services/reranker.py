@@ -4,11 +4,37 @@ This module implements cross-encoder reranking to improve answer relevance
 by re-scoring chunks based on semantic similarity to the query.
 """
 
+from __future__ import annotations
+
 import logging
+import threading
+from typing import TYPE_CHECKING
 
 from data_engineering_copilot.domain.models import RetrievedChunk
 
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
+
 logger = logging.getLogger(__name__)
+
+# Module-level singleton cache: model_name → CrossEncoderReranker
+_reranker_cache: dict[str, CrossEncoderReranker] = {}
+_cache_lock = threading.Lock()
+
+
+def get_reranker(model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2") -> CrossEncoderReranker:
+    """Get or create a singleton CrossEncoderReranker for the given model."""
+    if model_name not in _reranker_cache:
+        with _cache_lock:
+            if model_name not in _reranker_cache:
+                _reranker_cache[model_name] = CrossEncoderReranker(model_name=model_name)
+    return _reranker_cache[model_name]
+
+
+def clear_reranker_cache() -> None:
+    """Clear the reranker singleton cache (for testing)."""
+    with _cache_lock:
+        _reranker_cache.clear()
 
 
 class CrossEncoderReranker:
@@ -27,19 +53,20 @@ class CrossEncoderReranker:
         Args:
             model_name: HuggingFace model identifier for the cross-encoder
         """
+        self.model_name = model_name
+        self.model: CrossEncoder | None = None
         try:
             from sentence_transformers import CrossEncoder
 
             self.model = CrossEncoder(model_name)
-            self.model_name = model_name
             logger.info("Initialized CrossEncoder reranker: %s", model_name)
         except ImportError:
             logger.warning(
                 "sentence_transformers not available; reranking disabled. "
                 "Install with: pip install sentence-transformers"
             )
-            self.model = None
-            self.model_name = model_name
+        except Exception as exc:
+            logger.warning("Failed to initialize CrossEncoder reranker: %s", exc)
 
     def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
         """Rerank chunks based on query relevance using cross-encoder.

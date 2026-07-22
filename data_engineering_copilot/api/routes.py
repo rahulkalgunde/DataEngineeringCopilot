@@ -60,15 +60,17 @@ async def ingest_documents(request: IngestRequest):
 
     # Write an initial status so the polling endpoint has something to
     # return immediately, before the worker picks up the task.
-    initial_status = json.dumps({
-        "task_id": task.id,
-        "status": "DISPATCHED",
-        "source_names": request.source_names or [],
-        "pages_fetched": 0,
-        "chunks_indexed": 0,
-        "current_url": "",
-        "error": None,
-    })
+    initial_status = json.dumps(
+        {
+            "task_id": task.id,
+            "status": "DISPATCHED",
+            "source_names": request.source_names or [],
+            "pages_fetched": 0,
+            "chunks_indexed": 0,
+            "current_url": "",
+            "error": None,
+        }
+    )
     client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
     client.set("ingestion:latest_task_id", task.id, ex=86400)
 
@@ -135,14 +137,19 @@ async def cancel_ingestion(task_id: str) -> dict:
         data["status"] = "CANCELLED"
         client.set(redis_key, json.dumps(data))
     else:
-        client.set(redis_key, json.dumps({
-            "task_id": task_id,
-            "status": "CANCELLED",
-            "source_names": [],
-            "pages_fetched": 0,
-            "chunks_indexed": 0,
-            "current_url": "",
-            "error": None,
-        }))
+        client.set(
+            redis_key,
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "status": "CANCELLED",
+                    "source_names": [],
+                    "pages_fetched": 0,
+                    "chunks_indexed": 0,
+                    "current_url": "",
+                    "error": None,
+                }
+            ),
+        )
 
     return {"task_id": task_id, "status": "CANCELLED"}
