@@ -49,7 +49,7 @@ class TestIngestEndpoint:
         assert body["task_id"] == "task-abc-123"
         assert body["state"] == "PENDING"
         mock_delay.assert_called_once_with(["Test"], 10)
-        mock_redis.set.assert_called_once()
+        assert mock_redis.set.call_count == 2
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
@@ -63,7 +63,7 @@ class TestIngestEndpoint:
 
         resp = client.post("/api/v1/ingest", json={})
         assert resp.status_code == 200
-        mock_delay.assert_called_once_with([], 0)
+        mock_delay.assert_called_once_with(None, 0)
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
