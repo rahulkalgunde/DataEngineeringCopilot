@@ -51,7 +51,7 @@ class TestCrossEncoderReranker:
             assert reranker.model_name == "test_model"
 
     def test_initialization_with_import_error(self):
-        with patch("sentence_transformers.CrossEncoder", side_effect=ImportError):
+        with patch.dict("sys.modules", {"sentence_transformers": None}):
             reranker = CrossEncoderReranker(model_name="test_model")
 
             assert reranker.model is None
