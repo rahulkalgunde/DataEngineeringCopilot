@@ -8,7 +8,9 @@ Write tests first. Never write implementation before tests exist. Run tests imme
 - Check `plans/` and `sessions/` for stale files — resume if applicable.
 - Save plans to `plans/PLAN_<desc>_<YYYY-MM-DD_HHmm>.md` before presenting.
 - Save session details to `sessions/SESSION_<desc>_<YYYY-MM-DD_HHmm>.md` after context loss.
-- After each milestone, remind user to commit and push.
+- **Never run `git commit`, `git push`, `git add`, or any git command that changes history.** Only remind the user with the exact commands to run.
+- **Never run commands that may take longer than 15 minutes** (e.g., pulling large Docker images, running full integration suites). Print the command and ask the user to run it.
+- After each milestone, print the exact `git add`/`git commit`/`git push` commands and ask the user to run them.
 
 ## Commands
 ```bash
