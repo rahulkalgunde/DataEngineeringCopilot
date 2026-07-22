@@ -1,4 +1,4 @@
-"""Shared fixtures and health checks for integration tests.
+"""Shared fixtures and health checks for all tests.
 
 Provides:
 - Service health-check functions (Qdrant, Ollama, Langfuse)
@@ -8,6 +8,7 @@ Provides:
 - Reusable component fixtures (settings, embeddings, vector store, etc.)
 """
 
+import asyncio
 import json
 import pathlib
 import sys
@@ -175,11 +176,11 @@ def integration_settings():
 
 @pytest.fixture
 def embeddings_provider(integration_settings):
-    """Real Ollama embeddings provider. Skips if Ollama is unreachable."""
+    """Real Ollama embeddings provider (async wrapper). Skips if Ollama unreachable."""
     require_ollama()
-    from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
+    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-    return OllamaEmbeddings(
+    return AsyncOllamaEmbeddings(
         model_name=integration_settings.embedding_model_name,
     )
 
@@ -191,20 +192,21 @@ def embeddings_provider(integration_settings):
 
 @pytest.fixture
 def qdrant_store(integration_settings):
-    """Create a QdrantVectorStore with a unique collection name.
+    """Create an AsyncQdrantVectorStore with a unique collection name.
 
     Tears down the collection after the test.
     """
     require_qdrant()
     from qdrant_client import QdrantClient
 
-    from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
     coll_name = unique_collection_name("itest")
-    store = QdrantVectorStore(
+    store = AsyncQdrantVectorStore(
         url=integration_settings.qdrant_url,
         collection_name=coll_name,
     )
+    asyncio.run(store.initialize())
     yield store
 
     # Teardown: delete the collection
@@ -223,11 +225,11 @@ def qdrant_store(integration_settings):
 
 @pytest.fixture
 def ollama_client(integration_settings):
-    """Real Ollama client. Skips if Ollama is unreachable."""
+    """Real Ollama async client. Skips if Ollama is unreachable."""
     require_ollama()
-    from data_engineering_copilot.infrastructure.ollama_client import OllamaClient
+    from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
 
-    return OllamaClient(
+    return AsyncOllamaClient(
         base_url=integration_settings.ollama_base_url,
         model=integration_settings.ollama_model,
         timeout_seconds=integration_settings.ollama_timeout_seconds,
@@ -329,9 +331,9 @@ def populated_store(qdrant_store, embeddings_provider):
         texts.append(text)
 
     # Batch embed all texts in one call for speed
-    all_embeddings = embeddings_provider.embed_texts(texts)
+    all_embeddings = asyncio.run(embeddings_provider.embed_texts(texts))
 
-    qdrant_store.upsert_chunks(chunks, all_embeddings)
+    asyncio.run(qdrant_store.upsert_chunks(chunks, all_embeddings))
     return qdrant_store, chunks
 
 
@@ -342,12 +344,12 @@ def populated_store(qdrant_store, embeddings_provider):
 
 @pytest.fixture
 def rag_service(integration_settings, embeddings_provider, ollama_client, qdrant_store):
-    """RagAnswerService wired to real components."""
-    from data_engineering_copilot.services.rag import RagAnswerService
+    """AsyncRagService wired to real components."""
+    from data_engineering_copilot.services.async_rag import AsyncRagService
 
-    return RagAnswerService(
+    return AsyncRagService(
         vector_store=qdrant_store,
-        ollama_client=ollama_client,
+        llm_client=ollama_client,
         embedder=embeddings_provider,
     )
 

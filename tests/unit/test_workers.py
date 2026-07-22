@@ -1,3 +1,8 @@
+"""Tests for Celery worker tasks."""
+
+from __future__ import annotations
+
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,15 +28,19 @@ async def test_run_async_crawl(mock_crawler_class):
     mock_crawler.arun.assert_called_once_with(url="http://test.com")
 
 
-@patch("data_engineering_copilot.workers.tasks.OllamaEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
+@patch("data_engineering_copilot.workers.tasks.AsyncOllamaEmbeddings")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
-@patch("data_engineering_copilot.workers.tasks.QdrantVectorStore")
-def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embedder):
-    mock_doc = MagicMock()
-    mock_doc.success = True
-    mock_doc.markdown = "Test markdown"
-    mock_doc.title = "Test Title"
-    mock_doc.url = "http://test.com"
+@patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
+def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):
+    mock_crawler = AsyncMock()
+    mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
+    mock_doc_magic = MagicMock()
+    mock_doc_magic.success = True
+    mock_doc_magic.markdown = "Test markdown"
+    mock_doc_magic.title = "Test Title"
+    mock_doc_magic.url = "http://test.com"
+    mock_crawler.arun.return_value = mock_doc_magic
 
     mock_chunker = mock_chunker_class.return_value
     mock_chunk = MagicMock()
@@ -39,29 +48,44 @@ def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embe
     mock_chunker.chunk.return_value = [mock_chunk]
 
     mock_embed = mock_embedder.return_value
-    mock_embed.embed_texts.return_value = [[0.1, 0.2]]
+    mock_embed.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
 
-    with patch("asyncio.get_event_loop") as mock_loop:
-        mock_loop.return_value.run_until_complete.return_value = [mock_doc]
+    mock_vector_store = mock_qdrant.return_value
+    mock_vector_store.initialize = AsyncMock(return_value=None)
+    mock_vector_store.upsert_chunks = AsyncMock()
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
         result = execute_background_ingestion(["http://test.com"])
+    finally:
+        loop.close()
 
-        assert result == {"status": "INGESTION_COMPLETED", "processed_count": 1}
-        mock_chunker.chunk.assert_called_once()
-        mock_embed.embed_texts.assert_called_once_with(["Test markdown"])
-        mock_qdrant.return_value.upsert_chunks.assert_called_once()
+    assert result == {"status": "INGESTION_COMPLETED", "processed_count": 1}
+    mock_chunker.chunk.assert_called_once()
+    mock_embed.embed_texts.assert_called_once_with(["Test markdown"])
+    mock_vector_store.upsert_chunks.assert_called_once()
 
 
-@patch("data_engineering_copilot.workers.tasks.OllamaEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
+@patch("data_engineering_copilot.workers.tasks.AsyncOllamaEmbeddings")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
-@patch("data_engineering_copilot.workers.tasks.QdrantVectorStore")
-def test_execute_background_ingestion_failure(mock_qdrant, mock_chunker_class, mock_embedder):
-    mock_doc = MagicMock()
-    mock_doc.success = False
+@patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
+def test_execute_background_ingestion_failure(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):
+    mock_crawler = AsyncMock()
+    mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
+    mock_doc_magic = MagicMock()
+    mock_doc_magic.success = False
+    mock_crawler.arun.return_value = mock_doc_magic
 
-    with patch("asyncio.get_event_loop") as mock_loop:
-        mock_loop.return_value.run_until_complete.return_value = [mock_doc]
+    mock_vector_store = mock_qdrant.return_value
+    mock_vector_store.initialize = AsyncMock(return_value=None)
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
         result = execute_background_ingestion(["http://test.com"])
+    finally:
+        loop.close()
 
-        assert result == {"status": "INGESTION_COMPLETED", "processed_count": 0}
+    assert result == {"status": "INGESTION_COMPLETED", "processed_count": 0}

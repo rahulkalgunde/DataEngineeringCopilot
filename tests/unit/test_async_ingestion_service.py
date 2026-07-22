@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -56,30 +57,46 @@ def mock_chunker():
 @pytest.fixture
 def mock_embeddings():
     e = MagicMock()
-    e.embed_texts = MagicMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+    e.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
     return e
 
 
 @pytest.fixture
 def mock_vector_store():
     v = MagicMock()
-    v.upsert_chunks = MagicMock()
-    v.get_content_hash_for_url = MagicMock(return_value=None)
+    v.upsert_chunks = AsyncMock()
+    v.get_content_hash_for_url = AsyncMock(return_value=None)
+    v.delete_by_url = AsyncMock()
     return v
 
 
 @pytest.fixture
-def service(mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store):
+def _thread_executors():
+    """Provide ThreadPoolExecutor instances for parse/chunk to avoid fork deadlocks in tests."""
+    pe = ThreadPoolExecutor(max_workers=2)
+    ce = ThreadPoolExecutor(max_workers=2)
+    yield pe, ce
+    pe.shutdown(wait=False)
+    ce.shutdown(wait=False)
+
+
+@pytest.fixture
+def service(mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store, _thread_executors):
     from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 
-    return AsyncIngestionService(
+    parse_exec, chunk_exec = _thread_executors
+    svc = AsyncIngestionService(
         settings=mock_settings,
         crawler=mock_crawler,
         parser=mock_parser,
         chunker=mock_chunker,
         embeddings=mock_embeddings,
         vector_store=mock_vector_store,
+        parse_executor=parse_exec,
+        chunk_executor=chunk_exec,
     )
+    yield svc
+    svc.stop()
 
 
 def _make_raw(source_name="test", url="https://example.com/doc", html="<p>hello</p>"):
@@ -113,12 +130,29 @@ def _picklable_parse_skip(raw_doc):
     return None
 
 
+def _make_svc(mock_settings, mock_crawler, **kwargs):
+    """Helper to create AsyncIngestionService with ThreadPoolExecutor defaults."""
+    from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+
+    parse_exec = ThreadPoolExecutor(max_workers=2)
+    chunk_exec = ThreadPoolExecutor(max_workers=2)
+    svc = AsyncIngestionService(
+        settings=mock_settings,
+        crawler=mock_crawler,
+        parse_executor=parse_exec,
+        chunk_executor=chunk_exec,
+        **kwargs,
+    )
+    return svc
+
+
 class TestAsyncIngestionServiceInit:
     def test_init_accepts_components(
-        self, mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store
+        self, mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store, _thread_executors
     ):
         from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 
+        parse_exec, chunk_exec = _thread_executors
         s = AsyncIngestionService(
             settings=mock_settings,
             crawler=mock_crawler,
@@ -126,28 +160,30 @@ class TestAsyncIngestionServiceInit:
             chunker=mock_chunker,
             embeddings=mock_embeddings,
             vector_store=mock_vector_store,
+            parse_executor=parse_exec,
+            chunk_executor=chunk_exec,
         )
         assert s.settings is mock_settings
         assert s.crawler is mock_crawler
+        s.stop()
 
 
 class TestAsyncIngestionServiceIngest:
     @pytest.mark.asyncio
     async def test_single_page_indexed(self, mock_settings, mock_crawler):
-        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock()
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = MagicMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
         vector_store_mock = MagicMock()
-        vector_store_mock.get_content_hash_for_url = MagicMock(return_value=None)
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=embeddings_mock,
@@ -166,20 +202,19 @@ class TestAsyncIngestionServiceIngest:
 
     @pytest.mark.asyncio
     async def test_on_event_callback(self, mock_settings, mock_crawler):
-        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock()
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = MagicMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
         vector_store_mock = MagicMock()
-        vector_store_mock.get_content_hash_for_url = MagicMock(return_value=None)
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=embeddings_mock,
@@ -201,17 +236,18 @@ class TestAsyncIngestionServiceIngest:
 
     @pytest.mark.asyncio
     async def test_skips_none_parsed(self, mock_settings, mock_crawler):
-        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
         chunker_mock = MagicMock()
         embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock()
+        vector_store_mock.delete_by_url = AsyncMock()
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=embeddings_mock,
@@ -235,10 +271,11 @@ class TestAsyncIngestionServiceIngest:
         chunker_mock = MagicMock()
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=embeddings_mock,
@@ -263,20 +300,20 @@ class TestAsyncIngestionServiceIngest:
 
     @pytest.mark.asyncio
     async def test_respects_source_names(self, mock_settings, mock_crawler):
-        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock()
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = MagicMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
         vector_store_mock = MagicMock()
-        vector_store_mock.get_content_hash_for_url = MagicMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.delete_by_url = AsyncMock()
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=embeddings_mock,
@@ -294,33 +331,26 @@ class TestAsyncIngestionServiceIngest:
 
 class TestAsyncIngestionServiceWorkerPool:
     def test_isolated_executors_created(self, service):
-        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor
 
         assert hasattr(service, "_parse_executor")
         assert hasattr(service, "_chunk_executor")
-        assert hasattr(service, "_embed_executor")
-        assert hasattr(service, "_store_executor")
-        assert isinstance(service._parse_executor, ProcessPoolExecutor)
-        assert isinstance(service._chunk_executor, ProcessPoolExecutor)
-        assert isinstance(service._embed_executor, ThreadPoolExecutor)
-        assert isinstance(service._store_executor, ThreadPoolExecutor)
+        assert isinstance(service._parse_executor, ThreadPoolExecutor)
+        assert isinstance(service._chunk_executor, ThreadPoolExecutor)
 
     def test_processing_concurrency_from_settings(self, service):
         assert service._processing_concurrency == 2
 
     @pytest.mark.asyncio
     async def test_multi_page_batch_flush(self, mock_settings, mock_crawler, mock_embeddings, mock_vector_store):
-        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
-
-        # Use picklable functions for ProcessPoolExecutor
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock()
         chunker_mock.chunk = _picklable_chunk
 
-        service = AsyncIngestionService(
-            settings=mock_settings,
-            crawler=mock_crawler,
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
             parser=parser_mock,
             chunker=chunker_mock,
             embeddings=mock_embeddings,

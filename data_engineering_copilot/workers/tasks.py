@@ -13,8 +13,8 @@ import structlog
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
+from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import IngestionProgressTracker, get_redis_client
@@ -35,48 +35,48 @@ async def _run_async_crawl(urls: list[str]):
 
 @celery_app.task
 def execute_background_ingestion(urls: list[str]):
-    """Celery entry point.
-
-    The function runs the async crawler, parses the markdown, chunks the
-    text, embeds the chunks and finally upserts them into Qdrant.
-    """
+    """Legacy Celery entry point that crawls URLs directly using Crawl4AI."""
     loop = asyncio.get_event_loop()
     raw_docs = loop.run_until_complete(_run_async_crawl(urls))
 
-    embedder = OllamaEmbeddings(
+    embedder = AsyncOllamaEmbeddings(
         model_name=settings.embedding_model_name,
     )
     chunker = DocumentChunker(
         chunk_size_words=settings.chunk_size_words,
         overlap_words=settings.chunk_overlap_words,
     )
-    vector_store = QdrantVectorStore(
+    vector_store = AsyncQdrantVectorStore(
         url=settings.qdrant_url,
         collection_name=settings.collection_name,
     )
 
-    processed = 0
-    for doc in raw_docs:
-        if not getattr(doc, "success", False):
-            continue
+    loop.run_until_complete(vector_store.initialize())
 
-        text = doc.markdown
-        chunks = chunker.chunk(
-            type(
-                "TmpDoc",
-                (),
-                {
-                    "source_name": "crawl4ai",
-                    "title": doc.title or doc.url,
-                    "url": doc.url,
-                    "text": text,
-                },
-            )()
-        )
-        embeddings = embedder.embed_texts([c.text for c in chunks])
-        vector_store.upsert_chunks(chunks, embeddings)
-        processed += 1
+    async def _process():
+        processed = 0
+        for doc in raw_docs:
+            if not getattr(doc, "success", False):
+                continue
+            text = doc.markdown
+            chunks = chunker.chunk(
+                type(
+                    "TmpDoc",
+                    (),
+                    {
+                        "source_name": "crawl4ai",
+                        "title": doc.title or doc.url,
+                        "url": doc.url,
+                        "text": text,
+                    },
+                )()
+            )
+            embeddings = await embedder.embed_texts([c.text for c in chunks])
+            await vector_store.upsert_chunks(chunks, embeddings)
+            processed += 1
+        return processed
 
+    processed = loop.run_until_complete(_process())
     return {"status": "INGESTION_COMPLETED", "processed_count": processed}
 
 

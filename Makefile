@@ -26,6 +26,10 @@ test-unit-serial:
 test-integration:
 	$(PYTEST) tests/integration/ -v --reruns 2 --reruns-delay 1
 
+# Integration tests with controlled parallelism (xdist loadgroup for shared containers)
+test-integration-parallel:
+	$(PYTEST) tests/integration/ -v -n 2 --dist=loadgroup --reruns 2 --reruns-delay 1
+
 # E2E tests — full pipeline
 test-e2e:
 	$(PYTEST) tests/e2e/ -v

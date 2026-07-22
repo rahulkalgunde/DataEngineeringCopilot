@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import httpx
 import pytest
+import respx
 
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient, AsyncOllamaError
 
@@ -49,84 +48,84 @@ def test_extract_reasoning_only_returns_empty(async_client):
     assert result == ""
 
 
+@pytest.mark.asyncio
 async def test_generate_success(async_client):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "response": "<think>I should reason.</think>\nDelta Lake supports ACID transactions.",
-        "done_reason": "stop",
-    }
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "response": "<think>I should reason.</think>\nDelta Lake supports ACID transactions.",
+                    "done_reason": "stop",
+                },
+            )
+        )
         result = await async_client.generate("Answer from context")
         assert result == "Delta Lake supports ACID transactions."
 
 
+@pytest.mark.asyncio
 async def test_generate_strips_thinking_block(async_client):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "response": "<think>reasoning here</think>Final answer here.",
-        "done_reason": "stop",
-    }
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "response": "<think>reasoning here</think>Final answer here.",
+                    "done_reason": "stop",
+                },
+            )
+        )
         result = await async_client.generate("test")
         assert "<think>" not in result
         assert "Final answer here" in result
 
 
+@pytest.mark.asyncio
 async def test_generate_reasoning_only_raises(async_client):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "response": "<think>I ran out of tokens.",
-        "done_reason": "length",
-    }
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(AsyncOllamaError, match="spent its output budget on reasoning"):
-        await async_client.generate("test")
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "response": "<think>I ran out of tokens.",
+                    "done_reason": "length",
+                },
+            )
+        )
+        with pytest.raises(AsyncOllamaError, match="spent its output budget on reasoning"):
+            await async_client.generate("test")
 
 
 @pytest.mark.slow
+@pytest.mark.asyncio
 async def test_generate_http_error(async_client):
-    with (
-        patch.object(
-            async_client._client,
-            "post",
-            new_callable=AsyncMock,
-            side_effect=httpx.ConnectError("Connection refused"),
-        ),
-        pytest.raises(AsyncOllamaError, match="Could not reach Ollama"),
-    ):
-        await async_client.generate("test")
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(side_effect=httpx.ConnectError("Connection refused"))
+        with pytest.raises(AsyncOllamaError, match="Could not reach Ollama"):
+            await async_client.generate("test")
 
 
 @pytest.mark.slow
+@pytest.mark.asyncio
 async def test_generate_timeout_error(async_client):
-    with (
-        patch.object(
-            async_client._client,
-            "post",
-            new_callable=AsyncMock,
-            side_effect=httpx.TimeoutException("Request timed out"),
-        ),
-        pytest.raises(AsyncOllamaError, match="timed out"),
-    ):
-        await async_client.generate("test")
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(side_effect=httpx.TimeoutException("Request timed out"))
+        with pytest.raises(AsyncOllamaError, match="timed out"):
+            await async_client.generate("test")
 
 
+@pytest.mark.asyncio
 async def test_generate_empty_response(async_client):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "response": "",
-        "done_reason": "stop",
-    }
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(AsyncOllamaError, match="returned no final answer"):
-        await async_client.generate("test")
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "response": "",
+                    "done_reason": "stop",
+                },
+            )
+        )
+        with pytest.raises(AsyncOllamaError, match="returned no final answer"):
+            await async_client.generate("test")

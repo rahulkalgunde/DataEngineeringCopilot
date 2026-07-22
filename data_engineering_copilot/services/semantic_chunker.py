@@ -18,7 +18,6 @@ import numpy as np
 from nltk.tokenize import sent_tokenize
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
-from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.utils.text import slugify
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ class SemanticChunker:
         self,
         chunk_size_words: int,
         overlap_words: int,
-        embedding_model: OllamaEmbeddings,
+        embedding_model=None,
         min_semantic_similarity: float = 0.5,
         min_chunk_words: int = 20,
         max_chunk_words: int | None = None,
@@ -78,38 +77,40 @@ class SemanticChunker:
         self.min_chunk_words = min_chunk_words
         self.max_chunk_words = max_chunk_words or int(chunk_size_words * 1.5)
 
-    def chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
-        """
-        Chunk document using semantic similarity clustering.
-
-        Args:
-            document: ParsedDocument to chunk
-
-        Returns:
-            List of DocumentChunk objects grouped by semantic similarity
-        """
+    @staticmethod
+    def extract_sentences(text: str) -> list[str] | None:
         try:
-            sentences = sent_tokenize(document.text)
+            sentences = sent_tokenize(text)
         except Exception as e:
-            logger.warning(
-                "Sentence tokenization failed for url=%s: %s",
-                document.url,
-                str(e),
-            )
-            return []
+            logger.warning("Sentence tokenization failed: %s", str(e))
+            return None
+        return sentences
 
+    def chunk(
+        self,
+        document: ParsedDocument,
+        precomputed_embeddings: list[list[float]] | None = None,
+    ) -> list[DocumentChunk]:
+        sentences = self.extract_sentences(document.text)
         if not sentences:
             logger.warning("No sentences found in document url=%s", document.url)
             return []
 
-        # Embed all sentences
-        try:
-            embeddings = self.embedding_model.embed_texts(sentences)
-        except Exception as e:
-            logger.warning(
-                "Embedding failed for url=%s, cannot perform semantic chunking: %s",
-                document.url,
-                str(e),
+        if precomputed_embeddings is not None:
+            embeddings = precomputed_embeddings
+        elif self.embedding_model is not None:
+            try:
+                embeddings = self.embedding_model.embed_texts(sentences)
+            except Exception as e:
+                logger.warning(
+                    "Embedding failed for url=%s, cannot perform semantic chunking: %s",
+                    document.url,
+                    str(e),
+                )
+                return []
+        else:
+            logger.error(
+                "Semantic chunking requires either precomputed_embeddings or an embedding_model",
             )
             return []
 

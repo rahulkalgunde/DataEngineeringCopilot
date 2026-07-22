@@ -18,7 +18,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from data_engineering_copilot.config.logging import setup_logging  # noqa: E402
 from data_engineering_copilot.config.settings import settings  # noqa: E402
 from data_engineering_copilot.factory import build_rag_service  # noqa: E402
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore  # noqa: E402
 from data_engineering_copilot.services.metrics import MetricsCollector  # noqa: E402
 
 if settings.logging_enabled:
@@ -197,26 +196,12 @@ def _build_rag_service():
     return build_rag_service()
 
 
-@st.cache_resource
-def _build_vector_store():
-    return QdrantVectorStore(settings.qdrant_url, settings.collection_name)
-
-
 def rag_service():
     """Return cached RAG service, or None if Qdrant/Ollama are unavailable."""
     try:
         return _build_rag_service()
     except Exception as exc:
         logger.warning("Failed to create RAG service: %s", exc)
-        return None
-
-
-def vector_store():
-    """Return cached vector store, or None if Qdrant is unavailable."""
-    try:
-        return _build_vector_store()
-    except Exception as exc:
-        logger.warning("Failed to create vector store: %s", exc)
         return None
 
 
@@ -700,7 +685,8 @@ def render_qa_tab() -> None:
                         label = f"Step {len(completed_steps)}/4: {step_name}"
                         status.update(label=label, state="running")
 
-                    answer = service.answer(question.strip(), on_step=on_step)
+                    import asyncio
+                    answer = asyncio.run(service.answer(question.strip(), on_step=on_step))
                     status.update(label="✅ Answer ready", state="complete")
             except Exception as exc:
                 logger.exception("RAG answer failed")
@@ -881,11 +867,15 @@ def render_health_tab() -> None:
 
     # Repository stats
     st.markdown("### Vector Store")
-    store = vector_store()
-    if store is not None:
+    qdrant_ok, _ = _check_qdrant_reachable()
+    if qdrant_ok:
         try:
-            chunk_count = store.count()
-            st.metric("Total Chunks Indexed", chunk_count)
+            url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = json.loads(resp.read())
+                chunk_count = data.get("result", {}).get("points_count", 0)
+                st.metric("Total Chunks Indexed", chunk_count)
         except Exception:
             st.warning("Vector store is connected but returned an error.")
             chunk_count = 0
@@ -1124,14 +1114,14 @@ def main() -> None:
             st.error("Ollama: down")
 
         # Chunk count
-        store = vector_store()
-        if store is not None:
-            try:
-                chunk_count = store.count()
+        try:
+            url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = json.loads(resp.read())
+                chunk_count = data.get("result", {}).get("points_count", 0)
                 st.metric("Chunks in Store", chunk_count)
-            except Exception:
-                st.metric("Chunks in Store", "error")
-        else:
+        except Exception:
             st.metric("Chunks in Store", "unavailable")
 
         # Mini metrics summary in sidebar

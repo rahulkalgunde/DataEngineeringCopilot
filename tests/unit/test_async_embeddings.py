@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
+import httpx
 import pytest
+import respx
 
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
@@ -19,142 +19,132 @@ def test_init(async_embeddings):
     assert async_embeddings.ollama_base_url
 
 
+@pytest.mark.asyncio
 async def test_embed_single_text(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+        )
         result = await async_embeddings._aollama_embed(["test text"])
         assert len(result) == 1
         assert result[0] == [0.1] * 768
 
 
+@pytest.mark.asyncio
 async def test_embed_multiple_texts(async_embeddings):
     embedding_vectors = [[0.1] * 768, [0.2] * 768, [0.3] * 768]
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": embedding_vectors}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": embedding_vectors})
+        )
         result = await async_embeddings._aollama_embed(["text 1", "text 2", "text 3"])
         assert len(result) == 3
         assert result == embedding_vectors
 
 
+@pytest.mark.asyncio
 async def test_embed_uses_correct_endpoint(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(
-        async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response
-    ) as mock_post:
+    with respx.mock:
+        route = respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+        )
         await async_embeddings._aollama_embed(["test"])
-        call_args = mock_post.call_args
-        assert "/api/embed" in str(call_args)
+        assert route.called
 
 
+@pytest.mark.asyncio
 async def test_embed_request_payload(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(
-        async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response
-    ) as mock_post:
+    with respx.mock:
+        route = respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+        )
         await async_embeddings._aollama_embed(["test text"])
-        call_kwargs = mock_post.call_args[1]
-        assert call_kwargs["json"]["model"] == "nomic-embed-text"
-        assert call_kwargs["json"]["input"] == ["test text"]
+        request = route.calls[0].request
+        import json
+
+        body = json.loads(request.content)
+        assert body["model"] == "nomic-embed-text"
+        assert body["input"] == ["test text"]
 
 
+@pytest.mark.asyncio
 async def test_embed_missing_embeddings_key(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embedding": [0.1] * 768}
-    mock_response.raise_for_status = MagicMock()
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embedding": [0.1] * 768})
+        )
+        with pytest.raises(RuntimeError, match="missing 'embeddings' key"):
+            await async_embeddings._aollama_embed(["test"])
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="missing 'embeddings' key"):
-        await async_embeddings._aollama_embed(["test"])
 
-
+@pytest.mark.asyncio
 async def test_embed_count_mismatch(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
-    mock_response.raise_for_status = MagicMock()
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+        )
+        with pytest.raises(RuntimeError, match="returned 1 embeddings for 3 input texts"):
+            await async_embeddings._aollama_embed(["text1", "text2", "text3"])
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="returned 1 embeddings for 3 input texts"):
-        await async_embeddings._aollama_embed(["text1", "text2", "text3"])
 
-
+@pytest.mark.asyncio
 async def test_embed_wrong_dimension(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 512]}
-    mock_response.raise_for_status = MagicMock()
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 512]})
+        )
+        with pytest.raises(RuntimeError, match="dimension 512"):
+            await async_embeddings._aollama_embed(["test"])
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="dimension 512"):
-        await async_embeddings._aollama_embed(["test"])
 
-
+@pytest.mark.asyncio
 async def test_embed_empty_embedding(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[]]}
-    mock_response.raise_for_status = MagicMock()
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[]]})
+        )
+        with pytest.raises(RuntimeError, match="empty"):
+            await async_embeddings._aollama_embed(["test"])
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="empty"):
-        await async_embeddings._aollama_embed(["test"])
 
-
+@pytest.mark.asyncio
 async def test_embed_network_error(async_embeddings):
-    with (
-        patch.object(
-            async_embeddings._client, "post", new_callable=AsyncMock, side_effect=Exception("Connection refused")
-        ),
-        pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"),
-    ):
-        await async_embeddings._aollama_embed(["test"])
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(side_effect=Exception("Connection refused"))
+        with pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"):
+            await async_embeddings._aollama_embed(["test"])
 
 
+@pytest.mark.asyncio
 async def test_embed_texts_calls_aollama_embed(async_embeddings):
     embedding_vectors = [[0.1] * 768, [0.2] * 768]
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": embedding_vectors}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": embedding_vectors})
+        )
         result = await async_embeddings.embed_texts(["text1", "text2"])
         assert len(result) == 2
 
 
+@pytest.mark.asyncio
 async def test_embed_query_returns_single_vector(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+        )
         result = await async_embeddings.embed_query("test query")
         assert result == [0.1] * 768
         assert len(result) == 768
 
 
+@pytest.mark.asyncio
 async def test_embed_query_empty_result_raises(async_embeddings):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"embeddings": [None]}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="not a list|empty result"):
-        await async_embeddings.embed_query("test query")
+    with respx.mock:
+        respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(
+            return_value=httpx.Response(200, json={"embeddings": [None]})
+        )
+        with pytest.raises(RuntimeError, match="not a list|empty result"):
+            await async_embeddings.embed_query("test query")
 
 
 def test_slice_texts_into_batches(async_embeddings):
