@@ -41,7 +41,17 @@ def _get_or_start_qdrant_container():
     if _qdrant_url is not None:
         return _qdrant_url
 
-    # Try testcontainers first
+    # First: check if Qdrant is already running (Docker Compose / local dev)
+    try:
+        req = urllib.request.Request("http://localhost:6333/collections", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                _qdrant_url = "http://localhost:6333"
+                return _qdrant_url
+    except Exception:
+        pass
+
+    # Second: try testcontainers (self-contained, portable)
     try:
         from testcontainers.qdrant import QdrantContainer
 
@@ -51,16 +61,6 @@ def _get_or_start_qdrant_container():
         port = _qdrant_container.get_exposed_port(6333)
         _qdrant_url = f"http://{host}:{port}"
         return _qdrant_url
-    except Exception:
-        pass
-
-    # Fallback: check if Qdrant is already running (Docker Compose)
-    try:
-        req = urllib.request.Request("http://localhost:6333/collections", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                _qdrant_url = "http://localhost:6333"
-                return _qdrant_url
     except Exception:
         pass
 

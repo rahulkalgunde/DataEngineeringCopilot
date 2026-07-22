@@ -22,9 +22,9 @@ test-unit:
 test-unit-serial:
 	$(PYTEST) tests/unit/ -v -n 0
 
-# Integration tests — external services required (retry flaky service-connection tests)
+# Integration tests — sequential by default (testcontainers + shared Docker services)
 test-integration:
-	$(PYTEST) tests/integration/ -v --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -v -n 0 --reruns 2 --reruns-delay 1
 
 # Integration tests with controlled parallelism (xdist loadgroup for shared containers)
 test-integration-parallel:
@@ -41,8 +41,8 @@ test-ci-unit:
 # CI gate: unit + integration + e2e with coverage
 test-ci:
 	$(PYTEST) tests/unit/ -v --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
-	$(PYTEST) tests/integration/ -v --reruns 2 --reruns-delay 1
-	$(PYTEST) tests/e2e/ -v --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -v -n 0 --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/e2e/ -v -n 0 --reruns 2 --reruns-delay 1
 
 # Quick sanity — smoke test
 test-smoke:
