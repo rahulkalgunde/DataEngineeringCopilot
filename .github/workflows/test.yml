@@ -20,8 +20,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: uv venv dec_venv
-      - run: uv pip install -e ".[dev]"
+      - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make lint
 
   test-unit:
@@ -32,8 +31,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: uv venv dec_venv
-      - run: uv pip install -e ".[dev]"
+      - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-ci-unit
 
       - name: Upload coverage
@@ -68,8 +66,7 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
-      - run: uv venv dec_venv
-      - run: uv pip install -e ".[dev]"
+      - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-integration
 
   test-e2e:
@@ -97,6 +94,5 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
-      - run: uv venv dec_venv
-      - run: uv pip install -e ".[dev]"
+      - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-e2e
