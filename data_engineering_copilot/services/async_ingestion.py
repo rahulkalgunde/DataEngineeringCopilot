@@ -5,7 +5,7 @@ import dataclasses
 import hashlib
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import structlog
 
@@ -43,7 +43,11 @@ class AsyncIngestionService:
         self.vector_store = vector_store
         self._redis_client = redis_client
         self._processing_concurrency = settings.processing_concurrency
-        self._executor = ThreadPoolExecutor(max_workers=settings.processing_concurrency * 2)
+        # Isolated executor pools: CPU-bound (ProcessPool) vs IO-bound (ThreadPool)
+        self._parse_executor = ProcessPoolExecutor(max_workers=settings.parse_concurrency)
+        self._chunk_executor = ProcessPoolExecutor(max_workers=settings.chunk_concurrency)
+        self._embed_executor = ThreadPoolExecutor(max_workers=settings.embed_concurrency)
+        self._store_executor = ThreadPoolExecutor(max_workers=settings.store_concurrency)
 
     async def _process_raw(
         self,
@@ -52,7 +56,7 @@ class AsyncIngestionService:
         on_event: Callable[[IngestionEvent], None] | None,
         make_event: Callable[..., IngestionEvent],
     ) -> tuple[list[DocumentChunk], str, ParsedDocument] | None:
-        parsed = await loop.run_in_executor(self._executor, self.parser.parse, raw_document)
+        parsed = await loop.run_in_executor(self._parse_executor, self.parser.parse, raw_document)
         if parsed is None:
             log.info(
                 "async_ingestion.page_skipped",
@@ -72,7 +76,10 @@ class AsyncIngestionService:
 
         content_hash = self._compute_content_hash(parsed.text)
         stored_hash = await loop.run_in_executor(
-            self._executor, self._get_stored_content_hash, parsed.url, parsed.source_name,
+            self._store_executor,
+            self._get_stored_content_hash,
+            parsed.url,
+            parsed.source_name,
         )
         if stored_hash is not None and stored_hash == content_hash:
             log.info(
@@ -95,9 +102,9 @@ class AsyncIngestionService:
 
         if stored_hash is not None:
             log.info("async_ingestion.content_changed", url=parsed.url)
-            await loop.run_in_executor(self._executor, self._delete_chunks_for_url, parsed.url)
+            await loop.run_in_executor(self._store_executor, self._delete_chunks_for_url, parsed.url)
 
-        chunks = await loop.run_in_executor(self._executor, self.chunker.chunk, parsed)
+        chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
         return chunks, content_hash, parsed
 
@@ -123,7 +130,7 @@ class AsyncIngestionService:
         )
         try:
             texts = [chunk.text for chunk in batch_chunks]
-            batch_vectors = await loop.run_in_executor(self._executor, self.embeddings.embed_texts, texts)
+            batch_vectors = await loop.run_in_executor(self._embed_executor, self.embeddings.embed_texts, texts)
         except EmbeddingError as exc:
             log.error(
                 "async_ingestion.embed_batch_failed",
@@ -142,7 +149,9 @@ class AsyncIngestionService:
             ),
         )
         try:
-            await loop.run_in_executor(self._executor, self.vector_store.upsert_chunks, batch_chunks, batch_vectors)
+            await loop.run_in_executor(
+                self._store_executor, self.vector_store.upsert_chunks, batch_chunks, batch_vectors
+            )
         except Exception as exc:
             log.error(
                 "async_ingestion.upsert_batch_failed",
@@ -180,22 +189,25 @@ class AsyncIngestionService:
         max_parallel = min(len(selected_sources), self._processing_concurrency)
         embed_semaphore = asyncio.Semaphore(max_parallel)
 
-        tasks = [
-            self._ingest_source(source, page_limit, on_event, start_time, embed_semaphore)
-            for source in selected_sources
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
         total_chunks = 0
         errors: list[str] = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                src_name = selected_sources[i].name
-                log.error("async_ingestion.source_failed", source=src_name, error=str(result))
-                errors.append(f"{src_name}: {result}")
-            else:
-                total_chunks += result
+        source_counts: dict[str, int] = {}
 
+        async with asyncio.TaskGroup() as tg:
+            for source in selected_sources:
+                tg.create_task(
+                    self._run_source_task(
+                        source,
+                        page_limit,
+                        on_event,
+                        start_time,
+                        embed_semaphore,
+                        results=errors,
+                        source_counts=source_counts,
+                    )
+                )
+
+        total_chunks = sum(source_counts.values())
         total_elapsed = time.time() - start_time
         log.info("async_ingestion.completed", total_chunks=total_chunks, elapsed=round(total_elapsed, 1))
         await self.crawler.frontier.close()
@@ -203,6 +215,25 @@ class AsyncIngestionService:
         if errors:
             raise IngestionError(f"Source ingestion errors: {'; '.join(errors)}")
         return total_chunks
+
+    async def _run_source_task(
+        self,
+        source,
+        page_limit: int,
+        on_event: Callable[[IngestionEvent], None] | None,
+        start_time: float,
+        embed_semaphore: asyncio.Semaphore,
+        results: list[str],
+        source_counts: dict[str, int],
+    ) -> int:
+        try:
+            count = await self._ingest_source(source, page_limit, on_event, start_time, embed_semaphore)
+            source_counts[source.name] = count
+            return count
+        except Exception as exc:
+            log.error("async_ingestion.source_failed", source=source.name, error=str(exc))
+            results.append(f"{source.name}: {exc}")
+            return 0
 
     async def _ingest_source(
         self,
@@ -294,9 +325,7 @@ class AsyncIngestionService:
                 finally:
                     _queue.task_done()
 
-        w_tasks = [
-            asyncio.create_task(worker()) for _ in range(self._processing_concurrency)
-        ]
+        w_tasks = [asyncio.create_task(worker()) for _ in range(self._processing_concurrency)]
 
         self._emit(
             on_event,
@@ -309,9 +338,7 @@ class AsyncIngestionService:
         )
 
         try:
-            async for raw_document in self.crawler.crawl(
-                source, max_pages=page_limit, on_event=on_event
-            ):
+            async for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 await queue.put(raw_document)
         finally:
             for _ in range(self._processing_concurrency):
@@ -330,10 +357,7 @@ class AsyncIngestionService:
             _make_event(
                 "source_complete",
                 source_name=source.name,
-                message=(
-                    f"Completed {source.name}: fetched {source_pages} pages, "
-                    f"indexed {source_chunks} chunks."
-                ),
+                message=(f"Completed {source.name}: fetched {source_pages} pages, indexed {source_chunks} chunks."),
                 chunks_indexed=source_chunks,
                 pages_fetched=source_pages,
                 current_phase="crawling",

@@ -148,16 +148,18 @@ class IngestionProgressTracker:
 
         # --- recent events (rolling max 15) ---
         recent: list[dict[str, Any]] = self._state["recent_events"]
-        recent.append({
-            "type": event.event_type,
-            "source": event.source_name,
-            "url": event.url or "",
-            "title": event.title or "",
-            "chunks": event.chunks_indexed,
-            "ts": time.time(),
-            "error": event.error or "",
-            "batch_size": event.batch_size,
-        })
+        recent.append(
+            {
+                "type": event.event_type,
+                "source": event.source_name,
+                "url": event.url or "",
+                "title": event.title or "",
+                "chunks": event.chunks_indexed,
+                "ts": time.time(),
+                "error": event.error or "",
+                "batch_size": event.batch_size,
+            }
+        )
         if len(recent) > _MAX_RECENT_EVENTS:
             self._state["recent_events"] = recent[-_MAX_RECENT_EVENTS:]
 

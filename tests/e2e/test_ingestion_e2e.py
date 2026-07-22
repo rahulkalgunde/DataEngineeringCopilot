@@ -114,10 +114,7 @@ class TestIngestionPipelineE2E:
         results = vector_store.query(query_emb, top_k=5)
 
         assert len(results) > 0
-        assert any(
-            "unified analytics engine" in r.chunk.text.lower()
-            for r in results
-        ), "Should find Spark content"
+        assert any("unified analytics engine" in r.chunk.text.lower() for r in results), "Should find Spark content"
 
     def test_ingestion_idempotent(self, vector_store, embedder):
         n = self._ingest_sample(vector_store, embedder)

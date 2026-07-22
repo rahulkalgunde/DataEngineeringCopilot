@@ -13,6 +13,7 @@ dependencies = [
     "aiohttp>=3.9",
     "aiosqlite>=0.20",
     "beautifulsoup4>=4.12",
+    "httpx>=0.27",
     "markdownify>=0.12",
     "nltk>=3.8",
     "numpy>=1.26",
@@ -48,6 +49,7 @@ packages = ["data_engineering_copilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 filterwarnings = [
     'ignore:Using `httpx` with `starlette.testclient` is deprecated',
     'ignore:coroutine .* was never awaited',

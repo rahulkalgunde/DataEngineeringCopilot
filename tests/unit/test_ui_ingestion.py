@@ -34,6 +34,7 @@ def _mock_columns(n):
 # render_ingestion_progress tests
 # ---------------------------------------------------------------------------
 
+
 class TestRenderIngestionProgress:
     """Tests for the auto-refreshing progress fragment."""
 
@@ -117,6 +118,7 @@ class TestRenderIngestionProgress:
 # ---------------------------------------------------------------------------
 # render_ingestion_tab tests
 # ---------------------------------------------------------------------------
+
 
 class TestRenderIngestionTab:
     """Tests for the ingestion dashboard tab."""

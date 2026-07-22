@@ -133,6 +133,11 @@ class AppSettings(BaseSettings):
     crawl_thread_pool_size: int = 4
     ingestion_batch_chunk_size: int = 256
     processing_concurrency: int = 4
+    # Multi-stage pipeline concurrency (isolated executor pools)
+    parse_concurrency: int = 4
+    chunk_concurrency: int = 4
+    embed_concurrency: int = 4
+    store_concurrency: int = 2
     # Async crawler settings
     crawl_db_path: Path = PROJECT_ROOT / "data" / "crawl_frontier.db"
     crawl_async_concurrency: int = 20
