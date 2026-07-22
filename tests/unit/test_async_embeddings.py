@@ -79,9 +79,8 @@ async def test_embed_missing_embeddings_key(async_embeddings):
     mock_response.json.return_value = {"embedding": [0.1] * 768}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(RuntimeError, match="missing 'embeddings' key"):
-            await async_embeddings._aollama_embed(["test"])
+    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="missing 'embeddings' key"):
+        await async_embeddings._aollama_embed(["test"])
 
 
 async def test_embed_count_mismatch(async_embeddings):
@@ -90,9 +89,8 @@ async def test_embed_count_mismatch(async_embeddings):
     mock_response.json.return_value = {"embeddings": [[0.1] * 768]}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(RuntimeError, match="returned 1 embeddings for 3 input texts"):
-            await async_embeddings._aollama_embed(["text1", "text2", "text3"])
+    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="returned 1 embeddings for 3 input texts"):
+        await async_embeddings._aollama_embed(["text1", "text2", "text3"])
 
 
 async def test_embed_wrong_dimension(async_embeddings):
@@ -101,9 +99,8 @@ async def test_embed_wrong_dimension(async_embeddings):
     mock_response.json.return_value = {"embeddings": [[0.1] * 512]}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(RuntimeError, match="dimension 512"):
-            await async_embeddings._aollama_embed(["test"])
+    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="dimension 512"):
+        await async_embeddings._aollama_embed(["test"])
 
 
 async def test_embed_empty_embedding(async_embeddings):
@@ -112,9 +109,8 @@ async def test_embed_empty_embedding(async_embeddings):
     mock_response.json.return_value = {"embeddings": [[]]}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(RuntimeError, match="empty"):
-            await async_embeddings._aollama_embed(["test"])
+    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="empty"):
+        await async_embeddings._aollama_embed(["test"])
 
 
 async def test_embed_network_error(async_embeddings):
@@ -157,9 +153,8 @@ async def test_embed_query_empty_result_raises(async_embeddings):
     mock_response.json.return_value = {"embeddings": [None]}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(RuntimeError, match="not a list|empty result"):
-            await async_embeddings.embed_query("test query")
+    with patch.object(async_embeddings._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(RuntimeError, match="not a list|empty result"):
+        await async_embeddings.embed_query("test query")
 
 
 def test_slice_texts_into_batches(async_embeddings):

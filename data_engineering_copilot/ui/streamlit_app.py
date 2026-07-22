@@ -452,9 +452,8 @@ def _render_progress_panel() -> None:
         st.session_state._ingest_was_running = False
         st.rerun(scope="app")
 
-    if not progress.is_running and not progress.success_message and not progress.error:
-        if not progress.source_names:
-            return
+    if not progress.is_running and not progress.success_message and not progress.error and not progress.source_names:
+        return
 
     if progress.is_running:
         st.session_state._ingest_was_running = True

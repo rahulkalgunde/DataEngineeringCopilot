@@ -87,9 +87,8 @@ async def test_generate_reasoning_only_raises(async_client):
     }
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(AsyncOllamaError, match="spent its output budget on reasoning"):
-            await async_client.generate("test")
+    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(AsyncOllamaError, match="spent its output budget on reasoning"):
+        await async_client.generate("test")
 
 
 @pytest.mark.slow
@@ -129,6 +128,5 @@ async def test_generate_empty_response(async_client):
     }
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response):
-        with pytest.raises(AsyncOllamaError, match="returned no final answer"):
-            await async_client.generate("test")
+    with patch.object(async_client._client, "post", new_callable=AsyncMock, return_value=mock_response), pytest.raises(AsyncOllamaError, match="returned no final answer"):
+        await async_client.generate("test")
