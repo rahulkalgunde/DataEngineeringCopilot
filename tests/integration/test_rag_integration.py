@@ -10,13 +10,14 @@ Run with: pytest tests/integration/test_rag_integration.py -v -m integration
 
 from __future__ import annotations
 
-import asyncio
-import time
-
 import pytest
 
 from data_engineering_copilot.domain.models import Answer, DocumentChunk
 from tests.integration.conftest import require_ollama
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +40,7 @@ def _embedder(_settings):
 
     return AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
 
+
 @pytest.fixture(scope="module")
 def _ollama(_settings):
     require_ollama()
@@ -55,11 +57,15 @@ def _ollama(_settings):
 
 @pytest.fixture(scope="module")
 def _store(_settings, qdrant_url):
+    import asyncio
+
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
     coll = f"rag_mod_{__name__.replace('.', '_')}"
     store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=coll)
-    asyncio.run(store.initialize())
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(store.initialize())
+    loop.close()
     yield store
     try:
         from qdrant_client import QdrantClient
@@ -72,8 +78,15 @@ def _store(_settings, qdrant_url):
 
 
 @pytest.fixture(scope="module")
-def _populated(_store, _embedder):
+def _populated(_store, _settings):
     """Populate the store once with 10 topic chunks."""
+
+    import asyncio
+
+    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+
+    embedder = AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
+
     topics = [
         (
             "Apache Spark",
@@ -130,16 +143,23 @@ def _populated(_store, _embedder):
         chunks.append(chunk)
         texts.append(text)
 
-    all_embs = asyncio.run(_embedder.embed_texts(texts))
-    asyncio.run(_store.upsert_chunks(chunks, all_embs))
+    loop = asyncio.new_event_loop()
+    try:
+        all_embs = loop.run_until_complete(embedder.embed_texts(texts))
+        loop.run_until_complete(_store.upsert_chunks(chunks, all_embs))
+    finally:
+        loop.run_until_complete(embedder.close())
+        loop.close()
     return _store, chunks
 
 
 @pytest.fixture(scope="module")
-def _rag(_store, _embedder, _ollama):
+def _rag(_store, _ollama, _settings):
+    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
-    return AsyncRagService(vector_store=_store, ollama_client=_ollama, embedder=_embedder)
+    embedder = AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
+    return AsyncRagService(vector_store=_store, ollama_client=_ollama, embedder=embedder)
 
 
 # ---------------------------------------------------------------------------
@@ -151,48 +171,56 @@ def _rag(_store, _embedder, _ollama):
 @pytest.mark.rag
 @pytest.mark.xdist_group("qdrant")
 class TestRAGPipeline:
-    def test_answer_returns_answer_object(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_answer_returns_answer_object(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
-        answer = asyncio.run(_rag.answer("What is Apache Spark?"))
+        answer = await _rag.answer("What is Apache Spark?")
         assert isinstance(answer, Answer)
         assert isinstance(answer.text, str)
         assert isinstance(answer.sources, tuple)
         assert isinstance(answer.confidence, float)
 
-    def test_answer_has_substantial_text(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_answer_has_substantial_text(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
-        answer = asyncio.run(_rag.answer("What is Apache Spark?"))
+        answer = await _rag.answer("What is Apache Spark?")
         assert len(answer.text) > 20, f"Answer too short: {answer.text!r}"
 
-    def test_answer_cites_sources(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_answer_cites_sources(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
-        answer = asyncio.run(_rag.answer("What is Delta Lake?"))
+        answer = await _rag.answer("What is Delta Lake?")
         assert len(answer.sources) > 0, "Should cite at least one source"
 
-    def test_answer_confidence_nonnegative(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_answer_confidence_nonnegative(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
-        answer = asyncio.run(_rag.answer("What is Apache Airflow?"))
+        answer = await _rag.answer("What is Apache Airflow?")
         assert answer.confidence >= 0.0
 
-    def test_multiple_sequential_questions(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_multiple_sequential_questions(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
         for q in [
             "What is Apache Spark?",
             "What is Delta Lake?",
         ]:
-            answer = asyncio.run(_rag.answer(q))
+            answer = await _rag.answer(q)
             assert len(answer.text) > 10, f"Bad answer for: {q}"
 
-    def test_performance_within_bounds(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_performance_within_bounds(self, _rag, _populated):
+        import time
+
         store, _ = _populated
         _rag.vector_store = store
         start = time.time()
-        answer = asyncio.run(_rag.answer("What is Apache Spark?"))
+        answer = await _rag.answer("What is Apache Spark?")
         elapsed = time.time() - start
         assert elapsed < 60, f"RAG query took {elapsed:.1f}s"
         assert len(answer.text) > 0
@@ -207,12 +235,13 @@ class TestRAGPipeline:
 @pytest.mark.rag
 @pytest.mark.xdist_group("qdrant")
 class TestRAGEdgeCases:
-    def test_unrelated_question_acknowledges_gap(self, _rag, _populated):
+    @pytest.mark.asyncio
+    async def test_unrelated_question_acknowledges_gap(self, _rag, _populated):
         """An unrelated question should produce an answer that acknowledges
         the docs don't cover it (either via confidence or LLM response)."""
         store, _ = _populated
         _rag.vector_store = store
-        answer = asyncio.run(_rag.answer("What is the capital of France?"))
+        answer = await _rag.answer("What is the capital of France?")
         text_lower = answer.text.lower()
         acknowledges_gap = any(
             phrase in text_lower
