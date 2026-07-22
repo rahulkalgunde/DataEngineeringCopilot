@@ -6,13 +6,12 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
-from data_engineering_copilot.infrastructure.crawler import DocumentationCrawler
 from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
-from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
+from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+from data_engineering_copilot.workers.progress import get_redis_client
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
-from data_engineering_copilot.services.ingestion import IngestionService
 from data_engineering_copilot.services.rag import ProductionRagService
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 
@@ -88,32 +87,6 @@ def build_chunker(app_settings: AppSettings = settings):
     )
 
 
-def build_ingestion_service(app_settings: AppSettings = settings) -> IngestionService:
-    logger.info(
-        "Building ingestion service sources=%s strategy=%s qdrant_url=%s collection=%s",
-        len(app_settings.sources),
-        app_settings.chunking_strategy,
-        app_settings.qdrant_url,
-        app_settings.collection_name,
-    )
-    return IngestionService(
-        settings=app_settings,
-        crawler=DocumentationCrawler(
-            timeout_seconds=app_settings.request_timeout_seconds,
-            delay_seconds=app_settings.crawl_delay_seconds,
-        ),
-        parser=DocumentationHtmlParser(),
-        chunker=build_chunker(app_settings),
-        embeddings=OllamaEmbeddings(
-            model_name=app_settings.embedding_model_name,
-        ),
-        vector_store=QdrantVectorStore(
-            url=app_settings.qdrant_url,
-            collection_name=app_settings.collection_name,
-        ),
-    )
-
-
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
     logger.info(
         "Building async crawler db=%s concurrency=%s max_concurrency=%s",
@@ -134,6 +107,7 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
         max_concurrency=app_settings.crawl_async_max_concurrency,
         conditional_get=app_settings.crawl_async_conditional_get,
         thread_pool_size=app_settings.crawl_async_thread_pool_size,
+        per_domain_concurrency=app_settings.crawl_async_per_domain_concurrency,
         user_agent="DataEngineeringCopilot/1.0",
     )
 
@@ -145,16 +119,22 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         app_settings.qdrant_url,
         app_settings.collection_name,
     )
+    try:
+        redis_client = get_redis_client()
+    except Exception:
+        redis_client = None
+
     return AsyncIngestionService(
         settings=app_settings,
         crawler=build_async_crawler(app_settings),
-        parser=DocumentationHtmlParser(),
+        parser=MarkdownParser(),
         chunker=build_chunker(app_settings),
         embeddings=OllamaEmbeddings(model_name=app_settings.embedding_model_name),
         vector_store=QdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
         ),
+        redis_client=redis_client,
     )
 
 

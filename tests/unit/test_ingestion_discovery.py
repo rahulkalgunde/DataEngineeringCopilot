@@ -147,7 +147,8 @@ class TestAutoDiscovery:
         assert progress.is_running is False
         assert progress.error is None
 
-    def test_discovery_completed_task_shows_success(self):
+    def test_discovery_of_completed_task_returns_idle(self):
+        """A completed task should NOT be auto-discovered — only running tasks."""
         import streamlit as st
 
         from data_engineering_copilot.ui.streamlit_app import IngestionManager
@@ -171,5 +172,5 @@ class TestAutoDiscovery:
         ):
             progress = IngestionManager.get_progress()
         assert progress.is_running is False
-        assert progress.success_message is not None
-        assert "500" in progress.success_message
+        assert progress.success_message is None
+        assert progress.error is None

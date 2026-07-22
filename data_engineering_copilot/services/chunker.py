@@ -167,13 +167,13 @@ class DocumentChunker:
         chunks: list[DocumentChunk] = []
         current_chunk_sentences: list[str] = []
         current_chunk_words = 0
-        max(1, self.chunk_size_words - self.overlap_words)
+        step = max(1, self.chunk_size_words - self.overlap_words)
 
         for sentence in sentences:
             sentence_words = len(sentence.split())
 
-            # If adding this sentence exceeds target, finalize current chunk
-            if current_chunk_words + sentence_words > self.chunk_size_words and current_chunk_sentences:
+            # If adding this sentence exceeds step (new content target), finalize current chunk
+            if current_chunk_words + sentence_words > step and current_chunk_sentences:
                 chunk_text = " ".join(current_chunk_sentences).strip()
                 if self._is_valid_chunk(chunk_text):
                     chunk_id = self._chunk_id(document, len(chunks))

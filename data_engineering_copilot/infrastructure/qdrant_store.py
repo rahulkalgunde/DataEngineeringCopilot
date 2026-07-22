@@ -47,7 +47,7 @@ class QdrantVectorStore:
             self._client = QdrantClient(url=self._url, prefer_grpc=False)
             # Ensure the collection exists; create if missing.
             if not self._client.collection_exists(self._collection_name):
-                self._client.recreate_collection(
+                self._client.create_collection(
                     collection_name=self._collection_name,
                     vectors_config=models.VectorParams(
                         size=self._embedding_dim(),
