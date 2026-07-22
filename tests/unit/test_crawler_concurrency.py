@@ -30,6 +30,7 @@ def _make_crawler(**kwargs):
         concurrency=10,
         max_concurrency=40,
         thread_pool_size=4,
+        per_domain_concurrency=40,
     )
     defaults.update(kwargs)
     return AsyncDocumentationCrawler(**defaults)
@@ -172,3 +173,15 @@ class TestThreadPoolSize:
 
         c = _make_crawler(thread_pool_size=settings.crawl_thread_pool_size)
         assert c._executor._max_workers == settings.crawl_thread_pool_size
+
+
+class TestPerDomainConcurrencyCap:
+    def test_respects_per_domain_cap(self):
+        c = _make_crawler(max_concurrency=40, per_domain_concurrency=3)
+        state = c._get_domain_state("https://spark.apache.org/docs")
+        assert state.semaphore._value == 3
+
+    def test_cap_does_not_affect_when_higher_than_allocated(self):
+        c = _make_crawler(max_concurrency=40, per_domain_concurrency=50)
+        state = c._get_domain_state("https://spark.apache.org/docs")
+        assert state.semaphore._value == 40

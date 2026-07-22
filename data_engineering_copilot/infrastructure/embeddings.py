@@ -47,6 +47,9 @@ class OllamaEmbeddings:
             batches.append(texts[i : i + batch_size])
         return batches
 
+    def _embed_timeout(self) -> int:
+        return getattr(settings, "ollama_timeout_seconds", 300)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -66,7 +69,7 @@ class OllamaEmbeddings:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=self._embed_timeout()) as response:
                 resp_data = json.load(response)
         except Exception as exc:
             raise EmbeddingError(f"Failed to get embeddings from Ollama: {exc}") from exc

@@ -176,8 +176,8 @@ class TestNoPrintInProduction:
     """Production modules should use logger, not print()."""
 
     @pytest.mark.parametrize("module_path", [
-        "data_engineering_copilot/services/ingestion.py",
-        "data_engineering_copilot/infrastructure/crawler.py",
+        "data_engineering_copilot/services/async_ingestion.py",
+        "data_engineering_copilot/infrastructure/async_crawler.py",
     ])
     def test_no_print_calls(self, module_path: str) -> None:
         """These modules should have no print() calls."""
