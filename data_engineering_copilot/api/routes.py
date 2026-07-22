@@ -23,7 +23,6 @@ REDIS_KEY_PREFIX = "ingestion:status"
 class IngestRequest(BaseModel):
     source_names: list[str] | None = None
     max_pages: int | None = None
-    use_async: bool = True
 
 
 class TaskStatus(BaseModel):
@@ -38,13 +37,29 @@ async def ingest_documents(request: IngestRequest):
         "ingest.dispatch",
         source_names=request.source_names,
         max_pages=request.max_pages,
-        use_async=request.use_async,
     )
-    task = async_ingest_task.delay(request.source_names, request.max_pages or 0, request.use_async)
+
+    client = get_redis_client()
+    raw_task_id = client.get("ingestion:latest_task_id")
+    if raw_task_id:
+        try:
+            latest_task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else str(raw_task_id)
+            raw = client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
+            if raw:
+                raw = raw.decode() if isinstance(raw, bytes) else raw
+                existing_status = json.loads(raw).get("status")
+                if existing_status in ("PROCESSING", "DISPATCHED"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Ingestion is already running (task {latest_task_id}). Cancel it or wait for completion.",
+                    )
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
+    task = async_ingest_task.delay(request.source_names, request.max_pages or 0)
 
     # Write an initial status so the polling endpoint has something to
     # return immediately, before the worker picks up the task.
-    client = get_redis_client()
     initial_status = json.dumps({
         "task_id": task.id,
         "status": "DISPATCHED",

@@ -13,7 +13,6 @@ import structlog
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.factory import build_ingestion_service
 from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
@@ -82,8 +81,8 @@ def execute_background_ingestion(urls: list[str]):
 
 
 @celery_app.task(bind=True)
-def async_ingest_task(self, source_names: list[str], max_pages: int, use_async: bool = True):
-    """Production ingestion task using the full IngestionService pipeline.
+def async_ingest_task(self, source_names: list[str], max_pages: int):
+    """Production ingestion task using the full AsyncIngestionService pipeline.
 
     Progress is persisted to Redis via ``IngestionProgressTracker`` so that
     the Streamlit UI and API endpoints can poll for real-time updates.
@@ -94,27 +93,18 @@ def async_ingest_task(self, source_names: list[str], max_pages: int, use_async: 
         task_id=task_id,
         source_names=source_names,
         max_pages=max_pages,
-        use_async=use_async,
     )
     tracker = IngestionProgressTracker(task_id, redis_client=get_redis_client(), source_names=source_names)
 
     try:
-        if use_async:
-            from data_engineering_copilot.factory import build_async_ingestion_service
+        from data_engineering_copilot.factory import build_async_ingestion_service
 
-            service = build_async_ingestion_service()
-            asyncio.run(service.ingest(
-                source_names=source_names,
-                max_pages_per_source=max_pages,
-                on_event=tracker.on_event,
-            ))
-        else:
-            service = build_ingestion_service()
-            service.ingest(
-                source_names=source_names,
-                max_pages_per_source=max_pages,
-                on_event=tracker.on_event,
-            )
+        service = build_async_ingestion_service()
+        asyncio.run(service.ingest(
+            source_names=source_names,
+            max_pages_per_source=max_pages,
+            on_event=tracker.on_event,
+        ))
         tracker.mark_completed()
         log.info("async_ingest_task.completed", task_id=task_id)
     except Exception as e:

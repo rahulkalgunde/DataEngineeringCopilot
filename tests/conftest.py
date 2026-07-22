@@ -243,10 +243,10 @@ def ollama_client(integration_settings):
 
 @pytest.fixture
 def html_parser():
-    from data_engineering_copilot.infrastructure.html_parser import DocumentationHtmlParser
 
-    return DocumentationHtmlParser()
+    from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 
+    return MarkdownParser()
 
 @pytest.fixture
 def chunker(integration_settings):

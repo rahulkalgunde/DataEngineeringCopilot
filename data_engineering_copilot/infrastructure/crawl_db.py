@@ -80,7 +80,10 @@ class CrawlFrontierDB:
     ) -> str | None:
         """Insert a URL as DISCOVERED if not already present.
 
-        Returns the url_hash if newly inserted, None if already known.
+        If the URL already exists and is in PROCESSED or FAILED state,
+        reset it to DISCOVERED so it gets re-crawled.
+
+        Returns the url_hash if newly inserted or reset, None if already DISCOVERED/FETCHING.
         """
         assert self._db is not None
         url_hash = self.hash_url(url)
@@ -89,8 +92,8 @@ class CrawlFrontierDB:
             await self._db.execute(
                 """INSERT INTO crawl_frontier
                    (url_hash, url, source_name, state, parent_hash, depth, created_at, updated_at)
-                   VALUES (?, ?, ?, 'DISCOVERED', ?, ?, ?, ?)""",
-                (url_hash, url, source_name, parent_hash, depth, now, now),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (url_hash, url, source_name, CrawlState.DISCOVERED.value, parent_hash, depth, now, now),
             )
             if parent_hash is not None:
                 await self._db.execute(
@@ -99,6 +102,23 @@ class CrawlFrontierDB:
                 )
             await self._db.commit()
         except aiosqlite.IntegrityError:
+            cursor = await self._db.execute(
+                "SELECT state FROM crawl_frontier WHERE url_hash = ?",
+                (url_hash,),
+            )
+            row = await cursor.fetchone()
+            if row and row["state"] in (CrawlState.PROCESSED.value, CrawlState.FAILED.value):
+                await self._db.execute(
+                    "UPDATE crawl_frontier SET state = ?, parent_hash = ?, depth = ?, updated_at = ? WHERE url_hash = ?",
+                    (CrawlState.DISCOVERED.value, parent_hash, depth, now, url_hash),
+                )
+                if parent_hash is not None:
+                    await self._db.execute(
+                        "INSERT OR IGNORE INTO sitemap_edges (parent_hash, child_hash) VALUES (?, ?)",
+                        (parent_hash, url_hash),
+                    )
+                await self._db.commit()
+                return url_hash
             return None
         return url_hash
 
@@ -107,10 +127,9 @@ class CrawlFrontierDB:
         assert self._db is not None
         now = time.time()
         cursor = await self._db.execute(
-            """UPDATE crawl_frontier
-               SET state = 'FETCHING', updated_at = ?, attempts = attempts + 1
-               WHERE url_hash = ? AND state = 'DISCOVERED'""",
-            (now, url_hash),
+            "UPDATE crawl_frontier SET state = ?, updated_at = ?, attempts = attempts + 1 "
+            "WHERE url_hash = ? AND state = ?",
+            (CrawlState.FETCHING.value, now, url_hash, CrawlState.DISCOVERED.value),
         )
         await self._db.commit()
         if cursor.rowcount == 0:
@@ -121,8 +140,8 @@ class CrawlFrontierDB:
         assert self._db is not None
         now = time.time()
         await self._db.execute(
-            "UPDATE crawl_frontier SET state = 'PROCESSED', updated_at = ? WHERE url_hash = ?",
-            (now, url_hash),
+            "UPDATE crawl_frontier SET state = ?, updated_at = ? WHERE url_hash = ?",
+            (CrawlState.PROCESSED.value, now, url_hash),
         )
         await self._db.commit()
 
@@ -130,21 +149,16 @@ class CrawlFrontierDB:
         assert self._db is not None
         now = time.time()
         await self._db.execute(
-            """UPDATE crawl_frontier
-               SET state = 'FAILED', last_error = ?, updated_at = ?
-               WHERE url_hash = ?""",
-            (error, now, url_hash),
+            "UPDATE crawl_frontier SET state = ?, last_error = ?, updated_at = ? WHERE url_hash = ?",
+            (CrawlState.FAILED.value, error, now, url_hash),
         )
         await self._db.commit()
 
     async def get_pending(self, source_name: str, limit: int = 50) -> list[CrawlRecord]:
         assert self._db is not None
         cursor = await self._db.execute(
-            """SELECT * FROM crawl_frontier
-               WHERE source_name = ? AND state = 'DISCOVERED'
-               ORDER BY depth ASC, created_at ASC
-               LIMIT ?""",
-            (source_name, limit),
+            "SELECT * FROM crawl_frontier WHERE source_name = ? AND state = ? ORDER BY depth ASC, created_at ASC LIMIT ?",
+            (source_name, CrawlState.DISCOVERED.value, limit),
         )
         rows = await cursor.fetchall()
         return [_row_to_record(row) for row in rows]
@@ -163,7 +177,10 @@ class CrawlFrontierDB:
     async def reset_stranded(self) -> int:
         """Reset FETCHING → DISCOVERED on boot. Returns count of reset records."""
         assert self._db is not None
-        cursor = await self._db.execute("UPDATE crawl_frontier SET state = 'DISCOVERED' WHERE state = 'FETCHING'")
+        cursor = await self._db.execute(
+            "UPDATE crawl_frontier SET state = ? WHERE state = ?",
+            (CrawlState.DISCOVERED.value, CrawlState.FETCHING.value),
+        )
         await self._db.commit()
         return cursor.rowcount
 

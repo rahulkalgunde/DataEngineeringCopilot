@@ -43,13 +43,13 @@ class TestQdrantVectorStore:
         assert store._url == "http://localhost:6333"
         assert store._collection_name == "test"
         mock_qdrant_client.collection_exists.assert_called_once_with("test")
-        mock_qdrant_client.recreate_collection.assert_called_once()
+        mock_qdrant_client.create_collection.assert_called_once()
 
     def test_init_skips_creation_if_exists(self, mock_qdrant_client):
         mock_qdrant_client.collection_exists.return_value = True
         QdrantVectorStore(url="http://localhost:6333", collection_name="existing")
         mock_qdrant_client.collection_exists.assert_called_once_with("existing")
-        mock_qdrant_client.recreate_collection.assert_not_called()
+        mock_qdrant_client.create_collection.assert_not_called()
 
     def test_upsert_chunks_success(self, mock_qdrant_client, sample_chunks, sample_embeddings):
         mock_qdrant_client.collection_exists.return_value = False

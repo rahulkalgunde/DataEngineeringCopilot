@@ -49,7 +49,8 @@ packages = ["data_engineering_copilot"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
-    "ignore::DeprecationWarning:starlette.*",
+    'ignore:Using `httpx` with `starlette.testclient` is deprecated',
+    'ignore:coroutine .* was never awaited',
 ]
 markers = [
     "integration: marks tests that require live external services (Qdrant, Ollama, Langfuse)",

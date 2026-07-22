@@ -68,6 +68,7 @@ class AsyncDocumentationCrawler:
         conditional_get: bool = True,
         user_agent: str = "DataEngineeringCopilot/1.0",
         thread_pool_size: int = 8,
+        per_domain_concurrency: int = 3,
         priority_domains: dict[str, int] | None = None,
         priority_multipliers: dict[int, float] | None = None,
     ) -> None:
@@ -82,6 +83,7 @@ class AsyncDocumentationCrawler:
         self.conditional_get = conditional_get
         self.user_agent = user_agent
         self.thread_pool_size = thread_pool_size
+        self.per_domain_concurrency = per_domain_concurrency
         self.priority_domains = priority_domains or {}
         self.priority_multipliers = priority_multipliers or {1: 1.0, 2: 2.0, 3: 4.0}
         self._domain_states: dict[str, _DomainState] = {}
@@ -118,6 +120,7 @@ class AsyncDocumentationCrawler:
         for dom, state in self._domain_states.items():
             share = weights[dom] / total_weight if total_weight > 0 else 1.0
             slots = max(1, int(self.max_concurrency * share))
+            slots = min(slots, self.per_domain_concurrency)
             state.semaphore = asyncio.Semaphore(slots)
 
     async def _enforce_delay(self, domain_state: _DomainState) -> None:

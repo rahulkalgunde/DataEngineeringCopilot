@@ -127,6 +127,13 @@ def _post_ingest(source_names: list[str], max_pages: int, use_async: bool = True
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
             return data.get("task_id"), None
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body).get("detail", body)
+        except Exception:
+            detail = body
+        return None, detail
     except (ConnectionRefusedError, TimeoutError, OSError) as exc:
         return None, (
             f"Cannot reach the API server at `{API_BASE_URL}`: {exc}\n\n"
@@ -268,13 +275,20 @@ class IngestionManager:
     @classmethod
     def get_progress(cls) -> IngestionProgress:
         """Read progress from Redis via the API polling endpoint."""
+        # If a final progress snapshot was cached, return it directly
+        final = st.session_state.get("_ingest_final_progress")
+        if final is not None:
+            return final
+
         task_id = st.session_state.get("ingestion_task_id")
         if not task_id:
             latest_task_id = _get_latest_task_id()
             if latest_task_id:
-                task_id = latest_task_id
-                st.session_state.ingestion_task_id = task_id
-                st.session_state.ingestion_start_time = time.time()
+                status, _ = _get_ingest_status(latest_task_id)
+                if status and status.get("status") in ("PROCESSING", "DISPATCHED"):
+                    task_id = latest_task_id
+                    st.session_state.ingestion_task_id = task_id
+                    st.session_state.ingestion_start_time = time.time()
         if not task_id:
             return IngestionProgress()
 
@@ -292,7 +306,16 @@ class IngestionManager:
         is_running = api_status in ("PROCESSING", "DISPATCHED")
         source_names = tuple(status.get("source_names", []))
         start_time = st.session_state.get("ingestion_start_time", time.time())
-        elapsed = time.time() - start_time if is_running else 0
+
+        # Freeze elapsed time at completion so it doesn't keep growing
+        if is_running:
+            elapsed_seconds = time.time() - start_time
+        else:
+            frozen = st.session_state.get("_ingest_final_elapsed")
+            if frozen is None:
+                frozen = time.time() - start_time
+                st.session_state._ingest_final_elapsed = frozen
+            elapsed_seconds = frozen
 
         # Build per-source detail from real Redis source_stats
         sources: dict[str, SourceProgress] = {}
@@ -325,10 +348,10 @@ class IngestionManager:
         recent_events = status.get("recent_events", [])
         last_msg = current_url if is_running else ("Ingestion complete." if is_completed else "")
 
-        return IngestionProgress(
+        result = IngestionProgress(
             is_running=is_running,
             start_time=start_time,
-            elapsed_seconds=elapsed if is_running else time.time() - start_time,
+            elapsed_seconds=elapsed_seconds,
             source_names=source_names,
             max_pages_per_source=st.session_state.get("ingestion_max_pages", 0),
             current_phase="crawling" if is_running else ("complete" if is_completed else "error"),
@@ -342,6 +365,12 @@ class IngestionManager:
             success_message=success_msg,
             last_message=last_msg,
         )
+
+        # Cache the final progress snapshot so it survives Redis TTL expiry
+        if not is_running and (success_msg or error_msg):
+            st.session_state._ingest_final_progress = result
+
+        return result
 
     @classmethod
     def is_running(cls) -> bool:
@@ -363,6 +392,9 @@ class IngestionManager:
             "ingestion_source_names",
             "ingestion_max_pages",
             "ingestion_start_time",
+            "_ingest_final_progress",
+            "_ingest_final_elapsed",
+            "_ingest_was_running",
         ):
             st.session_state.pop(key, None)
 
@@ -375,99 +407,246 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {secs:02d}s"
 
 
-@st.fragment(run_every=1.0)
-def render_ingestion_progress() -> None:
-    """Fragment that auto-refreshes every second to show live progress."""
+def _render_state_bar(progress: IngestionProgress) -> None:
+    """Compact one-line state bar with status, duration, and counts."""
+    if progress.is_running:
+        icon = "🔄"
+        status_label = "Running"
+        color = "blue"
+    elif progress.success_message:
+        icon = "✅"
+        status_label = "Completed"
+        color = "green"
+    elif progress.error:
+        icon = "❌"
+        status_label = "Failed"
+        color = "red"
+    else:
+        icon = "⏸️"
+        status_label = "Idle"
+        color = "gray"
+
+    cols = st.columns([1, 3, 8])
+    cols[0].markdown(f"# {icon}")
+    cols[1].markdown(
+        f"#### :{color}[{status_label}]\n"
+        f":{color}[{_format_duration(progress.elapsed_seconds)}]"
+    )
+    stats = []
+    if progress.total_pages_fetched > 0:
+        stats.append(f"**{progress.total_pages_fetched}** pages")
+    if progress.total_chunks_indexed > 0:
+        stats.append(f"**{progress.total_chunks_indexed}** chunks")
+    if progress.total_errors > 0:
+        stats.append(f":red[**{progress.total_errors}** errors]")
+    if progress.current_url and progress.is_running:
+        stats.append(f"`{progress.current_url[:80]}`")
+    cols[2].markdown(" · ".join(stats) if stats else "")
+
+
+@st.fragment(run_every=2.0)
+def _render_progress_panel() -> None:
+    """Auto-refreshing fragment that shows ingestion progress."""
     progress = IngestionManager.get_progress()
 
-    if not progress.is_running:
-        return
+    was_running = st.session_state.get("_ingest_was_running", False)
+    is_now_done = was_running and not progress.is_running and (progress.success_message or progress.error)
+    if is_now_done:
+        st.session_state._ingest_was_running = False
+        st.rerun(scope="app")
 
-    if "ingestion_started" not in st.session_state:
-        st.session_state.ingestion_started = True
+    if not progress.is_running and not progress.success_message and not progress.error:
+        if not progress.source_names:
+            return
 
-    # Phase badge
-    phase_colors = {
-        "crawling": "blue",
-        "embedding": "orange",
-        "indexing": "green",
-        "complete": "green",
-        "error": "red",
-        "cancelled": "gray",
-    }
-    color = phase_colors.get(progress.current_phase, "gray")
-    st.markdown(
-        f"**Phase:** :{color}[{progress.current_phase.upper()}]  |  "
-        f"**Elapsed:** {_format_duration(progress.elapsed_seconds)}",
+    if progress.is_running:
+        st.session_state._ingest_was_running = True
+
+    _render_state_bar(progress)
+
+    tab_overview, tab_sources, tab_log, tab_history = st.tabs(
+        ["Overview", "Sources", "Live Log", "History"]
     )
 
-    # Overall progress bar
-    total_sources = len(progress.source_names) or 1
-    estimated_pages = progress.max_pages_per_source * total_sources or 1
-    page_ratio = min(progress.total_pages_fetched / max(estimated_pages, 1), 1.0)
-    st.progress(page_ratio)
+    with tab_overview:
+        _render_overview_tab(progress)
+    with tab_sources:
+        _render_sources_tab(progress)
+    with tab_log:
+        _render_live_log_tab(progress)
+    with tab_history:
+        _render_history_tab(progress)
 
-    # Summary metrics row
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Pages Fetched", progress.total_pages_fetched)
-    col2.metric("Chunks Indexed", progress.total_chunks_indexed)
-    col3.metric("Errors", progress.total_errors, delta=None if progress.total_errors == 0 else progress.total_errors)
 
-    # Per-source cards
-    if progress.sources:
-        st.subheader("Source Details")
-        cols_per_row = 2
-        source_items = list(progress.sources.items())
-        for i in range(0, len(source_items), cols_per_row):
-            row_cols = st.columns(cols_per_row)
-            for j, col in enumerate(row_cols):
-                idx = i + j
-                if idx >= len(source_items):
-                    break
-                name, src = source_items[idx]
-                with col:
-                    status_icon = {
-                        "pending": "⏳",
-                        "crawling": "🔄",
-                        "complete": "✅",
-                    }.get(src.status, "❓")
-                    st.markdown(f"**{status_icon} {name}**")
-                    st.progress(min(src.pages_fetched / max(progress.max_pages_per_source, 1), 1.0))
-                    st.caption(
-                        f"Pages: {src.pages_fetched} | Chunks: {src.chunks_indexed}"
-                    )
+def _render_overview_tab(progress: IngestionProgress) -> None:
+    """Pipeline overview: stages, current URL, throughput."""
+    if progress.is_running:
+        total_sources = len(progress.source_names) or 1
+        effective_max_pages = progress.max_pages_per_source or settings.max_pages_per_source
+        estimated_pages = effective_max_pages * total_sources
+        page_ratio = min(progress.total_pages_fetched / max(estimated_pages, 1), 1.0)
+        st.progress(page_ratio, text=f"{progress.total_pages_fetched} / {estimated_pages} pages")
 
-    # Current URL + Throughput + ETA
-    if progress.current_url:
-        st.caption(f"Crawling: `{progress.current_url}`")
-    elapsed = progress.elapsed_seconds
-    throughput = progress.total_pages_fetched / elapsed if elapsed > 0 else 0
-    remaining = estimated_pages - progress.total_pages_fetched
-    eta = remaining / throughput if throughput > 0 else 0
-    col_t1, col_t2 = st.columns(2)
-    col_t1.metric("Throughput", f"{throughput:.1f} pages/sec")
-    col_t2.metric("Est. Remaining", _format_duration(eta))
+        if progress.current_url:
+            st.caption(f"Current URL: `{progress.current_url[:120]}`")
 
-    # Live event feed
-    if progress.recent_events:
-        with st.expander("📡 Live Feed (last 15 events)", expanded=True):
-            for evt in reversed(progress.recent_events):
-                icon_map = {
-                    "fetch_success": "📥",
-                    "page_indexed": "✅",
-                    "page_skipped_cached": "⏭️",
-                    "page_skipped_duplicate": "⏭️",
-                    "batch_embedding": "📦",
-                    "batch_indexing": "💾",
-                }
-                icon = icon_map.get(evt.get("type", ""), "ℹ️")
-                label = evt.get("title", "") or evt.get("url", "")
-                st.caption(f"{icon} {label}")
+        elapsed = progress.elapsed_seconds
+        throughput = progress.total_pages_fetched / elapsed if elapsed > 0 else 0
+        rolling_remaining = max(0, estimated_pages - progress.total_pages_fetched)
+        eta = rolling_remaining / throughput if throughput > 0 else 0
 
-    # Stop button
-    if st.button("Stop Refresh", type="primary", use_container_width=True, key="stop_refresh_btn"):
-        IngestionManager.stop()
-        st.rerun()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Throughput", f"{throughput:.1f}/s" if throughput > 0 else "—")
+        c2.metric("ETA", _format_duration(eta) if eta > 0 else "—")
+        c3.metric("Pages", progress.total_pages_fetched)
+        c4.metric("Chunks", progress.total_chunks_indexed)
+    elif progress.success_message:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Duration", _format_duration(progress.elapsed_seconds))
+        c2.metric("Pages", progress.total_pages_fetched)
+        c3.metric("Chunks", progress.total_chunks_indexed)
+        c4.metric("Sources", len(progress.source_names))
+    elif progress.error:
+        c1, c2 = st.columns([1, 3])
+        c1.metric("Duration", _format_duration(progress.elapsed_seconds))
+        c2.error(progress.error)
+
+
+def _render_sources_tab(progress: IngestionProgress) -> None:
+    """Dataframe with per-source progress."""
+    if not progress.source_names:
+        st.caption("No sources selected.")
+        return
+
+    rows = []
+    for name in progress.source_names:
+        src = progress.sources.get(name)
+        if src is None:
+            rows.append({
+                "Source": name,
+                "Status": "⏳ pending",
+                "Pages": 0,
+                "Chunks": 0,
+                "Errors": 0,
+                "Progress": 0.0,
+            })
+        else:
+            effective_max = progress.max_pages_per_source or settings.max_pages_per_source
+            pct = min(src.pages_fetched / max(effective_max, 1), 1.0)
+            if progress.is_running:
+                status_icon = "🔄" if src.pages_fetched > 0 else "⏳"
+            elif src.errors > 0:
+                status_icon = "❌"
+            else:
+                status_icon = "✅"
+            rows.append({
+                "Source": name,
+                "Status": f"{status_icon} {src.status}",
+                "Pages": src.pages_fetched,
+                "Chunks": src.chunks_indexed,
+                "Errors": src.errors,
+                "Progress": pct,
+            })
+
+    st.dataframe(
+        rows,
+        column_config={
+            "Progress": st.column_config.ProgressColumn(
+                "Progress", min_value=0, max_value=1, format="%.0f%%"
+            ),
+            "Status": st.column_config.TextColumn("Status", width="small"),
+            "Pages": st.column_config.NumberColumn("Pages", width="small"),
+            "Chunks": st.column_config.NumberColumn("Chunks", width="small"),
+            "Errors": st.column_config.NumberColumn("Errors", width="small"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if progress.current_url and progress.is_running:
+        st.caption(f"Crawling: `{progress.current_url[:120]}`")
+
+
+def _render_live_log_tab(progress: IngestionProgress) -> None:
+    """Scrollable live event log with source filter."""
+    events = progress.recent_events
+    if not events:
+        st.caption("No events yet.")
+        return
+
+    source_names = list(dict.fromkeys(e.get("source", "") for e in events if e.get("source")))
+    filter_source = st.selectbox("Filter by source", ["All"] + source_names, key="log_source_filter")
+    filter_types = st.multiselect(
+        "Event types", 
+        ["fetch_success", "page_indexed", "page_skipped_cached", "page_skipped_duplicate", 
+         "batch_embedding", "batch_indexing", "source_complete", "error"],
+        default=[],
+        key="log_type_filter",
+    )
+
+    filtered = events
+    if filter_source != "All":
+        filtered = [e for e in filtered if e.get("source") == filter_source]
+    if filter_types:
+        filtered = [e for e in filtered if e.get("type") in filter_types]
+
+    if not filtered:
+        st.caption("No matching events.")
+        return
+
+    icon_map = {
+        "fetch_success": "📥",
+        "page_indexed": "✅",
+        "page_skipped_cached": "⏭️",
+        "page_skipped_duplicate": "⏭️",
+        "batch_embedding": "📦",
+        "batch_indexing": "💾",
+        "source_complete": "🎯",
+        "error": "❌",
+    }
+
+    with st.container(height=400, border=True):
+        for evt in reversed(filtered[-100:]):
+            icon = icon_map.get(evt.get("type", ""), "ℹ️")
+            ts = _format_timestamp(evt.get("ts", 0))
+            source = evt.get("source", "")
+            label = evt.get("title", "") or evt.get("url", "")
+            err = evt.get("error", "")
+            line = f"{ts}  {icon}  {source + '  ' if source else ''}{label}"
+            if err:
+                st.markdown(f":red[{line}]")
+                st.caption(f":red[Error: {err}]")
+            else:
+                st.markdown(line)
+
+
+def _render_history_tab(progress: IngestionProgress) -> None:
+    """Past ingestion runs (stored in session state)."""
+    history = st.session_state.get("ingestion_history", [])
+    if not history:
+        st.caption("No previous runs in this session.")
+        return
+
+    st.dataframe(
+        history,
+        column_config={
+            "Time": "Time",
+            "Status": st.column_config.TextColumn("Status", width="small"),
+            "Pages": st.column_config.NumberColumn("Pages", width="small"),
+            "Chunks": st.column_config.NumberColumn("Chunks", width="small"),
+            "Duration": st.column_config.TextColumn("Duration", width="small"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _format_timestamp(ts: float) -> str:
+    """Format a Unix timestamp to HH:MM:SS."""
+    if not ts:
+        return ""
+    import datetime
+    return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
 def render_qa_tab() -> None:
@@ -575,79 +754,86 @@ def render_qa_tab() -> None:
 
 
 def render_ingestion_tab() -> None:
-    """Ingestion Dashboard tab: controls, progress, and results."""
-    st.subheader("Ingestion Controls")
-
-    # Controls row
-    ctrl_col1, ctrl_col2 = st.columns([2, 1])
-    with ctrl_col1:
-        selected_sources = st.multiselect(
-            "Select sources to ingest",
-            options=[source.name for source in settings.sources],
-            default=[source.name for source in settings.sources],
-            key="ingest_source_select",
-        )
-    with ctrl_col2:
-        max_pages = st.number_input(
-            "Max pages per source",
-            min_value=0,
-            value=settings.max_pages_per_source,
-            step=10,
-            help="0 = unlimited (capped by config max_pages_per_source)",
-            key="ingest_max_pages",
-        )
-
-    use_async = st.checkbox("Use async crawler (recommended)", value=True, key="use_async_toggle")
-    refresh_clicked = st.button("🔄 Refresh Documentation", type="primary", use_container_width=True)
-
-    if refresh_clicked:
-        if not selected_sources:
-            st.warning("Please select at least one source.")
-        else:
-            # Pre-flight check
-            qdrant_ok, qdrant_msg = _check_qdrant_reachable()
-            if not qdrant_ok:
-                st.error(f"**Cannot start ingestion**\n\n{qdrant_msg}")
-            else:
-                started, error = IngestionManager.start(
-                    source_names=tuple(selected_sources),
-                    max_pages=int(max_pages) if max_pages > 0 else 0,
-                    use_async=use_async,
-                )
-                if not started:
-                    st.warning(error or "Ingestion is already running.")
-                else:
-                    st.success("Ingestion started!")
-                    st.rerun()
-
-    # Progress display
+    """Ingestion Dashboard tab: controls, tabs with live progress, and history."""
     progress = IngestionManager.get_progress()
-    if progress.is_running:
-        render_ingestion_progress()
-    elif progress.success_message:
-        with st.container(border=True):
-            st.success("✅ Ingestion Complete")
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Duration", _format_duration(progress.elapsed_seconds))
-            col_b.metric("Pages Fetched", progress.total_pages_fetched)
-            col_c.metric("Chunks Indexed", progress.total_chunks_indexed)
-        # Per-source summary
-        if progress.sources:
-            with st.expander("Per-Source Summary"):
-                for name, src in progress.sources.items():
-                    st.markdown(
-                        f"- **{name}**: {src.pages_fetched} pages, {src.chunks_indexed} chunks, {src.errors} errors"
-                    )
-        if st.button("Dismiss", key="dismiss_success_btn"):
-            IngestionManager.reset_status()
-            st.session_state.pop("ingestion_started", None)
-            st.rerun()
-    elif progress.error:
-        st.warning(progress.error)
-        if st.button("Dismiss", key="dismiss_error_btn"):
-            IngestionManager.reset_status()
-            st.session_state.pop("ingestion_started", None)
-            st.rerun()
+
+    # === COMPACT CONTROLS (always visible, outside fragment) ===
+    with st.container(border=True):
+        ccol1, ccol2, ccol3 = st.columns([2, 1, 1])
+        with ccol1:
+            selected_sources = st.multiselect(
+                "Sources",
+                options=[source.name for source in settings.sources],
+                default=[source.name for source in settings.sources],
+                key="ingest_source_select",
+                label_visibility="collapsed",
+                placeholder="Select sources...",
+            )
+        with ccol2:
+            max_pages = st.number_input(
+                "Max pages",
+                min_value=0,
+                value=settings.max_pages_per_source,
+                step=10,
+                help="0 = unlimited (capped by config)",
+                key="ingest_max_pages",
+                label_visibility="collapsed",
+            )
+        with ccol3:
+            if progress.is_running or progress.success_message or progress.error:
+                if progress.is_running:
+                    stop = st.button("⏹ Stop", type="primary", use_container_width=True, key="stop_btn")
+                    if stop:
+                        IngestionManager.stop()
+                        st.rerun()
+                else:
+                    dismiss = st.button("Dismiss", type="secondary", use_container_width=True, key="dismiss_btn")
+                    if dismiss:
+                        # Save to history before clearing
+                        if progress.success_message:
+                            history = st.session_state.get("ingestion_history", [])
+                            history.append({
+                                "Time": time.strftime("%H:%M:%S"),
+                                "Status": "✅ Completed",
+                                "Pages": progress.total_pages_fetched,
+                                "Chunks": progress.total_chunks_indexed,
+                                "Duration": _format_duration(progress.elapsed_seconds),
+                            })
+                            st.session_state.ingestion_history = history[-20:]
+                        IngestionManager.reset_status()
+                        st.session_state.pop("ingestion_started", None)
+                        st.session_state.pop("_ingest_was_running", None)
+                        st.rerun()
+            else:
+                start_disabled = not selected_sources or progress.is_running
+                start = st.button(
+                    "🔄 Start",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=start_disabled,
+                    key="start_btn",
+                )
+                if start:
+                    if not selected_sources:
+                        st.warning("Select at least one source.")
+                    else:
+                        qdrant_ok, qdrant_msg = _check_qdrant_reachable()
+                        if not qdrant_ok:
+                            st.error(f"**Cannot start ingestion**\n\n{qdrant_msg}")
+                        else:
+                            started, error = IngestionManager.start(
+                                source_names=tuple(selected_sources),
+                                max_pages=int(max_pages) if max_pages > 0 else 0,
+                                use_async=True,
+                            )
+                            if not started:
+                                st.warning(error or "Already running.")
+                            else:
+                                st.success("Started!")
+                                st.rerun()
+
+    # === CONTENT (tabs with live progress) ===
+    _render_progress_panel()
 
 
 def render_health_tab() -> None:
@@ -906,10 +1092,11 @@ def main() -> None:
             if task_id:
                 st.caption(f"Task: `{task_id[:8]}`")
             total_sources = len(progress.source_names) or 1
-            estimated_pages = progress.max_pages_per_source * total_sources or 1
-            mini_ratio = min(progress.total_pages_fetched / max(estimated_pages, 1), 1.0)
+            effective_max_pages = progress.max_pages_per_source or settings.max_pages_per_source
+            sidebar_estimated = effective_max_pages * total_sources
+            mini_ratio = min(progress.total_pages_fetched / max(sidebar_estimated, 1), 1.0)
             st.progress(mini_ratio)
-            st.caption(f"{progress.total_pages_fetched} / {estimated_pages} pages  |  {progress.total_chunks_indexed} chunks")
+            st.caption(f"{progress.total_pages_fetched} / {sidebar_estimated} pages  |  {progress.total_chunks_indexed} chunks")
         elif progress.error:
             st.error("Ingestion failed")
         else:

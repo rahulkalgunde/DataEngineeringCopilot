@@ -11,7 +11,7 @@ from data_engineering_copilot.ui.streamlit_app import (
     IngestionManager,
     IngestionProgress,
     SourceProgress,
-    render_ingestion_progress,
+    _render_progress_panel,
     render_ingestion_tab,
 )
 
@@ -51,14 +51,20 @@ class TestRenderIngestionProgress:
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
-            mp.setattr(st, "progress", lambda value: value)
+            mp.setattr(st, "progress", lambda value, text=None: value)
             mp.setattr(st, "metric", lambda label, value, delta=None: None)
             mp.setattr(st, "markdown", lambda body: None)
             mp.setattr(st, "caption", lambda body: None)
             mp.setattr(st, "button", lambda *args, **kwargs: False)
             mp.setattr(st, "columns", _mock_columns)
+            mp.setattr(st, "tabs", lambda *args, **kwargs: [MagicMock() for _ in args[0]])
+            mp.setattr(st, "container", lambda *args, **kwargs: MagicMock())
+            mp.setattr(st, "selectbox", lambda *args, **kwargs: "All")
+            mp.setattr(st, "multiselect", lambda *args, **kwargs: [])
+            mp.setattr(st, "dataframe", lambda *args, **kwargs: None)
+            mp.setattr(st, "expander", lambda *args, **kwargs: MagicMock())
 
-            result = render_ingestion_progress()
+            result = _render_progress_panel()
             assert result is None
 
     def test_cancel_button_triggers_stop(self):
@@ -75,7 +81,7 @@ class TestRenderIngestionProgress:
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
-            mp.setattr(st, "progress", lambda value: None)
+            mp.setattr(st, "progress", lambda value, text=None: None)
             mp.setattr(st, "markdown", lambda body: None)
             mp.setattr(st, "caption", lambda body: None)
             mp.setattr(st, "metric", lambda label, value, delta=None: None)
@@ -83,18 +89,28 @@ class TestRenderIngestionProgress:
             mp.setattr(IngestionManager, "stop", lambda: None)
             mp.setattr(st, "rerun", lambda: None)
             mp.setattr(st, "columns", _mock_columns)
+            mp.setattr(st, "tabs", lambda *args, **kwargs: [MagicMock() for _ in args[0]])
+            mp.setattr(st, "container", lambda *args, **kwargs: MagicMock())
+            mp.setattr(st, "selectbox", lambda *args, **kwargs: "All")
+            mp.setattr(st, "multiselect", lambda *args, **kwargs: [])
+            mp.setattr(st, "dataframe", lambda *args, **kwargs: None)
+            mp.setattr(st, "expander", lambda *args, **kwargs: MagicMock())
 
             # @st.fragment prevents direct callback execution in unit tests;
             # verify no exception is raised.
-            render_ingestion_progress()
+            _render_progress_panel()
 
     def test_returns_early_when_not_running(self):
         mock_progress = IngestionProgress(is_running=False)
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(IngestionManager, "get_progress", lambda: mock_progress)
+            mp.setattr(st, "markdown", lambda body: None)
+            mp.setattr(st, "caption", lambda body: None)
+            mp.setattr(st, "columns", _mock_columns)
+            mp.setattr(st, "container", lambda *args, **kwargs: MagicMock())
 
-            result = render_ingestion_progress()
+            result = _render_progress_panel()
             assert result is None
 
 
