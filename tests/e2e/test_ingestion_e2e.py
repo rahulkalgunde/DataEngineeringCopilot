@@ -8,6 +8,7 @@ Requires Qdrant and Ollama to be running.
 Run with: ``dec_venv/bin/python -m pytest tests/e2e/ -v -m ingestion``
 """
 
+import asyncio
 import dataclasses
 import hashlib
 import time
@@ -16,9 +17,9 @@ import pytest
 
 from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import RawDocument
-from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
+from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from tests.conftest import require_qdrant_and_ollama, unique_collection_name
 
@@ -61,7 +62,7 @@ df.show()</code></pre>
 @pytest.fixture
 def embedder():
     require_qdrant_and_ollama()
-    return OllamaEmbeddings(model_name=AppSettings().embedding_model_name)
+    return AsyncOllamaEmbeddings(model_name=AppSettings().embedding_model_name)
 
 
 @pytest.fixture
@@ -70,7 +71,8 @@ def vector_store():
     from qdrant_client import QdrantClient
 
     coll = unique_collection_name("e2e_ingest")
-    store = QdrantVectorStore(url=AppSettings().qdrant_url, collection_name=coll)
+    store = AsyncQdrantVectorStore(url=AppSettings().qdrant_url, collection_name=coll)
+    asyncio.run(store.initialize())
     yield store
     try:
         c = QdrantClient(url=AppSettings().qdrant_url, prefer_grpc=False)
@@ -98,20 +100,20 @@ class TestIngestionPipelineE2E:
         assert len(chunks) >= 2
 
         texts = [c.text for c in chunks]
-        embeddings = embedder.embed_texts(texts)
-        vector_store.upsert_chunks(chunks, embeddings)
+        embeddings = asyncio.run(embedder.embed_texts(texts))
+        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
         return len(chunks)
 
     def test_parse_chunk_embed_upsert(self, vector_store, embedder):
         n = self._ingest_sample(vector_store, embedder)
-        assert vector_store.count() == n
+        assert asyncio.run(vector_store.count()) == n
 
     def test_ingested_data_queryable(self, vector_store, embedder):
         self._ingest_sample(vector_store, embedder)
 
         query = "What is Apache Spark used for?"
-        query_emb = embedder.embed_query(query)
-        results = vector_store.query(query_emb, top_k=5)
+        query_emb = asyncio.run(embedder.embed_query(query))
+        results = asyncio.run(vector_store.query(query_emb, top_k=5))
 
         assert len(results) > 0
         assert any("unified analytics engine" in r.chunk.text.lower() for r in results), "Should find Spark content"
@@ -119,7 +121,7 @@ class TestIngestionPipelineE2E:
     def test_ingestion_idempotent(self, vector_store, embedder):
         n = self._ingest_sample(vector_store, embedder)
         self._ingest_sample(vector_store, embedder)
-        assert vector_store.count() == n
+        assert asyncio.run(vector_store.count()) == n
 
     def test_content_hash_persisted(self, vector_store, embedder):
         url = "https://spark.apache.org/docs/latest/"
@@ -134,10 +136,10 @@ class TestIngestionPipelineE2E:
         chunks = chunker.chunk(parsed)
         chunks = [dataclasses.replace(c, content_hash=content_hash) for c in chunks]
         texts = [c.text for c in chunks]
-        embeddings = embedder.embed_texts(texts)
-        vector_store.upsert_chunks(chunks, embeddings)
+        embeddings = asyncio.run(embedder.embed_texts(texts))
+        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
 
-        stored = vector_store.get_content_hash_for_url(url)
+        stored = asyncio.run(vector_store.get_content_hash_for_url(url))
         assert stored == content_hash
 
     def test_delete_by_url_removes_chunks(self, vector_store, embedder):
@@ -151,15 +153,15 @@ class TestIngestionPipelineE2E:
         chunker = DocumentChunker(chunk_size_words=100, overlap_words=20)
         chunks = chunker.chunk(parsed)
         texts = [c.text for c in chunks]
-        embeddings = embedder.embed_texts(texts)
-        vector_store.upsert_chunks(chunks, embeddings)
+        embeddings = asyncio.run(embedder.embed_texts(texts))
+        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
 
-        count_before = vector_store.count()
+        count_before = asyncio.run(vector_store.count())
         assert count_before > 0
 
-        vector_store.delete_by_url(url)
+        asyncio.run(vector_store.delete_by_url(url))
         time.sleep(0.3)
-        assert vector_store.count() == 0
+        assert asyncio.run(vector_store.count()) == 0
 
 
 @pytest.mark.ingestion

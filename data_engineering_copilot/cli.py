@@ -25,11 +25,13 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
 
 
 def ask(question: str) -> None:
+    import asyncio
+
     from data_engineering_copilot.factory import build_rag_service
 
     logger.info("CLI ask started question=%r", question[:200])
     service = build_rag_service()
-    answer = service.answer(question)
+    answer = asyncio.run(service.answer(question))
     logger.info("CLI ask completed confidence=%.4f sources=%s", answer.confidence, len(answer.sources))
     print(answer.text)
     if answer.sources:
