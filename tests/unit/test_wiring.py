@@ -157,6 +157,7 @@ class TestApiRoutesWiring:
             get_redis_client,
             router,
         )
+
         assert router is not None
         assert callable(async_ingest_task.delay)
         assert celery_app is not None
@@ -239,6 +240,7 @@ class TestAsyncFactoryWiring:
         crawler = build_async_crawler()
         assert hasattr(crawler, "crawl")
         import inspect
+
         assert inspect.isasyncgenfunction(crawler.crawl)
 
     def test_async_crawler_has_shutdown_method(self):

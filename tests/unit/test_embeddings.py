@@ -324,7 +324,7 @@ class TestOllamaEmbeddings:
         texts = [f"text{i}" for i in range(319)]
 
         # Mock responses for each batch (319 / 32 = 10 batches)
-        def mock_urlopen_side_effect(request):
+        def mock_urlopen_side_effect(request, **kwargs):
             mock_response = MagicMock()
             mock_response.__enter__.return_value = mock_response
             mock_response.__exit__.return_value = None
@@ -359,7 +359,7 @@ class TestOllamaEmbeddings:
         """Test that batch slicing preserves order of embeddings."""
         texts = [f"text{i}" for i in range(100)]
 
-        def mock_urlopen_side_effect(request):
+        def mock_urlopen_side_effect(request, **kwargs):
             mock_response = MagicMock()
             mock_response.__enter__.return_value = mock_response
             mock_response.__exit__.return_value = None

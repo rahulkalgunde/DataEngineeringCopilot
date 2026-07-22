@@ -19,6 +19,7 @@ from data_engineering_copilot.domain.models import IngestionEvent
 # IngestionProgressTracker tests
 # ---------------------------------------------------------------------------
 
+
 class TestIngestionProgressTracker:
     """Tests for the IngestionProgressTracker class that writes
     ingestion progress to Redis as IngestionEvents fire."""
@@ -189,6 +190,7 @@ class TestIngestionProgressTracker:
 # Worker / Redis client tests
 # ---------------------------------------------------------------------------
 
+
 class TestGetRedisClient:
     """Tests for the get_redis_client factory function."""
 
@@ -228,6 +230,7 @@ class TestGetRedisClient:
 # ---------------------------------------------------------------------------
 # API endpoint tests
 # ---------------------------------------------------------------------------
+
 
 class TestIngestionStatusEndpoint:
     """Tests for the /api/v1/ingest/status/{task_id} FastAPI endpoint."""
@@ -346,9 +349,7 @@ class TestIngestionStatusEndpoint:
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.celery_app")
-    def test_cancel_endpoint_returns_cancelled_status(
-        self, mock_celery: MagicMock, mock_get_client: MagicMock
-    ):
+    def test_cancel_endpoint_returns_cancelled_status(self, mock_celery: MagicMock, mock_get_client: MagicMock):
         """POST cancel returns 200 and updates Redis status to CANCELLED."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -379,9 +380,7 @@ class TestIngestionStatusEndpoint:
 
     @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.celery_app")
-    def test_cancel_endpoint_handles_missing_task(
-        self, mock_celery: MagicMock, mock_get_client: MagicMock
-    ):
+    def test_cancel_endpoint_handles_missing_task(self, mock_celery: MagicMock, mock_get_client: MagicMock):
         """POST cancel returns 200 even if task not found in Redis."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -405,6 +404,7 @@ class TestIngestionStatusEndpoint:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_redis_client() -> MagicMock:

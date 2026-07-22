@@ -14,10 +14,7 @@ def create_test_chunks(num_chunks=5):
     query = "What is machine learning?"
     chunks = []
     for i in range(num_chunks):
-        text = (
-            f"This is chunk {i} containing relevant information about "
-            f"machine learning concepts."
-        )
+        text = f"This is chunk {i} containing relevant information about machine learning concepts."
         relevance_score = 1.0 - (i * 0.2)
         chunks.append(
             RetrievedChunk(

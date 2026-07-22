@@ -23,6 +23,7 @@ from qdrant_client.http import models
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
+from data_engineering_copilot.infrastructure.resilience import Bulkhead, CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ class QdrantVectorStore:
         self._url = url
         self._collection_name = collection_name
         self._client = None
+        self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30.0)
+        self._bulkhead = Bulkhead(max_concurrency=4)
         try:
             self._client = QdrantClient(url=self._url, prefer_grpc=False)
             # Ensure the collection exists; create if missing.
