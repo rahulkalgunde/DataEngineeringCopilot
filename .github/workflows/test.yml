@@ -20,6 +20,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv venv dec_venv
       - run: uv pip install -e ".[dev]"
       - run: make lint
 
@@ -31,6 +32,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv venv dec_venv
       - run: uv pip install -e ".[dev]"
       - run: make test-ci-unit
 
@@ -59,13 +61,14 @@ jobs:
             ollama-models-${{ runner.os }}-
 
       - name: Start all service dependencies (Qdrant, Redis, Ollama, Langfuse stack)
-        run: docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 180
+        run: docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 300
 
       - name: Pull Ollama models
         run: |
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
+      - run: uv venv dec_venv
       - run: uv pip install -e ".[dev]"
       - run: make test-integration
 
@@ -94,5 +97,6 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
+      - run: uv venv dec_venv
       - run: uv pip install -e ".[dev]"
       - run: make test-e2e
