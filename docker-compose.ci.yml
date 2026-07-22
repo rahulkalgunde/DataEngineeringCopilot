@@ -7,7 +7,6 @@ services:
       - "6379:6379"
     networks:
       - de_copilot_net
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "local_secure_password_123", "ping"]
       interval: 5s
@@ -25,7 +24,6 @@ services:
       - qdrant_storage:/qdrant/storage
     networks:
       - de_copilot_net
-    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
       interval: 5s
@@ -47,7 +45,6 @@ services:
       - "9001:9001"
     networks:
       - de_copilot_net
-    restart: unless-stopped
 
   minio-init:
     image: minio/mc:latest
@@ -69,10 +66,9 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama
+      - ./.ollama_cache:/root/.ollama
     networks:
       - de_copilot_net
-    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "ollama list 2>/dev/null || exit 1"]
       interval: 10s
@@ -98,7 +94,6 @@ services:
       - "9000:9000"
     networks:
       - de_copilot_net
-    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- -4 http://127.0.0.1:8123/ping || exit 1"]
       interval: 5s
@@ -131,8 +126,6 @@ services:
       - redis
     ports:
       - "3000:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       - DATABASE_URL=postgresql://langfuse:local_secure_password_123@langfuse-postgres:5432/langfuse
       - NEXTAUTH_SECRET=secret_string_minimum_32_characters_long
@@ -165,7 +158,6 @@ services:
       start_period: 5s
     networks:
       - de_copilot_net
-    restart: unless-stopped
 
   langfuse-worker:
     image: langfuse/langfuse-worker:3
@@ -176,8 +168,6 @@ services:
       - minio
       - minio-init
       - redis
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       - DATABASE_URL=postgresql://langfuse:local_secure_password_123@langfuse-postgres:5432/langfuse
       - NEXTAUTH_SECRET=secret_string_minimum_32_characters_long
@@ -204,72 +194,6 @@ services:
       - HOSTNAME=0.0.0.0
     networks:
       - de_copilot_net
-    restart: unless-stopped
-
-  backend-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: de_copilot_base_image:latest  # Tags the image to reuse it
-    container_name: de_copilot_api
-    command: uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload
-    ports:
-      - "8000:8000"
-    depends_on:
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      langfuse:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - .:/app
-      - ./logs:/app/logs
-    environment:
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
-      - QDRANT_URL=http://qdrant:6333
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - LOG_LEVEL=INFO
-      - LANGFUSE_SECRET_KEY=sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1
-      - LANGFUSE_PUBLIC_KEY=pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be
-      - LANGFUSE_HOST=http://langfuse:3000
-    networks:
-      - de_copilot_net
-    restart: unless-stopped
-
-  celery_worker:
-    image: de_copilot_base_image:latest  # Reuses backend-api build instantly
-    container_name: de_copilot_worker
-    command: celery -A data_engineering_copilot.workers.tasks worker --loglevel=info
-    shm_size: "2gb"
-    depends_on:
-      backend-api:
-        condition: service_started
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      langfuse:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - .:/app
-      - ./logs:/app/logs
-    environment:
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
-      - QDRANT_URL=http://qdrant:6333
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - LOG_LEVEL=INFO
-    networks:
-      - de_copilot_net
-    restart: unless-stopped
 
 networks:
   de_copilot_net:
@@ -281,4 +205,3 @@ volumes:
   clickhouse_logs:
   minio_data:
   langfuse_pg_data:
-  ollama_data:

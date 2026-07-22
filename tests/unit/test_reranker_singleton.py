@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _mock_sentence_transformers():
+    """Prevent real sentence-transformers model loading in all tests."""
+    mock_module = MagicMock()
+    mock_module.CrossEncoder = MagicMock(return_value=MagicMock())
+    with patch.dict("sys.modules", {"sentence_transformers": mock_module}):
+        yield
+
 
 class TestRerankerSingleton:
     def test_singleton_returns_same_instance(self):
