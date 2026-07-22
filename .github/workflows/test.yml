@@ -72,6 +72,9 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
+      - name: Fix .ollama_cache ownership for cache save
+        run: sudo chown -R $(whoami) .ollama_cache || true
+
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-integration
 
@@ -101,6 +104,9 @@ jobs:
         run: |
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
+
+      - name: Fix .ollama_cache ownership for cache save
+        run: sudo chown -R $(whoami) .ollama_cache || true
 
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-e2e
