@@ -39,6 +39,9 @@ dev = [
     "pytest-xdist>=3.6",
     "pytest-sugar>=1.0",
     "pytest-rerunfailures>=14.0",
+    "respx>=0.21",
+    "aresponses>=3.0",
+    "testcontainers[qdrant,redis,ollama]>=3.7",
     "ruff>=0.4",
     "pre-commit>=3.5",
 ]
@@ -52,12 +55,14 @@ packages = ["data_engineering_copilot"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-n auto --dist worksteal --strict-markers"
 filterwarnings = [
     'ignore:Using `httpx` with `starlette.testclient` is deprecated',
     'ignore:coroutine .* was never awaited',
 ]
 markers = [
+    "unit: fast, isolated tests with mocked dependencies (safe to run with -n auto)",
     "integration: marks tests that require live external services (Qdrant, Ollama, Langfuse)",
     "slow: marks tests that take a long time to run",
     "qdrant: marks tests that require a running Qdrant instance",
@@ -66,6 +71,7 @@ markers = [
     "rag: marks tests that exercise the full RAG pipeline (Qdrant + Ollama)",
     "ingestion: marks tests that exercise the full ingestion pipeline (Qdrant + Ollama)",
     "api: marks tests that exercise FastAPI endpoints (may require Celery/Redis)",
+    "xdist_group(name): tests sharing a resource that must run in the same worker process",
 ]
 
 [tool.coverage.run]

@@ -1,5 +1,6 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np  # noqa: F401 — import early prevents fork-related ImportError
 import pytest
 
 
@@ -21,25 +22,33 @@ def _mock_sentence_transformers():
 def _patch_reranker():
     mock_instance = MagicMock()
     mock_instance.is_available.return_value = False
-    rag_patcher = patch("data_engineering_copilot.services.rag.CrossEncoderReranker", return_value=mock_instance)
     async_patcher = patch("data_engineering_copilot.services.async_rag.CrossEncoderReranker", return_value=mock_instance)
-    rag_patcher.start()
     async_patcher.start()
     yield
     async_patcher.stop()
-    rag_patcher.stop()
 
 
 @pytest.fixture
 def mock_vector_store():
-    return MagicMock()
+    m = MagicMock()
+    m.upsert_chunks = AsyncMock()
+    m.query = AsyncMock()
+    m.count = AsyncMock()
+    m.get_content_hash_for_url = AsyncMock()
+    m.delete_by_url = AsyncMock()
+    return m
 
 
 @pytest.fixture
 def mock_ollama():
-    return MagicMock()
+    m = MagicMock()
+    m.generate = AsyncMock()
+    return m
 
 
 @pytest.fixture
 def mock_embedder():
-    return MagicMock()
+    m = MagicMock()
+    m.embed_texts = AsyncMock()
+    m.embed_query = AsyncMock()
+    return m

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import multiprocessing
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor
 
 import structlog
 
@@ -20,6 +21,7 @@ from data_engineering_copilot.domain.protocols import (
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.url_registry import UrlRegistry
+from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 
 log = structlog.get_logger(__name__)
 
@@ -34,6 +36,8 @@ class AsyncIngestionService:
         embeddings: EmbedderProtocol,
         vector_store: VectorStoreProtocol,
         redis_client: object | None = None,
+        parse_executor: Executor | None = None,
+        chunk_executor: Executor | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -43,11 +47,16 @@ class AsyncIngestionService:
         self.vector_store = vector_store
         self._redis_client = redis_client
         self._processing_concurrency = settings.processing_concurrency
-        # Isolated executor pools: CPU-bound (ProcessPool) vs IO-bound (ThreadPool)
-        self._parse_executor = ProcessPoolExecutor(max_workers=settings.parse_concurrency)
-        self._chunk_executor = ProcessPoolExecutor(max_workers=settings.chunk_concurrency)
-        self._embed_executor = ThreadPoolExecutor(max_workers=settings.embed_concurrency)
-        self._store_executor = ThreadPoolExecutor(max_workers=settings.store_concurrency)
+        if parse_executor is not None:
+            self._parse_executor = parse_executor
+        else:
+            ctx = multiprocessing.get_context("spawn")
+            self._parse_executor = ProcessPoolExecutor(max_workers=settings.parse_concurrency, mp_context=ctx)
+        if chunk_executor is not None:
+            self._chunk_executor = chunk_executor
+        else:
+            ctx = multiprocessing.get_context("spawn")
+            self._chunk_executor = ProcessPoolExecutor(max_workers=settings.chunk_concurrency, mp_context=ctx)
 
     async def _process_raw(
         self,
@@ -75,12 +84,7 @@ class AsyncIngestionService:
             return None
 
         content_hash = self._compute_content_hash(parsed.text)
-        stored_hash = await loop.run_in_executor(
-            self._store_executor,
-            self._get_stored_content_hash,
-            parsed.url,
-            parsed.source_name,
-        )
+        stored_hash = await self._get_stored_content_hash(parsed.url, parsed.source_name)
         if stored_hash is not None and stored_hash == content_hash:
             log.info(
                 "async_ingestion.page_skipped_duplicate",
@@ -102,9 +106,16 @@ class AsyncIngestionService:
 
         if stored_hash is not None:
             log.info("async_ingestion.content_changed", url=parsed.url)
-            await loop.run_in_executor(self._store_executor, self._delete_chunks_for_url, parsed.url)
+            await self._delete_chunks_for_url(parsed.url)
 
-        chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
+        if isinstance(self.chunker, SemanticChunker):
+            sentences = SemanticChunker.extract_sentences(parsed.text)
+            if not sentences:
+                return None
+            embeddings = await self.embeddings.embed_texts(sentences)
+            chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed, embeddings)
+        else:
+            chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
         return chunks, content_hash, parsed
 
@@ -130,7 +141,7 @@ class AsyncIngestionService:
         )
         try:
             texts = [chunk.text for chunk in batch_chunks]
-            batch_vectors = await loop.run_in_executor(self._embed_executor, self.embeddings.embed_texts, texts)
+            batch_vectors = await self.embeddings.embed_texts(texts)
         except EmbeddingError as exc:
             log.error(
                 "async_ingestion.embed_batch_failed",
@@ -149,9 +160,7 @@ class AsyncIngestionService:
             ),
         )
         try:
-            await loop.run_in_executor(
-                self._store_executor, self.vector_store.upsert_chunks, batch_chunks, batch_vectors
-            )
+            await self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
         except Exception as exc:
             log.error(
                 "async_ingestion.upsert_batch_failed",
@@ -214,7 +223,13 @@ class AsyncIngestionService:
 
         if errors:
             raise IngestionError(f"Source ingestion errors: {'; '.join(errors)}")
+        self._parse_executor.shutdown(wait=True)
+        self._chunk_executor.shutdown(wait=True)
         return total_chunks
+
+    def stop(self) -> None:
+        self._parse_executor.shutdown(wait=True)
+        self._chunk_executor.shutdown(wait=True)
 
     async def _run_source_task(
         self,
@@ -406,7 +421,7 @@ class AsyncIngestionService:
             setattr(self, key, UrlRegistry(self._redis_client, source_name))
         return getattr(self, key)
 
-    def _get_stored_content_hash(self, url: str, source_name: str = "") -> str | None:
+    async def _get_stored_content_hash(self, url: str, source_name: str = "") -> str | None:
         registry = self._get_url_registry(source_name) if source_name else None
         if registry is not None:
             cached = registry.get_html_hash(url)
@@ -415,17 +430,17 @@ class AsyncIngestionService:
         lookup = getattr(self.vector_store, "get_content_hash_for_url", None)
         if lookup is None:
             return None
-        return lookup(url)
+        return await lookup(url)
 
     def _set_content_hash(self, url: str, source_name: str, content_hash: str) -> None:
         registry = self._get_url_registry(source_name)
         if registry is not None:
             registry.set_html_hash(url, content_hash)
 
-    def _delete_chunks_for_url(self, url: str) -> None:
+    async def _delete_chunks_for_url(self, url: str) -> None:
         deleter = getattr(self.vector_store, "delete_by_url", None)
         if deleter is not None:
-            deleter(url)
+            await deleter(url)
         else:
             log.debug("vector_store.no_delete_by_url", url=url)
 

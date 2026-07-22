@@ -227,7 +227,7 @@ class TestAsyncFactoryWiring:
         crawler = build_async_crawler()
         assert isinstance(crawler, AsyncDocumentationCrawler)
 
-    @patch("data_engineering_copilot.factory.QdrantVectorStore")
+    @patch("data_engineering_copilot.factory.AsyncQdrantVectorStore")
     def test_build_async_ingestion_service_returns_service(self, mock_qdrant):
         from data_engineering_copilot.factory import build_async_ingestion_service
         from data_engineering_copilot.services.async_ingestion import AsyncIngestionService

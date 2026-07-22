@@ -4,14 +4,16 @@ import logging
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
+from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
-from data_engineering_copilot.infrastructure.embeddings import OllamaEmbeddings
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
-from data_engineering_copilot.infrastructure.qdrant_store import QdrantVectorStore
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
-from data_engineering_copilot.services.rag import ProductionRagService
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from data_engineering_copilot.workers.progress import get_redis_client
 
@@ -19,23 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 def build_chunker(app_settings: AppSettings = settings):
-    """
-    Build a document chunker based on configured strategy.
-
-    Supports multiple strategies:
-    - "fixed_size": Legacy word-based chunking
-    - "sentence_preserving": Sentence-boundary aware (default)
-    - "semantic": Embedding-based semantic clustering (requires enable_semantic_chunking=True)
-
-    Args:
-        app_settings: Application settings containing chunking configuration
-
-    Returns:
-        DocumentChunker or SemanticChunker instance
-
-    Raises:
-        ValueError: If semantic chunking requested but disabled, or invalid strategy
-    """
     strategy = app_settings.chunking_strategy.lower()
 
     if strategy == "semantic":
@@ -52,19 +37,17 @@ def build_chunker(app_settings: AppSettings = settings):
                 strategy,
                 app_settings.min_semantic_similarity,
             )
-            embedding_model = OllamaEmbeddings(
-                model_name=app_settings.embedding_model_name,
-            )
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
                 overlap_words=app_settings.chunk_overlap_words,
-                embedding_model=embedding_model,
+                embedding_model=AsyncOllamaEmbeddings(
+                    model_name=app_settings.embedding_model_name,
+                ),
                 min_semantic_similarity=app_settings.min_semantic_similarity,
-                min_chunk_words=int(app_settings.chunk_size_words * 0.1),  # 10% of target
+                min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
             )
 
-    # For fixed_size or sentence_preserving
     if strategy not in ["fixed_size", "sentence_preserving"]:
         logger.warning(
             "Unknown chunking strategy '%s'. Defaulting to sentence_preserving.",
@@ -83,7 +66,7 @@ def build_chunker(app_settings: AppSettings = settings):
         chunk_size_words=app_settings.chunk_size_words,
         overlap_words=app_settings.chunk_overlap_words,
         strategy=ChunkingStrategy(strategy),
-        min_chunk_words=int(app_settings.chunk_size_words * 0.1),  # 10% of target
+        min_chunk_words=int(app_settings.chunk_size_words * 0.1),
     )
 
 
@@ -129,8 +112,8 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         crawler=build_async_crawler(app_settings),
         parser=MarkdownParser(),
         chunker=build_chunker(app_settings),
-        embeddings=OllamaEmbeddings(model_name=app_settings.embedding_model_name),
-        vector_store=QdrantVectorStore(
+        embeddings=AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name),
+        vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
         ),
@@ -138,11 +121,30 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     )
 
 
-def build_rag_service(app_settings: AppSettings = settings) -> ProductionRagService:
+def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
     logger.info(
-        "Building Production RAG service model=%s top_k=%s max_context_chars=%s",
+        "Building async RAG service model=%s top_k=%s max_context_chars=%s",
         app_settings.ollama_model,
         app_settings.retrieval_top_k,
         app_settings.max_context_chars,
     )
-    return ProductionRagService()
+    vector_store = AsyncQdrantVectorStore(
+        url=app_settings.qdrant_url,
+        collection_name=app_settings.collection_name,
+    )
+    embedder = AsyncOllamaEmbeddings(
+        model_name=app_settings.embedding_model_name,
+    )
+    ollama_client = AsyncOllamaClient(
+        base_url=app_settings.ollama_base_url,
+        model=app_settings.ollama_model,
+        timeout_seconds=app_settings.ollama_timeout_seconds,
+        num_ctx=app_settings.ollama_num_ctx,
+        num_predict=app_settings.ollama_num_predict,
+    )
+    return AsyncRagService(
+        vector_store=vector_store,
+        ollama_client=ollama_client,
+        embedder=embedder,
+        cache=QueryCache(ttl_seconds=300),
+    )
