@@ -92,6 +92,7 @@ async def test_generate_reasoning_only_raises(async_client):
             await async_client.generate("test")
 
 
+@pytest.mark.slow
 async def test_generate_http_error(async_client):
     with (
         patch.object(
@@ -105,6 +106,7 @@ async def test_generate_http_error(async_client):
         await async_client.generate("test")
 
 
+@pytest.mark.slow
 async def test_generate_timeout_error(async_client):
     with (
         patch.object(

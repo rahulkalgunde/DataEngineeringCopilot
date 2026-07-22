@@ -37,3 +37,4 @@ Thumbs.db
 .vscode/
 .opencode/
 profiling/
+.ollama_cache/
