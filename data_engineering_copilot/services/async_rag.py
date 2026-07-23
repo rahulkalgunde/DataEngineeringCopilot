@@ -3,13 +3,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.domain.models import Answer
-from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol, VectorStoreProtocol
+from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
+from data_engineering_copilot.domain.models import Answer, RagConfig
+from data_engineering_copilot.domain.protocols import (
+    EmbedderProtocol,
+    LLMClientProtocol,
+    RerankerProtocol,
+    TelemetryTracerProtocol,
+    VectorStoreProtocol,
+)
 from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 from data_engineering_copilot.services.context_assembler import ContextAssembler
-from data_engineering_copilot.services.reranker import CrossEncoderReranker
+from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +22,22 @@ logger = logging.getLogger(__name__)
 class AsyncRagService:
     def __init__(
         self,
+        config: RagConfig,
         vector_store: VectorStoreProtocol,
-        ollama_client: LLMClientProtocol,
+        llm_client: LLMClientProtocol,
         embedder: EmbedderProtocol,
+        reranker: RerankerProtocol | None = None,
+        telemetry: TelemetryTracerProtocol | None = None,
         cache: QueryCache | None = None,
     ) -> None:
+        self.config = config
         self.vector_store = vector_store
-        self.ollama_client = ollama_client
+        self.llm_client = llm_client
         self.embedder = embedder
+        self.reranker = reranker
+        self.telemetry = telemetry
         self.cache = cache
-        self.langfuse = get_langfuse_instance()
+        self._prompt_builder = PromptBuilder()
 
     async def answer(self, question: str, on_step: Callable[[str], None] | None = None) -> Answer:
         if self.cache is not None:
@@ -36,8 +47,8 @@ class AsyncRagService:
                 return cached
 
         trace = None
-        if self.langfuse:
-            trace = self.langfuse.start_observation(
+        if self.telemetry:
+            trace = self.telemetry.start_observation(
                 name="rag-query-pipeline",
                 input=question,
                 as_type="trace",
@@ -61,20 +72,20 @@ class AsyncRagService:
                 retrieval_span.end()
             if trace:
                 trace.update(output=str(exc))
-            return Answer(
-                text="I cannot answer this question because embedding failed.", sources=tuple(), confidence=0.0
-            )
+            raise RetrievalError(f"Embedding failed: {exc}") from exc
 
         if on_step:
             on_step("Retrieving chunks")
         try:
-            retrieved_chunks = await self.vector_store.query(query_emb, top_k=settings.retrieval_top_k)
+            retrieved_chunks = await self.vector_store.query(query_emb, top_k=self.config.retrieval_top_k)
             if retrieval_span:
                 retrieval_span.update(
                     output=[c.chunk.text for c in retrieved_chunks],
                     input=question,
                 )
                 retrieval_span.end()
+        except RetrievalError:
+            raise
         except Exception as exc:
             logger.exception("Failed to query vector store: %s", exc)
             if retrieval_span:
@@ -82,11 +93,7 @@ class AsyncRagService:
                 retrieval_span.end()
             if trace:
                 trace.update(output=str(exc))
-            return Answer(
-                text="I cannot answer this question because vector store query failed.",
-                sources=tuple(),
-                confidence=0.0,
-            )
+            raise RetrievalError(f"Vector store query failed: {exc}") from exc
 
         if not retrieved_chunks:
             if trace:
@@ -97,10 +104,10 @@ class AsyncRagService:
                 confidence=0.0,
             )
 
-        if retrieved_chunks[0].confidence < settings.confidence_threshold:
+        if retrieved_chunks[0].confidence < self.config.confidence_threshold:
             if trace:
                 trace.update(
-                    output=f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {settings.confidence_threshold:.4f}"
+                    output=f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {self.config.confidence_threshold:.4f}"
                 )
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
@@ -112,31 +119,32 @@ class AsyncRagService:
         if trace:
             generation_span = trace.start_observation(
                 name="ollama-generation",
-                model=settings.ollama_model,
                 as_type="generation",
             )
 
         try:
             if on_step:
                 on_step("Reranking results")
-            if settings.reranker_enabled:
-                reranker = CrossEncoderReranker(model_name=settings.reranker_model)
-                if reranker.is_available():
-                    expanded_chunks = await self.vector_store.query(query_emb, top_k=settings.retrieval_top_k * 2)
-                    retrieved_chunks = reranker.rerank(question, expanded_chunks, top_k=settings.reranker_top_k)
+            if self.config.reranker_enabled and self.reranker is not None and self.reranker.is_available():
+                expanded_chunks = await self.vector_store.query(
+                    query_emb, top_k=self.config.retrieval_top_k * 2
+                )
+                retrieved_chunks = self.reranker.rerank(
+                    question, expanded_chunks, top_k=self.config.reranker_top_k
+                )
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
-            assembler = ContextAssembler(max_context_chars=settings.max_context_chars)
+            assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
             context_str, source_names = assembler.assemble(sorted_chunks)
 
             if on_step:
                 on_step("Generating answer")
-            prompt = f"Context:\n{context_str}\n\nQuestion: {question}"
+            prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=question)
 
             if generation_span:
                 generation_span.update(input=prompt)
 
-            answer_text = await self.ollama_client.generate(prompt)
+            answer_text = await self.llm_client.generate(prompt)
 
             if generation_span:
                 generation_span.update(output=answer_text)
@@ -145,8 +153,8 @@ class AsyncRagService:
                 trace.update(output=answer_text)
                 trace.end()
 
-            if self.langfuse:
-                self.langfuse.flush()
+            if self.telemetry:
+                self.telemetry.flush()
 
             result = Answer(
                 text=answer_text,
@@ -158,6 +166,8 @@ class AsyncRagService:
                 self.cache.set(question, result)
 
             return result
+        except LLMGenerationError:
+            raise
         except Exception as exc:
             logger.exception("Failed during answer generation: %s", exc)
             if generation_span:
@@ -165,8 +175,4 @@ class AsyncRagService:
                 generation_span.end()
             if trace:
                 trace.update(output=str(exc))
-            return Answer(
-                text=f"I encountered an error while generating the answer: {exc}",
-                sources=tuple(c.chunk for c in retrieved_chunks),
-                confidence=retrieved_chunks[0].confidence,
-            )
+            raise LLMGenerationError(f"LLM generation failed: {exc}") from exc

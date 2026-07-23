@@ -116,7 +116,9 @@ class TestMultiStagePools:
         service.parser.parse = _parse_fn
         service.vector_store.get_content_hash_for_url = AsyncMock(return_value=None)
 
-        service.chunker = MagicMock()
+        from data_engineering_copilot.services.chunker import DocumentChunker
+
+        service.chunker = MagicMock(spec=DocumentChunker)
         service.chunker.chunk = _chunk_fn
 
         raw_doc = RawDocument(source_name="test", url="http://example.com", html="<p>test</p>")

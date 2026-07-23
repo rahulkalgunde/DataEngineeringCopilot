@@ -28,11 +28,27 @@ def test_init(async_client):
     assert async_client.num_predict == 512
 
 
-def test_prompt_format(async_client):
-    prompt = async_client._format_raw_chat_prompt("What is Delta Lake?")
-    assert "DataEngineeringCopilot" in prompt
-    assert "provided context" in prompt
-    assert "What is Delta Lake?" in prompt
+@pytest.mark.asyncio
+async def test_prompt_passthrough_no_formatting(async_client):
+    """Client passes prompt as-is to Ollama (prompt formatting lives in PromptBuilder)."""
+    with respx.mock:
+        respx.post("http://localhost:11434/api/generate").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "response": "Direct answer.",
+                    "done_reason": "stop",
+                },
+            )
+        )
+        raw_prompt = "My custom prompt with no system instruction"
+        result = await async_client.generate(raw_prompt)
+        assert result == "Direct answer."
+        sent_payload = respx.calls.last.request.content
+        import json
+        body = json.loads(sent_payload)
+        assert body["prompt"] == raw_prompt
+        assert body["raw"] is True
 
 
 def test_extract_strips_thinking_block(async_client):

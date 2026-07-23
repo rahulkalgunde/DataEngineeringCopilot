@@ -54,7 +54,26 @@ class RetrievedChunk:
 
 
 @dataclass(frozen=True)
+class DocumentationSourceConfig:
+    name: str
+    start_url: str
+    allowed_domains: tuple[str, ...]
+    sitemap_url: str | None = None
+
+
+@dataclass(frozen=True)
+class RagConfig:
+    retrieval_top_k: int = 5
+    confidence_threshold: float = 0.3
+    reranker_enabled: bool = False
+    reranker_model: str = "ms-marco-MiniLM-L-6-v2"
+    reranker_top_k: int = 3
+    max_context_chars: int = 4000
+
+
+@dataclass(frozen=True)
 class Answer:
     text: str
     sources: tuple[DocumentChunk, ...]
     confidence: float
+

@@ -88,10 +88,8 @@ class TestOllamaClientGeneration:
         assert len(answer) < 2000
 
     @pytest.mark.asyncio
-    async def test_generate_prompt_formatting(self, ollama_client):
-        """The internal prompt formatter should wrap user input."""
-        raw = "What is Spark?"
-        formatted = ollama_client._format_raw_chat_prompt(raw)
-        assert "DataEngineeringCopilot" in formatted
-        assert raw in formatted
-        assert "SYSTEM" in formatted
+    async def test_generate_prompt_passthrough(self, ollama_client):
+        """Client passes prompt as-is to Ollama (formatting lives in PromptBuilder)."""
+        raw = "What is Spark? Answer briefly."
+        answer = await ollama_client.generate(raw, num_predict=50)
+        assert len(answer) > 0
