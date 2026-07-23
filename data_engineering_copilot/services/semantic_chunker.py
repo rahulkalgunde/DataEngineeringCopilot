@@ -244,7 +244,7 @@ class SemanticChunker:
                             source_name=document.source_name,
                             title=document.title,
                             url=document.url,
-                            text=chunk_text,
+                            text=f"[Source: {document.title}]\n{chunk_text}",
                         )
                     )
 
@@ -275,7 +275,7 @@ class SemanticChunker:
                             source_name=document.source_name,
                             title=document.title,
                             url=document.url,
-                            text=chunk_text,
+                            text=f"[Source: {document.title}]\n{chunk_text}",
                         )
                     )
                 current_chunk_clusters = []
@@ -292,7 +292,7 @@ class SemanticChunker:
                         source_name=document.source_name,
                         title=document.title,
                         url=document.url,
-                        text=chunk_text,
+                        text=f"[Source: {document.title}]\n{chunk_text}",
                     )
                 )
 
