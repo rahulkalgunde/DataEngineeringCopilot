@@ -22,6 +22,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          enable-cache: true
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make lint
 
@@ -35,6 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          enable-cache: true
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-ci-unit
 
@@ -55,6 +57,30 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Cache Docker images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: docker-ci-int-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            docker-ci-int-${{ runner.os }}-
+
+      - name: Load cached Docker images
+        run: |
+          if [ -d /tmp/docker-cache ]; then
+            for f in /tmp/docker-cache/*.tar; do
+              echo "Loading $f..."
+              docker load -i "$f"
+            done
+          fi
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}
 
       - name: Cache Ollama models
         uses: actions/cache@v4
@@ -78,6 +104,14 @@ jobs:
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-integration
 
+      - name: Save Docker images to cache
+        run: |
+          mkdir -p /tmp/docker-cache
+          docker save qdrant/qdrant redis:7-alpine -o /tmp/docker-cache/core.tar 2>/dev/null || true
+          docker save ollama/ollama -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
+          docker save clickhouse/clickhouse-server minio/minio postgres:16-alpine -o /tmp/docker-cache/langfuse1.tar 2>/dev/null || true
+          docker save langfuse/langfuse langfuse/langfuse-worker minio/mc -o /tmp/docker-cache/langfuse2.tar 2>/dev/null || true
+
   test-e2e:
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +122,24 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Cache Docker images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: docker-ci-e2e-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            docker-ci-e2e-${{ runner.os }}-
+
+      - name: Load cached Docker images
+        run: |
+          if [ -d /tmp/docker-cache ]; then
+            for f in /tmp/docker-cache/*.tar; do
+              echo "Loading $f..."
+              docker load -i "$f"
+            done
+          fi
 
       - name: Cache Ollama models
         uses: actions/cache@v4
@@ -110,3 +162,9 @@ jobs:
 
       - run: uv venv dec_venv && . dec_venv/bin/activate && uv pip install -e ".[dev]"
       - run: make test-e2e
+
+      - name: Save Docker images to cache
+        run: |
+          mkdir -p /tmp/docker-cache
+          docker save qdrant/qdrant redis:7-alpine -o /tmp/docker-cache/core.tar 2>/dev/null || true
+          docker save ollama/ollama -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
