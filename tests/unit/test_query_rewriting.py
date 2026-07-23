@@ -1,8 +1,8 @@
 """Tests for QueryRewriter — multi-step decomposition, HyDE, intent classification."""
+
 from __future__ import annotations
 
-import pytest
-from data_engineering_copilot.services.query_rewriting import QueryRewriter, RewrittenQuery
+from data_engineering_copilot.services.query_rewriting import QueryRewriter
 
 
 class TestIntentClassification:

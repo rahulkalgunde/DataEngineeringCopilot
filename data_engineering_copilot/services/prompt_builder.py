@@ -11,10 +11,7 @@ class PromptBuilder:
     """Builds structured prompts for RAG context synthesis."""
 
     def __init__(self, system_role: str | None = None) -> None:
-        self.system_role = (
-            system_role
-            or "You are DataEngineeringCopilot, an expert data engineering assistant."
-        )
+        self.system_role = system_role or "You are DataEngineeringCopilot, an expert data engineering assistant."
 
     def build_rag_prompt(self, context: str, question: str) -> str:
         """Construct a structured system prompt combining context and question."""

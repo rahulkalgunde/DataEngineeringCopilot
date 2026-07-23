@@ -16,17 +16,51 @@ from dataclasses import dataclass
 from qdrant_client.http.models import SparseVector
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9_\-]{2,}")
-_STOPWORDS = frozenset({
-    "the", "a", "an", "and", "or", "in", "on", "at", "to", "of",
-    "is", "are", "it", "as", "be", "by", "for", "with", "that",
-    "this", "from", "which", "not", "we", "do", "if", "my",
-    "has", "had", "was", "were", "can", "may", "its", "but",
-})
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "in",
+        "on",
+        "at",
+        "to",
+        "of",
+        "is",
+        "are",
+        "it",
+        "as",
+        "be",
+        "by",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "which",
+        "not",
+        "we",
+        "do",
+        "if",
+        "my",
+        "has",
+        "had",
+        "was",
+        "were",
+        "can",
+        "may",
+        "its",
+        "but",
+    }
+)
 
 
 @dataclass(frozen=True)
 class SparseToken:
     """A token with its numeric id and BM25 weight."""
+
     id: int
     weight: float
 
@@ -74,9 +108,7 @@ class BM25Tokenizer:
         if self._frozen and self._corpus_size > 0:
             for t in set(tokens):
                 df = self._doc_freq.get(t, 1)
-                idf_cache[t] = math.log(
-                    (self._corpus_size - df + 0.5) / (df + 0.5) + 1
-                )
+                idf_cache[t] = math.log((self._corpus_size - df + 0.5) / (df + 0.5) + 1)
 
         result: list[SparseToken] = []
         seen_ids: set[int] = set()
@@ -157,8 +189,4 @@ class BM25Tokenizer:
     @staticmethod
     def _extract_tokens(text: str) -> list[str]:
         """Lowercase regex extraction + stopword removal."""
-        return [
-            t.lower()
-            for t in _WORD_RE.findall(text)
-            if t.lower() not in _STOPWORDS
-        ]
+        return [t.lower() for t in _WORD_RE.findall(text) if t.lower() not in _STOPWORDS]

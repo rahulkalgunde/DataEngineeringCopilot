@@ -1,8 +1,8 @@
 """Tests for LLM token usage tracker."""
+
 from __future__ import annotations
 
-import pytest
-from data_engineering_copilot.observability.token_tracker import TokenUsage, TokenTracker
+from data_engineering_copilot.observability.token_tracker import TokenTracker
 
 
 class TestTokenTracker:

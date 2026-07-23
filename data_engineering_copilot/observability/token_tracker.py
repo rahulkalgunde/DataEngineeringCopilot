@@ -1,4 +1,5 @@
 """LLM token usage tracker for observability."""
+
 from __future__ import annotations
 
 import threading

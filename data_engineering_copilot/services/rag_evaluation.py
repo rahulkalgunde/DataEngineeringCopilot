@@ -1,4 +1,5 @@
 """RAG evaluation suite — no infra dependency, mocked embedder compatible."""
+
 from __future__ import annotations
 
 import re
@@ -86,10 +87,7 @@ class RAGEvaluator:
         all_context = " ".join(r.chunk.text for r in retrieved_chunks)
         answer_rel = self._answer_ev.score_relevance(answer, all_context)
 
-        overall = (
-            retrieval["precision"] * self._retrieval_weight
-            + answer_rel * self._answer_weight
-        )
+        overall = retrieval["precision"] * self._retrieval_weight + answer_rel * self._answer_weight
 
         return EvaluationResult(
             retrieval_precision=retrieval["precision"],

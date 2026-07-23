@@ -1,7 +1,7 @@
 """Tests for DocumentChunk enrichment (Phase 1C)."""
+
 from __future__ import annotations
 
-import pytest
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.services.chunk_enrichment import enrich_chunks
 
@@ -34,15 +34,14 @@ class TestEnrichChunks:
     def test_quality_score_high_for_code_and_text(self):
         chunk = _make_chunk(
             text="Use spark.sql('SELECT * FROM table') to query data. "
-                 "The DataFrame API provides transformations like filter and select."
+            "The DataFrame API provides transformations like filter and select."
         )
         result = enrich_chunks([chunk])
         assert result[0].content_quality_score > 0.5
 
     def test_source_type_detected_for_api_reference(self):
         chunk = _make_chunk(
-            text="def my_function(param): return param\n"
-                 "class MyClass:\n    pass",
+            text="def my_function(param): return param\nclass MyClass:\n    pass",
             url="http://example.com/api/reference",
         )
         result = enrich_chunks([chunk])
@@ -71,7 +70,7 @@ class TestEnrichChunks:
     def test_enrichment_does_not_modify_original(self):
         chunk = _make_chunk(text="Original text for testing enrichment pipeline.")
         original_id = chunk.chunk_id
-        result = enrich_chunks([chunk])
+        enrich_chunks([chunk])
         assert chunk.chunk_id == original_id
         assert chunk.content_quality_score == 0.0
 

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from data_engineering_copilot.infrastructure.bm25_tokenizer import (
     BM25Tokenizer,
-    SparseToken,
 )
 
 
@@ -16,13 +13,11 @@ class TestBM25TokenizerTokenize:
     def test_simple_tokens(self):
         tok = BM25Tokenizer()
         tokens = tok.tokenize("Delta Lake ACID transactions")
-        token_texts = {t.lower() for t in [tok._token_id_to_text(t.id, tok._vocab) if False else str(t.id) for t in tokens]}
         assert len(tokens) == 4  # delta, lake, acid, transactions
 
     def test_stopwords_removed(self):
         tok = BM25Tokenizer()
         tokens = tok.tokenize("the quick brown fox is in a box")
-        texts = [t.lower() for t in ["quick", "brown", "fox", "box"]]
         assert len(tokens) == 4  # quick, brown, fox, box — stopwords gone
 
     def test_short_tokens_filtered(self):
@@ -67,11 +62,13 @@ class TestBM25TokenizerFit:
 
     def test_fit_sets_doc_freq(self):
         tok = BM25Tokenizer()
-        tok.fit([
-            "Delta Lake ACID transactions",
-            "Delta Lake time travel",
-            "Spark SQL queries",
-        ])
+        tok.fit(
+            [
+                "Delta Lake ACID transactions",
+                "Delta Lake time travel",
+                "Spark SQL queries",
+            ]
+        )
         assert tok._doc_freq["delta"] == 2
         assert tok._doc_freq["lake"] == 2
         assert tok._doc_freq["acid"] == 1
@@ -122,14 +119,16 @@ class TestBM25TokenizerTokenizeQuery:
 
     def test_idf_weights_make_sense(self):
         tok = BM25Tokenizer()
-        tok.fit([
-            "Delta Lake ACID transactions",
-            "Delta Lake time travel",
-            "Spark SQL queries",
-            "Spark Streaming real-time",
-        ])
+        tok.fit(
+            [
+                "Delta Lake ACID transactions",
+                "Delta Lake time travel",
+                "Spark SQL queries",
+                "Spark Streaming real-time",
+            ]
+        )
         sv = tok.tokenize_query("Delta Lake")
-        weights = dict(zip(sv.indices, sv.values))
+        weights = dict(zip(sv.indices, sv.values, strict=True))
         # "lake" appears in 2/4 docs, "acid" in 1/4
         lake_id = tok._vocab["lake"]
         acid_id = tok._vocab["acid"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 
@@ -12,9 +13,12 @@ from data_engineering_copilot.domain.protocols import (
     TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
-from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
 from data_engineering_copilot.services.context_assembler import ContextAssembler
+from data_engineering_copilot.services.context_compression import ContextCompressor
+from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
+from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
+from data_engineering_copilot.services.query_rewriting import QueryRewriter
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,11 @@ class AsyncRagService:
         embedder: EmbedderProtocol,
         reranker: RerankerProtocol | None = None,
         telemetry: TelemetryTracerProtocol | None = None,
-        cache: QueryCache | None = None,
+        cache: TwoTierCache | None = None,
+        query_rewriter: QueryRewriter | None = None,
+        groundedness_verifier: GroundednessVerifier | None = None,
+        context_compressor: ContextCompressor | None = None,
+        token_tracker: object | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -37,14 +45,25 @@ class AsyncRagService:
         self.reranker = reranker
         self.telemetry = telemetry
         self.cache = cache
+        self.query_rewriter = query_rewriter
+        self.groundedness_verifier = groundedness_verifier
+        self.context_compressor = context_compressor
+        self.token_tracker = token_tracker
         self._prompt_builder = PromptBuilder()
 
     async def answer(self, question: str, on_step: Callable[[str], None] | None = None) -> Answer:
         if self.cache is not None:
-            cached = self.cache.get(question)
+            query_emb_for_cache = None
+            with contextlib.suppress(Exception):
+                query_emb_for_cache = await self.embedder.embed_query(question)
+            cached = self.cache.get(question, query_embedding=query_emb_for_cache)
             if cached is not None:
                 logger.info("cache_hit question=%r", question[:80])
-                return cached
+                return Answer(
+                    text=cached,
+                    sources=tuple(),
+                    confidence=1.0,
+                )
 
         trace = None
         if self.telemetry:
@@ -52,6 +71,19 @@ class AsyncRagService:
                 name="rag-query-pipeline",
                 input=question,
                 as_type="trace",
+            )
+
+        # Phase 2A: Query rewriting
+        effective_query = question
+        if self.query_rewriter is not None:
+            rewritten = self.query_rewriter.rewrite(question)
+            if rewritten.decomposed_steps:
+                effective_query = rewritten.decomposed_steps[0]
+            logger.info(
+                "query_rewritten intent=%s steps=%d original=%r",
+                rewritten.intent,
+                len(rewritten.decomposed_steps),
+                question[:80],
             )
 
         if on_step:
@@ -63,7 +95,7 @@ class AsyncRagService:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
 
         try:
-            query_emb = await self.embedder.embed_query(question)
+            query_emb = await self.embedder.embed_query(effective_query)
             logger.info("Query embedding successful: dimension=%d", len(query_emb))
         except Exception as exc:
             logger.exception("Failed to embed query: %s", exc)
@@ -81,7 +113,7 @@ class AsyncRagService:
             if retrieval_span:
                 retrieval_span.update(
                     output=[c.chunk.text for c in retrieved_chunks],
-                    input=question,
+                    input=effective_query,
                 )
                 retrieval_span.end()
         except RetrievalError:
@@ -115,6 +147,11 @@ class AsyncRagService:
                 confidence=0.0,
             )
 
+        # Phase 2D: Context compression (dedup + relevance re-ranking)
+        if self.context_compressor is not None:
+            retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
+            logger.info("context_compressed chunks=%d", len(retrieved_chunks))
+
         generation_span = None
         if trace:
             generation_span = trace.start_observation(
@@ -126,11 +163,9 @@ class AsyncRagService:
             if on_step:
                 on_step("Reranking results")
             if self.config.reranker_enabled and self.reranker is not None and self.reranker.is_available():
-                expanded_chunks = await self.vector_store.query(
-                    query_emb, top_k=self.config.retrieval_top_k * 2
-                )
+                expanded_chunks = await self.vector_store.query(query_emb, top_k=self.config.retrieval_top_k * 2)
                 retrieved_chunks = self.reranker.rerank(
-                    question, expanded_chunks, top_k=self.config.reranker_top_k
+                    effective_query, expanded_chunks, top_k=self.config.reranker_top_k
                 )
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
@@ -145,6 +180,16 @@ class AsyncRagService:
                 generation_span.update(input=prompt)
 
             answer_text = await self.llm_client.generate(prompt)
+
+            # Track token usage
+            if self.token_tracker is not None and hasattr(self.llm_client, "_last_usage"):
+                usage = getattr(self.llm_client, "_last_usage", None)
+                if usage is not None:
+                    self.token_tracker.record(
+                        prompt_tokens=getattr(usage, "prompt_tokens", 0),
+                        completion_tokens=getattr(usage, "completion_tokens", 0),
+                        model=getattr(self.llm_client, "model", "unknown"),
+                    )
 
             if generation_span:
                 generation_span.update(output=answer_text)
@@ -162,8 +207,18 @@ class AsyncRagService:
                 confidence=retrieved_chunks[0].confidence,
             )
 
+            # Phase 2B: Groundedness verification (annotate-only)
+            if self.groundedness_verifier is not None:
+                groundedness = self.groundedness_verifier.verify(answer_text, [c.chunk for c in retrieved_chunks])
+                logger.info(
+                    "groundedness_score=%.3f claims=%d",
+                    groundedness.overall_score,
+                    len(groundedness.annotations),
+                )
+
+            # Phase 2C: Cache the result
             if self.cache is not None:
-                self.cache.set(question, result)
+                self.cache.set_exact(question, answer_text)
 
             return result
         except LLMGenerationError:

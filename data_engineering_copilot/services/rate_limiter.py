@@ -1,4 +1,5 @@
 """Token-bucket rate limiter."""
+
 from __future__ import annotations
 
 import threading

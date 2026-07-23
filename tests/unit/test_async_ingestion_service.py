@@ -82,7 +82,9 @@ def _thread_executors():
 
 
 @pytest.fixture
-def service(mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store, _thread_executors):
+def service(
+    mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store, _thread_executors
+):
     from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 
     parse_exec, chunk_exec = _thread_executors
@@ -149,7 +151,14 @@ def _make_svc(mock_settings, mock_crawler, **kwargs):
 
 class TestAsyncIngestionServiceInit:
     def test_init_accepts_components(
-        self, mock_settings, mock_crawler, mock_parser, mock_chunker, mock_embeddings, mock_vector_store, _thread_executors
+        self,
+        mock_settings,
+        mock_crawler,
+        mock_parser,
+        mock_chunker,
+        mock_embeddings,
+        mock_vector_store,
+        _thread_executors,
     ):
         from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 

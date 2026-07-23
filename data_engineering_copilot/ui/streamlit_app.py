@@ -686,6 +686,7 @@ def render_qa_tab() -> None:
                         status.update(label=label, state="running")
 
                     import asyncio
+
                     answer = asyncio.run(service.answer(question.strip(), on_step=on_step))
                     status.update(label="✅ Answer ready", state="complete")
             except Exception as exc:

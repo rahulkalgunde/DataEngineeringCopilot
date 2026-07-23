@@ -102,7 +102,6 @@ async def test_query_success(mock_async_qdrant):
     assert results[0].distance == pytest.approx(0.2)
 
 
-
 async def test_query_empty_results(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 

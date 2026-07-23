@@ -1,7 +1,7 @@
 """Tests for ContextCompressor — redundancy elimination."""
+
 from __future__ import annotations
 
-import pytest
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.services.context_compression import ContextCompressor
 

@@ -1,13 +1,13 @@
 """Evaluation suite with mocked embedder — no infra dependency."""
+
 from __future__ import annotations
 
-import pytest
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.rag_evaluation import (
-    EvaluationResult,
-    RetrievalEvaluator,
     AnswerEvaluator,
+    EvaluationResult,
     RAGEvaluator,
+    RetrievalEvaluator,
 )
 
 

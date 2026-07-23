@@ -1,10 +1,12 @@
 """Tests for structured logger and LLM token tracking."""
+
 from __future__ import annotations
 
 import json
 import logging
 
 import pytest
+
 from data_engineering_copilot.observability.structured_logging import (
     StructuredLogger,
     parse_log_record,

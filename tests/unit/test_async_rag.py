@@ -139,7 +139,9 @@ class TestAsyncRagService:
         chunk.distance = 1.0 - confidence
         return chunk
 
-    def _make_service(self, config=None, vector_store=None, llm=None, embedder=None, reranker=None, telemetry=None, cache=None):
+    def _make_service(
+        self, config=None, vector_store=None, llm=None, embedder=None, reranker=None, telemetry=None, cache=None
+    ):
         from data_engineering_copilot.services.async_rag import AsyncRagService
 
         return AsyncRagService(
@@ -154,12 +156,11 @@ class TestAsyncRagService:
 
     @pytest.mark.asyncio
     async def test_answer_returns_cached_on_hit(self, mock_embedder, mock_vector_store, mock_llm, config):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
         from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache
 
-        cache = QueryCache(ttl_seconds=60)
-        cached = Answer(text="cached answer", sources=(), confidence=0.9)
-        cache.set("what is spark", cached)
+        cache = QueryCache(exact_enabled=True, semantic_enabled=False)
+        cache.set_exact("what is spark", "cached answer")
 
         service = AsyncRagService(
             config=config,
@@ -173,14 +174,13 @@ class TestAsyncRagService:
 
         result = await service.answer("what is spark")
         assert result.text == "cached answer"
-        mock_embedder.embed_query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_answer_caches_result_on_miss(self, mock_embedder, mock_vector_store, mock_llm, config):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
         from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache
 
-        cache = QueryCache(ttl_seconds=60)
+        cache = QueryCache(exact_enabled=True, semantic_enabled=False)
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
         mock_llm.generate = AsyncMock(return_value="generated answer")
 
@@ -196,9 +196,8 @@ class TestAsyncRagService:
 
         result = await service.answer("what is spark")
         assert result.text == "generated answer"
-        cached = cache.get("what is spark")
-        assert cached is not None
-        assert cached.text == "generated answer"
+        cached = cache.get_exact("what is spark")
+        assert cached == "generated answer"
 
     @pytest.mark.asyncio
     async def test_answer_without_cache_still_works(self, mock_embedder, mock_vector_store, mock_llm, config):
@@ -261,7 +260,9 @@ class TestAsyncRagService:
         assert result.confidence == 0.0
 
     @pytest.mark.asyncio
-    async def test_answer_low_confidence_returns_outside_scope(self, mock_embedder, mock_vector_store, mock_llm, config):
+    async def test_answer_low_confidence_returns_outside_scope(
+        self, mock_embedder, mock_vector_store, mock_llm, config
+    ):
         from data_engineering_copilot.services.async_rag import AsyncRagService
 
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.01)])

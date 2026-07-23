@@ -8,7 +8,6 @@ from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumenta
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
-from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
@@ -117,6 +116,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
+            hybrid_search=app_settings.hybrid_search_enabled,
         ),
         redis_client=redis_client,
     )
@@ -124,13 +124,19 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
 def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+    from data_engineering_copilot.observability.token_tracker import TokenTracker
+    from data_engineering_copilot.services.context_compression import ContextCompressor
+    from data_engineering_copilot.services.groundedness import GroundednessVerifier
+    from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
+    from data_engineering_copilot.services.query_rewriting import QueryRewriter
     from data_engineering_copilot.services.reranker import CrossEncoderReranker
 
     logger.info(
-        "Building async RAG service model=%s top_k=%s max_context_chars=%s",
+        "Building async RAG service model=%s top_k=%s max_context_chars=%s hybrid=%s",
         app_settings.ollama_model,
         app_settings.retrieval_top_k,
         app_settings.max_context_chars,
+        app_settings.hybrid_search_enabled,
     )
     rag_config = RagConfig(
         retrieval_top_k=app_settings.retrieval_top_k,
@@ -140,13 +146,6 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         reranker_top_k=app_settings.reranker_top_k,
         max_context_chars=app_settings.max_context_chars,
     )
-    vector_store = AsyncQdrantVectorStore(
-        url=app_settings.qdrant_url,
-        collection_name=app_settings.collection_name,
-    )
-    embedder = AsyncOllamaEmbeddings(
-        model_name=app_settings.embedding_model_name,
-    )
     llm_client = AsyncOllamaClient(
         base_url=app_settings.ollama_base_url,
         model=app_settings.ollama_model,
@@ -154,10 +153,35 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         num_ctx=app_settings.ollama_num_ctx,
         num_predict=app_settings.ollama_num_predict,
     )
+    vector_store = AsyncQdrantVectorStore(
+        url=app_settings.qdrant_url,
+        collection_name=app_settings.collection_name,
+        hybrid_search=app_settings.hybrid_search_enabled,
+    )
+    embedder = AsyncOllamaEmbeddings(
+        model_name=app_settings.embedding_model_name,
+    )
     reranker = None
     if app_settings.reranker_enabled:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+
     telemetry = build_telemetry_tracer()
+    token_tracker = TokenTracker()
+
+    # New Phase 2 modules
+    query_rewriter = QueryRewriter(
+        llm_client=llm_client,
+        enabled=app_settings.query_rewrite_enabled,
+    )
+    groundedness = GroundednessVerifier(
+        llm_client=llm_client,
+        enabled=app_settings.groundedness_enabled,
+    )
+    context_compressor = ContextCompressor(
+        enabled=app_settings.context_compression_enabled,
+        max_chunks=app_settings.retrieval_top_k,
+    )
+
     return AsyncRagService(
         config=rag_config,
         vector_store=vector_store,
@@ -165,5 +189,9 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         embedder=embedder,
         reranker=reranker,
         telemetry=telemetry,
-        cache=QueryCache(ttl_seconds=300),
+        cache=TwoTierCache(exact_enabled=True, semantic_enabled=True),
+        query_rewriter=query_rewriter,
+        groundedness_verifier=groundedness,
+        context_compressor=context_compressor,
+        token_tracker=token_tracker,
     )

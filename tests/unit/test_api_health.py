@@ -27,7 +27,7 @@ class TestReadyEndpoint:
             response = client.get("/ready")
             assert response.status_code == 200
             body = response.json()
-            assert body["status"] == "ready"
+            assert body["status"] == "healthy"
             assert body["checks"]["qdrant"] is True
             assert body["checks"]["ollama"] is True
             assert body["checks"]["redis"] is True
@@ -40,7 +40,7 @@ class TestReadyEndpoint:
             response = client.get("/ready")
             assert response.status_code == 503
             body = response.json()
-            assert body["status"] == "not_ready"
+            assert body["status"] == "degraded"
             assert body["checks"]["qdrant"] is False
 
     def test_ready_all_down_returns_503(self):
@@ -48,7 +48,7 @@ class TestReadyEndpoint:
             response = client.get("/ready")
             assert response.status_code == 503
             body = response.json()
-            assert body["status"] == "not_ready"
+            assert body["status"] == "unhealthy"
             assert all(v is False for v in body["checks"].values())
 
     def test_ready_includes_all_three_services(self):

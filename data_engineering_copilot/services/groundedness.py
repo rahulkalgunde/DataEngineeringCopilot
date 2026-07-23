@@ -2,6 +2,7 @@
 
 Annotate-only by design — never blocks answers, only reports scores.
 """
+
 from __future__ import annotations
 
 import logging
