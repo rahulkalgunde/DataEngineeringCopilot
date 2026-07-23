@@ -23,6 +23,17 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("factual", re.compile(r".*", re.DOTALL)),  # fallback
 ]
 
+_REWRITE_PROMPT = (
+    "You are a search query rewriter. Given a user question, produce a concise, "
+    "search-optimized query that would best retrieve relevant documentation.\n"
+    "Rules:\n"
+    "- Return ONLY the rewritten query, no preamble.\n"
+    "- Preserve the user's intent.\n"
+    "- Expand abbreviations and jargon where helpful.\n"
+    "- Output a single line, no more than 30 words.\n\n"
+    "User question: {question}\n\nRewritten query:"
+)
+
 
 @dataclass(frozen=True)
 class RewrittenQuery:
@@ -97,7 +108,52 @@ class QueryRewriter:
             hyde_query=hyde,
         )
 
+    async def async_rewrite(self, query: str) -> RewrittenQuery:
+        """LLM-based rewrite: classify intent, produce cleaned query via LLM.
+
+        Falls back to rule-based rewrite if LLM is unavailable or errors.
+        """
+        if not self._enabled or self._llm_client is None:
+            return self.rewrite(query)
+
+        try:
+            prompt = _REWRITE_PROMPT.format(question=query)
+            llm_result = await self._llm_client.generate(prompt)
+            rewritten = llm_result.strip()
+
+            if not rewritten or len(rewritten) < 3:
+                logger.warning("LLM rewrite returned empty result, falling back to rule-based")
+                return self.rewrite(query)
+
+            intent = self.classify_intent(query)
+            hyde = await self._generate_hyde_async(query) if self._hyde_enabled else ""
+
+            return RewrittenQuery(
+                original_query=query,
+                intent=intent,
+                decomposed_steps=(rewritten,),
+                hyde_query=hyde,
+            )
+        except Exception as exc:
+            logger.warning("LLM rewrite failed, falling back to rule-based: %s", exc)
+            return self.rewrite(query)
+
     # --- private helpers ---
+
+    async def _generate_hyde_async(self, query: str) -> str:
+        """Generate a hypothetical document answer for HyDE (async)."""
+        if self._llm_client is None:
+            return ""
+        try:
+            prompt = (
+                "Write a short, authoritative paragraph that would perfectly answer "
+                f"the following question. Do not address the user directly.\n\nQuestion: {query}"
+            )
+            result = await self._llm_client.generate(prompt)
+            return str(result).strip() if result else ""
+        except Exception as exc:
+            logger.warning("HyDE generation failed: %s", exc)
+            return ""
 
     def _generate_hyde(self, query: str) -> str:
         """Generate a hypothetical document answer for HyDE.

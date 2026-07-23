@@ -5,35 +5,30 @@ from __future__ import annotations
 import time
 
 from data_engineering_copilot.services.health_check import HealthChecker
-from data_engineering_copilot.services.rate_limiter import RateLimiter
+from data_engineering_copilot.services.rate_limiter import sliding_window_allow
 
 
-class TestRateLimiter:
+class TestSlidingWindowRateLimiter:
     def test_allows_within_limit(self):
-        rl = RateLimiter(max_calls=5, period_seconds=1.0)
-        assert rl.allow() is True
+        assert sliding_window_allow("/test", "ip1", max_calls=5, period_seconds=60) is True
 
     def test_blocks_over_limit(self):
-        rl = RateLimiter(max_calls=3, period_seconds=1.0)
         for _ in range(3):
-            assert rl.allow() is True
-        assert rl.allow() is False
+            assert sliding_window_allow("/test", "ip2", max_calls=3, period_seconds=60) is True
+        assert sliding_window_allow("/test", "ip2", max_calls=3, period_seconds=60) is False
 
     def test_resets_after_period(self):
-        rl = RateLimiter(max_calls=2, period_seconds=0.1)
-        assert rl.allow() is True
-        assert rl.allow() is True
-        assert rl.allow() is False
-        time.sleep(0.15)
-        assert rl.allow() is True
+        assert sliding_window_allow("/test", "ip3", max_calls=2, period_seconds=1) is True
+        assert sliding_window_allow("/test", "ip3", max_calls=2, period_seconds=1) is True
+        assert sliding_window_allow("/test", "ip3", max_calls=2, period_seconds=1) is False
+        time.sleep(1.1)
+        assert sliding_window_allow("/test", "ip3", max_calls=2, period_seconds=1) is True
 
-    def test_token_bucket_refills(self):
-        rl = RateLimiter(max_calls=2, period_seconds=0.1, refill_interval=0.05)
-        for _ in range(2):
-            rl.allow()
-        assert rl.allow() is False
-        time.sleep(0.12)
-        assert rl.allow() is True
+    def test_different_ips_independent(self):
+        for _ in range(3):
+            assert sliding_window_allow("/test", "ipA", max_calls=3, period_seconds=60) is True
+        assert sliding_window_allow("/test", "ipA", max_calls=3, period_seconds=60) is False
+        assert sliding_window_allow("/test", "ipB", max_calls=3, period_seconds=60) is True
 
 
 class TestHealthChecker:

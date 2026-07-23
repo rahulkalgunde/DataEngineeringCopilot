@@ -21,7 +21,6 @@ from data_engineering_copilot.domain.protocols import (
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
-from data_engineering_copilot.services.chunk_enrichment import enrich_chunks
 
 log = structlog.get_logger(__name__)
 
@@ -48,6 +47,7 @@ class AsyncIngestionService:
         self._redis_client = redis_client
         self._url_registries: dict[str, AsyncUrlRegistry] = {}
         self._processing_concurrency = settings.processing_concurrency
+        self._corpus_texts: list[str] = []
 
         if parse_executor is not None:
             self._parse_executor = parse_executor
@@ -119,7 +119,6 @@ class AsyncIngestionService:
         else:
             chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
-        chunks = enrich_chunks(chunks)
         return chunks, content_hash, parsed
 
     async def _flush_batch(
@@ -164,6 +163,8 @@ class AsyncIngestionService:
         )
         try:
             await self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
+            if hasattr(self.vector_store, "fit_bm25"):
+                self._corpus_texts.extend(texts)
         except Exception as exc:
             log.error(
                 "async_ingestion.upsert_batch_failed",
@@ -223,6 +224,13 @@ class AsyncIngestionService:
         total_chunks = sum(source_counts.values())
         total_elapsed = time.time() - start_time
         log.info("async_ingestion.completed", total_chunks=total_chunks, elapsed=round(total_elapsed, 1))
+
+        # Fit BM25 tokenizer on the full corpus after all sources are indexed
+        if self._corpus_texts and hasattr(self.vector_store, "fit_bm25"):
+            self.vector_store.fit_bm25(self._corpus_texts)
+            log.info("async_ingestion.bm25_fitted", corpus_size=len(self._corpus_texts))
+            self._corpus_texts.clear()
+
         await self.crawler.frontier.close()
 
         if errors:
