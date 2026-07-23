@@ -1,4 +1,5 @@
 """Lightweight chunk enrichment: source type detection, entity extraction, quality scoring."""
+
 from __future__ import annotations
 
 import logging

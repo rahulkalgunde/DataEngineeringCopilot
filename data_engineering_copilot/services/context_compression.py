@@ -1,4 +1,5 @@
 """Context compressor: redundancy elimination and relevance re-ranking."""
+
 from __future__ import annotations
 
 import logging

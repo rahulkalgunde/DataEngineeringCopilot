@@ -1,11 +1,11 @@
 """Tests for rate limiter and health checks."""
+
 from __future__ import annotations
 
 import time
 
-import pytest
+from data_engineering_copilot.services.health_check import HealthChecker
 from data_engineering_copilot.services.rate_limiter import RateLimiter
-from data_engineering_copilot.services.health_check import HealthChecker, HealthStatus
 
 
 class TestRateLimiter:

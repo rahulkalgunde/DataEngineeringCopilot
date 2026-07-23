@@ -1,7 +1,7 @@
 """Tests for two-tier query cache: exact match + semantic similarity."""
+
 from __future__ import annotations
 
-import pytest
 from data_engineering_copilot.services.query_cache import QueryCache
 
 

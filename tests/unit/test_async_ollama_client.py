@@ -46,6 +46,7 @@ async def test_prompt_passthrough_no_formatting(async_client):
         assert result == "Direct answer."
         sent_payload = respx.calls.last.request.content
         import json
+
         body = json.loads(sent_payload)
         assert body["prompt"] == raw_prompt
         assert body["raw"] is True

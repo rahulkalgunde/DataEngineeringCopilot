@@ -58,7 +58,6 @@ class AsyncOllamaClient:
             "prompt": prompt,
             "raw": True,
             "stream": False,
-
             "options": {
                 "temperature": 0.05,
                 "top_p": 0.8,
@@ -119,4 +118,3 @@ class AsyncOllamaClient:
     async def close(self) -> None:
         """Close the httpx client."""
         await self._client.aclose()
-

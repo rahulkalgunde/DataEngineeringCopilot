@@ -1,9 +1,8 @@
 """Tests for GroundednessVerifier — claim extraction, NLI scoring, annotation."""
+
 from __future__ import annotations
 
-import pytest
 from data_engineering_copilot.services.groundedness import (
-    ClaimAnnotation,
     GroundednessResult,
     GroundednessVerifier,
 )
@@ -13,8 +12,7 @@ def _make_chunks(*texts: str) -> list:
     from data_engineering_copilot.domain.models import DocumentChunk
 
     return [
-        DocumentChunk(chunk_id=f"c{i}", source_name="s", title="t", url="http://x", text=t)
-        for i, t in enumerate(texts)
+        DocumentChunk(chunk_id=f"c{i}", source_name="s", title="t", url="http://x", text=t) for i, t in enumerate(texts)
     ]
 
 
@@ -26,9 +24,7 @@ class TestClaimExtraction:
 
     def test_multiple_sentences(self):
         gv = GroundednessVerifier(llm_client=None, enabled=True)
-        claims = gv.extract_claims(
-            "Spark SQL is a module. Delta Lake provides ACID. Both integrate well."
-        )
+        claims = gv.extract_claims("Spark SQL is a module. Delta Lake provides ACID. Both integrate well.")
         assert len(claims) >= 2
 
     def test_disabled_returns_empty(self):

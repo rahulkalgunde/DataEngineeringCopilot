@@ -85,9 +85,7 @@ class TestEmbeddingRetry:
         catches it first and re-raises as EmbeddingError.
         """
         with respx.mock:
-            respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(
-                side_effect=httpx.TimeoutException("timeout")
-            )
+            respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(side_effect=httpx.TimeoutException("timeout"))
             with pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"):
                 await embeddings._aollama_embed(["test"])
 
