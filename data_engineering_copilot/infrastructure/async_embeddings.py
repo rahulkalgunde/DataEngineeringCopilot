@@ -23,11 +23,31 @@ class AsyncOllamaEmbeddings:
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self.ollama_base_url = settings.ollama_base_url.rstrip("/")
-        self._client = httpx.AsyncClient(
-            base_url=self.ollama_base_url,
-            timeout=httpx.Timeout(settings.ollama_timeout_seconds),
-        )
+        self._client: httpx.AsyncClient | None = None
+        self._loop_id: int | None = None
         logger.info("Using async Ollama embedding model %s at %s", model_name, self.ollama_base_url)
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Lazy-initialize the httpx client on the current event loop.
+
+        Re-creates the client if the event loop has changed (e.g. across
+        pytest-asyncio test functions with function-scoped loop scope).
+        """
+        import asyncio
+
+        current_loop = id(asyncio.get_running_loop())
+        if self._client is not None and self._loop_id != current_loop:
+            import warnings
+
+            warnings.warn("Recreating httpx client for new event loop")
+            self._client = None
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.ollama_base_url,
+                timeout=httpx.Timeout(settings.ollama_timeout_seconds),
+            )
+            self._loop_id = current_loop
+        return self._client
 
     def _slice_texts_into_batches(self, texts: list[str], batch_size: int) -> list[list[str]]:
         if batch_size <= 0:
@@ -43,7 +63,7 @@ class AsyncOllamaEmbeddings:
     async def _aollama_embed_single_batch(self, texts: list[str]) -> list[list[float]]:
         """Call Ollama /api/embed for a single batch asynchronously."""
         try:
-            response = await self._client.post(
+            response = await self._get_client().post(
                 "/api/embed",
                 json={"model": self.model_name, "input": texts},
             )
@@ -113,5 +133,7 @@ class AsyncOllamaEmbeddings:
         return results[0]
 
     async def close(self) -> None:
-        """Close the httpx client."""
-        await self._client.aclose()
+        """Close the httpx client if it was created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
