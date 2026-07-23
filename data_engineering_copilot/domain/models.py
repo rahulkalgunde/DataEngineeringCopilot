@@ -44,6 +44,9 @@ class DocumentChunk:
     url: str
     text: str
     content_hash: str = ""
+    extracted_entities: tuple[str, ...] = ()
+    source_type: str = ""
+    content_quality_score: float = 0.0
 
 
 @dataclass(frozen=True)

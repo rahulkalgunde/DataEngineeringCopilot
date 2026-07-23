@@ -89,10 +89,14 @@ CLI/UI → ProductionRagService → Embeddings → QdrantVectorStore → Reranke
 ```
 
 ## Key Gotchas
-- **Ollama raw prompt**: `OllamaClient` uses `raw=True` to avoid Qwen thinking-only empty responses (`infrastructure/ollama_client.py`).
+- **Ollama raw prompt**: `AsyncOllamaClient` sends `"raw": True` to skip Ollama's chat template, then strips `<think>` tags from output (`infrastructure/async_ollama_client.py:59`). Empty-response errors mean the model exhausted its budget on reasoning — increase `ollama_num_predict` or reduce context.
 - **`.env` dead config**: `.env` sets `LANGFUSE_BASE_URL` but `AppSettings` reads `LANGFUSE_HOST`. Set `LANGFUSE_HOST` for local Langfuse config.
 - **`reset-index`** deletes Qdrant collection, crawl frontier SQLite DB (`data/crawl_frontier.db`), and Redis crawl registry keys.
 - **Content-hash dedup**: `AsyncIngestionService` computes SHA-256 hashes and skips re-indexing unchanged pages via `UrlRegistry` (Redis). Chunks from removed pages are **not** cleaned up.
 - **Stale chunks**: changed pages have old chunks deleted before re-indexing, but pages removed from the crawl leave orphaned chunks.
 - **No canonical URL normalization** beyond fragments/slash dedupe — query-string variants may duplicate pages.
 - **Langfuse tracing** in `ProductionRagService`: graceful fallback if Langfuse unavailable — RAG still works.
+
+## Operational Guardrails (from `.clinerules`)
+- Do not install new software or run `sudo` without explicit user permission.
+- Never use `--force` or destructive delete commands without explicit permission.
