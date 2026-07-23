@@ -19,7 +19,7 @@ _NLI_PROMPT = (
     "You are a groundedness verifier. Given an answer and supporting context, "
     "determine which claims in the answer are supported by the context.\n\n"
     "For each claim in the answer, output a JSON array of objects:\n"
-    '[{"claim": "...", "supported": true/false, "evidence": "..."}]\n'
+    '[{{"claim": "...", "supported": true/false, "evidence": "..."}}]\n'
     "Return ONLY the JSON array, no preamble.\n\n"
     "ANSWER:\n{answer}\n\n"
     "CONTEXT (excerpted from documentation):\n{context}\n\n"
