@@ -179,6 +179,7 @@ class AskResponse(BaseModel):
     answer: str
     sources: list[SourceRef]
     confidence: float
+    groundedness_score: float = 1.0
     citations: list[dict[str, str]] = []
     metrics: dict[str, float] = {}
 
@@ -218,6 +219,7 @@ async def ask(request: AskRequest):
             answer=parsed.answer,
             sources=sources,
             confidence=answer_obj.confidence,
+            groundedness_score=answer_obj.groundedness_score,
             citations=parsed.citations,
             metrics={"chunks_retrieved": len(answer_obj.sources), "confidence": answer_obj.confidence},
         )

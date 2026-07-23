@@ -13,7 +13,10 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from nltk.stem import PorterStemmer
 from qdrant_client.http.models import SparseVector
+
+_stemmer = PorterStemmer()
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9_\-]{2,}")
 _STOPWORDS = frozenset(
@@ -188,5 +191,5 @@ class BM25Tokenizer:
 
     @staticmethod
     def _extract_tokens(text: str) -> list[str]:
-        """Lowercase regex extraction + stopword removal."""
-        return [t.lower() for t in _WORD_RE.findall(text) if t.lower() not in _STOPWORDS]
+        """Lowercase regex extraction + stopword removal + stemming."""
+        return [_stemmer.stem(t.lower()) for t in _WORD_RE.findall(text) if t.lower() not in _STOPWORDS]

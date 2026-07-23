@@ -79,3 +79,4 @@ class Answer:
     text: str
     sources: tuple[DocumentChunk, ...]
     confidence: float
+    groundedness_score: float = 1.0

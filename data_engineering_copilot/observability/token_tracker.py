@@ -53,3 +53,41 @@ class TokenTracker:
             self._completion_tokens = 0
             self._calls = 0
             self._by_model.clear()
+
+
+class RetrievalTracker:
+    """Track retrieval score distributions for quality monitoring."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._scores: list[float] = []
+        self._query_count: int = 0
+
+    def record_retrieval(self, scores: list[float], query: str = "") -> None:
+        """Record retrieval scores for a single query."""
+        with self._lock:
+            self._scores.extend(scores)
+            self._query_count += 1
+
+    def get_distribution(self) -> dict[str, float]:
+        """Return score distribution statistics."""
+        with self._lock:
+            if not self._scores:
+                return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "min": 0.0, "max": 0.0, "count": 0, "queries": 0}
+            sorted_scores = sorted(self._scores)
+            n = len(sorted_scores)
+            return {
+                "mean": sum(sorted_scores) / n,
+                "p50": sorted_scores[n // 2],
+                "p95": sorted_scores[int(n * 0.95)],
+                "p99": sorted_scores[int(n * 0.99)],
+                "min": sorted_scores[0],
+                "max": sorted_scores[-1],
+                "count": n,
+                "queries": self._query_count,
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._scores.clear()
+            self._query_count = 0

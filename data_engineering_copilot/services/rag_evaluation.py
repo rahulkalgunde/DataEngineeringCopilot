@@ -104,3 +104,55 @@ class RAGEvaluator:
             key_term_coverage=round(key_term_coverage, 4),
             overall_score=round(overall, 4),
         )
+
+
+@dataclass
+class FaithfulnessResult:
+    """LLM-based faithfulness scoring (RAGAS-compatible)."""
+    faithfulness_score: float
+    supported_claims: int
+    unsupported_claims: int
+
+
+class FaithfulnessEvaluator:
+    """Evaluate answer faithfulness using LLM NLI (RAGAS Faithfulness metric).
+
+    Primary mode: LLM-based claim verification.
+    Fallback: returns 1.0 when LLM unavailable.
+    """
+
+    def __init__(self, llm_client=None):
+        self._llm_client = llm_client
+
+    async def evaluate(self, answer: str, context: str) -> FaithfulnessResult:
+        """Score faithfulness of answer against context.
+
+        Returns FaithfulnessResult with faithfulness_score in [0, 1].
+        """
+        if self._llm_client is None:
+            return FaithfulnessResult(1.0, 0, 0)
+
+        prompt = (
+            "Given the answer and context below, count how many claims in the "
+            "answer are supported by the context.\n\n"
+            f"ANSWER: {answer[:2000]}\n\nCONTEXT: {context[:3000]}\n\n"
+            'Return JSON: {{"supported": N, "unsupported": N}}'
+        )
+
+        try:
+            import json
+            result = await self._llm_client.generate(prompt)
+            cleaned = result.strip()
+            # Strip markdown fencing if present
+            import re
+            fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
+            if fence_match:
+                cleaned = fence_match.group(1).strip()
+            data = json.loads(cleaned)
+            supported = data.get("supported", 0)
+            unsupported = data.get("unsupported", 0)
+            total = supported + unsupported
+            score = supported / total if total > 0 else 1.0
+            return FaithfulnessResult(score, supported, unsupported)
+        except Exception:
+            return FaithfulnessResult(1.0, 0, 0)

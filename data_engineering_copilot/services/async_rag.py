@@ -19,6 +19,7 @@ from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
+from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ class AsyncRagService:
         groundedness_verifier: GroundednessVerifier | None = None,
         context_compressor: ContextCompressor | None = None,
         token_tracker: object | None = None,
+        retrieval_tracker: object | None = None,
+        faithfulness_evaluator: FaithfulnessEvaluator | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -49,6 +52,8 @@ class AsyncRagService:
         self.groundedness_verifier = groundedness_verifier
         self.context_compressor = context_compressor
         self.token_tracker = token_tracker
+        self.retrieval_tracker = retrieval_tracker
+        self.faithfulness_evaluator = faithfulness_evaluator
         self._prompt_builder = PromptBuilder()
 
     async def answer(
@@ -78,65 +83,97 @@ class AsyncRagService:
                 as_type="trace",
             )
 
-        # Phase 2A: Query rewriting
+        # Phase 2A: Query rewriting — collect all queries for multi-step retrieval
+        rewritten = None
+        all_queries: list[str] = [question]  # Always include original
         effective_query = question
         if self.query_rewriter is not None:
             rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
+                all_queries.extend(rewritten.decomposed_steps)
                 effective_query = rewritten.decomposed_steps[0]
+            # Multi-query expansion: generate additional variations
+            expanded = await self.query_rewriter.expand_queries(question, max_variations=2)
+            for q in expanded:
+                if q not in all_queries:
+                    all_queries.append(q)
             logger.info(
-                "query_rewritten intent=%s steps=%d hyde=%s original=%r",
+                "query_rewritten intent=%s steps=%d expanded=%d hyde=%s original=%r",
                 rewritten.intent,
                 len(rewritten.decomposed_steps),
+                len(expanded),
                 bool(rewritten.hyde_query),
                 question[:80],
             )
 
         if on_step:
             on_step("Embedding query")
-        logger.info("async_rag.answer question=%r", question[:100])
+        logger.info("async_rag.answer question=%r queries=%d", question[:100], len(all_queries))
+
+        # Compute a representative embedding for reranking/MMR
+        try:
+            query_emb = await self.embedder.embed_query(effective_query)
+        except Exception as exc:
+            logger.exception("Failed to compute representative embedding: %s", exc)
+            raise RetrievalError(f"Embedding failed: {exc}") from exc
 
         retrieval_span = None
         if trace:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
 
+        # Retrieve with all query variations and merge results
+        all_retrieved: list = []
+        seen_ids: set[str] = set()
+        any_success = False
+        last_error: Exception | None = None
         try:
-            if self.query_rewriter is not None and rewritten.hyde_query:
-                query_emb = await self.query_rewriter.hyde(question, self.embedder)
-            else:
-                query_emb = await self.embedder.embed_query(effective_query)
-            logger.info("Query embedding successful: dimension=%d", len(query_emb))
-        except Exception as exc:
-            logger.exception("Failed to embed query: %s", exc)
-            if retrieval_span:
-                retrieval_span.update(output=str(exc), level="ERROR")
-                retrieval_span.end()
-            if trace:
-                trace.update(output=str(exc))
-            raise RetrievalError(f"Embedding failed: {exc}") from exc
+            for q in all_queries:
+                try:
+                    if self.query_rewriter is not None and rewritten is not None and rewritten.hyde_query:
+                        q_emb = await self.query_rewriter.hyde(q, self.embedder)
+                    else:
+                        q_emb = await self.embedder.embed_query(q)
+                    results = await self.vector_store.query(
+                        q_emb, top_k=self.config.retrieval_top_k, query_text=q
+                    )
+                    any_success = True
+                    for r in results:
+                        cid = r.chunk.chunk_id
+                        if cid not in seen_ids:
+                            seen_ids.add(cid)
+                            all_retrieved.append(r)
+                except Exception as sub_exc:
+                    last_error = sub_exc
+                    logger.warning("Failed to retrieve for sub-query %r: %s", q[:50], sub_exc)
 
-        if on_step:
-            on_step("Retrieving chunks")
-        try:
-            retrieved_chunks = await self.vector_store.query(
-                query_emb, top_k=self.config.retrieval_top_k, query_text=effective_query
-            )
+            if not any_success and last_error is not None:
+                raise RetrievalError(f"Vector store query failed: {last_error}") from last_error
+
+            # Sort merged results by confidence
+            retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
+
             if retrieval_span:
                 retrieval_span.update(
                     output=[c.chunk.text for c in retrieved_chunks],
                     input=effective_query,
                 )
                 retrieval_span.end()
+            logger.info("Multi-step retrieval: %d queries → %d unique chunks", len(all_queries), len(retrieved_chunks))
+
+            # Track retrieval scores for observability
+            if self.retrieval_tracker is not None and retrieved_chunks:
+                scores = [c.confidence for c in retrieved_chunks]
+                self.retrieval_tracker.record_retrieval(scores, query=question)
         except RetrievalError:
             raise
         except Exception as exc:
-            logger.exception("Failed to query vector store: %s", exc)
+            logger.exception("Failed during retrieval: %s", exc)
             if retrieval_span:
                 retrieval_span.update(output=str(exc), level="ERROR")
                 retrieval_span.end()
             if trace:
                 trace.update(output=str(exc))
-            raise RetrievalError(f"Vector store query failed: {exc}") from exc
+            raise RetrievalError(f"Retrieval failed: {exc}") from exc
 
         # Apply source filter if provided
         if source_filter:
@@ -233,16 +270,52 @@ class AsyncRagService:
             )
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
+            groundedness_score = 1.0
             if self.groundedness_verifier is not None:
                 supported, unsupported_claims = await self.groundedness_verifier.async_verify(
                     result, retrieved_chunks
                 )
-                logger.info("groundedness_supported=%s unsupported=%d", supported, len(unsupported_claims))
+                groundedness_result = self.groundedness_verifier.verify(
+                    result.text, [c.chunk for c in retrieved_chunks]
+                )
+                groundedness_score = groundedness_result.overall_score
+                logger.info(
+                    "groundedness_supported=%s unsupported=%d score=%.2f",
+                    supported, len(unsupported_claims), groundedness_score,
+                )
                 if not supported and unsupported_claims:
                     result = Answer(
                         text=result.text + "\n\n[Note: Some claims may not be fully supported by the documentation.]",
                         sources=result.sources,
                         confidence=result.confidence,
+                        groundedness_score=groundedness_score,
+                    )
+                else:
+                    result = Answer(
+                        text=result.text,
+                        sources=result.sources,
+                        confidence=result.confidence,
+                        groundedness_score=groundedness_score,
+                    )
+
+            # Phase 2B2: Faithfulness evaluation (RAGAS-compatible)
+            if self.faithfulness_evaluator is not None:
+                context_text = " ".join(c.chunk.text for c in retrieved_chunks[:5])
+                faith_result = await self.faithfulness_evaluator.evaluate(result.text, context_text)
+                logger.info(
+                    "faithfulness_score=%.2f supported=%d unsupported=%d",
+                    faith_result.faithfulness_score,
+                    faith_result.supported_claims,
+                    faith_result.unsupported_claims,
+                )
+                # Update groundedness_score with faithfulness if lower
+                if faith_result.faithfulness_score < groundedness_score:
+                    groundedness_score = faith_result.faithfulness_score
+                    result = Answer(
+                        text=result.text,
+                        sources=result.sources,
+                        confidence=result.confidence,
+                        groundedness_score=groundedness_score,
                     )
 
             # Phase 2C: Cache the result (exact + semantic tiers)
