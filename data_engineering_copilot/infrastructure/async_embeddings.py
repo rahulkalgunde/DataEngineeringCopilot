@@ -39,7 +39,7 @@ class AsyncOllamaEmbeddings:
         if self._client is not None and self._loop_id != current_loop:
             import warnings
 
-            warnings.warn("Recreating httpx client for new event loop")
+            warnings.warn("Recreating httpx client for new event loop", stacklevel=2)
             self._client = None
         if self._client is None:
             self._client = httpx.AsyncClient(
