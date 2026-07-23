@@ -165,11 +165,6 @@ class AsyncRagService:
                 confidence=0.0,
             )
 
-        # Phase 2D: Context compression (dedup + relevance re-ranking)
-        if self.context_compressor is not None:
-            retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
-            logger.info("context_compressed chunks=%d", len(retrieved_chunks))
-
         generation_span = None
         if trace:
             generation_span = trace.start_observation(
@@ -191,6 +186,12 @@ class AsyncRagService:
                 retrieved_chunks = self.reranker.max_marginal_relevance(
                     query_emb, retrieved_chunks, top_k=self.config.reranker_top_k
                 )
+
+            # Phase 2D: Context compression (dedup + relevance re-ranking) — runs after reranking
+            # to avoid wasted work (compressed results were previously discarded by re-fetch)
+            if self.context_compressor is not None:
+                retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
+                logger.info("context_compressed chunks=%d", len(retrieved_chunks))
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
@@ -244,9 +245,11 @@ class AsyncRagService:
                         confidence=result.confidence,
                     )
 
-            # Phase 2C: Cache the result
+            # Phase 2C: Cache the result (exact + semantic tiers)
             if self.cache is not None:
                 self.cache.set_exact(question, result.text)
+                if query_emb_for_cache is not None:
+                    self.cache.set_semantic(question, query_emb_for_cache, result.text)
 
             return result
         except LLMGenerationError:

@@ -128,12 +128,15 @@ class MetricsCollector:
         if not retrieved_chunks:
             return RetrievalMetrics(query=query, retrieved_count=0, top_confidence=0.0)
 
-        # MRR: Mean Reciprocal Rank (average of 1/rank for relevant results)
-        # Simplified: assume first chunk is most relevant
-        mrr = 1.0 / 1  # First chunk rank is 1
-
         # Precision@k: fraction of top-k results with confidence > threshold
         confidence_threshold = 0.45
+
+        # MRR: Mean Reciprocal Rank — first chunk exceeding confidence threshold
+        mrr = 0.0
+        for rank, chunk in enumerate(retrieved_chunks, start=1):
+            if chunk.confidence >= confidence_threshold:
+                mrr = 1.0 / rank
+                break
         top_k_chunks = retrieved_chunks[:top_k]
         relevant_count = sum(1 for c in top_k_chunks if c.confidence >= confidence_threshold)
 
