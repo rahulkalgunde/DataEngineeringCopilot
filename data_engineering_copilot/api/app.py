@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 from data_engineering_copilot.api.middleware import RateLimitMiddleware
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.services.health_check import HealthChecker
-from data_engineering_copilot.services.rate_limiter import RateLimiter
 
 from .routes import router
 
@@ -19,11 +18,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Rate limiting middleware: 60 req/min per IP
-app.add_middleware(
-    RateLimitMiddleware,
-    limiter=RateLimiter(max_calls=60, period_seconds=60.0),
-)
+# Rate limiting middleware: per-route (60/min for /ask, 10/min for /ingest)
+app.add_middleware(RateLimitMiddleware)
 
 app.include_router(router)
 

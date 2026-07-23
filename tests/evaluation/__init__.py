@@ -1,4 +1,7 @@
-"""Golden evaluation suite — 10 Q&A pairs with mocked embedder."""
+"""Golden evaluation suite — 10 Q&A pairs with mocked embedder.
+
+Marked @pytest.mark.evaluation — excluded from fast CI, runs nightly.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,8 @@ import pytest
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.rag_evaluation import RAGEvaluator
+
+pytestmark = pytest.mark.evaluation
 
 GOLDEN_QA: list[dict] = [
     {

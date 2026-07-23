@@ -16,10 +16,10 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
-from data_engineering_copilot.services.mmr_reranker import mmr_rerank
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
+from data_engineering_copilot.services.reranker import mmr_rerank
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class AsyncRagService:
         # Phase 2A: Query rewriting
         effective_query = question
         if self.query_rewriter is not None:
-            rewritten = self.query_rewriter.rewrite(question)
+            rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
                 effective_query = rewritten.decomposed_steps[0]
             logger.info(
@@ -110,7 +110,9 @@ class AsyncRagService:
         if on_step:
             on_step("Retrieving chunks")
         try:
-            retrieved_chunks = await self.vector_store.query(query_emb, top_k=self.config.retrieval_top_k)
+            retrieved_chunks = await self.vector_store.query(
+                query_emb, top_k=self.config.retrieval_top_k, query_text=effective_query
+            )
             if retrieval_span:
                 retrieval_span.update(
                     output=[c.chunk.text for c in retrieved_chunks],
@@ -188,12 +190,12 @@ class AsyncRagService:
 
             # Track token usage from OllamaClient
             if self.token_tracker is not None and hasattr(self.llm_client, "last_usage"):
-                usage = getattr(self.llm_client, "last_usage", {})
-                if usage:
+                usage = getattr(self.llm_client, "last_usage", None)
+                if usage is not None:
                     self.token_tracker.record(
-                        prompt_tokens=usage.get("prompt_tokens", 0),
-                        completion_tokens=usage.get("completion_tokens", 0),
-                        model=getattr(self.llm_client, "model", "unknown"),
+                        prompt_tokens=usage.prompt_eval_count,
+                        completion_tokens=usage.eval_count,
+                        model=usage.model,
                     )
 
             if generation_span:
@@ -212,14 +214,22 @@ class AsyncRagService:
                 confidence=retrieved_chunks[0].confidence,
             )
 
-            # Phase 2B: Groundedness verification (annotate-only)
+            # Phase 2B: Groundedness verification (annotate-only, fail-open)
             if self.groundedness_verifier is not None:
-                groundedness = self.groundedness_verifier.verify(answer_text, [c.chunk for c in retrieved_chunks])
+                groundedness = await self.groundedness_verifier.async_verify(
+                    answer_text, [c.chunk for c in retrieved_chunks]
+                )
                 logger.info(
                     "groundedness_score=%.3f claims=%d",
                     groundedness.overall_score,
                     len(groundedness.annotations),
                 )
+                # Append caveat if groundedness score is low
+                if groundedness.overall_score < 0.7 and groundedness.annotations:
+                    answer_text += (
+                        f"\n\n[Note: {groundedness.overall_score:.0%} of claims are "
+                        "directly supported by the documentation.]"
+                    )
 
             # Phase 2C: Cache the result
             if self.cache is not None:

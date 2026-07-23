@@ -36,12 +36,14 @@ class AsyncQdrantVectorStore:
         embeddings and use Qdrant native RRF fusion at query time.
     """
 
-    def __init__(self, url: str, collection_name: str, hybrid_search: bool = True) -> None:
+    def __init__(self, url: str, collection_name: str, hybrid_search: bool = True, hybrid_rrf_k: int = 60) -> None:
         self._url = url
         self._collection_name = collection_name
         self._hybrid_search = hybrid_search
+        self._hybrid_rrf_k = hybrid_rrf_k
         self._bm25: BM25Tokenizer | None = BM25Tokenizer() if hybrid_search else None
         self._client = None
+        self._last_query_sparse = None
         try:
             self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         except Exception as exc:
@@ -132,12 +134,21 @@ class AsyncQdrantVectorStore:
             logger.exception("Failed to async upsert chunks to Qdrant: %s", exc)
             raise
 
-    async def query(self, query_embedding: list[float], top_k: int) -> list[RetrievedChunk]:
+    async def query(
+        self, query_embedding: list[float], top_k: int, query_text: str | None = None
+    ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
         When ``hybrid_search=True`` and the BM25 tokenizer has been fitted,
         uses Qdrant native prefetch + RRF fusion over dense and sparse vectors.
         Otherwise falls back to pure dense cosine search.
+
+        Parameters
+        ----------
+        query_text:
+            Optional raw query string.  When provided and hybrid search is active,
+            the BM25 sparse vector is computed internally (eliminates the need for
+            ``set_query_sparse``).
         """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
@@ -154,7 +165,9 @@ class AsyncQdrantVectorStore:
             )
 
             if use_hybrid:
-                sparse = getattr(self, "_last_query_sparse", None)
+                sparse = self._last_query_sparse
+                if sparse is None and query_text is not None:
+                    sparse = self._bm25.tokenize_query(query_text)
                 if sparse is not None:
                     query_kwargs["prefetch"] = [
                         models.Prefetch(
@@ -168,7 +181,7 @@ class AsyncQdrantVectorStore:
                             limit=top_k * 2,
                         ),
                     ]
-                    query_kwargs["query"] = models.FusionQuery(fusion=models.Fusion.RRF)
+                    query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
                 else:
                     query_kwargs["query"] = query_embedding
             else:

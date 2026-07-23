@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
-from data_engineering_copilot.services.mmr_reranker import mmr_rerank
+from data_engineering_copilot.services.reranker import mmr_rerank
 
 
 def _chunk(cid: str, text: str, score: float = 0.8) -> RetrievedChunk:

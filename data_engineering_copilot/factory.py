@@ -117,6 +117,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
             hybrid_search=app_settings.hybrid_search_enabled,
+            hybrid_rrf_k=app_settings.hybrid_rrf_k,
         ),
         redis_client=redis_client,
     )
@@ -157,6 +158,7 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         url=app_settings.qdrant_url,
         collection_name=app_settings.collection_name,
         hybrid_search=app_settings.hybrid_search_enabled,
+        hybrid_rrf_k=app_settings.hybrid_rrf_k,
     )
     embedder = AsyncOllamaEmbeddings(
         model_name=app_settings.embedding_model_name,
