@@ -127,9 +127,11 @@ class AsyncQdrantVectorStore:
                     url=payload.get("url", ""),
                     text=payload.get("text", ""),
                 )
-                distance = hit.score if isinstance(hit.score, float) else 0.0
-                confidence = max(0.0, min(1.0, 1.0 - distance))
+                score = float(hit.score) if hit.score is not None else 0.0
+                confidence = max(0.0, min(1.0, score))
+                distance = 1.0 - confidence
                 retrieved.append(RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence))
+
             return retrieved
         except Exception as exc:
             error_str = str(exc)

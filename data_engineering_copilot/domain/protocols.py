@@ -8,9 +8,8 @@ protocol — no inheritance required.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Protocol
+from typing import Any, Protocol
 
-from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.domain.models import (
     DocumentChunk,
     IngestionEvent,
@@ -23,7 +22,7 @@ from data_engineering_copilot.domain.models import (
 class CrawlerProtocol(Protocol):
     def crawl(
         self,
-        source: DocumentationSource,
+        source: Any,
         max_pages: int,
         on_event: Callable[[IngestionEvent], None] | None = ...,
     ) -> Iterable[RawDocument]: ...
@@ -52,3 +51,19 @@ class VectorStoreProtocol(Protocol):
 
 class LLMClientProtocol(Protocol):
     async def generate(self, prompt: str) -> str: ...
+
+
+class RerankerProtocol(Protocol):
+    def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]: ...
+    def is_available(self) -> bool: ...
+
+
+class TelemetryTracerProtocol(Protocol):
+    def start_observation(
+        self,
+        name: str,
+        input: Any = ...,
+        as_type: str = ...,
+        model: str | None = ...,
+    ) -> Any: ...
+    def flush(self) -> None: ...

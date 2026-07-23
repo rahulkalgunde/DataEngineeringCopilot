@@ -1,24 +1,36 @@
 """Domain exception hierarchy.
 
-All application-specific exceptions inherit from ``DataCopilotError``.
+All domain exceptions inherit from ``CoreDomainException``.
 """
 
 
-class DataCopilotError(RuntimeError):
-    """Base exception for all DataEngineeringCopilot errors."""
+class CoreDomainException(RuntimeError):
+    """Base exception for all domain-level errors."""
 
 
-class EmbeddingError(DataCopilotError):
+class DataCopilotError(CoreDomainException):
+    """Base exception for legacy/application errors."""
+
+
+class EmbeddingError(CoreDomainException):
     """Raised when embedding generation fails."""
 
 
-class VectorStoreError(DataCopilotError):
+class VectorStoreError(CoreDomainException):
     """Raised when a vector store operation fails."""
 
 
-class IngestionError(DataCopilotError):
+class IngestionError(CoreDomainException):
     """Raised when the ingestion pipeline fails."""
 
 
-class CrawlError(DataCopilotError):
+class CrawlError(CoreDomainException):
     """Raised when a single page crawl fails (non-fatal, page is skipped)."""
+
+
+class RetrievalError(CoreDomainException):
+    """Raised when document retrieval fails during RAG pipeline."""
+
+
+class LLMGenerationError(CoreDomainException):
+    """Raised when LLM text generation fails."""

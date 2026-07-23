@@ -18,16 +18,6 @@ def _mock_sentence_transformers():
         yield
 
 
-@pytest.fixture(autouse=True)
-def _patch_reranker():
-    mock_instance = MagicMock()
-    mock_instance.is_available.return_value = False
-    async_patcher = patch("data_engineering_copilot.services.async_rag.CrossEncoderReranker", return_value=mock_instance)
-    async_patcher.start()
-    yield
-    async_patcher.stop()
-
-
 @pytest.fixture
 def mock_vector_store():
     m = MagicMock()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from data_engineering_copilot.config.settings import AppSettings, settings
+from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
@@ -122,11 +123,22 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
 
 def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+    from data_engineering_copilot.services.reranker import CrossEncoderReranker
+
     logger.info(
         "Building async RAG service model=%s top_k=%s max_context_chars=%s",
         app_settings.ollama_model,
         app_settings.retrieval_top_k,
         app_settings.max_context_chars,
+    )
+    rag_config = RagConfig(
+        retrieval_top_k=app_settings.retrieval_top_k,
+        confidence_threshold=app_settings.confidence_threshold,
+        reranker_enabled=app_settings.reranker_enabled,
+        reranker_model=app_settings.reranker_model,
+        reranker_top_k=app_settings.reranker_top_k,
+        max_context_chars=app_settings.max_context_chars,
     )
     vector_store = AsyncQdrantVectorStore(
         url=app_settings.qdrant_url,
@@ -135,16 +147,23 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
     embedder = AsyncOllamaEmbeddings(
         model_name=app_settings.embedding_model_name,
     )
-    ollama_client = AsyncOllamaClient(
+    llm_client = AsyncOllamaClient(
         base_url=app_settings.ollama_base_url,
         model=app_settings.ollama_model,
         timeout_seconds=app_settings.ollama_timeout_seconds,
         num_ctx=app_settings.ollama_num_ctx,
         num_predict=app_settings.ollama_num_predict,
     )
+    reranker = None
+    if app_settings.reranker_enabled:
+        reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+    telemetry = build_telemetry_tracer()
     return AsyncRagService(
+        config=rag_config,
         vector_store=vector_store,
-        ollama_client=ollama_client,
+        llm_client=llm_client,
         embedder=embedder,
+        reranker=reranker,
+        telemetry=telemetry,
         cache=QueryCache(ttl_seconds=300),
     )

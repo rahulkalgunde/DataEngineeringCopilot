@@ -55,9 +55,10 @@ class AsyncOllamaClient:
 
         payload = {
             "model": self.model,
-            "prompt": self._format_raw_chat_prompt(prompt),
+            "prompt": prompt,
             "raw": True,
             "stream": False,
+
             "options": {
                 "temperature": 0.05,
                 "top_p": 0.8,
@@ -115,41 +116,7 @@ class AsyncOllamaClient:
             return ""
         return response
 
-    def _format_raw_chat_prompt(self, user_prompt: str) -> str:
-        return "\n".join(
-            [
-                "## SYSTEM",
-                "You are DataEngineeringCopilot, an expert data engineering assistant.",
-                "Your role is to answer questions using ONLY the provided documentation context.",
-                "",
-                "## CONSTRAINTS",
-                "1. Base your answer strictly on the provided context.",
-                "2. Do NOT invent, assume, or use external knowledge.",
-                "3. If information is missing or unclear, explicitly state the limitation.",
-                "4. Cite specific documentation sources when possible.",
-                "5. Use precise technical terminology from the context.",
-                "",
-                "## OUTPUT FORMAT",
-                "Provide a clear, concise answer with these components:",
-                "- Answer: [Your direct answer, 2-4 sentences]",
-                "- Key Points: [2-3 bullet points if applicable]",
-                "- Important Notes: [Caveats or limitations, if any]",
-                "- Not Covered: [What the docs don't address, if relevant]",
-                "",
-                "## INSTRUCTIONS",
-                "1. For factual questions: State facts from the docs clearly.",
-                "2. For comparative questions: Show differences between the documented options.",
-                "3. For procedural questions: Outline steps from the documentation.",
-                "4. For open-ended questions: Provide a thoughtful synthesis of available info.",
-                "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.",
-                "",
-                "## USER QUESTION AND CONTEXT",
-                user_prompt,
-                "",
-                "## YOUR STRUCTURED ANSWER",
-            ]
-        )
-
     async def close(self) -> None:
         """Close the httpx client."""
         await self._client.aclose()
+

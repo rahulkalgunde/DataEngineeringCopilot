@@ -345,9 +345,11 @@ def populated_store(qdrant_store, embeddings_provider):
 @pytest.fixture
 def rag_service(integration_settings, embeddings_provider, ollama_client, qdrant_store):
     """AsyncRagService wired to real components."""
+    from data_engineering_copilot.domain.models import RagConfig
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
     return AsyncRagService(
+        config=RagConfig(),
         vector_store=qdrant_store,
         llm_client=ollama_client,
         embedder=embeddings_provider,

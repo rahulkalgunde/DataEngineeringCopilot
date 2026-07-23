@@ -155,11 +155,17 @@ def _populated(_store, _settings):
 
 @pytest.fixture(scope="module")
 def _rag(_store, _ollama, _settings):
+    from data_engineering_copilot.domain.models import RagConfig
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
     embedder = AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
-    return AsyncRagService(vector_store=_store, ollama_client=_ollama, embedder=embedder)
+    return AsyncRagService(
+        config=RagConfig(),
+        vector_store=_store,
+        llm_client=_ollama,
+        embedder=embedder,
+    )
 
 
 # ---------------------------------------------------------------------------
