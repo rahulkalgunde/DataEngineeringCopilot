@@ -57,7 +57,7 @@ class QueryRewriter:
         self,
         llm_client: object | None,
         enabled: bool = True,
-        hyde_enabled: bool = False,
+        hyde_enabled: bool = True,
     ) -> None:
         self._llm_client = llm_client
         self._enabled = enabled
@@ -154,6 +154,30 @@ class QueryRewriter:
         if not hyde_text:
             return await embedder.embed_query(question)
         return await embedder.embed_query(hyde_text)
+
+    async def expand_queries(self, query: str, max_variations: int = 3) -> list[str]:
+        """Generate multiple query variations for improved recall.
+
+        Uses the LLM to generate paraphrases and related queries.
+        Falls back to original query on failure.
+        """
+        if not self._enabled or self._llm_client is None:
+            return [query]
+
+        prompt = (
+            f"Generate {max_variations} different search queries that would find "
+            f"the same information as this question. Return ONLY the queries, "
+            f"one per line, no numbering.\n\n"
+            f"Original question: {query}\n\nVariations:"
+        )
+
+        try:
+            result = await self._llm_client.generate(prompt)
+            variations = [q.strip() for q in result.strip().split("\n") if q.strip()]
+            return [query] + variations[:max_variations]
+        except Exception as exc:
+            logger.warning("Query expansion failed, using original: %s", exc)
+            return [query]
 
     # --- private helpers ---
 

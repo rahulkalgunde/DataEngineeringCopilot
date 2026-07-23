@@ -88,6 +88,14 @@ class AsyncQdrantVectorStore:
             )
         except Exception:
             logger.debug("Payload index on 'url' already exists or could not be created.", exc_info=True)
+        try:
+            await self._client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="source_name",
+                field_schema="keyword",
+            )
+        except Exception:
+            logger.debug("Payload index on 'source_name' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
         return settings.embedding_dimension
