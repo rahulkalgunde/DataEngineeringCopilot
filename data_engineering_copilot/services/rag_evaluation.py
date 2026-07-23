@@ -18,6 +18,7 @@ class EvaluationResult:
     retrieval_recall: float
     retrieval_mrr: float
     answer_relevance: float
+    key_term_coverage: float
     overall_score: float
 
 
@@ -87,6 +88,12 @@ class RAGEvaluator:
         all_context = " ".join(r.chunk.text for r in retrieved_chunks)
         answer_rel = self._answer_ev.score_relevance(answer, all_context)
 
+        # Key-term coverage: fraction of query key terms found in retrieved context
+        key_terms = set(re.findall(r"[A-Z]\w+|\w{4,}", query.lower()))
+        all_context_lower = all_context.lower()
+        covered = sum(1 for t in key_terms if t in all_context_lower) if key_terms else 1
+        key_term_coverage = covered / len(key_terms) if key_terms else 1.0
+
         overall = retrieval["precision"] * self._retrieval_weight + answer_rel * self._answer_weight
 
         return EvaluationResult(
@@ -94,5 +101,6 @@ class RAGEvaluator:
             retrieval_recall=retrieval["recall"],
             retrieval_mrr=retrieval["mrr"],
             answer_relevance=answer_rel,
+            key_term_coverage=round(key_term_coverage, 4),
             overall_score=round(overall, 4),
         )
