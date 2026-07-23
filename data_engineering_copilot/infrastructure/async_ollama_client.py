@@ -39,6 +39,7 @@ class AsyncOllamaClient:
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_seconds),
         )
+        self.last_usage: dict[str, int] = {}
 
     async def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
         if num_predict is None:
@@ -79,6 +80,13 @@ class AsyncOllamaClient:
 
         response = self._extract_final_response(str(body.get("response", "")))
         done_reason = body.get("done_reason", "unknown")
+
+        # Track token usage
+        self.last_usage = {
+            "prompt_tokens": body.get("prompt_eval_count", 0),
+            "completion_tokens": body.get("eval_count", 0),
+        }
+
         logger.info(
             "Async Ollama generation completed done_reason=%s response_chars=%s final_chars=%s",
             done_reason,

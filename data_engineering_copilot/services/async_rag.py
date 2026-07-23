@@ -16,6 +16,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
+from data_engineering_copilot.services.mmr_reranker import mmr_rerank
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
@@ -168,6 +169,10 @@ class AsyncRagService:
                     effective_query, expanded_chunks, top_k=self.config.reranker_top_k
                 )
 
+            # MMR diversity reranking — ensures diverse context
+            if len(retrieved_chunks) > 3:
+                retrieved_chunks = mmr_rerank(retrieved_chunks, top_k=self.config.reranker_top_k)
+
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
             context_str, source_names = assembler.assemble(sorted_chunks)
@@ -181,13 +186,13 @@ class AsyncRagService:
 
             answer_text = await self.llm_client.generate(prompt)
 
-            # Track token usage
-            if self.token_tracker is not None and hasattr(self.llm_client, "_last_usage"):
-                usage = getattr(self.llm_client, "_last_usage", None)
-                if usage is not None:
+            # Track token usage from OllamaClient
+            if self.token_tracker is not None and hasattr(self.llm_client, "last_usage"):
+                usage = getattr(self.llm_client, "last_usage", {})
+                if usage:
                     self.token_tracker.record(
-                        prompt_tokens=getattr(usage, "prompt_tokens", 0),
-                        completion_tokens=getattr(usage, "completion_tokens", 0),
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
                         model=getattr(self.llm_client, "model", "unknown"),
                     )
 

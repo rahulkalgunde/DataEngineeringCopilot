@@ -6,8 +6,10 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from data_engineering_copilot.api.middleware import RateLimitMiddleware
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.services.health_check import HealthChecker
+from data_engineering_copilot.services.rate_limiter import RateLimiter
 
 from .routes import router
 
@@ -15,6 +17,12 @@ app = FastAPI(
     title="DataEngineeringCopilot API",
     description="Async ingestion and RAG service endpoints",
     version="1.0.0",
+)
+
+# Rate limiting middleware: 60 req/min per IP
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=RateLimiter(max_calls=60, period_seconds=60.0),
 )
 
 app.include_router(router)
