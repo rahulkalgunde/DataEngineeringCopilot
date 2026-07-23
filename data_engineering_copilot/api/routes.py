@@ -190,7 +190,10 @@ async def ask(request: AskRequest):
 
     try:
         service = build_rag_service()
-        answer_obj = await service.answer(request.question)
+        answer_obj = await service.answer(
+            request.question,
+            source_filter=request.source_filter,
+        )
         parsed = parse_rag_response(answer_obj.text)
 
         # Cross-reference citations against retrieved sources

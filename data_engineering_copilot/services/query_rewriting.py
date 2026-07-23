@@ -6,6 +6,8 @@ import logging
 import re
 from dataclasses import dataclass
 
+from data_engineering_copilot.domain.protocols import EmbedderProtocol
+
 logger = logging.getLogger(__name__)
 
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -137,6 +139,21 @@ class QueryRewriter:
         except Exception as exc:
             logger.warning("LLM rewrite failed, falling back to rule-based: %s", exc)
             return self.rewrite(query)
+
+    async def hyde(
+        self,
+        question: str,
+        embedder: EmbedderProtocol,
+    ) -> list[float]:
+        """Generate a hypothetical document and return its embedding.
+
+        Plan spec: ``hyde(question, embedder) → LLM generates hypothetical
+        answer → embed that``.
+        """
+        hyde_text = await self._generate_hyde_async(question)
+        if not hyde_text:
+            return await embedder.embed_query(question)
+        return await embedder.embed_query(hyde_text)
 
     # --- private helpers ---
 

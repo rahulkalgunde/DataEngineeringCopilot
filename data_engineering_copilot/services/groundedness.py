@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from data_engineering_copilot.domain.models import DocumentChunk
+from data_engineering_copilot.domain.models import Answer, DocumentChunk, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -82,31 +82,31 @@ class GroundednessVerifier:
             return []
         return _extract_sentences(answer_text)
 
-    def _tuple_result(
-        self, answer_text: str, context_chunks: list[DocumentChunk]
-    ) -> tuple[bool, list[str]]:
-        """Return ``(supported, unsupported_claims)`` using text-overlap heuristic."""
-        result = self.verify(answer_text, context_chunks)
-        return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
-
     async def async_verify(
         self,
-        answer_text: str,
-        context_chunks: list[DocumentChunk],
+        answer: Answer,
+        context_chunks: list[RetrievedChunk],
     ) -> tuple[bool, list[str]]:
         """LLM-based groundedness verification (fail-open).
 
+        Takes an ``Answer`` object and top-5 ``RetrievedChunk`` contexts.
         Returns ``(supported, unsupported_claims)``.
         On any error, falls back to the text-overlap heuristic.
         """
         if not self._enabled:
             return (True, [])
 
+        top_5 = context_chunks[:5]
+        answer_text = answer.text
+        context_docs: list[DocumentChunk] = [c.chunk for c in top_5]
+
         if self._llm_client is None:
-            return self._tuple_result(answer_text, context_chunks)
+            return self._fallback_tuple(answer_text, context_docs)
 
         try:
-            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_chunks[:5])
+            context_excerpt = "\n".join(
+                f"[{c.source_name}] {c.text[:500]}" for c in context_docs
+            )
             prompt = _NLI_PROMPT.format(
                 answer=answer_text[:2000],
                 context=context_excerpt[:3000],
@@ -141,7 +141,14 @@ class GroundednessVerifier:
             return (overall >= 0.5, unsupported)
         except Exception as exc:
             logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
-            return self._tuple_result(answer_text, context_chunks)
+            return self._fallback_tuple(answer_text, context_docs)
+
+    def _fallback_tuple(
+        self, answer_text: str, context_chunks: list[DocumentChunk]
+    ) -> tuple[bool, list[str]]:
+        """Fallback: text-overlap heuristic returning ``(supported, unsupported_claims)``."""
+        result = self.verify(answer_text, context_chunks)
+        return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
 
     def verify(
         self,

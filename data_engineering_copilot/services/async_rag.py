@@ -51,7 +51,12 @@ class AsyncRagService:
         self.token_tracker = token_tracker
         self._prompt_builder = PromptBuilder()
 
-    async def answer(self, question: str, on_step: Callable[[str], None] | None = None) -> Answer:
+    async def answer(
+        self,
+        question: str,
+        on_step: Callable[[str], None] | None = None,
+        source_filter: list[str] | None = None,
+    ) -> Answer:
         if self.cache is not None:
             query_emb_for_cache = None
             with contextlib.suppress(Exception):
@@ -79,8 +84,6 @@ class AsyncRagService:
             rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
                 effective_query = rewritten.decomposed_steps[0]
-            if rewritten.hyde_query:
-                effective_query = rewritten.hyde_query
             logger.info(
                 "query_rewritten intent=%s steps=%d hyde=%s original=%r",
                 rewritten.intent,
@@ -98,7 +101,10 @@ class AsyncRagService:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
 
         try:
-            query_emb = await self.embedder.embed_query(effective_query)
+            if self.query_rewriter is not None and rewritten.hyde_query:
+                query_emb = await self.query_rewriter.hyde(question, self.embedder)
+            else:
+                query_emb = await self.embedder.embed_query(effective_query)
             logger.info("Query embedding successful: dimension=%d", len(query_emb))
         except Exception as exc:
             logger.exception("Failed to embed query: %s", exc)
@@ -131,6 +137,13 @@ class AsyncRagService:
             if trace:
                 trace.update(output=str(exc))
             raise RetrievalError(f"Vector store query failed: {exc}") from exc
+
+        # Apply source filter if provided
+        if source_filter:
+            retrieved_chunks = [
+                c for c in retrieved_chunks if c.chunk.source_name in source_filter
+            ]
+            logger.info("source_filter applied: sources=%s chunks=%d", source_filter, len(retrieved_chunks))
 
         if not retrieved_chunks:
             if trace:
@@ -221,17 +234,19 @@ class AsyncRagService:
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
             if self.groundedness_verifier is not None:
                 supported, unsupported_claims = await self.groundedness_verifier.async_verify(
-                    answer_text, [c.chunk for c in retrieved_chunks]
+                    result, retrieved_chunks
                 )
                 logger.info("groundedness_supported=%s unsupported=%d", supported, len(unsupported_claims))
                 if not supported and unsupported_claims:
-                    answer_text += (
-                        "\n\n[Note: Some claims may not be fully supported by the documentation.]"
+                    result = Answer(
+                        text=result.text + "\n\n[Note: Some claims may not be fully supported by the documentation.]",
+                        sources=result.sources,
+                        confidence=result.confidence,
                     )
 
             # Phase 2C: Cache the result
             if self.cache is not None:
-                self.cache.set_exact(question, answer_text)
+                self.cache.set_exact(question, result.text)
 
             return result
         except LLMGenerationError:
