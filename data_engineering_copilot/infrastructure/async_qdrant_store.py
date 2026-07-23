@@ -184,8 +184,12 @@ class AsyncQdrantVectorStore:
                     query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
                 else:
                     query_kwargs["query"] = query_embedding
+                    if self._hybrid_search:
+                        query_kwargs["using"] = "dense"
             else:
                 query_kwargs["query"] = query_embedding
+                if self._hybrid_search:
+                    query_kwargs["using"] = "dense"
 
             results = await self._client.query_points(**query_kwargs)
             retrieved: list[RetrievedChunk] = []

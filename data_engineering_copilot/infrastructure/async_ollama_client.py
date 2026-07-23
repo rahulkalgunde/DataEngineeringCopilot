@@ -48,11 +48,31 @@ class AsyncOllamaClient:
         self.timeout_seconds = timeout_seconds
         self.num_ctx = num_ctx
         self.num_predict = num_predict
-        self._client = httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=httpx.Timeout(timeout_seconds),
-        )
+        self._client: httpx.AsyncClient | None = None
+        self._loop_id: int | None = None
         self.last_usage: dict[str, int] = {}
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Lazy-initialize the httpx client on the current event loop.
+
+        Re-creates the client if the event loop has changed (e.g. across
+        pytest-asyncio test functions with function-scoped loop scope).
+        """
+        import asyncio
+
+        current_loop = id(asyncio.get_running_loop())
+        if self._client is not None and self._loop_id != current_loop:
+            import warnings
+
+            warnings.warn("Recreating httpx client for new event loop")
+            self._client = None
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=httpx.Timeout(self.timeout_seconds),
+            )
+            self._loop_id = current_loop
+        return self._client
 
     async def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
         if num_predict is None:
@@ -138,7 +158,7 @@ class AsyncOllamaClient:
         reraise=True,
     )
     async def _http_post(self, payload: dict) -> dict:
-        response = await self._client.post("/api/generate", json=payload)
+        response = await self._get_client().post("/api/generate", json=payload)
         response.raise_for_status()
         return response.json()
 
@@ -152,5 +172,7 @@ class AsyncOllamaClient:
         return response
 
     async def close(self) -> None:
-        """Close the httpx client."""
-        await self._client.aclose()
+        """Close the httpx client if it was created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
