@@ -105,6 +105,11 @@ class CrossEncoderReranker:
             scored_chunks = list(zip(chunks, scores, strict=False))
             scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
+            # Write cross-encoder scores back to chunk.confidence
+            # so downstream MMR and sorting use the better relevance score
+            for chunk, score in scored_chunks:
+                object.__setattr__(chunk, "confidence", float(score))
+
             # Keep top_k results
             reranked = [chunk for chunk, score in scored_chunks[:top_k]]
 
