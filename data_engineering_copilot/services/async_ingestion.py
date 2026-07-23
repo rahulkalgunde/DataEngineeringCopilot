@@ -21,6 +21,7 @@ from data_engineering_copilot.domain.protocols import (
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
+from data_engineering_copilot.services.chunk_enrichment import enrich_chunks
 
 log = structlog.get_logger(__name__)
 
@@ -118,6 +119,7 @@ class AsyncIngestionService:
         else:
             chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
+        chunks = enrich_chunks(chunks)
         return chunks, content_hash, parsed
 
     async def _flush_batch(

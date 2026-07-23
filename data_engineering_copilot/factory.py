@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
@@ -11,13 +9,14 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
+from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from data_engineering_copilot.workers.progress import get_redis_client
 
-logger = logging.getLogger(__name__)
+logger = StructuredLogger(__name__)
 
 
 def build_chunker(app_settings: AppSettings = settings):
@@ -26,16 +25,16 @@ def build_chunker(app_settings: AppSettings = settings):
     if strategy == "semantic":
         if not app_settings.enable_semantic_chunking:
             logger.warning(
-                "Semantic chunking requested but disabled in settings. "
-                "Falling back to sentence_preserving. "
-                "Set enable_semantic_chunking=True to use semantic chunking."
+                "semantic_chunking_disabled",
+                strategy=strategy,
+                fallback="sentence_preserving",
             )
             strategy = "sentence_preserving"
         else:
             logger.info(
-                "Building semantic chunker strategy=%s similarity=%s",
-                strategy,
-                app_settings.min_semantic_similarity,
+                "building_semantic_chunker",
+                strategy=strategy,
+                similarity=app_settings.min_semantic_similarity,
             )
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
@@ -50,16 +49,17 @@ def build_chunker(app_settings: AppSettings = settings):
 
     if strategy not in ["fixed_size", "sentence_preserving"]:
         logger.warning(
-            "Unknown chunking strategy '%s'. Defaulting to sentence_preserving.",
-            strategy,
+            "unknown_chunking_strategy",
+            strategy=strategy,
+            fallback="sentence_preserving",
         )
         strategy = "sentence_preserving"
 
     logger.info(
-        "Building document chunker strategy=%s size=%s overlap=%s",
-        strategy,
-        app_settings.chunk_size_words,
-        app_settings.chunk_overlap_words,
+        "building_document_chunker",
+        strategy=strategy,
+        chunk_size=app_settings.chunk_size_words,
+        overlap=app_settings.chunk_overlap_words,
     )
 
     return DocumentChunker(
@@ -72,10 +72,10 @@ def build_chunker(app_settings: AppSettings = settings):
 
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
     logger.info(
-        "Building async crawler db=%s concurrency=%s max_concurrency=%s",
-        app_settings.crawl_db_path,
-        app_settings.crawl_async_concurrency,
-        app_settings.crawl_async_max_concurrency,
+        "building_async_crawler",
+        db=str(app_settings.crawl_db_path),
+        concurrency=app_settings.crawl_async_concurrency,
+        max_concurrency=app_settings.crawl_async_max_concurrency,
     )
     db_path = str(app_settings.crawl_db_path)
     frontier = CrawlFrontierDB(db_path)
@@ -97,10 +97,10 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
 
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
     logger.info(
-        "Building async ingestion service sources=%s qdrant_url=%s collection=%s",
-        len(app_settings.sources),
-        app_settings.qdrant_url,
-        app_settings.collection_name,
+        "building_async_ingestion_service",
+        sources=len(app_settings.sources),
+        qdrant_url=app_settings.qdrant_url,
+        collection=app_settings.collection_name,
     )
     try:
         redis_client = get_redis_client()
@@ -132,11 +132,11 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
     from data_engineering_copilot.services.reranker import CrossEncoderReranker
 
     logger.info(
-        "Building async RAG service model=%s top_k=%s max_context_chars=%s hybrid=%s",
-        app_settings.ollama_model,
-        app_settings.retrieval_top_k,
-        app_settings.max_context_chars,
-        app_settings.hybrid_search_enabled,
+        "building_async_rag_service",
+        model=app_settings.ollama_model,
+        top_k=app_settings.retrieval_top_k,
+        max_context_chars=app_settings.max_context_chars,
+        hybrid=app_settings.hybrid_search_enabled,
     )
     rag_config = RagConfig(
         retrieval_top_k=app_settings.retrieval_top_k,
