@@ -31,3 +31,26 @@ def test_app_settings_default_logging_enabled() -> None:
     settings = AppSettings()
 
     assert settings.logging_enabled is True
+
+
+def test_app_settings_hybrid_search_defaults() -> None:
+    settings = AppSettings()
+    assert settings.hybrid_search_enabled is True
+    assert settings.hybrid_rrf_k == 60
+    assert settings.context_compression_enabled is False
+    assert settings.max_context_tokens == 4096
+    assert settings.query_rewrite_enabled is True
+    assert settings.groundedness_enabled is True
+
+
+def test_app_settings_hybrid_search_overridable() -> None:
+    settings = AppSettings(
+        hybrid_search_enabled=False,
+        hybrid_rrf_k=100,
+        context_compression_enabled=True,
+        max_context_tokens=8192,
+    )
+    assert settings.hybrid_search_enabled is False
+    assert settings.hybrid_rrf_k == 100
+    assert settings.context_compression_enabled is True
+    assert settings.max_context_tokens == 8192
