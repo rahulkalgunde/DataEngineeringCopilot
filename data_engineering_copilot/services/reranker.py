@@ -135,6 +135,48 @@ class CrossEncoderReranker:
         """
         return self.model is not None
 
+    def max_marginal_relevance(
+        self,
+        query_emb: list[float],
+        chunks: list[RetrievedChunk],
+        lambda_param: float = 0.5,
+        top_k: int = 5,
+    ) -> list[RetrievedChunk]:
+        """MMR diversity reranking — relevance (cross-encoder or embedding score) + diversity.
+
+        Args:
+            query_emb: Query embedding vector.
+            chunks: Candidate chunks (already scored by cross-encoder or embedding).
+            lambda_param: Tradeoff between relevance (1.0) and diversity (0.0).
+            top_k: Max chunks to return.
+        """
+        if not chunks or top_k <= 0:
+            return []
+        sorted_chunks = sorted(chunks, key=lambda c: c.confidence, reverse=True)
+        selected: list[RetrievedChunk] = []
+        remaining = list(sorted_chunks)
+        selected_tokens: list[set[str]] = []
+        while remaining and len(selected) < top_k:
+            best_score = -1.0
+            best_idx = 0
+            for idx, chunk in enumerate(remaining):
+                relevance = chunk.confidence
+                chunk_tokens = set(re.findall(r"[a-z0-9_]+", chunk.chunk.text.lower()))
+                max_sim = max(
+                    (len(chunk_tokens & s) / math.sqrt(len(chunk_tokens) * len(s)))
+                    for s in selected_tokens
+                ) if selected_tokens else 0.0
+                mmr = lambda_param * relevance - (1 - lambda_param) * max_sim
+                if mmr > best_score:
+                    best_score = mmr
+                    best_idx = idx
+            chosen = remaining.pop(best_idx)
+            selected.append(chosen)
+            selected_tokens.append(
+                set(re.findall(r"[a-z0-9_]+", chosen.chunk.text.lower()))
+            )
+        return selected
+
 
 # ---------------------------------------------------------------------------
 # MMR (Maximal Marginal Relevance) diversity reranking

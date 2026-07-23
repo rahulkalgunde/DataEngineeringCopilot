@@ -19,7 +19,6 @@ from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
-from data_engineering_copilot.services.reranker import mmr_rerank
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +79,13 @@ class AsyncRagService:
             rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
                 effective_query = rewritten.decomposed_steps[0]
+            if rewritten.hyde_query:
+                effective_query = rewritten.hyde_query
             logger.info(
-                "query_rewritten intent=%s steps=%d original=%r",
+                "query_rewritten intent=%s steps=%d hyde=%s original=%r",
                 rewritten.intent,
                 len(rewritten.decomposed_steps),
+                bool(rewritten.hyde_query),
                 question[:80],
             )
 
@@ -172,8 +174,10 @@ class AsyncRagService:
                 )
 
             # MMR diversity reranking — ensures diverse context
-            if len(retrieved_chunks) > 3:
-                retrieved_chunks = mmr_rerank(retrieved_chunks, top_k=self.config.reranker_top_k)
+            if len(retrieved_chunks) > 3 and self.reranker is not None:
+                retrieved_chunks = self.reranker.max_marginal_relevance(
+                    query_emb, retrieved_chunks, top_k=self.config.reranker_top_k
+                )
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
@@ -216,19 +220,13 @@ class AsyncRagService:
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
             if self.groundedness_verifier is not None:
-                groundedness = await self.groundedness_verifier.async_verify(
+                supported, unsupported_claims = await self.groundedness_verifier.async_verify(
                     answer_text, [c.chunk for c in retrieved_chunks]
                 )
-                logger.info(
-                    "groundedness_score=%.3f claims=%d",
-                    groundedness.overall_score,
-                    len(groundedness.annotations),
-                )
-                # Append caveat if groundedness score is low
-                if groundedness.overall_score < 0.7 and groundedness.annotations:
+                logger.info("groundedness_supported=%s unsupported=%d", supported, len(unsupported_claims))
+                if not supported and unsupported_claims:
                     answer_text += (
-                        f"\n\n[Note: {groundedness.overall_score:.0%} of claims are "
-                        "directly supported by the documentation.]"
+                        "\n\n[Note: Some claims may not be fully supported by the documentation.]"
                     )
 
             # Phase 2C: Cache the result

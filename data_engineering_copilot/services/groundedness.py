@@ -82,21 +82,28 @@ class GroundednessVerifier:
             return []
         return _extract_sentences(answer_text)
 
+    def _tuple_result(
+        self, answer_text: str, context_chunks: list[DocumentChunk]
+    ) -> tuple[bool, list[str]]:
+        """Return ``(supported, unsupported_claims)`` using text-overlap heuristic."""
+        result = self.verify(answer_text, context_chunks)
+        return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
+
     async def async_verify(
         self,
         answer_text: str,
         context_chunks: list[DocumentChunk],
-    ) -> GroundednessResult:
+    ) -> tuple[bool, list[str]]:
         """LLM-based groundedness verification (fail-open).
 
-        Calls the LLM to verify each claim against the context.
+        Returns ``(supported, unsupported_claims)``.
         On any error, falls back to the text-overlap heuristic.
         """
         if not self._enabled:
-            return GroundednessResult(overall_score=1.0, annotations=())
+            return (True, [])
 
         if self._llm_client is None:
-            return self.verify(answer_text, context_chunks)
+            return self._tuple_result(answer_text, context_chunks)
 
         try:
             context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_chunks[:5])
@@ -106,7 +113,6 @@ class GroundednessVerifier:
             )
             raw = await self._llm_client.generate(prompt)
 
-            # Strip markdown JSON fencing
             cleaned = raw.strip()
             fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
             if fence_match:
@@ -131,13 +137,11 @@ class GroundednessVerifier:
                 )
 
             overall = sum(a.score for a in annotations) / len(annotations) if annotations else 0.0
-            return GroundednessResult(
-                overall_score=round(overall, 4),
-                annotations=tuple(annotations),
-            )
+            unsupported = [a.claim for a in annotations if not a.supported]
+            return (overall >= 0.5, unsupported)
         except Exception as exc:
             logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
-            return self.verify(answer_text, context_chunks)
+            return self._tuple_result(answer_text, context_chunks)
 
     def verify(
         self,

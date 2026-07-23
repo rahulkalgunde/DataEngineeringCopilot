@@ -212,3 +212,14 @@ class TestGoldenEvaluation:
 
     def test_golden_count(self):
         assert len(GOLDEN_QA) == 10
+
+    def test_key_term_coverage(self):
+        evaluator = RAGEvaluator()
+        qa = GOLDEN_QA[0]
+        result = evaluator.evaluate(
+            query=qa["query"],
+            answer=f"Answer about {qa['query']}",
+            retrieved_chunks=qa["relevant_chunks"],
+            relevant_chunk_ids=qa["relevant_ids"],
+        )
+        assert result.key_term_coverage > 0.5, f"Key-term coverage should be >50% for query: {qa['query']}"

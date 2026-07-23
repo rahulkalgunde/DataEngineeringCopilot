@@ -43,3 +43,12 @@ def parse_rag_response(raw: str) -> StructuredAnswer:
         pass
 
     return StructuredAnswer(answer=raw, citations=[])
+
+
+def verify_citations(
+    citations: list[dict[str, str]],
+    source_names: list[str],
+) -> list[dict[str, str]]:
+    """Keep only citations whose source matches a retrieved source name."""
+    valid_sources = set(source_names)
+    return [c for c in citations if c.get("source", "") in valid_sources]

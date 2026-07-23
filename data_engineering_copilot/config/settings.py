@@ -150,6 +150,9 @@ class AppSettings(BaseSettings):
     # Hybrid search
     hybrid_search_enabled: bool = True
     hybrid_rrf_k: int = 60
+    # Semantic cache
+    semantic_cache_threshold: float = 0.95
+    semantic_cache_ttl: int = 3600
     # Query rewriting / grounding
     query_rewrite_enabled: bool = True
     groundedness_enabled: bool = True
