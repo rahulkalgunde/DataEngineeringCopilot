@@ -98,7 +98,9 @@ async def test_query_success(mock_async_qdrant):
 
     assert len(results) == 1
     assert results[0].chunk.chunk_id == "550e8400-e29b-41d4-a716-446655440000"
-    assert results[0].confidence == pytest.approx(0.2)
+    assert results[0].confidence == pytest.approx(0.8)
+    assert results[0].distance == pytest.approx(0.2)
+
 
 
 async def test_query_empty_results(mock_async_qdrant):

@@ -8,13 +8,22 @@ from typing import Any
 
 import pytest
 
-from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument, RetrievedChunk
+from data_engineering_copilot.domain.models import (
+    DocumentationSourceConfig,
+    DocumentChunk,
+    ParsedDocument,
+    RagConfig,
+    RawDocument,
+    RetrievedChunk,
+)
 from data_engineering_copilot.domain.protocols import (
     ChunkerProtocol,
     CrawlerProtocol,
     EmbedderProtocol,
     LLMClientProtocol,
     ParserProtocol,
+    RerankerProtocol,
+    TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
 
@@ -61,6 +70,8 @@ class TestProtocolStructure:
         assert EmbedderProtocol is not None
         assert VectorStoreProtocol is not None
         assert LLMClientProtocol is not None
+        assert RerankerProtocol is not None
+        assert TelemetryTracerProtocol is not None
 
     def test_crawler_protocol_has_crawl_method(self):
         assert hasattr(CrawlerProtocol, "crawl")
@@ -104,6 +115,44 @@ class TestProtocolStructure:
         hints = typing.get_type_hints(LLMClientProtocol.generate)
         assert "prompt" in hints
         assert hints["return"] is str
+
+    def test_reranker_protocol_has_required_methods(self):
+        assert hasattr(RerankerProtocol, "rerank")
+        assert hasattr(RerankerProtocol, "is_available")
+
+    def test_telemetry_tracer_protocol_has_required_methods(self):
+        assert hasattr(TelemetryTracerProtocol, "start_observation")
+        assert hasattr(TelemetryTracerProtocol, "flush")
+
+
+class TestDomainIsolation:
+    """Test domain layer clean isolation from outer config/infra layers."""
+
+    def test_domain_protocols_does_not_import_config(self):
+        import inspect
+        import sys
+
+        # Remove domain and config modules if cached to inspect imports
+        sys.modules.pop("data_engineering_copilot.domain.protocols", None)
+
+        import data_engineering_copilot.domain.protocols as proto_module
+
+        # Read module source directly to ensure no config imports
+        source = inspect.getsource(proto_module)
+        assert "data_engineering_copilot.config" not in source, (
+            "domain.protocols must not import from data_engineering_copilot.config"
+        )
+
+    def test_domain_configs_exist(self):
+        source_cfg = DocumentationSourceConfig(
+            name="pandas",
+            start_url="https://pandas.pydata.org",
+            allowed_domains=("pandas.pydata.org",),
+        )
+        assert source_cfg.name == "pandas"
+
+        rag_cfg = RagConfig(retrieval_top_k=5, confidence_threshold=0.3)
+        assert rag_cfg.retrieval_top_k == 5
 
 
 class TestProtocolConformance:
@@ -181,3 +230,4 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+

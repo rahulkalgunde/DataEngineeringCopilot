@@ -20,8 +20,7 @@ from data_engineering_copilot.domain.protocols import (
     VectorStoreProtocol,
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
-from data_engineering_copilot.infrastructure.url_registry import UrlRegistry
-from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -46,7 +45,9 @@ class AsyncIngestionService:
         self.embeddings = embeddings
         self.vector_store = vector_store
         self._redis_client = redis_client
+        self._url_registries: dict[str, AsyncUrlRegistry] = {}
         self._processing_concurrency = settings.processing_concurrency
+
         if parse_executor is not None:
             self._parse_executor = parse_executor
         else:
@@ -108,8 +109,8 @@ class AsyncIngestionService:
             log.info("async_ingestion.content_changed", url=parsed.url)
             await self._delete_chunks_for_url(parsed.url)
 
-        if isinstance(self.chunker, SemanticChunker):
-            sentences = SemanticChunker.extract_sentences(parsed.text)
+        if hasattr(self.chunker, 'extract_sentences'):
+            sentences = self.chunker.extract_sentences(parsed.text)
             if not sentences:
                 return None
             embeddings = await self.embeddings.embed_texts(sentences)
@@ -174,7 +175,8 @@ class AsyncIngestionService:
             key = (chunk.url, chunk.source_name)
             if key not in seen and chunk.content_hash:
                 seen.add(key)
-                self._set_content_hash(chunk.url, chunk.source_name, chunk.content_hash)
+                await self._set_content_hash(chunk.url, chunk.source_name, chunk.content_hash)
+
         batch_chunks.clear()
 
     async def ingest(
@@ -413,29 +415,26 @@ class AsyncIngestionService:
     def _compute_content_hash(self, text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def _get_url_registry(self, source_name: str) -> UrlRegistry | None:
+    def _get_url_registry(self, source_name: str) -> AsyncUrlRegistry | None:
         if self._redis_client is None:
             return None
-        key = f"_url_registry:{source_name}"
-        if not hasattr(self, key):
-            setattr(self, key, UrlRegistry(self._redis_client, source_name))
-        return getattr(self, key)
+        if source_name not in self._url_registries:
+            self._url_registries[source_name] = AsyncUrlRegistry(self._redis_client, source_name)
+        return self._url_registries[source_name]
 
     async def _get_stored_content_hash(self, url: str, source_name: str = "") -> str | None:
         registry = self._get_url_registry(source_name) if source_name else None
         if registry is not None:
-            cached = registry.get_html_hash(url)
+            cached = await registry.get_html_hash(url)
             if cached is not None:
                 return cached
-        lookup = getattr(self.vector_store, "get_content_hash_for_url", None)
-        if lookup is None:
-            return None
-        return await lookup(url)
+        return await self.vector_store.get_content_hash_for_url(url)
 
-    def _set_content_hash(self, url: str, source_name: str, content_hash: str) -> None:
+    async def _set_content_hash(self, url: str, source_name: str, content_hash: str) -> None:
         registry = self._get_url_registry(source_name)
         if registry is not None:
-            registry.set_html_hash(url, content_hash)
+            await registry.set_html_hash(url, content_hash)
+
 
     async def _delete_chunks_for_url(self, url: str) -> None:
         deleter = getattr(self.vector_store, "delete_by_url", None)

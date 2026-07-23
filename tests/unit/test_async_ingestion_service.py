@@ -7,6 +7,7 @@ import pytest
 
 from data_engineering_copilot.config.settings import AppSettings, DocumentationSource
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument
+from data_engineering_copilot.services.chunker import DocumentChunker
 
 
 @pytest.fixture
@@ -168,12 +169,30 @@ class TestAsyncIngestionServiceInit:
         s.stop()
 
 
+class _AsyncListIterator:
+    """Async iterator wrapper for a plain list, usable with ``async for``."""
+
+    def __init__(self, items):
+        self._items = list(items)
+        self._index = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._index >= len(self._items):
+            raise StopAsyncIteration
+        item = self._items[self._index]
+        self._index += 1
+        return item
+
+
 class TestAsyncIngestionServiceIngest:
     @pytest.mark.asyncio
     async def test_single_page_indexed(self, mock_settings, mock_crawler):
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -191,9 +210,7 @@ class TestAsyncIngestionServiceIngest:
         )
 
         raw = _make_raw()
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter([raw])
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
         total = await service.ingest()
 
@@ -204,7 +221,7 @@ class TestAsyncIngestionServiceIngest:
     async def test_on_event_callback(self, mock_settings, mock_crawler):
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -222,9 +239,7 @@ class TestAsyncIngestionServiceIngest:
         )
 
         raw = _make_raw()
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter([raw])
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
         events = []
         total = await service.ingest(on_event=events.append)
@@ -238,7 +253,7 @@ class TestAsyncIngestionServiceIngest:
     async def test_skips_none_parsed(self, mock_settings, mock_crawler):
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
@@ -255,9 +270,7 @@ class TestAsyncIngestionServiceIngest:
         )
 
         raw = _make_raw()
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter([raw, raw])
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw, raw])
 
         total = await service.ingest()
         assert total == 0
@@ -268,7 +281,7 @@ class TestAsyncIngestionServiceIngest:
 
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
@@ -283,9 +296,7 @@ class TestAsyncIngestionServiceIngest:
         )
 
         raw = _make_raw()
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter([raw])
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
         mock_vector_store.get_content_hash_for_url.return_value = "sha256:somehash"
 
@@ -302,7 +313,7 @@ class TestAsyncIngestionServiceIngest:
     async def test_respects_source_names(self, mock_settings, mock_crawler):
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -321,9 +332,7 @@ class TestAsyncIngestionServiceIngest:
         )
 
         raw = _make_raw()
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter([raw])
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
         total = await service.ingest(source_names=["test"])
         assert total > 0
@@ -345,7 +354,7 @@ class TestAsyncIngestionServiceWorkerPool:
     async def test_multi_page_batch_flush(self, mock_settings, mock_crawler, mock_embeddings, mock_vector_store):
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
-        chunker_mock = MagicMock()
+        chunker_mock = MagicMock(spec=DocumentChunker)
         chunker_mock.chunk = _picklable_chunk
 
         service = _make_svc(
@@ -359,9 +368,7 @@ class TestAsyncIngestionServiceWorkerPool:
 
         urls = [f"https://example.com/{i}" for i in range(3)]
         raws = [_make_raw(url=url) for url in urls]
-        async_iter = MagicMock()
-        async_iter.__aiter__.return_value = iter(raws)
-        mock_crawler.crawl.return_value = async_iter
+        mock_crawler.crawl.return_value = _AsyncListIterator(raws)
 
         total = await service.ingest()
 
