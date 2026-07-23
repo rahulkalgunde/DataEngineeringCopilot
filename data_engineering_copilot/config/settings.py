@@ -147,6 +147,15 @@ class AppSettings(BaseSettings):
     crawl_async_cache_url: str = ""
     crawl_async_thread_pool_size: int = 4
     logging_enabled: bool = True
+    # Hybrid search
+    hybrid_search_enabled: bool = True
+    hybrid_rrf_k: int = 60
+    # Query rewriting / grounding
+    query_rewrite_enabled: bool = True
+    groundedness_enabled: bool = True
+    # Context management
+    context_compression_enabled: bool = False
+    max_context_tokens: int = 4096
     sources: tuple[DocumentationSource, ...] = ()
 
     @model_validator(mode="after")
