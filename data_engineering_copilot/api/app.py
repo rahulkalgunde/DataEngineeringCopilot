@@ -4,6 +4,7 @@ import urllib.request
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from data_engineering_copilot.api.middleware import RateLimitMiddleware
@@ -20,6 +21,15 @@ app = FastAPI(
 
 # Rate limiting middleware: per-route (60/min for /ask, 10/min for /ingest)
 app.add_middleware(RateLimitMiddleware)
+
+# CORS — allow all origins for local development; restrict in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(router)
 

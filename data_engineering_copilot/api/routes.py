@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -190,9 +191,12 @@ async def ask(request: AskRequest):
 
     try:
         service = build_rag_service()
-        answer_obj = await service.answer(
-            request.question,
-            source_filter=request.source_filter,
+        answer_obj = await asyncio.wait_for(
+            service.answer(
+                request.question,
+                source_filter=request.source_filter,
+            ),
+            timeout=120.0,
         )
         parsed = parse_rag_response(answer_obj.text)
 
@@ -217,6 +221,9 @@ async def ask(request: AskRequest):
             citations=parsed.citations,
             metrics={"chunks_retrieved": len(answer_obj.sources), "confidence": answer_obj.confidence},
         )
+    except TimeoutError:
+        logger.warning("RAG ask timed out after 120s question=%r", request.question[:100])
+        raise HTTPException(status_code=504, detail="Request timed out. Try a simpler question.") from None
     except Exception as exc:
         logger.exception("RAG ask failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"RAG pipeline error: {exc}") from exc
