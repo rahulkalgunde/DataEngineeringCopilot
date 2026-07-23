@@ -1,10 +1,11 @@
 """Structured JSON logger for production observability."""
+
 from __future__ import annotations
 
 import json
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class StructuredLogger:
@@ -20,7 +21,7 @@ class StructuredLogger:
 
     def _emit(self, level: int, event: str, kwargs: dict, exc_info: bool = False) -> None:
         data: dict = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": event,
             **kwargs,
         }

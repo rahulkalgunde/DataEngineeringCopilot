@@ -119,10 +119,7 @@ class AsyncQdrantVectorStore:
             payloads: list[dict] = [self._chunk_to_payload(chunk) for chunk in chunks_list]
 
             if self._hybrid_search and self._bm25 is not None:
-                sparse_vectors_list = [
-                    self._bm25.tokenize_query(c.text)
-                    for c in chunks_list
-                ]
+                sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in chunks_list]
                 vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
             else:
                 vectors_dict = vectors
@@ -146,11 +143,7 @@ class AsyncQdrantVectorStore:
             logger.warning("Qdrant client not initialized. Returning empty results.")
             return []
 
-        use_hybrid = (
-            self._hybrid_search
-            and self._bm25 is not None
-            and self._bm25._frozen
-        )
+        use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
 
         try:
             query_kwargs: dict = dict(

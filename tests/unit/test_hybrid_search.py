@@ -46,6 +46,7 @@ def sample_embeddings():
 # Collection creation with sparse vectors
 # ------------------------------------------------------------------
 
+
 async def test_initialize_creates_sparse_vectors_config(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -88,6 +89,7 @@ async def test_initialize_no_sparse_when_hybrid_off(mock_async_qdrant):
 # Upsert with sparse vectors
 # ------------------------------------------------------------------
 
+
 async def test_upsert_includes_sparse_vectors(mock_async_qdrant, sample_chunks, sample_embeddings):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -129,6 +131,7 @@ async def test_upsert_no_sparse_when_hybrid_off(mock_async_qdrant, sample_chunks
 # Hybrid query with prefetch + RRF
 # ------------------------------------------------------------------
 
+
 async def test_hybrid_query_uses_prefetch(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -157,6 +160,7 @@ async def test_hybrid_query_uses_prefetch(mock_async_qdrant):
     store.fit_bm25(["Apache Spark SQL structured data", "Delta Lake ACID"])
     # Set the sparse vector for the query
     from qdrant_client.http.models import SparseVector
+
     store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
 
     results = await store.query([0.1] * 768, top_k=5)
@@ -181,7 +185,7 @@ async def test_dense_only_query_no_prefetch(mock_async_qdrant):
         collection_name="test",
         hybrid_search=False,
     )
-    results = await store.query([0.1] * 768, top_k=5)
+    await store.query([0.1] * 768, top_k=5)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
     # No prefetch when hybrid is off
@@ -191,6 +195,7 @@ async def test_dense_only_query_no_prefetch(mock_async_qdrant):
 # ------------------------------------------------------------------
 # BM25 fit integration
 # ------------------------------------------------------------------
+
 
 async def test_fit_bm25_populates_tokenizer(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
@@ -231,6 +236,7 @@ async def test_fit_bm25_noop_when_hybrid_off():
 # ------------------------------------------------------------------
 # Backward compatibility: default hybrid_search=True
 # ------------------------------------------------------------------
+
 
 async def test_default_constructor_enables_hybrid(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore

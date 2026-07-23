@@ -109,7 +109,7 @@ class AsyncIngestionService:
             log.info("async_ingestion.content_changed", url=parsed.url)
             await self._delete_chunks_for_url(parsed.url)
 
-        if hasattr(self.chunker, 'extract_sentences'):
+        if hasattr(self.chunker, "extract_sentences"):
             sentences = self.chunker.extract_sentences(parsed.text)
             if not sentences:
                 return None
@@ -434,7 +434,6 @@ class AsyncIngestionService:
         registry = self._get_url_registry(source_name)
         if registry is not None:
             await registry.set_html_hash(url, content_hash)
-
 
     async def _delete_chunks_for_url(self, url: str) -> None:
         deleter = getattr(self.vector_store, "delete_by_url", None)

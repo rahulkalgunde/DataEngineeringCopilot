@@ -79,4 +79,3 @@ class Answer:
     text: str
     sources: tuple[DocumentChunk, ...]
     confidence: float
-

@@ -1,4 +1,5 @@
 """Query rewriter: intent classification, multi-step decomposition, HyDE."""
+
 from __future__ import annotations
 
 import logging
@@ -9,8 +10,16 @@ logger = logging.getLogger(__name__)
 
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("comparative", re.compile(r"\b(compare|vs\.?|versus|difference between|pros and cons)\b", re.IGNORECASE)),
-    ("debugging", re.compile(r"\b(why is|error|fail|bug|oom|exception|not working|broken|crash|issue|problem)\b", re.IGNORECASE)),
-    ("how_to", re.compile(r"\b(how (to|do|can|should)|step[- ]by[- ]step|guide|tutorial|set up|configure|install)\b", re.IGNORECASE)),
+    (
+        "debugging",
+        re.compile(r"\b(why is|error|fail|bug|oom|exception|not working|broken|crash|issue|problem)\b", re.IGNORECASE),
+    ),
+    (
+        "how_to",
+        re.compile(
+            r"\b(how (to|do|can|should)|step[- ]by[- ]step|guide|tutorial|set up|configure|install)\b", re.IGNORECASE
+        ),
+    ),
     ("factual", re.compile(r".*", re.DOTALL)),  # fallback
 ]
 
