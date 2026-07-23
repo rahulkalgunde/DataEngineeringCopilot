@@ -1,19 +1,21 @@
-"""FastAPI routes for ingestion dispatch, status polling and control."""
+"""FastAPI routes for ingestion dispatch, status polling, control, and RAG ask."""
 
 from __future__ import annotations
 
 import json
+import logging
 
 import structlog
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import get_redis_client
 from data_engineering_copilot.workers.tasks import async_ingest_task
 
 log = structlog.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -153,3 +155,58 @@ async def cancel_ingestion(task_id: str) -> dict:
         )
 
     return {"task_id": task_id, "status": "CANCELLED"}
+
+
+# --- RAG Ask endpoint ---
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    source_filter: list[str] | None = None
+
+
+class SourceRef(BaseModel):
+    source_name: str
+    title: str
+    url: str
+    snippet: str
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[SourceRef]
+    confidence: float
+    citations: list[dict[str, str]] = []
+
+
+@router.post("/api/v1/ask", response_model=AskResponse)
+async def ask(request: AskRequest):
+    """Answer a question using the RAG pipeline."""
+    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.structured_output import parse_rag_response
+
+    try:
+        service = build_rag_service()
+        answer_obj = await service.answer(request.question)
+        parsed = parse_rag_response(answer_obj.text)
+
+        sources = [
+            SourceRef(
+                source_name=src.source_name,
+                title=src.title,
+                url=src.url,
+                snippet=src.text[:200],
+            )
+            for src in answer_obj.sources
+        ]
+
+        return AskResponse(
+            answer=parsed.answer,
+            sources=sources,
+            confidence=answer_obj.confidence,
+            citations=parsed.citations,
+        )
+    except Exception as exc:
+        logger.exception("RAG ask failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"RAG pipeline error: {exc}") from exc
