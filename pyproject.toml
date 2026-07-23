@@ -71,6 +71,7 @@ markers = [
     "rag: marks tests that exercise the full RAG pipeline (Qdrant + Ollama)",
     "ingestion: marks tests that exercise the full ingestion pipeline (Qdrant + Ollama)",
     "api: marks tests that exercise FastAPI endpoints (may require Celery/Redis)",
+    "evaluation: marks tests that evaluate RAG quality with mocked embedder (no infra needed)",
     "xdist_group(name): tests sharing a resource that must run in the same worker process",
 ]
 

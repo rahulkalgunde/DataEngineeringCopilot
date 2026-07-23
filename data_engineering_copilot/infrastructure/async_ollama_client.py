@@ -8,11 +8,24 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GenerationResult:
+    """Structured output from Ollama generation."""
+
+    text: str
+    prompt_eval_count: int = 0
+    eval_count: int = 0
+    duration_ms: int = 0
+    tokens_per_second: float = 0.0
+    model: str = ""
 
 
 class AsyncOllamaError(RuntimeError):
@@ -82,16 +95,31 @@ class AsyncOllamaClient:
         done_reason = body.get("done_reason", "unknown")
 
         # Track token usage
-        self.last_usage = {
-            "prompt_tokens": body.get("prompt_eval_count", 0),
-            "completion_tokens": body.get("eval_count", 0),
-        }
+        prompt_eval_count = body.get("prompt_eval_count", 0)
+        eval_count = body.get("eval_count", 0)
+        total_duration_ns = body.get("total_duration", 0)
+        duration_ms = int(total_duration_ns / 1_000_000) if total_duration_ns else 0
+        tokens_per_second = (eval_count / (duration_ms / 1000)) if duration_ms > 0 else 0.0
+
+        self.last_usage = GenerationResult(
+            text=response,
+            prompt_eval_count=prompt_eval_count,
+            eval_count=eval_count,
+            duration_ms=duration_ms,
+            tokens_per_second=round(tokens_per_second, 2),
+            model=self.model,
+        )
 
         logger.info(
-            "Async Ollama generation completed done_reason=%s response_chars=%s final_chars=%s",
+            "Async Ollama generation completed done_reason=%s response_chars=%s final_chars=%s "
+            "prompt_tokens=%d completion_tokens=%d duration_ms=%d tok/s=%.1f",
             done_reason,
             len(str(body.get("response", ""))),
             len(response),
+            prompt_eval_count,
+            eval_count,
+            duration_ms,
+            tokens_per_second,
         )
         if not response:
             logger.warning("Async Ollama returned no final answer done_reason=%s", done_reason)

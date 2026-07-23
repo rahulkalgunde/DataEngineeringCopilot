@@ -1,10 +1,12 @@
-"""Groundedness verifier: claim extraction + text-overlap scoring.
+"""Groundedness verifier: claim extraction + LLM NLI scoring (with text-overlap fallback).
 
 Annotate-only by design — never blocks answers, only reports scores.
+Fail-open: on LLM error, falls back to text-overlap heuristic.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -12,6 +14,17 @@ from dataclasses import dataclass
 from data_engineering_copilot.domain.models import DocumentChunk
 
 logger = logging.getLogger(__name__)
+
+_NLI_PROMPT = (
+    "You are a groundedness verifier. Given an answer and supporting context, "
+    "determine which claims in the answer are supported by the context.\n\n"
+    "For each claim in the answer, output a JSON array of objects:\n"
+    '[{"claim": "...", "supported": true/false, "evidence": "..."}]\n'
+    "Return ONLY the JSON array, no preamble.\n\n"
+    "ANSWER:\n{answer}\n\n"
+    "CONTEXT (excerpted from documentation):\n{context}\n\n"
+    "JSON array:"
+)
 
 
 @dataclass(frozen=True)
@@ -47,9 +60,10 @@ def _overlap_score(claim_tokens: set[str], chunk_tokens: set[str]) -> float:
 
 
 class GroundednessVerifier:
-    """Lightweight groundedness checker using text-overlap heuristics.
+    """Groundedness checker using LLM NLI (with text-overlap fallback).
 
-    No LLM or NLI model required. Scores each claim against context chunks.
+    Primary mode: LLM-based claim verification via ``async_verify()``.
+    Fallback: text-overlap heuristic via ``verify()`` (used when LLM unavailable).
     """
 
     def __init__(
@@ -67,6 +81,63 @@ class GroundednessVerifier:
         if not self._enabled or not answer_text.strip():
             return []
         return _extract_sentences(answer_text)
+
+    async def async_verify(
+        self,
+        answer_text: str,
+        context_chunks: list[DocumentChunk],
+    ) -> GroundednessResult:
+        """LLM-based groundedness verification (fail-open).
+
+        Calls the LLM to verify each claim against the context.
+        On any error, falls back to the text-overlap heuristic.
+        """
+        if not self._enabled:
+            return GroundednessResult(overall_score=1.0, annotations=())
+
+        if self._llm_client is None:
+            return self.verify(answer_text, context_chunks)
+
+        try:
+            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_chunks[:5])
+            prompt = _NLI_PROMPT.format(
+                answer=answer_text[:2000],
+                context=context_excerpt[:3000],
+            )
+            raw = await self._llm_client.generate(prompt)
+
+            # Strip markdown JSON fencing
+            cleaned = raw.strip()
+            fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
+            if fence_match:
+                cleaned = fence_match.group(1).strip()
+
+            claims_data = json.loads(cleaned)
+            if not isinstance(claims_data, list):
+                raise ValueError("LLM returned non-array JSON")
+
+            annotations: list[ClaimAnnotation] = []
+            for item in claims_data:
+                claim = str(item.get("claim", "")).strip()
+                supported = bool(item.get("supported", False))
+                score = 1.0 if supported else 0.0
+                annotations.append(
+                    ClaimAnnotation(
+                        claim=claim,
+                        supported=supported,
+                        supporting_chunk_ids=(),
+                        score=score,
+                    )
+                )
+
+            overall = sum(a.score for a in annotations) / len(annotations) if annotations else 0.0
+            return GroundednessResult(
+                overall_score=round(overall, 4),
+                annotations=tuple(annotations),
+            )
+        except Exception as exc:
+            logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
+            return self.verify(answer_text, context_chunks)
 
     def verify(
         self,
