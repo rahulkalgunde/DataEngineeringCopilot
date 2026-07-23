@@ -164,6 +164,7 @@ class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
     source_filter: list[str] | None = None
+    rerank: bool = True
 
 
 class SourceRef(BaseModel):
@@ -178,18 +179,23 @@ class AskResponse(BaseModel):
     sources: list[SourceRef]
     confidence: float
     citations: list[dict[str, str]] = []
+    metrics: dict[str, float] = {}
 
 
 @router.post("/api/v1/ask", response_model=AskResponse)
 async def ask(request: AskRequest):
     """Answer a question using the RAG pipeline."""
     from data_engineering_copilot.factory import build_rag_service
-    from data_engineering_copilot.services.structured_output import parse_rag_response
+    from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
     try:
         service = build_rag_service()
         answer_obj = await service.answer(request.question)
         parsed = parse_rag_response(answer_obj.text)
+
+        # Cross-reference citations against retrieved sources
+        source_names = [src.source_name for src in answer_obj.sources]
+        parsed.citations = verify_citations(parsed.citations, source_names)
 
         sources = [
             SourceRef(
@@ -206,6 +212,7 @@ async def ask(request: AskRequest):
             sources=sources,
             confidence=answer_obj.confidence,
             citations=parsed.citations,
+            metrics={"chunks_retrieved": len(answer_obj.sources), "confidence": answer_obj.confidence},
         )
     except Exception as exc:
         logger.exception("RAG ask failed: %s", exc)

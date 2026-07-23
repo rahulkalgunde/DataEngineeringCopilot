@@ -6,6 +6,7 @@ import hashlib
 import logging
 import math
 import re
+import time
 from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class QueryCache:
 
     Tier 1: exact match via SHA-256 of normalized query.
     Tier 2: semantic similarity via cosine distance of query embeddings.
+    Entries in the semantic tier expire after ``ttl_seconds``.
     """
 
     def __init__(
@@ -45,14 +47,16 @@ class QueryCache:
         similarity_threshold: float = 0.92,
         exact_max_size: int = 1024,
         semantic_max_size: int = 512,
+        ttl_seconds: int = 3600,
     ) -> None:
         self._exact_enabled = exact_enabled
         self._semantic_enabled = semantic_enabled
         self._similarity_threshold = similarity_threshold
         self._exact_cache: OrderedDict[str, str] = OrderedDict()
-        self._semantic_cache: list[tuple[list[float], str, str]] = []  # (embedding, query, answer)
+        self._semantic_cache: list[tuple[list[float], str, str, float]] = []  # (embedding, query, answer, ts)
         self._exact_max_size = exact_max_size
         self._semantic_max_size = semantic_max_size
+        self._ttl_seconds = ttl_seconds
 
     def _exact_key(self, query: str) -> str:
         normalized = _normalize_query(query)
@@ -79,9 +83,13 @@ class QueryCache:
     def get_semantic(self, query: str, query_embedding: list[float]) -> str | None:
         if not self._semantic_enabled or not self._semantic_cache:
             return None
+        now = time.monotonic()
         best_score = -1.0
         best_answer = None
-        for embedding, _cached_q, answer in self._semantic_cache:
+        self._semantic_cache = [
+            entry for entry in self._semantic_cache if now - entry[3] <= self._ttl_seconds
+        ]
+        for embedding, _cached_q, answer, _ts in self._semantic_cache:
             score = _cosine_similarity(query_embedding, embedding)
             if score > best_score:
                 best_score = score
@@ -93,7 +101,7 @@ class QueryCache:
     def set_semantic(self, query: str, query_embedding: list[float], answer: str) -> None:
         if not self._semantic_enabled:
             return
-        self._semantic_cache.append((list(query_embedding), query, answer))
+        self._semantic_cache.append((list(query_embedding), query, answer, time.monotonic()))
         if len(self._semantic_cache) > self._semantic_max_size:
             self._semantic_cache.pop(0)
 

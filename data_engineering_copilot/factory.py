@@ -191,7 +191,12 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         embedder=embedder,
         reranker=reranker,
         telemetry=telemetry,
-        cache=TwoTierCache(exact_enabled=True, semantic_enabled=True),
+        cache=TwoTierCache(
+            exact_enabled=True,
+            semantic_enabled=True,
+            similarity_threshold=app_settings.semantic_cache_threshold,
+            ttl_seconds=app_settings.semantic_cache_ttl,
+        ),
         query_rewriter=query_rewriter,
         groundedness_verifier=groundedness,
         context_compressor=context_compressor,
