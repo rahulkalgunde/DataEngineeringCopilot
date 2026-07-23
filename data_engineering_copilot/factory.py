@@ -10,6 +10,7 @@ from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
+from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
@@ -125,7 +126,6 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
 def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
-    from data_engineering_copilot.observability.token_tracker import TokenTracker
     from data_engineering_copilot.services.context_compression import ContextCompressor
     from data_engineering_copilot.services.groundedness import GroundednessVerifier
     from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
@@ -169,6 +169,11 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
 
     telemetry = build_telemetry_tracer()
     token_tracker = TokenTracker()
+    retrieval_tracker = RetrievalTracker()
+
+    # Wire trackers to API metrics endpoint
+    from data_engineering_copilot.api.app import set_trackers
+    set_trackers(retrieval_tracker=retrieval_tracker, token_tracker=token_tracker)
 
     # New Phase 2 modules
     query_rewriter = QueryRewriter(
@@ -201,4 +206,5 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         groundedness_verifier=groundedness,
         context_compressor=context_compressor,
         token_tracker=token_tracker,
+        retrieval_tracker=retrieval_tracker,
     )
