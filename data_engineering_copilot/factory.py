@@ -30,10 +30,11 @@ def build_llm_client(app_settings: AppSettings = settings):
     """Build LLM client based on configured provider."""
     provider = app_settings.llm_provider.lower()
     if provider == "openrouter":
-        if not app_settings.openrouter_api_key:
-            raise ValueError("openrouter_api_key is required when llm_provider='openrouter'")
+        api_key = app_settings.openrouter_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY is required when llm_provider='openrouter'")
         return OpenRouterLLMClient(
-            api_key=app_settings.openrouter_api_key,
+            api_key=api_key,
             model=app_settings.openrouter_model,
             timeout_seconds=app_settings.ollama_timeout_seconds,
         )
@@ -53,20 +54,22 @@ def build_embedder(app_settings: AppSettings = settings):
     """Build embedding provider based on configured provider."""
     provider = app_settings.embedding_provider.lower()
     if provider == "openai":
-        if not app_settings.openai_api_key:
-            raise ValueError("openai_api_key is required when embedding_provider='openai'")
+        api_key = app_settings.openai_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is required when embedding_provider='openai'")
         return OpenAIEmbeddings(
-            api_key=app_settings.openai_api_key,
+            api_key=api_key,
             model_name=app_settings.openai_embedding_model,
             base_url=app_settings.openai_embedding_base_url,
             embedding_dimension=app_settings.openai_embedding_dimension,
             batch_size=app_settings.embedding_batch_size,
         )
     elif provider == "openrouter":
-        if not app_settings.openrouter_api_key:
-            raise ValueError("openrouter_api_key is required when embedding_provider='openrouter'")
+        api_key = app_settings.openrouter_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY is required when embedding_provider='openrouter'")
         return OpenRouterEmbeddings(
-            api_key=app_settings.openrouter_api_key,
+            api_key=api_key,
             model_name=app_settings.openrouter_embedding_model,
             embedding_dimension=app_settings.openrouter_embedding_dimension,
             batch_size=app_settings.embedding_batch_size,

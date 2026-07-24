@@ -31,6 +31,21 @@ def _make_settings(**overrides) -> AppSettings:
     return AppSettings(**defaults)
 
 
+def _make_settings_with_key(provider: str, key_value: str, provider_type: str = "llm") -> AppSettings:
+    """Create settings with provider set AND key provided, then clear the key via frozen bypass."""
+    if provider_type == "llm":
+        s = _make_settings(llm_provider=provider, openrouter_api_key=key_value)
+        object.__setattr__(s, "openrouter_api_key", AppSettings.model_fields["openrouter_api_key"].annotation(""))
+    else:
+        if provider == "openai":
+            s = _make_settings(embedding_provider=provider, openai_api_key=key_value)
+            object.__setattr__(s, "openai_api_key", AppSettings.model_fields["openai_api_key"].annotation(""))
+        else:
+            s = _make_settings(embedding_provider=provider, openrouter_api_key=key_value)
+            object.__setattr__(s, "openrouter_api_key", AppSettings.model_fields["openrouter_api_key"].annotation(""))
+    return s
+
+
 class TestBuildLLMClient:
     def test_ollama_default(self):
         from data_engineering_copilot.factory import build_llm_client
@@ -57,8 +72,8 @@ class TestBuildLLMClient:
     def test_openrouter_missing_api_key_raises(self):
         from data_engineering_copilot.factory import build_llm_client
 
-        s = _make_settings(llm_provider="openrouter", openrouter_api_key="")
-        with pytest.raises(ValueError, match="openrouter_api_key is required"):
+        s = _make_settings_with_key("openrouter", "sk-or-v1-test", "llm")
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY is required"):
             build_llm_client(s)
 
     def test_unsupported_provider_raises(self):
@@ -95,8 +110,8 @@ class TestBuildEmbedder:
     def test_openai_missing_api_key_raises(self):
         from data_engineering_copilot.factory import build_embedder
 
-        s = _make_settings(embedding_provider="openai", openai_api_key="")
-        with pytest.raises(ValueError, match="openai_api_key is required"):
+        s = _make_settings_with_key("openai", "sk-test", "embedding")
+        with pytest.raises(ValueError, match="OPENAI_API_KEY is required"):
             build_embedder(s)
 
     def test_openrouter(self):
@@ -115,8 +130,8 @@ class TestBuildEmbedder:
     def test_openrouter_missing_api_key_raises(self):
         from data_engineering_copilot.factory import build_embedder
 
-        s = _make_settings(embedding_provider="openrouter", openrouter_api_key="")
-        with pytest.raises(ValueError, match="openrouter_api_key is required"):
+        s = _make_settings_with_key("openrouter", "sk-or-v1-test", "embedding")
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY is required"):
             build_embedder(s)
 
     def test_unsupported_provider_raises(self):

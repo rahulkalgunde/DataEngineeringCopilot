@@ -233,8 +233,8 @@ def get_langfuse_instance():
 
             try:
                 lf = Langfuse(
-                    public_key=settings.langfuse_public_key,
-                    secret_key=settings.langfuse_secret_key,
+                    public_key=settings.langfuse_public_key.get_secret_value(),
+                    secret_key=settings.langfuse_secret_key.get_secret_value(),
                     host=candidate_host,
                     debug=True,
                 )
