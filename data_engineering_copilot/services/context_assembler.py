@@ -52,9 +52,10 @@ class ContextAssembler:
         for chunk in deduped:
             source = chunk.chunk.source_name
             text = chunk.chunk.text
+            section_header = chunk.chunk.section_header
 
-            # Format: "Source: [Title]\n[Text]\n"
-            formatted = f"[{source}] {text}"
+            # Format: "Source: [Title > Section] [Text]" when section header exists
+            formatted = f"[{source} > {section_header}] {text}" if section_header else f"[{source}] {text}"
 
             # Check if adding this chunk would exceed limit
             new_length = current_length + len(formatted) + 2  # +2 for newlines

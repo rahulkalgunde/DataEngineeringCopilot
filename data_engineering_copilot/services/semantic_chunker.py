@@ -101,6 +101,7 @@ class SemanticChunker:
         elif self.embedding_model is not None:
             try:
                 import asyncio
+
                 if asyncio.iscoroutinefunction(self.embedding_model.embed_texts):
                     embeddings = await self.embedding_model.embed_texts(sentences)
                 else:

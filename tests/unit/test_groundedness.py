@@ -31,9 +31,7 @@ def _make_retrieved(*texts: str) -> list[RetrievedChunk]:
 def _make_answer(text: str = "Spark SQL is a module.") -> Answer:
     return Answer(
         text=text,
-        sources=(
-            DocumentChunk(chunk_id="c0", source_name="s", title="t", url="http://x", text=text),
-        ),
+        sources=(DocumentChunk(chunk_id="c0", source_name="s", title="t", url="http://x", text=text),),
         confidence=0.9,
     )
 
@@ -104,9 +102,7 @@ class TestAnnotation:
 class TestAsyncVerify:
     async def test_disabled_returns_true_empty(self):
         gv = GroundednessVerifier(llm_client=None, enabled=False)
-        supported, unsupported = await gv.async_verify(
-            _make_answer(), _make_retrieved("Some context.")
-        )
+        supported, unsupported = await gv.async_verify(_make_answer(), _make_retrieved("Some context."))
         assert supported is True
         assert unsupported == []
 
@@ -121,9 +117,7 @@ class TestAsyncVerify:
 
     async def test_llm_success_returns_tuple(self):
         mock_llm = AsyncMock()
-        mock_llm.generate.return_value = (
-            '[{"claim": "Spark SQL is a module.", "supported": true}]'
-        )
+        mock_llm.generate.return_value = '[{"claim": "Spark SQL is a module.", "supported": true}]'
         gv = GroundednessVerifier(llm_client=mock_llm, enabled=True)
         supported, unsupported = await gv.async_verify(
             _make_answer("Spark SQL is a module."),
@@ -134,9 +128,7 @@ class TestAsyncVerify:
 
     async def test_llm_unsupported_claim(self):
         mock_llm = AsyncMock()
-        mock_llm.generate.return_value = (
-            '[{"claim": "Unicorns exist.", "supported": false}]'
-        )
+        mock_llm.generate.return_value = '[{"claim": "Unicorns exist.", "supported": false}]'
         gv = GroundednessVerifier(llm_client=mock_llm, enabled=True)
         supported, unsupported = await gv.async_verify(
             _make_answer("Unicorns exist."),
@@ -158,9 +150,7 @@ class TestAsyncVerify:
 
     async def test_uses_top_5_chunks_only(self):
         mock_llm = AsyncMock()
-        mock_llm.generate.return_value = (
-            '[{"claim": "Test claim.", "supported": true}]'
-        )
+        mock_llm.generate.return_value = '[{"claim": "Test claim.", "supported": true}]'
         gv = GroundednessVerifier(llm_client=mock_llm, enabled=True)
         chunks = _make_retrieved(*[f"Chunk {i} text." for i in range(10)])
         answer = _make_answer("Test claim.")

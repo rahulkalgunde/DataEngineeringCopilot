@@ -104,9 +104,7 @@ class GroundednessVerifier:
             return self._fallback_tuple(answer_text, context_docs)
 
         try:
-            context_excerpt = "\n".join(
-                f"[{c.source_name}] {c.text[:500]}" for c in context_docs
-            )
+            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_docs)
             prompt = _NLI_PROMPT.format(
                 answer=answer_text[:2000],
                 context=context_excerpt[:3000],
@@ -143,9 +141,7 @@ class GroundednessVerifier:
             logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
             return self._fallback_tuple(answer_text, context_docs)
 
-    def _fallback_tuple(
-        self, answer_text: str, context_chunks: list[DocumentChunk]
-    ) -> tuple[bool, list[str]]:
+    def _fallback_tuple(self, answer_text: str, context_chunks: list[DocumentChunk]) -> tuple[bool, list[str]]:
         """Fallback: text-overlap heuristic returning ``(supported, unsupported_claims)``."""
         result = self.verify(answer_text, context_chunks)
         return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
@@ -176,9 +172,7 @@ class GroundednessVerifier:
             )
 
         try:
-            context_excerpt = "\n".join(
-                f"[{c.source_name}] {c.text[:500]}" for c in context_docs
-            )
+            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_docs)
             prompt = _NLI_PROMPT.format(
                 answer=answer_text[:2000],
                 context=context_excerpt[:3000],

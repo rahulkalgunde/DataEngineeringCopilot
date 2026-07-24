@@ -96,6 +96,22 @@ class AsyncQdrantVectorStore:
             )
         except Exception:
             logger.debug("Payload index on 'source_name' already exists or could not be created.", exc_info=True)
+        try:
+            await self._client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="chunk_type",
+                field_schema="keyword",
+            )
+        except Exception:
+            logger.debug("Payload index on 'chunk_type' already exists or could not be created.", exc_info=True)
+        try:
+            await self._client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="section_header",
+                field_schema="keyword",
+            )
+        except Exception:
+            logger.debug("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
         return settings.embedding_dimension
@@ -108,6 +124,10 @@ class AsyncQdrantVectorStore:
             "url": chunk.url,
             "text": chunk.text,
             "content_hash": chunk.content_hash,
+            "section_header": chunk.section_header,
+            "chunk_type": chunk.chunk_type,
+            "word_count": chunk.word_count,
+            "heading_path": list(chunk.heading_path),
         }
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
@@ -143,8 +163,12 @@ class AsyncQdrantVectorStore:
             raise
 
     async def query(
-        self, query_embedding: list[float], top_k: int, query_text: str | None = None,
+        self,
+        query_embedding: list[float],
+        top_k: int,
+        query_text: str | None = None,
         source_filter: list[str] | None = None,
+        chunk_type_filter: str | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -161,6 +185,9 @@ class AsyncQdrantVectorStore:
         source_filter:
             Optional list of source names to filter results by.
             Applied at the Qdrant query level for efficiency.
+        chunk_type_filter:
+            Optional chunk type to filter results by (e.g. "api", "code", "text").
+            Applied at the Qdrant query level for efficiency.
         """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
@@ -168,15 +195,25 @@ class AsyncQdrantVectorStore:
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
 
-        # Build Qdrant filter for source names
+        # Build Qdrant filter for source names and chunk type
         query_filter = None
+        filter_conditions = []
         if source_filter:
-            query_filter = models.Filter(
-                must=[models.FieldCondition(
+            filter_conditions.append(
+                models.FieldCondition(
                     key="source_name",
                     match=models.MatchAny(any=source_filter),
-                )]
+                )
             )
+        if chunk_type_filter:
+            filter_conditions.append(
+                models.FieldCondition(
+                    key="chunk_type",
+                    match=models.MatchValue(value=chunk_type_filter),
+                )
+            )
+        if filter_conditions:
+            query_filter = models.Filter(must=filter_conditions)
 
         try:
             query_kwargs: dict = dict(
@@ -230,6 +267,11 @@ class AsyncQdrantVectorStore:
                     title=payload.get("title", ""),
                     url=payload.get("url", ""),
                     text=payload.get("text", ""),
+                    content_hash=payload.get("content_hash", ""),
+                    section_header=payload.get("section_header", ""),
+                    chunk_type=payload.get("chunk_type", "text"),
+                    word_count=payload.get("word_count", 0),
+                    heading_path=tuple(payload.get("heading_path", [])),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
                 confidence = max(0.0, min(1.0, score))

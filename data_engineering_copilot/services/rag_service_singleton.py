@@ -28,6 +28,7 @@ def get_rag_service() -> AsyncRagService:
         with _lock:
             if _instance is None:
                 from data_engineering_copilot.factory import build_rag_service
+
                 _instance = build_rag_service()
     return _instance
 

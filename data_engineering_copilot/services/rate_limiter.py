@@ -31,6 +31,7 @@ def _cleanup_in_memory_store() -> None:
     for key in empty_keys:
         del _IN_MEMORY_STORE[key]
 
+
 # Per-route defaults
 DEFAULT_LIMITS: dict[str, tuple[int, int]] = {
     "/api/v1/ask": (60, 60),  # 60 req / 60 s
