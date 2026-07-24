@@ -150,6 +150,76 @@ class GroundednessVerifier:
         result = self.verify(answer_text, context_chunks)
         return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
 
+    async def async_verify_with_score(
+        self,
+        answer: Answer,
+        context_chunks: list[RetrievedChunk],
+    ) -> tuple[bool, list[str], float]:
+        """LLM-based groundedness verification returning (supported, unsupported, score).
+
+        Combines async verification + score computation in a single LLM call.
+        Falls back to text-overlap heuristic on error.
+        """
+        if not self._enabled:
+            return (True, [], 1.0)
+
+        top_5 = context_chunks[:5]
+        answer_text = answer.text
+        context_docs: list[DocumentChunk] = [c.chunk for c in top_5]
+
+        if self._llm_client is None:
+            result = self.verify(answer_text, context_docs)
+            return (
+                result.overall_score >= 0.5,
+                [a.claim for a in result.annotations if not a.supported],
+                result.overall_score,
+            )
+
+        try:
+            context_excerpt = "\n".join(
+                f"[{c.source_name}] {c.text[:500]}" for c in context_docs
+            )
+            prompt = _NLI_PROMPT.format(
+                answer=answer_text[:2000],
+                context=context_excerpt[:3000],
+            )
+            raw = await self._llm_client.generate(prompt)
+
+            cleaned = raw.strip()
+            fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
+            if fence_match:
+                cleaned = fence_match.group(1).strip()
+
+            claims_data = json.loads(cleaned)
+            if not isinstance(claims_data, list):
+                raise ValueError("LLM returned non-array JSON")
+
+            annotations: list[ClaimAnnotation] = []
+            for item in claims_data:
+                claim = str(item.get("claim", "")).strip()
+                supported = bool(item.get("supported", False))
+                score = 1.0 if supported else 0.0
+                annotations.append(
+                    ClaimAnnotation(
+                        claim=claim,
+                        supported=supported,
+                        supporting_chunk_ids=(),
+                        score=score,
+                    )
+                )
+
+            overall = sum(a.score for a in annotations) / len(annotations) if annotations else 0.0
+            unsupported = [a.claim for a in annotations if not a.supported]
+            return (overall >= 0.5, unsupported, overall)
+        except Exception as exc:
+            logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
+            result = self.verify(answer_text, context_docs)
+            return (
+                result.overall_score >= 0.5,
+                [a.claim for a in result.annotations if not a.supported],
+                result.overall_score,
+            )
+
     def verify(
         self,
         answer_text: str,

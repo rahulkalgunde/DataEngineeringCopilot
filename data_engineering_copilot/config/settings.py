@@ -88,11 +88,11 @@ class AppSettings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     langfuse_url: str = "http://langfuse:3000"
     langfuse_public_key: str = Field(
-        default="pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be",
+        default="",
         validation_alias="LANGFUSE_PUBLIC_KEY",
     )
     langfuse_secret_key: str = Field(
-        default="sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1",
+        default="",
         validation_alias="LANGFUSE_SECRET_KEY",
     )
     langfuse_host: str = Field(

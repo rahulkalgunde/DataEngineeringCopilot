@@ -134,7 +134,8 @@ class AsyncRagService:
                     else:
                         q_emb = await self.embedder.embed_query(q)
                     results = await self.vector_store.query(
-                        q_emb, top_k=self.config.retrieval_top_k, query_text=q
+                        q_emb, top_k=self.config.retrieval_top_k, query_text=q,
+                        source_filter=source_filter,
                     )
                     any_success = True
                     for r in results:
@@ -174,13 +175,6 @@ class AsyncRagService:
             if trace:
                 trace.update(output=str(exc))
             raise RetrievalError(f"Retrieval failed: {exc}") from exc
-
-        # Apply source filter if provided
-        if source_filter:
-            retrieved_chunks = [
-                c for c in retrieved_chunks if c.chunk.source_name in source_filter
-            ]
-            logger.info("source_filter applied: sources=%s chunks=%d", source_filter, len(retrieved_chunks))
 
         if not retrieved_chunks:
             if trace:
@@ -272,13 +266,11 @@ class AsyncRagService:
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
             groundedness_score = 1.0
             if self.groundedness_verifier is not None:
-                supported, unsupported_claims = await self.groundedness_verifier.async_verify(
-                    result, retrieved_chunks
+                supported, unsupported_claims, groundedness_score = (
+                    await self.groundedness_verifier.async_verify_with_score(
+                        result, retrieved_chunks
+                    )
                 )
-                groundedness_result = self.groundedness_verifier.verify(
-                    result.text, [c.chunk for c in retrieved_chunks]
-                )
-                groundedness_score = groundedness_result.overall_score
                 logger.info(
                     "groundedness_supported=%s unsupported=%d score=%.2f",
                     supported, len(unsupported_claims), groundedness_score,
