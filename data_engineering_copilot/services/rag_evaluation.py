@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
+
+import numpy as np
 
 from data_engineering_copilot.domain.models import RetrievedChunk
 
@@ -49,11 +52,32 @@ class RetrievalEvaluator:
 
 
 class AnswerEvaluator:
-    """Evaluate answer relevance to context using token overlap."""
+    """Evaluate answer relevance to context using embedding cosine similarity or token overlap."""
+
+    def __init__(self, embedder=None) -> None:
+        self._embedder = embedder
 
     def score_relevance(self, answer: str, context: str) -> float:
-        if not answer.strip():
+        if not answer.strip() or not context.strip():
             return 0.0
+        if self._embedder is not None:
+            try:
+                if asyncio.iscoroutinefunction(self._embedder.embed_texts):
+                    embeddings = asyncio.run(self._embedder.embed_texts([answer, context]))
+                else:
+                    embeddings = self._embedder.embed_texts([answer, context])
+                if len(embeddings) == 2:
+                    a_emb = np.array(embeddings[0], dtype=np.float32)
+                    c_emb = np.array(embeddings[1], dtype=np.float32)
+                    norm_a = np.linalg.norm(a_emb)
+                    norm_c = np.linalg.norm(c_emb)
+                    if norm_a > 0 and norm_c > 0:
+                        cosine = float(np.dot(a_emb, c_emb) / (norm_a * norm_c))
+                        return max(0.0, min(1.0, cosine))
+            except Exception:
+                pass
+
+        # Fallback to token overlap
         answer_tokens = _tokenize(answer)
         context_tokens = _tokenize(context)
         if not answer_tokens:

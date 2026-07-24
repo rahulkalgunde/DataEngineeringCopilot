@@ -40,6 +40,7 @@ class AsyncRagService:
         token_tracker: object | None = None,
         retrieval_tracker: object | None = None,
         faithfulness_evaluator: FaithfulnessEvaluator | None = None,
+        ragas_evaluator: object | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -54,6 +55,7 @@ class AsyncRagService:
         self.token_tracker = token_tracker
         self.retrieval_tracker = retrieval_tracker
         self.faithfulness_evaluator = faithfulness_evaluator
+        self.ragas_evaluator = ragas_evaluator
         self._prompt_builder = PromptBuilder()
 
     async def answer(
@@ -177,6 +179,9 @@ class AsyncRagService:
                 scores = [c.confidence for c in retrieved_chunks]
                 self.retrieval_tracker.record_retrieval(scores, query=question)
         except RetrievalError:
+            if trace:
+                trace.update(output="RetrievalError")
+                trace.end()
             raise
         except Exception as exc:
             logger.exception("Failed during retrieval: %s", exc)
@@ -185,11 +190,13 @@ class AsyncRagService:
                 retrieval_span.end()
             if trace:
                 trace.update(output=str(exc))
+                trace.end()
             raise RetrievalError(f"Retrieval failed: {exc}") from exc
 
         if not retrieved_chunks:
             if trace:
                 trace.update(output="No chunks retrieved")
+                trace.end()
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
@@ -201,6 +208,7 @@ class AsyncRagService:
                 trace.update(
                     output=f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {self.config.confidence_threshold:.4f}"
                 )
+                trace.end()
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
@@ -257,6 +265,19 @@ class AsyncRagService:
                         completion_tokens=usage.completion_tokens,
                         model=usage.model,
                     )
+
+            # Output guardrails: verify structure and quality
+            from data_engineering_copilot.services.output_guardrails import OutputGuardrails
+            validated = OutputGuardrails.verify(answer_text, len(retrieved_chunks))
+            if validated is not None:
+                answer_text = validated.answer
+                logger.info(
+                    "output_guardrails passed confidence=%.2f citations=%d",
+                    validated.confidence,
+                    len(validated.citations),
+                )
+            else:
+                logger.info("output_guardrails rejected answer, using raw output")
 
             if generation_span:
                 generation_span.update(output=answer_text)
@@ -331,6 +352,9 @@ class AsyncRagService:
 
             return result
         except LLMGenerationError:
+            if trace:
+                trace.update(output="LLMGenerationError")
+                trace.end()
             raise
         except Exception as exc:
             logger.exception("Failed during answer generation: %s", exc)
@@ -339,4 +363,5 @@ class AsyncRagService:
                 generation_span.end()
             if trace:
                 trace.update(output=str(exc))
+                trace.end()
             raise LLMGenerationError(f"LLM generation failed: {exc}") from exc

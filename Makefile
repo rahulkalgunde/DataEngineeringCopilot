@@ -1,7 +1,7 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
 
-.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke lint format clean docker-up docker-down docker-ci-up
+.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-ci-up
 
 install:
 	uv pip install -e ".[dev]"
@@ -47,6 +47,9 @@ test-ci:
 # Quick sanity — smoke test
 test-smoke:
 	$(PYTEST) tests/unit/ -m "not slow" -q --no-header
+
+test-eval:
+	$(PYTEST) tests/evaluation/ -v
 
 lint:
 	$(PYTHON) -m ruff check data_engineering_copilot/ tests/

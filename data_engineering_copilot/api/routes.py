@@ -229,3 +229,51 @@ async def ask(request: AskRequest):
     except Exception as exc:
         logger.exception("RAG ask failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"RAG pipeline error: {exc}") from exc
+
+
+@router.post("/api/v1/ask/stream")
+async def ask_stream(request: AskRequest):
+    """Streaming RAG answer with Server-Sent Events."""
+    from fastapi.responses import StreamingResponse
+
+    from data_engineering_copilot.services.rag_service_singleton import get_rag_service
+
+    async def event_stream():
+        yield f"data: {json.dumps({'type': 'start'})}\n\n"
+        try:
+            service = get_rag_service()
+            answer_obj = await asyncio.wait_for(
+                service.answer(
+                    request.question,
+                    source_filter=request.source_filter,
+                ),
+                timeout=120.0,
+            )
+            sources = [
+                {"source": s.source_name, "title": s.title, "url": s.url}
+                for s in answer_obj.sources
+            ]
+            payload = {
+                "type": "answer",
+                "text": answer_obj.text,
+                "confidence": answer_obj.confidence,
+                "groundedness_score": answer_obj.groundedness_score,
+                "sources": sources,
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+        except TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Request timed out'})}\n\n"
+        except Exception as exc:
+            logger.exception("RAG streaming ask failed: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

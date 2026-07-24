@@ -1,7 +1,8 @@
 """Telemetry adapter conforming to TelemetryTracerProtocol.
 
-Provides ``LangfuseTelemetryTracer`` (wraps the existing Langfuse client)
-and ``NoOpTelemetryTracer`` (graceful no-op when Langfuse is unavailable).
+Provides ``OTelTelemetryTracer`` (primary, via OpenTelemetry),
+``LangfuseTelemetryTracer`` (fallback), and ``NoOpTelemetryTracer``
+(graceful no-op when neither is available).
 """
 
 from __future__ import annotations
@@ -71,14 +72,31 @@ class LangfuseTelemetryTracer:
 
 
 def build_telemetry_tracer() -> NoOpTelemetryTracer | LangfuseTelemetryTracer:
-    """Factory that returns a ``LangfuseTelemetryTracer`` if Langfuse is reachable,
-    otherwise a ``NoOpTelemetryTracer``."""
+    """Factory that returns the best available tracer.
+
+    Priority: OTel → Langfuse → NoOp.
+    """
+    # Try OpenTelemetry first
+    try:
+        from data_engineering_copilot.observability.otel_telemetry import OTelTelemetryTracer
+
+        otel = OTelTelemetryTracer()
+        if otel._tracer is not None:
+            logger.info("Using OpenTelemetry tracer")
+            return otel  # type: ignore[return-value]
+    except Exception as exc:
+        logger.debug("OTel telemetry unavailable: %s", exc)
+
+    # Fall back to Langfuse
     try:
         from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
         instance = get_langfuse_instance()
         if instance is not None:
+            logger.info("Using Langfuse tracer")
             return LangfuseTelemetryTracer(instance)
     except Exception as exc:
         logger.debug("Langfuse telemetry unavailable: %s", exc)
+
+    logger.info("Using NoOp tracer")
     return NoOpTelemetryTracer()

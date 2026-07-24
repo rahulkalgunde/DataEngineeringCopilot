@@ -168,6 +168,11 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
 
 
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
+    from data_engineering_copilot.services.contextual_chunk_enricher import (
+        ContextualChunkEnricher,
+        LLMContextSummarizer,
+    )
+
     logger.info(
         "building_async_ingestion_service",
         sources=len(app_settings.sources),
@@ -178,6 +183,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         redis_client = get_redis_client()
     except Exception:
         redis_client = None
+
+    contextual_enricher = ContextualChunkEnricher(
+        summarizer=LLMContextSummarizer(llm_client=build_llm_client(app_settings)),
+        enabled=app_settings.contextual_enrichment_enabled,
+    )
 
     return AsyncIngestionService(
         settings=app_settings,
@@ -192,6 +202,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
         ),
         redis_client=redis_client,
+        contextual_enricher=contextual_enricher,
         api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
         code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
     )
@@ -255,6 +266,9 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         enabled=app_settings.context_compression_enabled,
         max_chunks=app_settings.retrieval_top_k,
     )
+    from data_engineering_copilot.services.ragas_evaluation import RagasEvaluator
+
+    ragas_evaluator = RagasEvaluator()
 
     return AsyncRagService(
         config=rag_config,
@@ -274,4 +288,5 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         context_compressor=context_compressor,
         token_tracker=token_tracker,
         retrieval_tracker=retrieval_tracker,
+        ragas_evaluator=ragas_evaluator,
     )
