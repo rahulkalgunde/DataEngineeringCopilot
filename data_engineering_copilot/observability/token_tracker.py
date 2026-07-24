@@ -73,7 +73,16 @@ class RetrievalTracker:
         """Return score distribution statistics."""
         with self._lock:
             if not self._scores:
-                return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "min": 0.0, "max": 0.0, "count": 0, "queries": 0}
+                return {
+                    "mean": 0.0,
+                    "p50": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                    "min": 0.0,
+                    "max": 0.0,
+                    "count": 0,
+                    "queries": 0,
+                }
             sorted_scores = sorted(self._scores)
             n = len(sorted_scores)
             return {

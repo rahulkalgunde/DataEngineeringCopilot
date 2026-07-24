@@ -37,6 +37,9 @@ class AsyncIngestionService:
         redis_client: object | None = None,
         parse_executor: Executor | None = None,
         chunk_executor: Executor | None = None,
+        contextual_enricher: object | None = None,
+        api_extractor: object | None = None,
+        code_block_parser: object | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -48,6 +51,9 @@ class AsyncIngestionService:
         self._url_registries: dict[str, AsyncUrlRegistry] = {}
         self._processing_concurrency = settings.processing_concurrency
         self._corpus_texts: list[str] = []
+        self._contextual_enricher = contextual_enricher
+        self._api_extractor = api_extractor
+        self._code_block_parser = code_block_parser
 
         if parse_executor is not None:
             self._parse_executor = parse_executor
@@ -116,6 +122,7 @@ class AsyncIngestionService:
                 return None
             embeddings = await self.embeddings.embed_texts(sentences)
             import asyncio as _asyncio
+
             if _asyncio.iscoroutinefunction(self.chunker.chunk):
                 chunks = await self.chunker.chunk(parsed, embeddings)
             else:
@@ -138,6 +145,14 @@ class AsyncIngestionService:
         # Contextual enrichment (optional)
         if hasattr(self, "_contextual_enricher") and self._contextual_enricher is not None:
             batch_chunks = await self._contextual_enricher.enrich_chunks(batch_chunks)
+
+        # API documentation extraction (optional)
+        if hasattr(self, "_api_extractor") and self._api_extractor is not None:
+            batch_chunks = self._api_extractor.extract(batch_chunks)
+
+        # Code block parsing (optional)
+        if hasattr(self, "_code_block_parser") and self._code_block_parser is not None:
+            batch_chunks = self._code_block_parser.extract(batch_chunks)
 
         batch_size = len(batch_chunks)
         self._emit(

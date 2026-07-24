@@ -121,6 +121,14 @@ class AsyncRagService:
         if trace:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
 
+        # Determine chunk type filter based on intent
+        chunk_type_filter = None
+        if rewritten is not None:
+            if rewritten.intent == "api_lookup":
+                chunk_type_filter = "api"
+            elif rewritten.intent == "code_example":
+                chunk_type_filter = "code"
+
         # Retrieve with all query variations and merge results
         all_retrieved: list = []
         seen_ids: set[str] = set()
@@ -134,8 +142,11 @@ class AsyncRagService:
                     else:
                         q_emb = await self.embedder.embed_query(q)
                     results = await self.vector_store.query(
-                        q_emb, top_k=self.config.retrieval_top_k, query_text=q,
+                        q_emb,
+                        top_k=self.config.retrieval_top_k,
+                        query_text=q,
                         source_filter=source_filter,
+                        chunk_type_filter=chunk_type_filter,
                     )
                     any_success = True
                     for r in results:
@@ -266,14 +277,16 @@ class AsyncRagService:
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
             groundedness_score = 1.0
             if self.groundedness_verifier is not None:
-                supported, unsupported_claims, groundedness_score = (
-                    await self.groundedness_verifier.async_verify_with_score(
-                        result, retrieved_chunks
-                    )
-                )
+                (
+                    supported,
+                    unsupported_claims,
+                    groundedness_score,
+                ) = await self.groundedness_verifier.async_verify_with_score(result, retrieved_chunks)
                 logger.info(
                     "groundedness_supported=%s unsupported=%d score=%.2f",
-                    supported, len(unsupported_claims), groundedness_score,
+                    supported,
+                    len(unsupported_claims),
+                    groundedness_score,
                 )
                 if not supported and unsupported_claims:
                     result = Answer(

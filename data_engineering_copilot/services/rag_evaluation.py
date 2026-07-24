@@ -109,6 +109,7 @@ class RAGEvaluator:
 @dataclass
 class FaithfulnessResult:
     """LLM-based faithfulness scoring (RAGAS-compatible)."""
+
     faithfulness_score: float
     supported_claims: int
     unsupported_claims: int
@@ -141,10 +142,12 @@ class FaithfulnessEvaluator:
 
         try:
             import json
+
             result = await self._llm_client.generate(prompt)
             cleaned = result.strip()
             # Strip markdown fencing if present
             import re
+
             fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
             if fence_match:
                 cleaned = fence_match.group(1).strip()

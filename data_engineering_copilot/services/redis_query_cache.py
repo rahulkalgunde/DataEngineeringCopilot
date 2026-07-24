@@ -77,9 +77,7 @@ class RedisQueryCache:
 
         cursor = 0
         while True:
-            cursor, keys = await self._redis.scan(
-                cursor=cursor, match=f"{self._prefix}:semantic:*", count=100
-            )
+            cursor, keys = await self._redis.scan(cursor=cursor, match=f"{self._prefix}:semantic:*", count=100)
             for key in keys:
                 data = await self._redis.hgetall(key)
                 if "embedding" not in data or "answer" not in data:

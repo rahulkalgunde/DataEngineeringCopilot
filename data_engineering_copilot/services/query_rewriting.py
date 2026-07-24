@@ -11,6 +11,14 @@ from data_engineering_copilot.domain.protocols import EmbedderProtocol
 logger = logging.getLogger(__name__)
 
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("api_lookup", re.compile(
+        r"\b(\w+\.\w+\s*\(|DataFrame\.|SparkSession\.|spark\.read|spark\.sql|\.groupBy|\.select|\.filter|\.join|\.agg|\.write|\.show)\b",
+        re.IGNORECASE,
+    )),
+    ("code_example", re.compile(
+        r"\b(example|snippet|code (for|sample)|sample (code|implementation)|how to (write|code|implement)|pyspark code|scala code)\b",
+        re.IGNORECASE,
+    )),
     ("comparative", re.compile(r"\b(compare|vs\.?|versus|difference between|pros and cons)\b", re.IGNORECASE)),
     (
         "debugging",
@@ -86,6 +94,10 @@ class QueryRewriter:
             return self._decompose_how_to(query)
         if intent == "debugging":
             return self._decompose_debugging(query)
+        if intent == "api_lookup":
+            return self._decompose_api_lookup(query)
+        if intent == "code_example":
+            return self._decompose_code_example(query)
         # factual: single step
         return (query,)
 
@@ -264,11 +276,35 @@ class QueryRewriter:
 
     def _decompose_debugging(self, query: str) -> tuple[str, ...]:
         """Break debugging query into cause + solution sub-queries."""
-        m = re.search(r"(?:why|what).+?(?:failing|error|broken|oom|crash)\s+(.+?)(?:\?|$)", query, re.IGNORECASE)
+        m = re.search(r"(?:why|what)\s+.+?(?:failing|error|broken|oom|crash)", query, re.IGNORECASE)
         if m:
             context = m.group(0).strip()
             return (
                 f"What causes {context}?",
                 f"How to fix {context}?",
+            )
+        return (query,)
+
+    def _decompose_api_lookup(self, query: str) -> tuple[str, ...]:
+        """Expand API lookup into signature + parameters + examples."""
+        # Extract the method name from patterns like spark.read.parquet() or DataFrame.groupBy()
+        m = re.search(r"(\w+(?:\.\w+)*)\s*\(", query)
+        if m:
+            method = m.group(1)
+            return (
+                f"What is the signature of {method}?",
+                f"What are the parameters of {method}?",
+                f"{query}",
+            )
+        return (query,)
+
+    def _decompose_code_example(self, query: str) -> tuple[str, ...]:
+        """Expand code example query into implementation + usage sub-queries."""
+        m = re.search(r"(?:write|code|implement|show)\s+(.+?)(?:\?|$)", query, re.IGNORECASE)
+        if m:
+            topic = m.group(1).strip()
+            return (
+                f"Show me a code example for {topic}",
+                f"What is the recommended way to implement {topic}?",
             )
         return (query,)

@@ -11,9 +11,12 @@ from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
+from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
+from data_engineering_copilot.services.code_block_parser import CodeBlockParser
+from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from data_engineering_copilot.workers.progress import get_redis_client
 
@@ -47,6 +50,19 @@ def build_chunker(app_settings: AppSettings = settings):
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
             )
+
+    if strategy == "header_aware":
+        logger.info(
+            "building_header_aware_chunker",
+            strategy=strategy,
+            chunk_size=app_settings.chunk_size_words,
+            overlap=app_settings.chunk_overlap_words,
+        )
+        return HeaderAwareChunker(
+            chunk_size_words=app_settings.chunk_size_words,
+            overlap_words=app_settings.chunk_overlap_words,
+            min_chunk_words=int(app_settings.chunk_size_words * 0.1),
+        )
 
     if strategy not in ["fixed_size", "sentence_preserving"]:
         logger.warning(
@@ -121,6 +137,8 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
         ),
         redis_client=redis_client,
+        api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
+        code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
     )
 
 
@@ -173,6 +191,7 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
 
     # Wire trackers to API metrics endpoint
     from data_engineering_copilot.api.app import set_trackers
+
     set_trackers(retrieval_tracker=retrieval_tracker, token_tracker=token_tracker)
 
     # New Phase 2 modules

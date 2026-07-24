@@ -15,8 +15,10 @@ make test-quick       # unit only, no @slow (~15s)
 make test-unit        # all unit tests
 make test-unit-serial # sequential (debug xdist issues)
 make test-integration # integration (sequential, --reruns 2)
+make test-integration-parallel  # integration with xdist loadgroup (2 workers)
 make test-e2e         # end-to-end
-make test-ci          # CI gate: unit + integration + e2e with coverage
+make test-ci          # CI gate: unit (with coverage) + integration + e2e
+make test-smoke       # quick sanity: unit, no @slow, no header
 make lint             # ruff check data_engineering_copilot/ tests/
 make format           # ruff format data_engineering_copilot/ tests/
 make docker-up        # docker compose up -d (full stack)
@@ -24,7 +26,7 @@ make docker-ci-up     # docker compose -f docker-compose.ci.yml up -d --wait (in
 ```
 - Pytest markers: `integration`, `slow`, `qdrant`, `ollama`, `langfuse`, `rag`, `ingestion`, `api`, `evaluation`, `xdist_group(name)`.
 - Integration tests auto-skip when services unreachable (`tests/conftest.py`). Run with `-n 0 --reruns 2`.
-- `asyncio_mode = "auto"` in pyproject.toml; `asyncio_default_fixture_loop_scope = "function"`.
+- `asyncio_mode = "auto"` in pyproject.toml; `asyncio_default_fixture_loop_scope = "function"`. Async tests do NOT need `@pytest.mark.asyncio` — `auto` mode handles it.
 
 ## Running the App
 ```bash
@@ -44,6 +46,7 @@ dec_venv/bin/python -m uvicorn data_engineering_copilot.api.app:app --reload --p
 - `make docker-up` → Redis, Qdrant (6333/6334), Ollama (11434), Langfuse (3000), langfuse-worker, postgres, ClickHouse, MinIO, backend-api, celery_worker.
 - Redis requires auth password `local_secure_password_123` (set in docker-compose).
 - Pull Ollama models: `docker exec de_copilot_ollama ollama pull nomic-embed-text` and `llama3.2:3b`.
+- CI uses `COMPOSE_PROJECT_NAME: dec_ci` (`.github/workflows/test.yml`). Containers are prefixed `dec_ci_*`.
 
 ## Architecture
 ```
@@ -58,6 +61,9 @@ CLI/UI → AsyncRagService → Embeddings → QdrantVectorStore → Reranker →
 - **Reranker**: `sentence-transformers` CrossEncoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`), module-level singleton.
 - **Cache**: two-tier query cache (exact + semantic similarity) in `services/query_cache.py`; plus `CrawlCache` in `infrastructure/crawl_cache.py`.
 - **Observability**: `LangfuseTelemetryTracer` / `NoOpTelemetryTracer` fallback + `TokenTracker` + structlog.
+- **Chunking strategies**: `sentence_preserving` (default), `fixed_size`, `semantic`, `header_aware` (splits on `#`/`##`/`###` headers).
+- **Query intents**: `factual`, `how_to`, `debugging`, `comparative`, `api_lookup` (filters to `chunk_type="api"`), `code_example` (filters to `chunk_type="code"`).
+- **Post-processors**: `ApiDocExtractor` (API metadata enrichment), `CodeBlockParser` (code block splitting with AST), `ContextualChunkEnricher` (LLM-based context prefixes, opt-in).
 
 ## Gotchas
 - **Ollama raw mode**: `AsyncOllamaClient` sends `"raw": True` to skip Ollama's chat template, then strips `<think>` tags. Empty response means model exhausted output budget — increase `ollama_num_predict` or reduce context.
@@ -90,3 +96,7 @@ CLI/UI → AsyncRagService → Embeddings → QdrantVectorStore → Reranker →
 ## Ruff Config
 - line-length=120, target=py312, select=E,F,W,I,UP,B,SIM, ignore=E501.
 - Coverage omits `data_engineering_copilot/ui/*`.
+
+## Pre-commit
+- Hooks: trailing-whitespace, end-of-file-fixer, check-yaml, check-added-large-files (500KB), ruff --fix, ruff-format.
+- Commits may be blocked if files fail these checks. Run `make lint && make format` before committing.

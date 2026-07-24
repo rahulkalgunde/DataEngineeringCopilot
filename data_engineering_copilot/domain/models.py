@@ -29,11 +29,23 @@ class IngestionEvent:
 
 
 @dataclass(frozen=True)
+class DocumentSection:
+    """A structured section extracted from a parsed document."""
+
+    header: str
+    level: int  # 1 for #, 2 for ##, etc.
+    heading_path: tuple[str, ...]
+    text: str
+    code_blocks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ParsedDocument:
     source_name: str
     title: str
     url: str
     text: str
+    sections: tuple[DocumentSection, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,10 @@ class DocumentChunk:
     url: str
     text: str
     content_hash: str = ""
+    section_header: str = ""
+    chunk_type: str = "text"  # one of: text, code, api, table
+    word_count: int = 0
+    heading_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
