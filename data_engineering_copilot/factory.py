@@ -5,6 +5,9 @@ from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+from data_engineering_copilot.infrastructure.async_openai_embeddings import OpenAIEmbeddings
+from data_engineering_copilot.infrastructure.async_openrouter_client import OpenRouterLLMClient
+from data_engineering_copilot.infrastructure.async_openrouter_embeddings import OpenRouterEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
@@ -21,6 +24,57 @@ from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from data_engineering_copilot.workers.progress import get_redis_client
 
 logger = StructuredLogger(__name__)
+
+
+def build_llm_client(app_settings: AppSettings = settings):
+    """Build LLM client based on configured provider."""
+    provider = app_settings.llm_provider.lower()
+    if provider == "openrouter":
+        if not app_settings.openrouter_api_key:
+            raise ValueError("openrouter_api_key is required when llm_provider='openrouter'")
+        return OpenRouterLLMClient(
+            api_key=app_settings.openrouter_api_key,
+            model=app_settings.openrouter_model,
+            timeout_seconds=app_settings.ollama_timeout_seconds,
+        )
+    elif provider == "ollama":
+        return AsyncOllamaClient(
+            base_url=app_settings.ollama_base_url,
+            model=app_settings.ollama_model,
+            timeout_seconds=app_settings.ollama_timeout_seconds,
+            num_ctx=app_settings.ollama_num_ctx,
+            num_predict=app_settings.ollama_num_predict,
+        )
+    else:
+        raise ValueError(f"Unsupported llm_provider: {provider!r}. Choose 'ollama' or 'openrouter'.")
+
+
+def build_embedder(app_settings: AppSettings = settings):
+    """Build embedding provider based on configured provider."""
+    provider = app_settings.embedding_provider.lower()
+    if provider == "openai":
+        if not app_settings.openai_api_key:
+            raise ValueError("openai_api_key is required when embedding_provider='openai'")
+        return OpenAIEmbeddings(
+            api_key=app_settings.openai_api_key,
+            model_name=app_settings.openai_embedding_model,
+            base_url=app_settings.openai_embedding_base_url,
+            embedding_dimension=app_settings.openai_embedding_dimension,
+            batch_size=app_settings.embedding_batch_size,
+        )
+    elif provider == "openrouter":
+        if not app_settings.openrouter_api_key:
+            raise ValueError("openrouter_api_key is required when embedding_provider='openrouter'")
+        return OpenRouterEmbeddings(
+            api_key=app_settings.openrouter_api_key,
+            model_name=app_settings.openrouter_embedding_model,
+            embedding_dimension=app_settings.openrouter_embedding_dimension,
+            batch_size=app_settings.embedding_batch_size,
+        )
+    elif provider == "ollama":
+        return AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name)
+    else:
+        raise ValueError(f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openai', or 'openrouter'.")
 
 
 def build_chunker(app_settings: AppSettings = settings):
@@ -43,9 +97,7 @@ def build_chunker(app_settings: AppSettings = settings):
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
                 overlap_words=app_settings.chunk_overlap_words,
-                embedding_model=AsyncOllamaEmbeddings(
-                    model_name=app_settings.embedding_model_name,
-                ),
+                embedding_model=build_embedder(app_settings),
                 min_semantic_similarity=app_settings.min_semantic_similarity,
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
@@ -129,7 +181,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         crawler=build_async_crawler(app_settings),
         parser=MarkdownParser(),
         chunker=build_chunker(app_settings),
-        embeddings=AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name),
+        embeddings=build_embedder(app_settings),
         vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
@@ -152,7 +204,8 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
 
     logger.info(
         "building_async_rag_service",
-        model=app_settings.ollama_model,
+        llm_provider=app_settings.llm_provider,
+        embedding_provider=app_settings.embedding_provider,
         top_k=app_settings.retrieval_top_k,
         max_context_chars=app_settings.max_context_chars,
         hybrid=app_settings.hybrid_search_enabled,
@@ -165,22 +218,14 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         reranker_top_k=app_settings.reranker_top_k,
         max_context_chars=app_settings.max_context_chars,
     )
-    llm_client = AsyncOllamaClient(
-        base_url=app_settings.ollama_base_url,
-        model=app_settings.ollama_model,
-        timeout_seconds=app_settings.ollama_timeout_seconds,
-        num_ctx=app_settings.ollama_num_ctx,
-        num_predict=app_settings.ollama_num_predict,
-    )
+    llm_client = build_llm_client(app_settings)
     vector_store = AsyncQdrantVectorStore(
         url=app_settings.qdrant_url,
         collection_name=app_settings.collection_name,
         hybrid_search=app_settings.hybrid_search_enabled,
         hybrid_rrf_k=app_settings.hybrid_rrf_k,
     )
-    embedder = AsyncOllamaEmbeddings(
-        model_name=app_settings.embedding_model_name,
-    )
+    embedder = build_embedder(app_settings)
     reranker = None
     if app_settings.reranker_enabled:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)

@@ -11,14 +11,20 @@ from data_engineering_copilot.domain.protocols import EmbedderProtocol
 logger = logging.getLogger(__name__)
 
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("api_lookup", re.compile(
-        r"\b(\w+\.\w+\s*\(|DataFrame\.|SparkSession\.|spark\.read|spark\.sql|\.groupBy|\.select|\.filter|\.join|\.agg|\.write|\.show)\b",
-        re.IGNORECASE,
-    )),
-    ("code_example", re.compile(
-        r"\b(example|snippet|code (for|sample)|sample (code|implementation)|how to (write|code|implement)|pyspark code|scala code)\b",
-        re.IGNORECASE,
-    )),
+    (
+        "api_lookup",
+        re.compile(
+            r"\b(\w+\.\w+\s*\(|DataFrame\.|SparkSession\.|spark\.read|spark\.sql|\.groupBy|\.select|\.filter|\.join|\.agg|\.write|\.show)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "code_example",
+        re.compile(
+            r"\b(example|snippet|code (for|sample)|sample (code|implementation)|how to (write|code|implement)|pyspark code|scala code)\b",
+            re.IGNORECASE,
+        ),
+    ),
     ("comparative", re.compile(r"\b(compare|vs\.?|versus|difference between|pros and cons)\b", re.IGNORECASE)),
     (
         "debugging",

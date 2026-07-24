@@ -105,6 +105,22 @@ class AppSettings(BaseSettings):
     embedding_dimension: int = 768
     embedding_batch_size: int = 32
 
+    # Provider selection: "ollama" | "openrouter" | "openai"
+    llm_provider: str = "ollama"
+    embedding_provider: str = "ollama"
+
+    # OpenRouter settings (LLM + Embeddings)
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-3.5-sonnet"
+    openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
+    openrouter_embedding_dimension: int = 2048
+
+    # OpenAI settings (Embeddings only)
+    openai_api_key: str = ""
+    openai_embedding_model: str = "text-embedding-3-small"
+    openai_embedding_base_url: str = "https://api.openai.com"
+    openai_embedding_dimension: int = 1536
+
     ollama_model: str = "llama3.2:3b"
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"

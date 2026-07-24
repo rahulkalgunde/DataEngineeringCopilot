@@ -26,11 +26,7 @@ class TestHeaderAwareChunker:
         assert any(h in headers for h in ["Getting Started", "Configuration"])
 
     def test_heading_path_tracking(self):
-        md = (
-            "# Top\nIntro text.\n\n"
-            "## Middle\nMiddle text.\n\n"
-            "### Bottom\nBottom text.\n"
-        )
+        md = "# Top\nIntro text.\n\n## Middle\nMiddle text.\n\n### Bottom\nBottom text.\n"
         chunker = HeaderAwareChunker(chunk_size_words=100, overlap_words=10, min_chunk_words=3)
         chunks = chunker.chunk(_doc(md))
         # All three are nested: Top > Middle > Bottom — they share a path chain
@@ -38,11 +34,7 @@ class TestHeaderAwareChunker:
         assert all(c.heading_path for c in chunks)
 
     def test_code_blocks_preserved(self):
-        md = (
-            "## Example\nText before code.\n\n"
-            "```python\ndef foo():\n    pass\n```\n\n"
-            "Text after code.\n"
-        )
+        md = "## Example\nText before code.\n\n```python\ndef foo():\n    pass\n```\n\nText after code.\n"
         chunker = HeaderAwareChunker(chunk_size_words=200, overlap_words=10, min_chunk_words=3)
         chunks = chunker.chunk(_doc(md))
         assert len(chunks) >= 1
