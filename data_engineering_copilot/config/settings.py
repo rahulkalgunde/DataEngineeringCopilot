@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -72,7 +72,12 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
 
 
 class AppSettings(BaseSettings):
-    model_config = SettingsConfigDict(frozen=True)
+    model_config = SettingsConfigDict(
+        frozen=True,
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+    )
 
     project_root: Path = PROJECT_ROOT
     documentation_sources_path: Path = (
@@ -87,12 +92,12 @@ class AppSettings(BaseSettings):
     # URLs accessed within docker
     redis_url: str = "redis://redis:6379/0"
     langfuse_url: str = "http://langfuse:3000"
-    langfuse_public_key: str = Field(
-        default="",
+    langfuse_public_key: SecretStr = Field(
+        default=SecretStr(""),
         validation_alias="LANGFUSE_PUBLIC_KEY",
     )
-    langfuse_secret_key: str = Field(
-        default="",
+    langfuse_secret_key: SecretStr = Field(
+        default=SecretStr(""),
         validation_alias="LANGFUSE_SECRET_KEY",
     )
     langfuse_host: str = Field(
@@ -110,13 +115,13 @@ class AppSettings(BaseSettings):
     embedding_provider: str = "ollama"
 
     # OpenRouter settings (LLM + Embeddings)
-    openrouter_api_key: str = ""
+    openrouter_api_key: SecretStr = SecretStr("")
     openrouter_model: str = "anthropic/claude-3.5-sonnet"
     openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
     openrouter_embedding_dimension: int = 2048
 
     # OpenAI settings (Embeddings only)
-    openai_api_key: str = ""
+    openai_api_key: SecretStr = SecretStr("")
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_base_url: str = "https://api.openai.com"
     openai_embedding_dimension: int = 1536
@@ -185,6 +190,16 @@ class AppSettings(BaseSettings):
     def _load_sources_from_json(self) -> AppSettings:
         if not self.sources:
             object.__setattr__(self, "sources", load_documentation_sources(self.documentation_sources_path))
+        return self
+
+    @model_validator(mode="after")
+    def _validate_provider_api_keys(self) -> AppSettings:
+        if self.llm_provider == "openrouter" and not self.openrouter_api_key.get_secret_value():
+            raise ValueError("OPENROUTER_API_KEY is required when LLM_PROVIDER='openrouter'")
+        if self.embedding_provider == "openrouter" and not self.openrouter_api_key.get_secret_value():
+            raise ValueError("OPENROUTER_API_KEY is required when EMBEDDING_PROVIDER='openrouter'")
+        if self.embedding_provider == "openai" and not self.openai_api_key.get_secret_value():
+            raise ValueError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER='openai'")
         return self
 
 
