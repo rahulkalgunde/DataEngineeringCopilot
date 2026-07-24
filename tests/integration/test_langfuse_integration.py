@@ -135,8 +135,8 @@ class TestLangfuseTraceLifecycle:
 @pytest.mark.langfuse
 class TestLangfuseConfiguration:
     def test_settings_have_langfuse_keys(self):
-        assert settings.langfuse_public_key.startswith("pk-lf-")
-        assert settings.langfuse_secret_key.startswith("sk-lf-")
+        assert settings.langfuse_public_key.get_secret_value().startswith("pk-lf-")
+        assert settings.langfuse_secret_key.get_secret_value().startswith("sk-lf-")
         assert settings.langfuse_host.startswith("http")
 
     def test_langfuse_host_env_override(self, monkeypatch):
@@ -151,5 +151,5 @@ class TestLangfuseConfiguration:
             monkeypatch.delenv(var, raising=False)
         from data_engineering_copilot.config.settings import AppSettings
 
-        custom = AppSettings()
+        custom = AppSettings(_env_file=None)
         assert custom.langfuse_host == "http://langfuse:3000"

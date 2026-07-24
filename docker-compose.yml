@@ -229,13 +229,13 @@ services:
     volumes:
       - .:/app
       - ./logs:/app/logs
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
       - LOG_LEVEL=INFO
-      - LANGFUSE_SECRET_KEY=sk-lf-30b5912b-5882-4fe3-acfd-ecf0e38d1bb1
-      - LANGFUSE_PUBLIC_KEY=pk-lf-ff6ebcae-7f5f-470a-92b9-cd78ed04a8be
       - LANGFUSE_HOST=http://langfuse:3000
     networks:
       - de_copilot_net
@@ -262,11 +262,14 @@ services:
     volumes:
       - .:/app
       - ./logs:/app/logs
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
       - LOG_LEVEL=INFO
+      - LANGFUSE_HOST=http://langfuse:3000
     networks:
       - de_copilot_net
     restart: unless-stopped
