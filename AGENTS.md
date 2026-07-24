@@ -6,6 +6,7 @@ Write tests first. Run tests after every code change.
 ## Python & Environment
 - Always use `dec_venv/bin/python` (project-root venv). Never `python` or `pip`.
 - Install: `uv pip install -e ".[dev]"`. Only `uv`, never `pip` or `python -m venv`.
+- The venv directory is hardcoded to `dec_venv` in the Makefile (`PYTHON := dec_venv/bin/python`). A different name breaks every `make` target.
 
 ## Commands
 ```bash
@@ -22,7 +23,7 @@ make test-smoke       # quick sanity: unit, no @slow, no header
 make lint             # ruff check data_engineering_copilot/ tests/
 make format           # ruff format data_engineering_copilot/ tests/
 make docker-up        # docker compose up -d (full stack)
-make docker-ci-up     # docker compose -f docker-compose.ci.yml up -d --wait (infra only)
+make docker-ci-up     # docker compose -f docker-compose.ci.yml up -d --wait (infra stack)
 ```
 - Pytest markers: `integration`, `slow`, `qdrant`, `ollama`, `langfuse`, `rag`, `ingestion`, `api`, `evaluation`, `xdist_group(name)`.
 - Integration tests auto-skip when services unreachable (`tests/conftest.py`). Run with `-n 0 --reruns 2`.
