@@ -14,80 +14,68 @@ env:
   PYTHON_VERSION: "3.12"
   UV_VERSION: "0.4"
   COMPOSE_PROJECT_NAME: dec_ci
+  UV_PROJECT_ENVIRONMENT: dec_venv
 
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Lint
         run: uv run make lint
 
   test-unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: lint
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Unit Tests
         run: uv run make test-ci-unit
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           files: coverage.xml
           flags: unit
           fail_ci_if_error: false
-          # token: ${{ secrets.CODECOV_TOKEN }}   # if private repo
+          # token: ${{ secrets.CODECOV_TOKEN }}
 
   test-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: test-unit
+    timeout-minutes: 30
+    needs: [lint, test-unit]
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
       - name: Cache Docker images
@@ -107,12 +95,6 @@ jobs:
             docker load -i "$f"
           done
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ runner.os }}
-
       - name: Cache Ollama models
         uses: actions/cache@v4
         with:
@@ -120,6 +102,15 @@ jobs:
           key: ollama-models-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
           restore-keys: |
             ollama-models-${{ runner.os }}-
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}
+
+      - name: Fix Ollama cache permissions
+        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
 
       - name: Start all service dependencies
         run: |
@@ -130,19 +121,14 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
-      - name: Fix Ollama cache ownership
-        run: sudo chown -R $(whoami) .ollama_cache || true
-
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Integration Tests
         run: uv run make test-integration
 
       - name: Save Docker images to cache
-        if: always()
+        if: steps.docker-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p /tmp/docker-cache
 
@@ -164,19 +150,16 @@ jobs:
 
   test-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     needs: test-integration
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
       - name: Cache Docker images
@@ -204,6 +187,9 @@ jobs:
           restore-keys: |
             ollama-models-${{ runner.os }}-
 
+      - name: Fix Ollama cache permissions
+        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
+
       - name: Start service dependencies
         run: |
           docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 180 qdrant redis ollama
@@ -213,19 +199,14 @@ jobs:
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
 
-      - name: Fix Ollama cache ownership
-        run: sudo chown -R $(whoami) .ollama_cache || true
-
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: E2E Tests
         run: uv run make test-e2e
 
       - name: Save Docker images to cache
-        if: always()
+        if: steps.docker-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p /tmp/docker-cache
 
