@@ -22,7 +22,7 @@ class TestIntentRouting:
 
     def test_api_lookup_spark_sql(self):
         rw = _rewriter()
-        assert rw.classify_intent("spark.sql(\"SELECT * FROM t\")") == "api_lookup"
+        assert rw.classify_intent('spark.sql("SELECT * FROM t")') == "api_lookup"
 
     def test_code_example_pyspark(self):
         rw = _rewriter()

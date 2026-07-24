@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from data_engineering_copilot.domain.models import (
     DocumentChunk,
     IngestionEvent,
+    LLMUsage,
     ParsedDocument,
     RawDocument,
     RetrievedChunk,
@@ -56,6 +57,9 @@ class VectorStoreProtocol(Protocol):
 
 class LLMClientProtocol(Protocol):
     async def generate(self, prompt: str) -> str: ...
+
+    @property
+    def last_usage(self) -> LLMUsage: ...
 
 
 class RerankerProtocol(Protocol):

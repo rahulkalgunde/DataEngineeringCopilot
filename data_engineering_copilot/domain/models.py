@@ -80,6 +80,17 @@ class RagConfig:
 
 
 @dataclass(frozen=True)
+class LLMUsage:
+    """Unified token usage metadata returned by all LLM providers."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    model: str = ""
+    duration_ms: int = 0
+    tokens_per_second: float = 0.0
+
+
+@dataclass(frozen=True)
 class Answer:
     text: str
     sources: tuple[DocumentChunk, ...]
