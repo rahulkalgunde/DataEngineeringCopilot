@@ -168,7 +168,6 @@ class HeaderAwareChunker:
             wc = len(body.split())
             if wc >= self.min_chunk_words:
                 chunk_id = self._chunk_id(document, len(chunks))
-                enriched = f"[Source: {document.title}]\n{body}"
                 # Determine chunk type
                 ct = "text"
                 if current_code_parts and not current_text_parts:
@@ -181,7 +180,7 @@ class HeaderAwareChunker:
                         source_name=document.source_name,
                         title=document.title,
                         url=document.url,
-                        text=enriched,
+                        text=body,
                         section_header=current_heading,
                         chunk_type=ct,
                         word_count=wc,

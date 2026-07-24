@@ -181,7 +181,7 @@ class AppSettings(BaseSettings):
     context_compression_enabled: bool = False
     max_context_tokens: int = 4096
     # Post-processing toggles
-    contextual_enrichment_enabled: bool = False
+    contextual_enrichment_enabled: bool = True
     api_extraction_enabled: bool = True
     code_block_parsing_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = ()

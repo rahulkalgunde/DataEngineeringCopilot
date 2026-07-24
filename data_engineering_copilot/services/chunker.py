@@ -112,14 +112,13 @@ class DocumentChunker:
             # Apply quality validation
             if self._is_valid_chunk(text):
                 chunk_id = self._chunk_id(document, len(chunks))
-                enriched_text = f"[Source: {document.title}]\n{text}"
                 chunks.append(
                     DocumentChunk(
                         chunk_id=chunk_id,
                         source_name=document.source_name,
                         title=document.title,
                         url=document.url,
-                        text=enriched_text,
+                        text=text,
                     )
                 )
 
@@ -178,14 +177,13 @@ class DocumentChunker:
                 chunk_text = " ".join(current_chunk_sentences).strip()
                 if self._is_valid_chunk(chunk_text):
                     chunk_id = self._chunk_id(document, len(chunks))
-                    enriched_text = f"[Source: {document.title}]\n{chunk_text}"
                     chunks.append(
                         DocumentChunk(
                             chunk_id=chunk_id,
                             source_name=document.source_name,
                             title=document.title,
                             url=document.url,
-                            text=enriched_text,
+                            text=chunk_text,
                         )
                     )
 
@@ -209,14 +207,13 @@ class DocumentChunker:
             chunk_text = " ".join(current_chunk_sentences).strip()
             if self._is_valid_chunk(chunk_text):
                 chunk_id = self._chunk_id(document, len(chunks))
-                enriched_text = f"[Source: {document.title}]\n{chunk_text}"
                 chunks.append(
                     DocumentChunk(
                         chunk_id=chunk_id,
                         source_name=document.source_name,
                         title=document.title,
                         url=document.url,
-                        text=enriched_text,
+                        text=chunk_text,
                     )
                 )
 
