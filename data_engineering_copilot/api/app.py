@@ -7,6 +7,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from data_engineering_copilot.api.auth import ApiKeyAuthMiddleware
 from data_engineering_copilot.api.middleware import RateLimitMiddleware
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.services.health_check import HealthChecker
@@ -21,6 +22,9 @@ app = FastAPI(
 
 # Rate limiting middleware: per-route (60/min for /ask, 10/min for /ingest)
 app.add_middleware(RateLimitMiddleware)
+
+# API key authentication (no-op if API_KEY env var not set)
+app.add_middleware(ApiKeyAuthMiddleware)
 
 # CORS — allow all origins for local development; restrict in production
 app.add_middleware(

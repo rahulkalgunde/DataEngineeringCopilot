@@ -70,6 +70,15 @@ CLI/UI → AsyncRagService → Embeddings → QdrantVectorStore → Reranker →
 - **Logs**: structlog to `logs/app.log` and `logs/ingestion_refresh.log`.
 - **No canonical URL normalization** — query-string variants may duplicate pages.
 
+## Agent Behavioral Rules
+- **One edit per turn**: Never modify more than ONE file at a time. Do not chain multiple write actions.
+- **Read before writing**: Always `read` a file fully before editing. Never guess contents.
+- **No speculative code**: Write complete, production-ready implementations. No placeholders or TODOs.
+- **No unasked refactoring**: Fix only the explicit target requested. Do not clean up surrounding code.
+- **Single-command rule**: Run exactly ONE terminal command at a time. Wait for output before next.
+- **Anti-looping**: If you fail to resolve an error after 2 sequential attempts using the same tool, STOP and present current state.
+- **Test-driven**: Write tests first. After code change, run unit tests.
+
 ## Session & Plan Conventions
 - Check `git status` at start; alert user if uncommitted changes exist.
 - Check `plans/` and `sessions/` for stale files to resume.

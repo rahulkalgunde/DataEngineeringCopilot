@@ -187,11 +187,11 @@ class AskResponse(BaseModel):
 @router.post("/api/v1/ask", response_model=AskResponse)
 async def ask(request: AskRequest):
     """Answer a question using the RAG pipeline."""
-    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.rag_service_singleton import get_rag_service
     from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
     try:
-        service = build_rag_service()
+        service = get_rag_service()
         answer_obj = await asyncio.wait_for(
             service.answer(
                 request.question,
