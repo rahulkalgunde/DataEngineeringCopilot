@@ -86,9 +86,7 @@ class QueryCache:
         now = time.monotonic()
         best_score = -1.0
         best_answer = None
-        self._semantic_cache = [
-            entry for entry in self._semantic_cache if now - entry[3] <= self._ttl_seconds
-        ]
+        self._semantic_cache = [entry for entry in self._semantic_cache if now - entry[3] <= self._ttl_seconds]
         for embedding, _cached_q, answer, _ts in self._semantic_cache:
             score = _cosine_similarity(query_embedding, embedding)
             if score > best_score:

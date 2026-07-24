@@ -167,19 +167,18 @@ class CrossEncoderReranker:
             for idx, chunk in enumerate(remaining):
                 relevance = chunk.confidence
                 chunk_tokens = set(re.findall(r"[a-z0-9_]+", chunk.chunk.text.lower()))
-                max_sim = max(
-                    (len(chunk_tokens & s) / math.sqrt(len(chunk_tokens) * len(s)))
-                    for s in selected_tokens
-                ) if selected_tokens else 0.0
+                max_sim = (
+                    max((len(chunk_tokens & s) / math.sqrt(len(chunk_tokens) * len(s))) for s in selected_tokens)
+                    if selected_tokens
+                    else 0.0
+                )
                 mmr = lambda_param * relevance - (1 - lambda_param) * max_sim
                 if mmr > best_score:
                     best_score = mmr
                     best_idx = idx
             chosen = remaining.pop(best_idx)
             selected.append(chosen)
-            selected_tokens.append(
-                set(re.findall(r"[a-z0-9_]+", chosen.chunk.text.lower()))
-            )
+            selected_tokens.append(set(re.findall(r"[a-z0-9_]+", chosen.chunk.text.lower())))
         return selected
 
 
