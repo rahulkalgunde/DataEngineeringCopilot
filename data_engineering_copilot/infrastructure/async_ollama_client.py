@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from data_engineering_copilot.domain.models import LLMUsage
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,7 +52,11 @@ class AsyncOllamaClient:
         self.num_predict = num_predict
         self._client: httpx.AsyncClient | None = None
         self._loop_id: int | None = None
-        self.last_usage: dict[str, int] = {}
+        self._usage: LLMUsage = LLMUsage()
+
+    @property
+    def last_usage(self) -> LLMUsage:
+        return self._usage
 
     def _get_client(self) -> httpx.AsyncClient:
         """Lazy-initialize the httpx client on the current event loop.
@@ -121,13 +127,12 @@ class AsyncOllamaClient:
         duration_ms = int(total_duration_ns / 1_000_000) if total_duration_ns else 0
         tokens_per_second = (eval_count / (duration_ms / 1000)) if duration_ms > 0 else 0.0
 
-        self.last_usage = GenerationResult(
-            text=response,
-            prompt_eval_count=prompt_eval_count,
-            eval_count=eval_count,
+        self._usage = LLMUsage(
+            prompt_tokens=prompt_eval_count,
+            completion_tokens=eval_count,
+            model=self.model,
             duration_ms=duration_ms,
             tokens_per_second=round(tokens_per_second, 2),
-            model=self.model,
         )
 
         logger.info(

@@ -248,13 +248,13 @@ class AsyncRagService:
 
             answer_text = await self.llm_client.generate(prompt)
 
-            # Track token usage from OllamaClient
+            # Track token usage from LLM provider
             if self.token_tracker is not None and hasattr(self.llm_client, "last_usage"):
                 usage = getattr(self.llm_client, "last_usage", None)
                 if usage is not None:
                     self.token_tracker.record(
-                        prompt_tokens=usage.prompt_eval_count,
-                        completion_tokens=usage.eval_count,
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
                         model=usage.model,
                     )
 
