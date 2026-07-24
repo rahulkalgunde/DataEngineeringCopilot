@@ -143,7 +143,8 @@ class AsyncQdrantVectorStore:
             raise
 
     async def query(
-        self, query_embedding: list[float], top_k: int, query_text: str | None = None
+        self, query_embedding: list[float], top_k: int, query_text: str | None = None,
+        source_filter: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -157,12 +158,25 @@ class AsyncQdrantVectorStore:
             Optional raw query string.  When provided and hybrid search is active,
             the BM25 sparse vector is computed internally (eliminates the need for
             ``set_query_sparse``).
+        source_filter:
+            Optional list of source names to filter results by.
+            Applied at the Qdrant query level for efficiency.
         """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
             return []
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
+
+        # Build Qdrant filter for source names
+        query_filter = None
+        if source_filter:
+            query_filter = models.Filter(
+                must=[models.FieldCondition(
+                    key="source_name",
+                    match=models.MatchAny(any=source_filter),
+                )]
+            )
 
         try:
             query_kwargs: dict = dict(
@@ -182,11 +196,13 @@ class AsyncQdrantVectorStore:
                             query=query_embedding,
                             using="dense",
                             limit=top_k * 2,
+                            filter=query_filter,
                         ),
                         models.Prefetch(
                             query=sparse,
                             using="sparse",
                             limit=top_k * 2,
+                            filter=query_filter,
                         ),
                     ]
                     query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
@@ -194,10 +210,14 @@ class AsyncQdrantVectorStore:
                     query_kwargs["query"] = query_embedding
                     if self._hybrid_search:
                         query_kwargs["using"] = "dense"
+                    if query_filter is not None:
+                        query_kwargs["query_filter"] = query_filter
             else:
                 query_kwargs["query"] = query_embedding
                 if self._hybrid_search:
                     query_kwargs["using"] = "dense"
+                if query_filter is not None:
+                    query_kwargs["query_filter"] = query_filter
 
             results = await self._client.query_points(**query_kwargs)
             retrieved: list[RetrievedChunk] = []

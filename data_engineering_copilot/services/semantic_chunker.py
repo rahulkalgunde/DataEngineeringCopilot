@@ -86,7 +86,7 @@ class SemanticChunker:
             return None
         return sentences
 
-    def chunk(
+    async def chunk(
         self,
         document: ParsedDocument,
         precomputed_embeddings: list[list[float]] | None = None,
@@ -100,7 +100,11 @@ class SemanticChunker:
             embeddings = precomputed_embeddings
         elif self.embedding_model is not None:
             try:
-                embeddings = self.embedding_model.embed_texts(sentences)
+                import asyncio
+                if asyncio.iscoroutinefunction(self.embedding_model.embed_texts):
+                    embeddings = await self.embedding_model.embed_texts(sentences)
+                else:
+                    embeddings = self.embedding_model.embed_texts(sentences)
             except Exception as e:
                 logger.warning(
                     "Embedding failed for url=%s, cannot perform semantic chunking: %s",

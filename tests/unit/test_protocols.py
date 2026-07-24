@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from data_engineering_copilot.domain.models import (
-    DocumentationSourceConfig,
     DocumentChunk,
     ParsedDocument,
     RagConfig,
@@ -144,9 +143,11 @@ class TestDomainIsolation:
         )
 
     def test_domain_configs_exist(self):
-        source_cfg = DocumentationSourceConfig(
+        from data_engineering_copilot.config.settings import DocumentationSource
+
+        source_cfg = DocumentationSource(
             name="pandas",
-            start_url="https://pandas.pydata.org",
+            start_urls=("https://pandas.pydata.org",),
             allowed_domains=("pandas.pydata.org",),
         )
         assert source_cfg.name == "pandas"

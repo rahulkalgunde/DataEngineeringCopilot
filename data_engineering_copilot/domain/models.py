@@ -44,9 +44,6 @@ class DocumentChunk:
     url: str
     text: str
     content_hash: str = ""
-    extracted_entities: tuple[str, ...] = ()
-    source_type: str = ""
-    content_quality_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -54,14 +51,6 @@ class RetrievedChunk:
     chunk: DocumentChunk
     distance: float
     confidence: float
-
-
-@dataclass(frozen=True)
-class DocumentationSourceConfig:
-    name: str
-    start_url: str
-    allowed_domains: tuple[str, ...]
-    sitemap_url: str | None = None
 
 
 @dataclass(frozen=True)

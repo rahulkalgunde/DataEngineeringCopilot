@@ -145,7 +145,7 @@ class TestSemanticChunkerInitialization:
 class TestSemanticClustering:
     """Tests for semantic clustering algorithm."""
 
-    def test_clustering_groups_similar_sentences(self):
+    async def test_clustering_groups_similar_sentences(self):
         """Test that clustering groups semantically similar sentences."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -169,7 +169,7 @@ class TestSemanticClustering:
             text=text,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
         # Chunks should group related sentences
         assert all(len(c.text) > 0 for c in chunks)
@@ -239,7 +239,7 @@ class TestSemanticClustering:
 class TestChunkMerging:
     """Tests for chunk merging with size constraints."""
 
-    def test_merging_respects_target_size(self):
+    async def test_merging_respects_target_size(self):
         """Test that merging respects target chunk size."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -262,13 +262,13 @@ class TestChunkMerging:
             text=text,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         for chunk in chunks:
             word_count = len(chunk.text.split())
             # Allow some variance, but generally should be near target
             assert word_count <= chunker.max_chunk_words
 
-    def test_merging_respects_max_size_hard_limit(self):
+    async def test_merging_respects_max_size_hard_limit(self):
         """Test that max_chunk_words is enforced as hard limit."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -290,7 +290,7 @@ class TestChunkMerging:
             text=text,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         for chunk in chunks:
             word_count = len(chunk.text.split())
             # All chunks must respect hard limit
@@ -356,7 +356,7 @@ class TestChunkQualityValidation:
 class TestChunkIDGeneration:
     """Tests for chunk ID generation."""
 
-    def test_chunk_id_format_includes_semantic_marker(self):
+    async def test_chunk_id_format_includes_semantic_marker(self):
         """Test that semantic chunk IDs include 'semantic' marker."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -374,7 +374,7 @@ class TestChunkIDGeneration:
             text=text,
         )
 
-        document_chunks = chunker.chunk(document)
+        document_chunks = await chunker.chunk(document)
         for chunk in document_chunks:
             assert "semantic" in chunk.chunk_id
 
@@ -382,7 +382,7 @@ class TestChunkIDGeneration:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
-    def test_empty_document(self):
+    async def test_empty_document(self):
         """Test handling of empty document."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -399,10 +399,10 @@ class TestEdgeCases:
             text="",
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert chunks == []
 
-    def test_single_sentence_document(self):
+    async def test_single_sentence_document(self):
         """Test handling of single sentence."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -419,10 +419,10 @@ class TestEdgeCases:
             text="This is a single sentence.",
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert len(chunks) <= 1
 
-    def test_document_with_very_long_sentences(self):
+    async def test_document_with_very_long_sentences(self):
         """Test handling of documents with long sentences."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -442,13 +442,13 @@ class TestEdgeCases:
             text=long_sentence,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         # Should still respect max_chunk_words (allow small extra for [Source: ...] enrichment)
         for chunk in chunks:
             word_count = len(chunk.text.split())
             assert word_count <= 110
 
-    def test_embedding_model_failure_returns_empty(self):
+    async def test_embedding_model_failure_returns_empty(self):
         """Test that embedding failures return empty chunk list."""
         model = MagicMock()
         model.embed_texts.side_effect = Exception("Embedding failed")
@@ -467,14 +467,14 @@ class TestEdgeCases:
             text="This is a test document.",
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert chunks == []
 
 
 class TestIntegration:
     """Integration tests with realistic documents."""
 
-    def test_realistic_document(self):
+    async def test_realistic_document(self):
         """Test with realistic multi-topic document."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -504,13 +504,13 @@ class TestIntegration:
             text=text,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
         # Each chunk should have meaningful content
         assert all(len(c.text) > 0 for c in chunks)
         assert all(c.source_name == "Programming Topics" for c in chunks)
 
-    def test_chunker_reusability(self):
+    async def test_chunker_reusability(self):
         """Test that chunker can be reused for multiple documents."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -528,11 +528,11 @@ class TestIntegration:
                 text="This is a test document. " * 20,
             )
 
-            chunks = chunker.chunk(document)
+            chunks = await chunker.chunk(document)
             assert len(chunks) > 0
             assert all(c.source_name == f"Source {i}" for c in chunks)
 
-    def test_multiple_documents_independence(self):
+    async def test_multiple_documents_independence(self):
         """Test that documents produce independent chunks."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -554,13 +554,13 @@ class TestIntegration:
 
         all_chunks = []
         for doc in docs:
-            all_chunks.extend(chunker.chunk(doc))
+            all_chunks.extend(await chunker.chunk(doc))
 
         # All chunks should be unique
         chunk_ids = [c.chunk_id for c in all_chunks]
         assert len(chunk_ids) == len(set(chunk_ids))
 
-    def test_metadata_preservation(self):
+    async def test_metadata_preservation(self):
         """Test that chunk metadata is preserved."""
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
@@ -577,7 +577,7 @@ class TestIntegration:
             text="Spark is a big data framework. " * 20,
         )
 
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         for chunk in chunks:
             assert chunk.source_name == "Apache Spark Documentation"
             assert chunk.title == "Spark SQL"
