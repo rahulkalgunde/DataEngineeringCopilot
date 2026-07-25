@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,7 +12,11 @@ from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlR
 
 @pytest.fixture
 def mock_redis():
-    return MagicMock()
+    m = MagicMock()
+    m.hget = AsyncMock()
+    m.hset = AsyncMock()
+    m.delete = AsyncMock()
+    return m
 
 
 async def test_async_get_html_hash_found(mock_redis):

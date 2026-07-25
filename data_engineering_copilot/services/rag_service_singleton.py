@@ -27,9 +27,23 @@ def get_rag_service() -> AsyncRagService:
     if _instance is None:
         with _lock:
             if _instance is None:
+                from data_engineering_copilot.api.app import set_trackers
                 from data_engineering_copilot.factory import build_rag_service
+                from data_engineering_copilot.observability.token_tracker import (
+                    RetrievalTracker,
+                    TokenTracker,
+                )
 
-                _instance = build_rag_service()
+                token_tracker = TokenTracker()
+                retrieval_tracker = RetrievalTracker()
+                _instance = build_rag_service(
+                    token_tracker=token_tracker,
+                    retrieval_tracker=retrieval_tracker,
+                )
+                set_trackers(
+                    retrieval_tracker=retrieval_tracker,
+                    token_tracker=token_tracker,
+                )
     return _instance
 
 

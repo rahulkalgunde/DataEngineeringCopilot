@@ -135,9 +135,7 @@ class TestProgressEvents:
 class TestRecentEvents:
     def test_recent_events_capped_at_max(self, fresh_redis_client, tracker):
         for i in range(_MAX_RECENT_EVENTS + 5):
-            tracker.on_event(
-                _event("page_indexed", url=f"https://example.com/page{i}", chunks_indexed=1)
-            )
+            tracker.on_event(_event("page_indexed", url=f"https://example.com/page{i}", chunks_indexed=1))
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert len(doc["recent_events"]) == _MAX_RECENT_EVENTS
 
@@ -177,9 +175,7 @@ class TestSourceStats:
     def test_source_complete_overwrites_cumulative_chunks(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=3))
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=2))
-        tracker.on_event(
-            _event("source_complete", source_name="test_source", chunks_indexed=10)
-        )
+        tracker.on_event(_event("source_complete", source_name="test_source", chunks_indexed=10))
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["source_stats"]["test_source"]["chunks_indexed"] == 10
 

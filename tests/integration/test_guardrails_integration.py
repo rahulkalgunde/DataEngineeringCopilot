@@ -18,7 +18,13 @@ from data_engineering_copilot.services.output_guardrails import GuardrailedAnswe
 @pytest.mark.integration
 class TestValidAnswers:
     def test_valid_json_returns_guardrailed_answer(self):
-        raw = json.dumps({"answer": "Apache Spark is a distributed data processing engine.", "citations": [{"url": "https://example.com"}], "confidence": 0.9})
+        raw = json.dumps(
+            {
+                "answer": "Apache Spark is a distributed data processing engine.",
+                "citations": [{"url": "https://example.com"}],
+                "confidence": 0.9,
+            }
+        )
         result = OutputGuardrails.verify(raw, source_count=1)
         assert result is not None
         assert isinstance(result, GuardrailedAnswer)
@@ -50,7 +56,9 @@ class TestBoilerplateRejection:
         assert result is None
 
     def test_rejects_outside_my_knowledge(self):
-        raw = json.dumps({"answer": "This topic is outside my knowledge base.", "citations": [{"url": "https://example.com"}]})
+        raw = json.dumps(
+            {"answer": "This topic is outside my knowledge base.", "citations": [{"url": "https://example.com"}]}
+        )
         result = OutputGuardrails.verify(raw, source_count=1)
         assert result is None
 
@@ -60,7 +68,9 @@ class TestBoilerplateRejection:
         assert result is None
 
     def test_rejects_i_am_not_able_to(self):
-        raw = json.dumps({"answer": "I am not able to determine the answer from the provided sources.", "citations": []})
+        raw = json.dumps(
+            {"answer": "I am not able to determine the answer from the provided sources.", "citations": []}
+        )
         result = OutputGuardrails.verify(raw, source_count=1)
         assert result is None
 

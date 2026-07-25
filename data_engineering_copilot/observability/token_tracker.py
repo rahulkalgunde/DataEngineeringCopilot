@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 
@@ -56,11 +56,14 @@ class TokenTracker:
 
 
 class RetrievalTracker:
-    """Track retrieval score distributions for quality monitoring."""
+    """Track retrieval score distributions for quality monitoring.
 
-    def __init__(self) -> None:
+    Uses a fixed-capacity ring buffer to bound memory growth.
+    """
+
+    def __init__(self, max_samples: int = 10000) -> None:
         self._lock = threading.Lock()
-        self._scores: list[float] = []
+        self._scores: deque[float] = deque(maxlen=max_samples)
         self._query_count: int = 0
 
     def record_retrieval(self, scores: list[float], query: str = "") -> None:
@@ -100,3 +103,7 @@ class RetrievalTracker:
         with self._lock:
             self._scores.clear()
             self._query_count = 0
+
+    @property
+    def max_samples(self) -> int:
+        return self._scores.maxlen or 0

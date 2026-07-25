@@ -78,9 +78,7 @@ class _OTelSpan:
         if level == "ERROR":
             from opentelemetry import trace as otel_trace
 
-            self._span.set_status(
-                otel_trace.Status(otel_trace.StatusCode.ERROR, str(output))
-            )
+            self._span.set_status(otel_trace.Status(otel_trace.StatusCode.ERROR, str(output)))
         return self
 
     def end(self) -> None:

@@ -268,6 +268,7 @@ class AsyncRagService:
 
             # Output guardrails: verify structure and quality
             from data_engineering_copilot.services.output_guardrails import OutputGuardrails
+
             validated = OutputGuardrails.verify(answer_text, len(retrieved_chunks))
             if validated is not None:
                 answer_text = validated.answer

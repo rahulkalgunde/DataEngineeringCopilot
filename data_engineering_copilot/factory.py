@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import redis.asyncio as aioredis
+
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
@@ -21,7 +23,6 @@ from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
-from data_engineering_copilot.workers.progress import get_redis_client
 
 logger = StructuredLogger(__name__)
 
@@ -178,7 +179,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         collection=app_settings.collection_name,
     )
     try:
-        redis_client = get_redis_client()
+        redis_client = aioredis.from_url(
+            app_settings.redis_url,
+            decode_responses=True,
+            max_connections=20,
+        )
     except Exception:
         redis_client = None
 
@@ -207,7 +212,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     )
 
 
-def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
+def build_rag_service(
+    app_settings: AppSettings = settings,
+    token_tracker: TokenTracker | None = None,
+    retrieval_tracker: RetrievalTracker | None = None,
+) -> AsyncRagService:
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.context_compression import ContextCompressor
     from data_engineering_copilot.services.groundedness import GroundednessVerifier
@@ -244,15 +253,12 @@ def build_rag_service(app_settings: AppSettings = settings) -> AsyncRagService:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
 
     telemetry = build_telemetry_tracer()
-    token_tracker = TokenTracker()
-    retrieval_tracker = RetrievalTracker()
+    if token_tracker is None:
+        token_tracker = TokenTracker()
+    if retrieval_tracker is None:
+        retrieval_tracker = RetrievalTracker()
 
-    # Wire trackers to API metrics endpoint
-    from data_engineering_copilot.api.app import set_trackers
-
-    set_trackers(retrieval_tracker=retrieval_tracker, token_tracker=token_tracker)
-
-    # New Phase 2 modules
+    # Phase 2 modules
     query_rewriter = QueryRewriter(
         llm_client=llm_client,
         enabled=app_settings.query_rewrite_enabled,

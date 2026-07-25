@@ -7,7 +7,6 @@ nvidia/nemotron-3-embed-1b:free.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import httpx
@@ -15,6 +14,7 @@ import tiktoken
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
+from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> st
     return text
 
 
-class OpenRouterEmbeddings:
+class OpenRouterEmbeddings(SafeAsyncClientMixin):
     """Async OpenRouter embedding provider using the /api/v1/embeddings endpoint."""
 
     def __init__(
@@ -50,29 +50,22 @@ class OpenRouterEmbeddings:
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
-        self._base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/")
         self._embedding_dimension = embedding_dimension
         self._batch_size = batch_size
-        self._timeout_seconds = timeout_seconds
-        self._client: httpx.AsyncClient | None = None
-        self._loop_id: int | None = None
-        logger.info("Using OpenRouter embedding model %s at %s", model_name, self._base_url)
+        self.timeout_seconds = timeout_seconds
+        logger.info("Using OpenRouter embedding model %s at %s", model_name, self.base_url)
 
-    def _get_client(self) -> httpx.AsyncClient:
-        current_loop = id(asyncio.get_running_loop())
-        if self._client is not None and self._loop_id != current_loop:
-            self._client = None
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=httpx.Timeout(self._timeout_seconds),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "HTTP-Referer": "https://data-engineering-copilot.local",
-                },
-            )
-            self._loop_id = current_loop
-        return self._client
+    def _make_client_kwargs(self) -> dict:
+        return {
+            "headers": {
+                "Authorization": f"Bearer {self.api_key}",
+                "HTTP-Referer": "https://data-engineering-copilot.local",
+            }
+        }
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        return await self._get_safe_client()
 
     def _slice_texts_into_batches(self, texts: list[str], batch_size: int) -> list[list[str]]:
         if batch_size <= 0:
@@ -90,7 +83,7 @@ class OpenRouterEmbeddings:
         safe_texts = [_truncate_to_safe_tokens(t) for t in texts]
 
         try:
-            response = await self._get_client().post(
+            response = await (await self._get_client()).post(
                 "/embeddings",
                 json={
                     "model": self.model_name,
