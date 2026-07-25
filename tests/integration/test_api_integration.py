@@ -167,6 +167,67 @@ class TestIngestEndpoint:
         assert resp.status_code == 200
         mock_delay.assert_called_once()
 
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_allowed_when_stale_zombie(self, mock_delay, mock_ar, redis_test_client, client):
+        """Allow dispatch when Redis says PROCESSING but Celery says FAILURE."""
+        existing_task_id = "task-zombie-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {"task_id": existing_task_id, "status": "PROCESSING"}
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        mock_celery_task = MagicMock()
+        mock_celery_task.state = "FAILURE"
+        mock_ar.return_value = mock_celery_task
+
+        mock_new_task = MagicMock()
+        mock_new_task.id = "task-new-zombie"
+        mock_new_task.state = "PENDING"
+        mock_delay.return_value = mock_new_task
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 200
+        mock_delay.assert_called_once()
+
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_allowed_when_stale_revoked(self, mock_delay, mock_ar, redis_test_client, client):
+        """Allow dispatch when Redis says DISPATCHED but Celery says REVOKED."""
+        existing_task_id = "task-revoked-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {"task_id": existing_task_id, "status": "DISPATCHED"}
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        mock_celery_task = MagicMock()
+        mock_celery_task.state = "REVOKED"
+        mock_ar.return_value = mock_celery_task
+
+        mock_new_task = MagicMock()
+        mock_new_task.id = "task-new-revoked"
+        mock_new_task.state = "PENDING"
+        mock_delay.return_value = mock_new_task
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 200
+        mock_delay.assert_called_once()
+
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_returns_409_when_stale_but_celery_pending(self, mock_delay, mock_ar, redis_test_client, client):
+        """Return 409 when Redis says PROCESSING and Celery says PENDING (task still alive)."""
+        existing_task_id = "task-alive-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {"task_id": existing_task_id, "status": "PROCESSING"}
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        mock_celery_task = MagicMock()
+        mock_celery_task.state = "PENDING"
+        mock_ar.return_value = mock_celery_task
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 409
+        mock_delay.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/task/{task_id}  (mocked Celery AsyncResult only)
@@ -266,6 +327,7 @@ class TestIngestionStatusEndpoint:
 
     def test_returns_error_when_key_expired(self, redis_test_client, client):
         import time
+
         redis_test_client.set("ingestion:status:task-expired", "NOT_JSON", ex=1)
         time.sleep(1.1)
         resp = client.get("/api/v1/ingest/status/task-expired")

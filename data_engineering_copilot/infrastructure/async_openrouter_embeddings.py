@@ -11,11 +11,29 @@ import asyncio
 import logging
 
 import httpx
+import tiktoken
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
+
+# Fallback token encoder (matches OpenAI/OpenRouter common tokenizer tokenization ratio)
+_TOKENIZER = tiktoken.get_encoding("cl100k_base")
+MAX_SAFE_TOKENS = 3800  # Safe buffer below OpenRouter's 4096 model limit
+
+
+def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> str:
+    """Truncates text to stay safely under OpenRouter's token limit."""
+    tokens = _TOKENIZER.encode(text)
+    if len(tokens) > max_tokens:
+        logger.warning(
+            "Text length (%d tokens) exceeds max limit (%d). Truncating before sending to OpenRouter.",
+            len(tokens),
+            max_tokens,
+        )
+        return _TOKENIZER.decode(tokens[:max_tokens])
+    return text
 
 
 class OpenRouterEmbeddings:
@@ -68,15 +86,29 @@ class OpenRouterEmbeddings:
         reraise=True,
     )
     async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
+        # Pre-emptively truncate all texts to ensure no text exceeds 3800 tokens
+        safe_texts = [_truncate_to_safe_tokens(t) for t in texts]
+
         try:
             response = await self._get_client().post(
                 "/embeddings",
-                json={"model": self.model_name, "input": texts},
+                json={
+                    "model": self.model_name,
+                    "input": safe_texts,
+                    "provider": {"truncate": "END"},  # Instruct OpenRouter upstream to truncate if still oversized
+                },
             )
             response.raise_for_status()
             resp_data = response.json()
         except Exception as exc:
             raise EmbeddingError(f"Failed to get embeddings from OpenRouter: {exc}") from exc
+
+        # FIX: Check for OpenRouter 200 OK Embedded Error Body
+        if isinstance(resp_data, dict) and "error" in resp_data:
+            err_details = resp_data["error"]
+            err_msg = err_details.get("message", str(resp_data)) if isinstance(err_details, dict) else str(err_details)
+            err_code = err_details.get("code", "UNKNOWN") if isinstance(err_details, dict) else "UNKNOWN"
+            raise EmbeddingError(f"OpenRouter API returned error [Code {err_code}]: {err_msg}")
 
         if "data" not in resp_data:
             raise EmbeddingError(
@@ -91,10 +123,10 @@ class OpenRouterEmbeddings:
 
         embeddings = [item["embedding"] for item in sorted(data_list, key=lambda x: x.get("index", 0))]
 
-        if len(embeddings) != len(texts):
-            raise EmbeddingError(f"OpenRouter returned {len(embeddings)} embeddings for {len(texts)} input texts.")
+        if len(embeddings) != len(safe_texts):
+            raise EmbeddingError(f"OpenRouter returned {len(embeddings)} embeddings for {len(safe_texts)} input texts.")
 
-        self._validate_embedding_dimensions(embeddings, texts)
+        self._validate_embedding_dimensions(embeddings, safe_texts)
         return embeddings
 
     async def _embed_with_batching(self, texts: list[str]) -> list[list[float]]:

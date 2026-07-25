@@ -17,7 +17,7 @@ from data_engineering_copilot.observability.token_tracker import RetrievalTracke
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.async_rag import AsyncRagService
-from data_engineering_copilot.services.chunker import ChunkingStrategy, DocumentChunker
+from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
@@ -130,15 +130,13 @@ def build_chunker(app_settings: AppSettings = settings):
     logger.info(
         "building_document_chunker",
         strategy=strategy,
-        chunk_size=app_settings.chunk_size_words,
-        overlap=app_settings.chunk_overlap_words,
+        chunk_size=app_settings.chunk_size_words * 5,
+        overlap=app_settings.chunk_overlap_words * 5,
     )
 
     return DocumentChunker(
-        chunk_size_words=app_settings.chunk_size_words,
-        overlap_words=app_settings.chunk_overlap_words,
-        strategy=ChunkingStrategy(strategy),
-        min_chunk_words=int(app_settings.chunk_size_words * 0.1),
+        chunk_size=app_settings.chunk_size_words * 5,
+        chunk_overlap=app_settings.chunk_overlap_words * 5,
     )
 
 

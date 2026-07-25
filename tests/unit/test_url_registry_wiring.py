@@ -19,6 +19,22 @@ from data_engineering_copilot.workers.progress import IngestionProgressTracker
 class TestResetIndexClearsRegistry:
     """Step 5: Verify reset-index clears crawl:url_registry:* keys."""
 
+    def _make_urlopen_side_effect(self):
+        """Return a side_effect list: first call returns 404 (DELETE), second call succeeds (PUT)."""
+        import urllib.error
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"result": true}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        def _urlopen(req, timeout=10):
+            if req.get_method() == "DELETE":
+                raise urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
+            return mock_resp
+
+        return _urlopen
+
     def test_reset_index_clears_registry_keys(self) -> None:
         from data_engineering_copilot.cli import reset_index
 
@@ -32,19 +48,8 @@ class TestResetIndexClearsRegistry:
         ]
 
         with patch("data_engineering_copilot.cli.urllib.request") as mock_req:
-            import urllib.error
-
-            mock_resp = MagicMock()
-            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-            mock_resp.__exit__ = MagicMock(return_value=False)
             mock_req.Request.return_value = MagicMock()
-            mock_req.urlopen.side_effect = urllib.error.HTTPError(
-                url="",
-                code=404,
-                msg="Not Found",
-                hdrs=None,
-                fp=None,
-            )
+            mock_req.urlopen.side_effect = self._make_urlopen_side_effect()
 
             with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
                 reset_index()
@@ -60,16 +65,8 @@ class TestResetIndexClearsRegistry:
         mock_redis.scan_iter.return_value = []
 
         with patch("data_engineering_copilot.cli.urllib.request") as mock_req:
-            import urllib.error
-
             mock_req.Request.return_value = MagicMock()
-            mock_req.urlopen.side_effect = urllib.error.HTTPError(
-                url="",
-                code=404,
-                msg="Not Found",
-                hdrs=None,
-                fp=None,
-            )
+            mock_req.urlopen.side_effect = self._make_urlopen_side_effect()
 
             with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
                 reset_index()

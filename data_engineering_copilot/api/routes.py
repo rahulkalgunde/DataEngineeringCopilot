@@ -64,6 +64,10 @@ async def ingest_documents(request: IngestRequest):
                     raw = raw.decode() if isinstance(raw, bytes) else raw
                     existing_status = json.loads(raw).get("status")
                     if existing_status in ("PROCESSING", "DISPATCHED"):
+                        task_res = AsyncResult(latest_task_id)
+                        if task_res.state in ("FAILURE", "REVOKED"):
+                            existing_status = "FAILED"
+                    if existing_status in ("PROCESSING", "DISPATCHED"):
                         raise HTTPException(
                             status_code=409,
                             detail=f"Ingestion is already running (task {latest_task_id}). Cancel it or wait for completion.",
@@ -269,10 +273,7 @@ async def ask_stream(request: AskRequest):
                 ),
                 timeout=120.0,
             )
-            sources = [
-                {"source": s.source_name, "title": s.title, "url": s.url}
-                for s in answer_obj.sources
-            ]
+            sources = [{"source": s.source_name, "title": s.title, "url": s.url} for s in answer_obj.sources]
             payload = {
                 "type": "answer",
                 "text": answer_obj.text,

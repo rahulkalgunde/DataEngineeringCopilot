@@ -14,11 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 def _client_ip(request: Request) -> str:
-    """Extract client IP from X-Forwarded-For or direct connection."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Extract client IP from the direct connection."""
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

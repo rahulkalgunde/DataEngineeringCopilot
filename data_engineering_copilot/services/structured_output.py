@@ -31,14 +31,16 @@ def parse_rag_response(raw: str) -> StructuredAnswer:
 
     try:
         data = json.loads(text)
-        if isinstance(data, dict) and "answer" in data:
-            citations = data.get("citations", [])
-            if not isinstance(citations, list):
-                citations = []
-            return StructuredAnswer(
-                answer=str(data["answer"]),
-                citations=citations,
-            )
+        if isinstance(data, dict):
+            answer = data.get("answer") or data.get("response") or data.get("text") or data.get("content")
+            if answer is not None:
+                citations = data.get("citations", [])
+                if not isinstance(citations, list):
+                    citations = []
+                return StructuredAnswer(
+                    answer=str(answer),
+                    citations=citations,
+                )
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 

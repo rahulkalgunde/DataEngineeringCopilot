@@ -58,3 +58,28 @@ class TestContextCompressor:
         chunks = [_chunk("x", "Hello world test text.")]
         result = cc.compress(chunks, "hello")
         assert all(isinstance(c, DocumentChunk) for c in result)
+
+    def test_empty_query_returns_all_chunks_in_order(self):
+        cc = ContextCompressor(enabled=True, similarity_threshold=0.9)
+        chunks = [_chunk("a", "Alpha"), _chunk("b", "Beta"), _chunk("c", "Gamma")]
+        result = cc.compress(chunks, "")
+        assert len(result) == 3
+        assert [c.chunk_id for c in result] == ["a", "b", "c"]
+
+    def test_jaccard_at_exact_threshold_deduplicates(self):
+        cc = ContextCompressor(enabled=True, similarity_threshold=0.5)
+        chunks = [
+            _chunk("a", "cat dog bird fish"),
+            _chunk("b", "cat dog bird fish mouse"),
+        ]
+        result = cc.compress(chunks, "query")
+        assert len(result) == 1
+
+    def test_jaccard_below_threshold_keeps_both(self):
+        cc = ContextCompressor(enabled=True, similarity_threshold=0.9)
+        chunks = [
+            _chunk("a", "cat dog bird fish"),
+            _chunk("b", "elephant fox giraffe hippo"),
+        ]
+        result = cc.compress(chunks, "query")
+        assert len(result) == 2

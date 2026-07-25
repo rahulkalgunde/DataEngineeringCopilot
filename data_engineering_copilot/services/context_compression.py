@@ -22,8 +22,6 @@ def _cosine(a: set[str], b: set[str]) -> float:
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
-    if not a and not b:
-        return 1.0
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
@@ -59,13 +57,15 @@ class ContextCompressor:
 
         # Step 2: score relevance to query
         query_tokens = _tokenize(query)
+        if not query_tokens:
+            return deduped[: self._max_chunks]
+
         scored: list[tuple[float, int, DocumentChunk]] = []
         for idx, chunk in enumerate(deduped):
             chunk_tokens = _tokenize(chunk.text)
             # Combine cosine similarity with simple overlap ratio
-            cos_sim = _cosine(query_tokens, chunk_tokens) if query_tokens else 0.0
-            # Boost chunks that share more tokens with the query
-            overlap = len(query_tokens & chunk_tokens) / max(len(query_tokens), 1) if query_tokens else 0.0
+            cos_sim = _cosine(query_tokens, chunk_tokens)
+            overlap = len(query_tokens & chunk_tokens) / len(query_tokens)
             score = cos_sim * 0.6 + overlap * 0.4
             scored.append((score, idx, chunk))
 

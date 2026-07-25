@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
@@ -36,24 +37,24 @@ async def _run_async_crawl(urls: list[str]):
 @celery_app.task
 def execute_background_ingestion(urls: list[str]):
     """Legacy Celery entry point that crawls URLs directly using Crawl4AI."""
-    loop = asyncio.get_event_loop()
-    raw_docs = loop.run_until_complete(_run_async_crawl(urls))
 
-    embedder = AsyncOllamaEmbeddings(
-        model_name=settings.embedding_model_name,
-    )
-    chunker = DocumentChunker(
-        chunk_size_words=settings.chunk_size_words,
-        overlap_words=settings.chunk_overlap_words,
-    )
-    vector_store = AsyncQdrantVectorStore(
-        url=settings.qdrant_url,
-        collection_name=settings.collection_name,
-    )
+    async def _pipeline():
+        raw_docs = await _run_async_crawl(urls)
 
-    loop.run_until_complete(vector_store.initialize())
+        embedder = AsyncOllamaEmbeddings(
+            model_name=settings.embedding_model_name,
+        )
+        chunker = DocumentChunker(
+            chunk_size=settings.chunk_size_words * 5,
+            chunk_overlap=settings.chunk_overlap_words * 5,
+        )
+        vector_store = AsyncQdrantVectorStore(
+            url=settings.qdrant_url,
+            collection_name=settings.collection_name,
+        )
 
-    async def _process():
+        await vector_store.initialize()
+
         processed = 0
         for doc in raw_docs:
             if not getattr(doc, "success", False):
@@ -76,11 +77,17 @@ def execute_background_ingestion(urls: list[str]):
             processed += 1
         return processed
 
-    processed = loop.run_until_complete(_process())
-    return {"status": "INGESTION_COMPLETED", "processed_count": processed}
+    processed_count = asyncio.run(_pipeline())
+    return {"status": "INGESTION_COMPLETED", "processed_count": processed_count}
 
 
-@celery_app.task(bind=True, queue="ingestion")
+@celery_app.task(
+    bind=True,
+    queue="ingestion",
+    autoretry_for=(ConnectionError, TimeoutError),
+    retry_kwargs={"max_retries": 3, "countdown": 10},
+    retry_backoff=True,
+)
 def async_ingest_task(self, source_names: list[str], max_pages: int):
     """Production ingestion task using the full AsyncIngestionService pipeline.
 
@@ -109,6 +116,12 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         )
         tracker.mark_completed()
         log.info("async_ingest_task.completed", task_id=task_id)
+    except SoftTimeLimitExceeded:
+        err_msg = "Task exceeded soft time limit. Execution cancelled."
+        log.error("async_ingest_task.timeout", task_id=task_id)
+        tracker.mark_failed(err_msg)
+        raise
     except Exception as e:
         log.exception("async_ingest_task.failed", task_id=task_id, error=str(e))
         tracker.mark_failed(str(e))
+        raise
