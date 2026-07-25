@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import logging
-from enum import Enum
 
-import nltk
-from nltk.tokenize import sent_tokenize
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.utils.text import slugify
@@ -14,259 +11,94 @@ from data_engineering_copilot.utils.text import slugify
 logger = logging.getLogger(__name__)
 
 
-# Download required NLTK data on first import
-def _setup_nltk_data():
-    """Ensure required NLTK data is available."""
-    try:
-        nltk.data.find("tokenizers/punkt_tab")
-    except LookupError:
-        try:
-            nltk.download("punkt_tab", quiet=True)
-        except Exception:
-            # Fallback to older punkt tokenizer if punkt_tab fails
-            with contextlib.suppress(Exception):
-                nltk.download("punkt", quiet=True)
-
-
-_setup_nltk_data()
-
-
-class ChunkingStrategy(Enum):
-    """Enum for supported chunking strategies."""
-
-    FIXED_SIZE = "fixed_size"  # Legacy word-based fixed-size chunking
-    SENTENCE_PRESERVING = "sentence_preserving"  # New: sentence-boundary aware chunking
-
-
 class DocumentChunker:
-    """
-    Improved document chunker with support for multiple strategies.
+    """Syntax-aware document chunker using langchain RecursiveCharacterTextSplitter.
 
-    Attributes:
-        chunk_size_words: Target chunk size in words
-        overlap_words: Overlap between chunks in words
-        strategy: Chunking strategy to use
-        min_chunk_words: Minimum chunk size to avoid empty/tiny chunks
+    Detects programming language from the document URL and uses
+    language-appropriate splitters (e.g. splitting Python on class/def
+    boundaries, SQL on statement boundaries, etc.). Falls back to a
+    generic text splitter for non-code documents.
     """
 
     def __init__(
         self,
-        chunk_size_words: int,
-        overlap_words: int,
-        strategy: ChunkingStrategy | str = ChunkingStrategy.SENTENCE_PRESERVING,
-        min_chunk_words: int = 10,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 100,
     ) -> None:
-        if chunk_size_words <= 0:
-            raise ValueError("chunk_size_words must be positive")
-        if overlap_words < 0 or overlap_words >= chunk_size_words:
-            raise ValueError("overlap_words must be >= 0 and less than chunk_size_words")
-        if min_chunk_words < 0:
-            raise ValueError("min_chunk_words must be non-negative")
-        if min_chunk_words > chunk_size_words:
-            raise ValueError("min_chunk_words must not exceed chunk_size_words")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap must be >= 0 and less than chunk_size")
 
-        self.chunk_size_words = chunk_size_words
-        self.overlap_words = overlap_words
-        self.min_chunk_words = min_chunk_words
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
 
-        # Convert string to enum if needed
-        if isinstance(strategy, str):
-            try:
-                self.strategy = ChunkingStrategy(strategy)
-            except ValueError as err:
-                raise ValueError(f"Unknown chunking strategy: {strategy}") from err
-        else:
-            self.strategy = strategy
+        self._default_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " ", ""],
+        )
+        self._language_splitters = {
+            Language.PYTHON: RecursiveCharacterTextSplitter.from_language(
+                Language.PYTHON, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            ),
+            Language.SCALA: RecursiveCharacterTextSplitter.from_language(
+                Language.SCALA, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            ),
+            Language.JAVA: RecursiveCharacterTextSplitter.from_language(
+                Language.JAVA, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            ),
+            Language.R: RecursiveCharacterTextSplitter.from_language(
+                Language.R, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+            ),
+        }
+
+    def _detect_language(self, url: str) -> Language | None:
+        url_lower = url.lower()
+        if "/api/python/" in url_lower or "/pyspark" in url_lower:
+            return Language.PYTHON
+        if "/api/scala/" in url_lower:
+            return Language.SCALA
+        if "/api/java/" in url_lower:
+            return Language.JAVA
+        if "/api/r/" in url_lower:
+            return Language.R
+        return None
 
     def chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
-        """
-        Chunk a parsed document using the configured strategy.
+        lang = self._detect_language(document.url)
+        splitter = self._language_splitters.get(lang, self._default_splitter)
 
-        Args:
-            document: ParsedDocument to chunk
+        texts = splitter.split_text(document.text)
 
-        Returns:
-            List of DocumentChunk objects
-        """
-        if self.strategy == ChunkingStrategy.FIXED_SIZE:
-            return self._chunk_fixed_size(document)
-        elif self.strategy == ChunkingStrategy.SENTENCE_PRESERVING:
-            return self._chunk_sentence_preserving(document)
-        else:
-            raise ValueError(f"Unsupported chunking strategy: {self.strategy}")
-
-    def _chunk_fixed_size(self, document: ParsedDocument) -> list[DocumentChunk]:
-        """
-        Legacy fixed-size word-based chunking.
-        Splits text into fixed word chunks regardless of sentence boundaries.
-        """
-        words = document.text.split()
         chunks: list[DocumentChunk] = []
-        start = 0
-        step = self.chunk_size_words - self.overlap_words
-
-        while start < len(words):
-            end = min(start + self.chunk_size_words, len(words))
-            text = " ".join(words[start:end])
-
-            # Apply quality validation
-            if self._is_valid_chunk(text):
-                chunk_id = self._chunk_id(document, len(chunks))
-                chunks.append(
-                    DocumentChunk(
-                        chunk_id=chunk_id,
-                        source_name=document.source_name,
-                        title=document.title,
-                        url=document.url,
-                        text=text,
-                    )
-                )
-
-            if end == len(words):
-                break
-            start += step
-
-        logger.info(
-            "Chunked document (fixed-size) source=%s url=%s title=%r words=%s chunks=%s",
-            document.source_name,
-            document.url,
-            document.title,
-            len(words),
-            len(chunks),
-        )
-        return chunks
-
-    def _chunk_sentence_preserving(self, document: ParsedDocument) -> list[DocumentChunk]:
-        """
-        Sentence-boundary aware chunking.
-
-        Strategy:
-        1. Split text into sentences using NLTK
-        2. Group sentences into chunks respecting target word size
-        3. Preserve paragraph boundaries when possible
-        4. Apply min/max chunk size constraints
-        5. Validate chunk quality before inclusion
-
-        Returns:
-            List of DocumentChunk objects with sentence boundaries preserved
-        """
-        try:
-            sentences = sent_tokenize(document.text)
-        except Exception as e:
-            logger.warning(
-                "Sentence tokenization failed for url=%s, falling back to fixed-size: %s",
-                document.url,
-                str(e),
+        for i, text in enumerate(texts):
+            chunk = DocumentChunk(
+                chunk_id=self._chunk_id(document, i),
+                source_name=document.source_name,
+                title=document.title,
+                url=document.url,
+                text=text,
             )
-            return self._chunk_fixed_size(document)
-
-        if not sentences:
-            logger.warning("No sentences found in document url=%s", document.url)
-            return []
-
-        chunks: list[DocumentChunk] = []
-        current_chunk_sentences: list[str] = []
-        current_chunk_words = 0
-        step = max(1, self.chunk_size_words - self.overlap_words)
-
-        for sentence in sentences:
-            sentence_words = len(sentence.split())
-
-            # If adding this sentence exceeds step (new content target), finalize current chunk
-            if current_chunk_words + sentence_words > step and current_chunk_sentences:
-                chunk_text = " ".join(current_chunk_sentences).strip()
-                if self._is_valid_chunk(chunk_text):
-                    chunk_id = self._chunk_id(document, len(chunks))
-                    chunks.append(
-                        DocumentChunk(
-                            chunk_id=chunk_id,
-                            source_name=document.source_name,
-                            title=document.title,
-                            url=document.url,
-                            text=chunk_text,
-                        )
-                    )
-
-                # Start new chunk with overlap: keep the last N words from previous chunk
-                current_chunk_sentences = []
-                current_chunk_words = 0
-
-                # Add overlap: reuse sentences from end of previous chunk if available
-                if chunks and self.overlap_words > 0:
-                    overlap_text = chunk_text.split()[-self.overlap_words :]
-                    if overlap_text:
-                        current_chunk_sentences.append(" ".join(overlap_text))
-                        current_chunk_words = len(overlap_text)
-
-            # Add sentence to current chunk
-            current_chunk_sentences.append(sentence)
-            current_chunk_words += sentence_words
-
-        # Handle final chunk
-        if current_chunk_sentences:
-            chunk_text = " ".join(current_chunk_sentences).strip()
-            if self._is_valid_chunk(chunk_text):
-                chunk_id = self._chunk_id(document, len(chunks))
-                chunks.append(
-                    DocumentChunk(
-                        chunk_id=chunk_id,
-                        source_name=document.source_name,
-                        title=document.title,
-                        url=document.url,
-                        text=chunk_text,
-                    )
-                )
+            chunks.append(chunk)
 
         logger.info(
-            "Chunked document (sentence-preserving) source=%s url=%s title=%r sentences=%s chunks=%s",
+            "Chunked document source=%s url=%s title=%r lang=%s chunks=%s",
             document.source_name,
             document.url,
             document.title,
-            len(sentences),
+            lang.name if lang else "text",
             len(chunks),
         )
         return chunks
 
     def _is_valid_chunk(self, text: str) -> bool:
-        """
-        Validate chunk quality before inclusion.
-
-        Rules:
-        - Must have at least min_chunk_words words
-        - Must not be empty after stripping
-        - Must contain at least some alphanumeric content (not just punctuation)
-
-        Args:
-            text: Chunk text to validate
-
-        Returns:
-            True if chunk is valid, False otherwise
-        """
         text = text.strip()
         if not text:
             return False
-
-        words = text.split()
-        if len(words) < self.min_chunk_words:
-            return False
-
-        # Ensure chunk has meaningful content (not just punctuation)
-        has_alphanumeric = any(c.isalnum() for c in text)
-        return has_alphanumeric
+        return any(c.isalnum() for c in text)
 
     def _chunk_id(self, document: ParsedDocument, index: int) -> str:
-        """
-        Generate deterministic chunk ID.
-
-        Format: {source_slug}:{url_digest}:{index:04d}
-
-        Args:
-            document: Source document
-            index: Chunk index within document
-
-        Returns:
-            Unique chunk identifier
-        """
         digest = hashlib.sha1(document.url.encode("utf-8")).hexdigest()[:10]
         source = slugify(document.source_name)
         return f"{source}:{digest}:{index:04d}"

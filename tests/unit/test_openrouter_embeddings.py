@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -82,8 +84,6 @@ async def test_embed_sends_correct_payload(embeddings):
             )
         )
         await embeddings.embed_texts(["hello world"])
-        import json
-
         body = json.loads(route.calls.last.request.content)
         assert body["model"] == "nvidia/nemotron-3-embed-1b:free"
         assert body["input"] == ["hello world"]
@@ -132,6 +132,51 @@ async def test_embed_http_error(embeddings):
         from data_engineering_copilot.domain.exceptions import EmbeddingError
 
         with pytest.raises(EmbeddingError, match="Failed to get embeddings"):
+            await embeddings.embed_texts(["test"])
+
+
+def test_truncate_to_safe_tokens_short_text():
+    from data_engineering_copilot.infrastructure.async_openrouter_embeddings import _truncate_to_safe_tokens
+
+    result = _truncate_to_safe_tokens("short text", max_tokens=100)
+    assert result == "short text"
+
+
+def test_truncate_to_safe_tokens_long_text():
+    from data_engineering_copilot.infrastructure.async_openrouter_embeddings import _truncate_to_safe_tokens
+
+    text = "hello world " * 1000
+    result = _truncate_to_safe_tokens(text, max_tokens=10)
+    assert len(result) < len(text)
+
+
+@pytest.mark.asyncio
+async def test_embed_sends_truncate_provider_param():
+    embs = OpenRouterEmbeddings(api_key="key")
+    with respx.mock:
+        route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"embedding": [0.1] * 2048, "index": 0}]},
+            )
+        )
+        await embs.embed_texts(["hello"])
+        body = json.loads(route.calls.last.request.content)
+        assert body["provider"] == {"truncate": "END"}
+
+
+@pytest.mark.asyncio
+async def test_embed_handles_error_in_response(embeddings):
+    with respx.mock:
+        respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={"error": {"message": "Input too long", "code": 422}},
+            )
+        )
+        from data_engineering_copilot.domain.exceptions import EmbeddingError
+
+        with pytest.raises(EmbeddingError, match="OpenRouter API returned error"):
             await embeddings.embed_texts(["test"])
 
 

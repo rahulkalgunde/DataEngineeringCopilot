@@ -95,7 +95,7 @@ class TestIngestionPipelineE2E:
         parsed = MarkdownParser().parse(raw)
         assert parsed is not None
 
-        chunker = DocumentChunker(chunk_size_words=100, overlap_words=20)
+        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
         chunks = chunker.chunk(parsed)
         assert len(chunks) >= 2
 
@@ -132,7 +132,7 @@ class TestIngestionPipelineE2E:
         )
         parsed = MarkdownParser().parse(raw)
         content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
-        chunker = DocumentChunker(chunk_size_words=100, overlap_words=20)
+        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
         chunks = chunker.chunk(parsed)
         chunks = [dataclasses.replace(c, content_hash=content_hash) for c in chunks]
         texts = [c.text for c in chunks]
@@ -150,7 +150,7 @@ class TestIngestionPipelineE2E:
             html=SAMPLE_HTML,
         )
         parsed = MarkdownParser().parse(raw)
-        chunker = DocumentChunker(chunk_size_words=100, overlap_words=20)
+        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
         chunks = chunker.chunk(parsed)
         texts = [c.text for c in chunks]
         embeddings = asyncio.run(embedder.embed_texts(texts))
