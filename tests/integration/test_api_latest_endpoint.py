@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from data_engineering_copilot.api.app import app
@@ -12,6 +13,8 @@ from data_engineering_copilot.api.app import app
 client = TestClient(app)
 
 
+@pytest.mark.integration
+@pytest.mark.api
 class TestLatestEndpoint:
     def test_returns_task_status(self):
         task_id = "test-latest-123"

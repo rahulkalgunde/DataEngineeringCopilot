@@ -53,8 +53,9 @@ class CrawlFrontierDB:
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self.db_path)
+        self._db = await aiosqlite.connect(self.db_path, timeout=30)
         self._db.row_factory = aiosqlite.Row
+        await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA_SQL)
         await self._db.commit()
         reset_count = await self.reset_stranded()

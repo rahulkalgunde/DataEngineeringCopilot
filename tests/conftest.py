@@ -64,10 +64,25 @@ def _langfuse_is_reachable(url: str = "http://localhost:3000", timeout: int = 3)
     return False
 
 
+def _redis_is_reachable(url: str = "redis://localhost:6379/0", timeout: int = 3) -> bool:
+    """Return True if Redis responds to PING."""
+    try:
+        import socket
+
+        sock = socket.create_connection(("localhost", 6379), timeout=timeout)
+        sock.sendall(b"PING\r\n")
+        response = sock.recv(1024)
+        sock.close()
+        return b"PONG" in response
+    except Exception:
+        return False
+
+
 # Module-level caches so we only hit each service once per test session
 _qdrant_ok: bool | None = None
 _ollama_ok: bool | None = None
 _langfuse_ok: bool | None = None
+_redis_ok: bool | None = None
 
 
 def qdrant_available() -> bool:
@@ -91,6 +106,13 @@ def langfuse_available() -> bool:
     return _langfuse_ok
 
 
+def redis_available() -> bool:
+    global _redis_ok
+    if _redis_ok is None:
+        _redis_ok = _redis_is_reachable()
+    return _redis_ok
+
+
 def require_qdrant():
     if not qdrant_available():
         pytest.skip("Qdrant is not reachable — skipping test")
@@ -104,6 +126,11 @@ def require_ollama():
 def require_langfuse():
     if not langfuse_available():
         pytest.skip("Langfuse is not reachable — skipping test")
+
+
+def require_redis():
+    if not redis_available():
+        pytest.skip("Redis is not reachable — skipping test")
 
 
 def require_qdrant_and_ollama():
@@ -139,6 +166,9 @@ def pytest_collection_modifyitems(config, items):
 
         if "langfuse" in markers and not langfuse_available():
             item.add_marker(pytest.mark.skip(reason="Langfuse is not reachable"))
+
+        if "redis" in markers and not redis_available():
+            item.add_marker(pytest.mark.skip(reason="Redis is not reachable"))
 
         if "rag" in markers and (not qdrant_available() or not ollama_available()):
             item.add_marker(pytest.mark.skip(reason="RAG tests require Qdrant + Ollama"))

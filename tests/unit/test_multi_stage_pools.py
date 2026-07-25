@@ -7,7 +7,7 @@ embedding and storage.
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -98,8 +98,8 @@ class TestMultiStagePools:
         assert not hasattr(service, "_embed_executor")
         assert not hasattr(service, "_store_executor")
 
-        assert isinstance(service._parse_executor, ProcessPoolExecutor)
-        assert isinstance(service._chunk_executor, ProcessPoolExecutor)
+        assert isinstance(service._parse_executor, ThreadPoolExecutor)
+        assert isinstance(service._chunk_executor, ThreadPoolExecutor)
 
     def test_executor_sizes_match_settings(self):
         service = _make_service(parse_concurrency=3, chunk_concurrency=5, embed_concurrency=2, store_concurrency=1)
@@ -181,6 +181,64 @@ class TestMultiStagePools:
 
         assert len(embed_called) == 1
         assert len(store_called) == 1
+
+    @pytest.mark.asyncio
+    async def test_flush_batch_clears_shared_list(self):
+        """Verify that _flush_batch clears the shared batch list immediately.
+
+        Regression test: previously batch_chunks.clear() operated on a local
+        variable reassignmed by enrichment/extract, leaving the original shared
+        list intact and causing O(n²) re-processing.
+        """
+        service = _make_service()
+
+        # Mock enricher that returns a NEW list (triggers reassignment path)
+        mock_enricher = MagicMock()
+
+        async def enrich_fn(chunks):
+            return [
+                DocumentChunk(chunk_id=c.chunk_id, source_name=c.source_name,
+                              title=c.title, url=c.url, text="enriched " + c.text,
+                              content_hash=c.content_hash)
+                for c in chunks
+            ]
+
+        mock_enricher.enrich_chunks = enrich_fn
+        service._contextual_enricher = mock_enricher
+
+        # Mock api_extractor that returns a NEW list
+        mock_api = MagicMock()
+        mock_api.extract = lambda chunks: list(chunks)
+        service._api_extractor = mock_api
+
+        # Mock code_block_parser that returns a NEW list
+        mock_code = MagicMock()
+        mock_code.extract = lambda chunks: list(chunks)
+        service._code_block_parser = mock_code
+
+        service.embeddings.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        service.vector_store.upsert_chunks = AsyncMock()
+
+        # This is the shared list (simulates _shared["batch_chunks"])
+        shared_batch = [
+            DocumentChunk(chunk_id="c1", source_name="test", title="T",
+                          url="http://example.com", text="chunk", content_hash="abc")
+        ]
+
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+
+        await service._flush_batch(
+            loop,
+            shared_batch,
+            None,
+            lambda *a, **kw: IngestionEvent(event_type="test", source_name="", message=""),
+        )
+
+        # The shared list must be empty after flush — this was the bug
+        assert shared_batch == [], f"Expected empty list after flush, got {len(shared_batch)} items"
+        assert service.vector_store.upsert_chunks.called
 
     def test_legacy_single_executor_removed(self):
         """Verify the old shared ThreadPoolExecutor is no longer used."""

@@ -114,7 +114,7 @@ class AsyncQdrantVectorStore:
             logger.debug("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
-        return settings.embedding_dimension
+        return settings.get_embedding_dimension()
 
     def _chunk_to_payload(self, chunk: DocumentChunk) -> dict:
         return {

@@ -244,7 +244,7 @@ services:
   celery_worker:
     image: de_copilot_base_image:latest  # Reuses backend-api build instantly
     container_name: de_copilot_worker
-    command: celery -A data_engineering_copilot.workers.tasks worker --loglevel=info
+    command: celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info
     shm_size: "2gb"
     depends_on:
       backend-api:

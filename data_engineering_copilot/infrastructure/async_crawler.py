@@ -248,6 +248,7 @@ class AsyncDocumentationCrawler:
                     source_name=record.source_name,
                     message=f"Fetched: {record.url}",
                     url=record.url,
+                    pages_fetched=self._metrics.pages_fetched,
                 ),
             )
 

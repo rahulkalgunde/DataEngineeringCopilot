@@ -187,6 +187,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     contextual_enricher = ContextualChunkEnricher(
         summarizer=LLMContextSummarizer(llm_client=build_llm_client(app_settings)),
         enabled=app_settings.contextual_enrichment_enabled,
+        batch_size=app_settings.enrichment_batch_size,
     )
 
     return AsyncIngestionService(

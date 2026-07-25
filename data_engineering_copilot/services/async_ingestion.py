@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
-import multiprocessing
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import Executor, ProcessPoolExecutor
+from concurrent.futures import Executor, ThreadPoolExecutor
 
 import structlog
 
@@ -58,13 +57,11 @@ class AsyncIngestionService:
         if parse_executor is not None:
             self._parse_executor = parse_executor
         else:
-            ctx = multiprocessing.get_context("spawn")
-            self._parse_executor = ProcessPoolExecutor(max_workers=settings.parse_concurrency, mp_context=ctx)
+            self._parse_executor = ThreadPoolExecutor(max_workers=settings.parse_concurrency)
         if chunk_executor is not None:
             self._chunk_executor = chunk_executor
         else:
-            ctx = multiprocessing.get_context("spawn")
-            self._chunk_executor = ProcessPoolExecutor(max_workers=settings.chunk_concurrency, mp_context=ctx)
+            self._chunk_executor = ThreadPoolExecutor(max_workers=settings.chunk_concurrency)
 
     async def _process_raw(
         self,
@@ -142,19 +139,35 @@ class AsyncIngestionService:
         if not batch_chunks:
             return
 
+        # Snapshot the shared list and clear it immediately so that new
+        # chunks arriving during enrichment/embedding accumulate in a fresh list.
+        local_chunks = list(batch_chunks)
+        batch_chunks.clear()
+
         # Contextual enrichment (optional)
         if hasattr(self, "_contextual_enricher") and self._contextual_enricher is not None:
-            batch_chunks = await self._contextual_enricher.enrich_chunks(batch_chunks)
+            log.info("async_ingestion.enrichment_start batch_size=%d", len(local_chunks))
+            try:
+                local_chunks = await asyncio.wait_for(
+                    self._contextual_enricher.enrich_chunks(local_chunks),
+                    timeout=120.0,
+                )
+            except TimeoutError:
+                log.warning(
+                    "async_ingestion.enrichment_timeout batch_size=%d timeout=120",
+                    len(local_chunks),
+                )
+            log.info("async_ingestion.enrichment_done batch_size=%d", len(local_chunks))
 
         # API documentation extraction (optional)
         if hasattr(self, "_api_extractor") and self._api_extractor is not None:
-            batch_chunks = self._api_extractor.extract(batch_chunks)
+            local_chunks = self._api_extractor.extract(local_chunks)
 
         # Code block parsing (optional)
         if hasattr(self, "_code_block_parser") and self._code_block_parser is not None:
-            batch_chunks = self._code_block_parser.extract(batch_chunks)
+            local_chunks = self._code_block_parser.extract(local_chunks)
 
-        batch_size = len(batch_chunks)
+        batch_size = len(local_chunks)
         self._emit(
             on_event,
             make_event(
@@ -166,12 +179,12 @@ class AsyncIngestionService:
             ),
         )
         try:
-            texts = [chunk.text for chunk in batch_chunks]
+            texts = [chunk.text for chunk in local_chunks]
             batch_vectors = await self.embeddings.embed_texts(texts)
         except EmbeddingError as exc:
             log.error(
                 "async_ingestion.embed_batch_failed",
-                batch_size=len(batch_chunks),
+                batch_size=len(local_chunks),
                 error=str(exc),
             )
             raise IngestionError(f"Embedding failed: {exc}") from exc
@@ -186,25 +199,23 @@ class AsyncIngestionService:
             ),
         )
         try:
-            await self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
+            await self.vector_store.upsert_chunks(local_chunks, batch_vectors)
             if hasattr(self.vector_store, "fit_bm25"):
                 self._corpus_texts.extend(texts)
         except Exception as exc:
             log.error(
                 "async_ingestion.upsert_batch_failed",
-                batch_size=len(batch_chunks),
+                batch_size=len(local_chunks),
                 error=str(exc),
             )
             raise VectorStoreError(f"Vector store upsert failed: {exc}") from exc
 
         seen: set[tuple[str, str]] = set()
-        for chunk in batch_chunks:
+        for chunk in local_chunks:
             key = (chunk.url, chunk.source_name)
             if key not in seen and chunk.content_hash:
                 seen.add(key)
                 await self._set_content_hash(chunk.url, chunk.source_name, chunk.content_hash)
-
-        batch_chunks.clear()
 
     async def ingest(
         self,
@@ -212,6 +223,8 @@ class AsyncIngestionService:
         source_names: Iterable[str] | None = None,
         on_event: Callable[[IngestionEvent], None] | None = None,
     ) -> int:
+        if hasattr(self.vector_store, "initialize") and asyncio.iscoroutinefunction(self.vector_store.initialize):
+            await self.vector_store.initialize()
         start_time = time.time()
         page_limit = max_pages_per_source or self.settings.max_pages_per_source
         selected_sources = self._selected_sources(source_names)
@@ -391,6 +404,7 @@ class AsyncIngestionService:
         try:
             async for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 await queue.put(raw_document)
+            log.info("async_ingestion._ingest_source.crawl_done source=%s", source.name)
         finally:
             for _ in range(self._processing_concurrency):
                 await queue.put(None)

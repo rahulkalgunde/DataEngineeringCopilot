@@ -54,9 +54,31 @@ def reset_index() -> None:
             print(f"Collection '{settings.collection_name}' does not exist (nothing to reset).")
         else:
             raise
+
+    # Recreate collection with correct dimension for the active embedding provider
+    dim = settings.get_embedding_dimension()
+    hybrid = settings.hybrid_search_enabled
+    create_url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
+    if hybrid:
+        payload = {
+            "vectors": {"dense": {"size": dim, "distance": "Cosine"}},
+            "sparse_vectors": {"sparse": {"index": None}},
+        }
+    else:
+        payload = {"vectors": {"size": dim, "distance": "Cosine"}}
+    req = urllib.request.Request(
+        create_url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+        print(f"Created collection '{settings.collection_name}' (dim={dim}, hybrid={hybrid}): {body}")
+
     logger.info("Qdrant collection reset completed collection=%s", settings.collection_name)
 
-    # Clear crawl URL registry keys from Redis
+    # Clear crawl-related keys from Redis (URL registry + HTTP conditional-GET cache)
     from data_engineering_copilot.workers.progress import get_redis_client
 
     try:
@@ -65,8 +87,17 @@ def reset_index() -> None:
         if registry_keys:
             redis_client.delete(*registry_keys)
             logger.info("Cleared %d crawl registry keys", len(registry_keys))
+        all_crawl_keys = list(redis_client.scan_iter("crawl:*"))
+        non_registry = [
+            k for k in all_crawl_keys
+            if not (isinstance(k, str) and k.startswith("crawl:url_registry:"))
+            and not (isinstance(k, bytes) and k.startswith(b"crawl:url_registry:"))
+        ]
+        if non_registry:
+            redis_client.delete(*non_registry)
+            logger.info("Cleared %d crawl cache keys", len(non_registry))
     except Exception:
-        logger.debug("Could not clear crawl registry keys (Redis may be unavailable)")
+        logger.debug("Could not clear crawl Redis keys (Redis may be unavailable)")
 
     # Delete the crawl frontier SQLite database
     db_path = settings.crawl_db_path

@@ -19,6 +19,10 @@ class AsyncUrlRegistry:
     """Per-source URL state store backed by Redis hashes with async/await support."""
 
     def __init__(self, redis_client: Any, source_name: str) -> None:
+        if redis_client is not None and not hasattr(redis_client, "hget"):
+            raise TypeError(
+                f"redis_client must implement SyncRedisProtocol (got {type(redis_client).__name__})"
+            )
         self._redis = redis_client
         self._key = f"crawl:url_registry:{source_name}"
         self._source_name = source_name
@@ -27,7 +31,11 @@ class AsyncUrlRegistry:
         """Return the stored ``html_hash`` for *url* asynchronously, or ``None``."""
         if self._redis is None:
             return None
-        raw = await self._redis.hget(self._key, url)
+        try:
+            raw = self._redis.hget(self._key, url)
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            log.warning("async_url_registry.get_html_hash failed", url=url, error=str(exc), exc_info=True)
+            return None
         if raw is None:
             return None
         if isinstance(raw, bytes):
@@ -48,11 +56,17 @@ class AsyncUrlRegistry:
                 "discovered_at": time.time(),
             }
         )
-        await self._redis.hset(self._key, url, record)
+        try:
+            self._redis.hset(self._key, url, record)
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            log.warning("async_url_registry.set_html_hash failed", url=url, error=str(exc), exc_info=True)
 
     async def clear(self) -> None:
         """Remove all entries for this source asynchronously."""
         if self._redis is None:
             return
-        await self._redis.delete(self._key)
+        try:
+            self._redis.delete(self._key)
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            log.warning("async_url_registry.clear failed", source=self._source_name, error=str(exc), exc_info=True)
         log.info("async_url_registry.cleared", source=self._source_name)

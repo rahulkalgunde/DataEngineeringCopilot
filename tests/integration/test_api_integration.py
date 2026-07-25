@@ -1,12 +1,15 @@
 """Integration tests for FastAPI API endpoints.
 
-Tests the /api/v1/ingest, /api/v1/task/{id}, /api/v1/sources,
-/api/v1/sources/{name}/pages, and /api/v1/sources/{name}/pages/{page}/query
-endpoints using the real FastAPI TestClient with mocked Celery tasks.
+Tests /api/v1/ingest, /api/v1/task/{id}, /api/v1/ingest/status/{task_id}
+endpoints using the real FastAPI TestClient and a real Redis instance
+(testcontainer). Only the Celery worker dispatch is mocked.
 
-Run with: pytest tests/test_api_integration.py -v -m integration
+Run with: pytest tests/integration/test_api_integration.py -v -m integration
 """
 
+from __future__ import annotations
+
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +17,18 @@ import pytest
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def redis_test_client(fresh_redis_client):
+    """Real Redis client + monkeypatch routes.get_redis_client to use it."""
+    import data_engineering_copilot.api.routes as routes_mod
+
+    real_client = fresh_redis_client
+    original_fn = routes_mod.get_redis_client
+    routes_mod.get_redis_client = lambda: real_client
+    yield real_client
+    routes_mod.get_redis_client = original_fn
 
 
 @pytest.fixture
@@ -26,18 +41,15 @@ def client():
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/ingest
+# POST /api/v1/ingest  (real Redis, mocked Celery dispatch)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 @pytest.mark.api
 class TestIngestEndpoint:
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_returns_task_id(self, mock_delay, mock_get_client, client):
-        mock_redis = MagicMock()
-        mock_get_client.return_value = mock_redis
+    def test_ingest_returns_task_id(self, mock_delay, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-abc-123"
         mock_task.state = "PENDING"
@@ -49,13 +61,18 @@ class TestIngestEndpoint:
         assert body["task_id"] == "task-abc-123"
         assert body["state"] == "PENDING"
         mock_delay.assert_called_once_with(["Test"], 10)
-        assert mock_redis.set.call_count == 2
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+        raw = redis_test_client.get("ingestion:latest_task_id")
+        assert raw is not None
+        assert raw.decode() == "task-abc-123"
+        raw_status = redis_test_client.get("ingestion:status:task-abc-123")
+        assert raw_status is not None
+        status = json.loads(raw_status)
+        assert status["status"] == "DISPATCHED"
+        assert status["source_names"] == ["Test"]
+
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_with_no_sources(self, mock_delay, mock_get_client, client):
-        mock_redis = MagicMock()
-        mock_get_client.return_value = mock_redis
+    def test_ingest_with_no_sources(self, mock_delay, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-null-sources"
         mock_task.state = "PENDING"
@@ -65,11 +82,8 @@ class TestIngestEndpoint:
         assert resp.status_code == 200
         mock_delay.assert_called_once_with(None, 0)
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_with_multiple_sources(self, mock_delay, mock_get_client, client):
-        mock_redis = MagicMock()
-        mock_get_client.return_value = mock_redis
+    def test_ingest_with_multiple_sources(self, mock_delay, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-multi"
         mock_task.state = "PENDING"
@@ -82,16 +96,80 @@ class TestIngestEndpoint:
         assert resp.status_code == 200
         mock_delay.assert_called_once_with(["Spark", "Airflow"], 5)
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_invalid_body(self, mock_delay, mock_get_client, client):
+    def test_ingest_invalid_body(self, mock_delay, redis_test_client, client):
         """Sending a non-dict body should return 422."""
         resp = client.post("/api/v1/ingest", json="invalid")
         assert resp.status_code == 422
 
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_returns_409_when_already_running(self, mock_delay, redis_test_client, client):
+        """POST /api/v1/ingest should return 409 if another task is PROCESSING."""
+        existing_task_id = "task-running-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {
+            "task_id": existing_task_id,
+            "status": "PROCESSING",
+            "source_names": ["Test"],
+            "pages_fetched": 5,
+            "chunks_indexed": 10,
+            "current_url": "https://example.com",
+            "error": None,
+        }
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 409
+        mock_delay.assert_not_called()
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_returns_409_when_dispatched(self, mock_delay, redis_test_client, client):
+        """POST /api/v1/ingest should return 409 if another task is DISPATCHED."""
+        existing_task_id = "task-dispatched-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {"task_id": existing_task_id, "status": "DISPATCHED"}
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 409
+        mock_delay.assert_not_called()
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_allowed_when_previous_task_completed(self, mock_delay, redis_test_client, client):
+        """POST /api/v1/ingest should succeed if previous task is COMPLETED."""
+        existing_task_id = "task-completed-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        status_doc = {"task_id": existing_task_id, "status": "COMPLETED"}
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+
+        mock_task = MagicMock()
+        mock_task.id = "task-new-001"
+        mock_task.state = "PENDING"
+        mock_delay.return_value = mock_task
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 200
+        mock_delay.assert_called_once()
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_ingest_allowed_when_latest_task_status_corrupt(self, mock_delay, redis_test_client, client):
+        """POST /api/v1/ingest should succeed even if the stored status JSON is corrupt."""
+        existing_task_id = "task-corrupt-001"
+        redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
+        redis_test_client.set(f"ingestion:status:{existing_task_id}", "NOT_JSON", ex=86400)
+
+        mock_task = MagicMock()
+        mock_task.id = "task-new-002"
+        mock_task.state = "PENDING"
+        mock_delay.return_value = mock_task
+
+        resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp.status_code == 200
+        mock_delay.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/task/{task_id}
+# GET /api/v1/task/{task_id}  (mocked Celery AsyncResult only)
 # ---------------------------------------------------------------------------
 
 
@@ -154,27 +232,54 @@ class TestTaskStatusEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/sources (via settings)
+# GET /api/v1/ingest/status/{task_id}  (real Redis)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 @pytest.mark.api
-class TestSourcesEndpoint:
-    def test_sources_returns_list(self, client):
-        """If the /api/v1/sources endpoint exists, it should return 200 or 404."""
-        resp = client.get("/api/v1/sources")
-        # Either the endpoint exists (200) or doesn't exist (404)
-        assert resp.status_code in (200, 404)
+class TestIngestionStatusEndpoint:
+    def test_returns_status_document(self, redis_test_client, client):
+        """GET /api/v1/ingest/status/{id} should return the stored status doc."""
+        status_doc = {
+            "task_id": "task-001",
+            "status": "COMPLETED",
+            "source_names": ["Test"],
+            "pages_fetched": 10,
+            "chunks_indexed": 25,
+            "current_url": "https://example.com/page10",
+            "error": None,
+        }
+        redis_test_client.set("ingestion:status:task-001", json.dumps(status_doc), ex=86400)
 
-    def test_sources_page_query_nonexistent(self, client):
-        """Querying a non-existent source should return 404 or appropriate error."""
-        resp = client.get("/api/v1/sources/NonExistent/pages")
-        assert resp.status_code in (200, 404)
+        resp = client.get("/api/v1/ingest/status/task-001")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "COMPLETED"
+        assert body["pages_fetched"] == 10
+        assert body["chunks_indexed"] == 25
+        assert body["source_names"] == ["Test"]
+
+    def test_returns_404_when_not_found(self, redis_test_client, client):
+        resp = client.get("/api/v1/ingest/status/task-nonexistent")
+        assert resp.status_code == 404
+
+    def test_returns_error_when_key_expired(self, redis_test_client, client):
+        import time
+        redis_test_client.set("ingestion:status:task-expired", "NOT_JSON", ex=1)
+        time.sleep(1.1)
+        resp = client.get("/api/v1/ingest/status/task-expired")
+        assert resp.status_code == 404
+
+    def test_returns_500_when_json_corrupt(self, redis_test_client, client):
+        redis_test_client.set("ingestion:status:task-corrupt", "NOT_JSON{{", ex=86400)
+        resp = client.get("/api/v1/ingest/status/task-corrupt")
+        assert resp.status_code == 500
+        assert "corrupted" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------
-# App metadata
+# GET /openapi.json and /docs  (no external dependencies)
 # ---------------------------------------------------------------------------
 
 

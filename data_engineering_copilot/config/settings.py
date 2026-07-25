@@ -77,6 +77,7 @@ class AppSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         env_ignore_empty=True,
+        extra="ignore",
     )
 
     project_root: Path = PROJECT_ROOT
@@ -108,7 +109,8 @@ class AppSettings(BaseSettings):
     embedding_model_name: str = "nomic-embed-text"
     # Default dm is 768 for the nomic-embed-text model
     embedding_dimension: int = 768
-    embedding_batch_size: int = 32
+    embedding_batch_size: int = 256
+    enrichment_batch_size: int = 20
 
     # Provider selection: "ollama" | "openrouter" | "openai"
     llm_provider: str = "ollama"
@@ -201,6 +203,15 @@ class AppSettings(BaseSettings):
         if self.embedding_provider == "openai" and not self.openai_api_key.get_secret_value():
             raise ValueError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER='openai'")
         return self
+
+    def get_embedding_dimension(self) -> int:
+        """Return the correct embedding dimension for the active provider."""
+        provider = self.embedding_provider.lower()
+        if provider == "openrouter":
+            return self.openrouter_embedding_dimension
+        elif provider == "openai":
+            return self.openai_embedding_dimension
+        return self.embedding_dimension
 
 
 settings = AppSettings()

@@ -191,12 +191,13 @@ class TestApiRoutesWiring:
             data = response.json()
             assert data["task_id"] == "new-task-id"
 
-            # Verify initial status was written to Redis (status key + latest_task_id key)
-            assert mock_client.set.call_count == 2
+            # Verify initial status was written to Redis (dispatch lock + status key + latest_task_id key)
+            assert mock_client.set.call_count == 3
             set_keys = [call.args[0] for call in mock_client.set.call_args_list]
+            assert "ingestion:dispatch_lock" in set_keys
             assert "ingestion:status:new-task-id" in set_keys
             assert "ingestion:latest_task_id" in set_keys
-            status_call = mock_client.set.call_args_list[0]
+            status_call = mock_client.set.call_args_list[1]
             redis_key = status_call.args[0]
             assert redis_key == "ingestion:status:new-task-id"
             status_payload = json.loads(status_call.args[1])
