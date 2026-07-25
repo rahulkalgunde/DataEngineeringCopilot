@@ -7,6 +7,7 @@ import urllib.request
 
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.profiler import cli as profiler_cli
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("reset-index", help="Delete the Qdrant collection so ingestion can rebuild it.")
     subparsers.add_parser("ui", help="Print the Streamlit command.")
+
+    profile_parser = subparsers.add_parser("profile", help="Profile ingestion pipeline with concurrency sweep.")
+    profile_parser.add_argument(
+        "--sources", nargs="*", default=None, help="Documentation sources to profile (default: all)."
+    )
+    profile_parser.add_argument(
+        "--max-pages", type=int, default=10, help="Pages per source for benchmark (default: 10)."
+    )
+    profile_parser.add_argument(
+        "--concurrency-sweep",
+        type=str,
+        default="1,2,4,8",
+        help="Comma-separated concurrency values to test (default: 1,2,4,8).",
+    )
+    profile_parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./profiler_reports",
+        help="Directory for reports (default: ./profiler_reports).",
+    )
     return parser
 
 
@@ -148,6 +169,13 @@ def main() -> None:
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
+        elif args.command == "profile":
+            profiler_cli.main([
+                "--sources", *(args.sources or []),
+                "--max-pages", str(args.max_pages),
+                "--concurrency-sweep", args.concurrency_sweep,
+                "--output-dir", args.output_dir,
+            ])
     except Exception:
         logger.exception("CLI command failed command=%s", args.command)
         raise

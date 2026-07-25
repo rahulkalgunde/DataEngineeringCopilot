@@ -37,6 +37,16 @@ make test-smoke        # fast sanity: unit not slow, -q --no-header
  - CI stack: `make docker-ci-up` (`docker-compose.ci.yml`, containers prefixed `dec_ci_*`).
  - Rebuild after `pyproject.toml` changes: `docker compose build --no-cache backend-api && docker compose up -d backend-api celery_worker`
 
+## `profiler` — Profiling, Telemetry & Concurrency Auto-Tuning
+- **Module**: `data_engineering_copilot/profiler/` — 6 files: telemetry, rate_limit_tracker, concurrency_tuner, report_generator, cli, __init__
+- **CLI**: `dec profile --sources "Apache Spark" --max-pages 20 --concurrency-sweep "1,2,4,8"`
+- **`Profiler`**: Captures per-stage timing (trace context manager), system resources (CPU/RSS/IO via psutil background task), and rate-limit events.
+- **`ConcurrencyTuner`**: Analyzes stage metrics using Little's Law. Recommends SCALE_UP/SCALE_DOWN/OPTIMAL/RATE_LIMITED per stage.
+- **`RateLimitTracker`**: Intercepts 429s and provider rate-limit headers. Computes provider saturation level.
+- **`ReportGenerator`**: Outputs Markdown reports + structured JSON to `./profiler_reports/`.
+- **Dependencies**: `psutil>=5.9` (added to pyproject.toml).
+- **Tests**: 45 unit tests across 4 files (`test_profiler_telemetry`, `test_profiler_rate_limit`, `test_profiler_concurrency`, `test_profiler_report`).
+
 ## Architecture & Gotchas
 - **Pipeline** (no LangChain/LlamaIndex): `AsyncCrawler` → `MarkdownParser` → `Chunker` → `Embeddings` → `QdrantVectorStore`.
 - **RAG pipeline** (stages): query rewriting → hybrid search (dense+sparse) → cross-encoder reranking → context compression → groundedness verification → RAGAS evaluation. All configurable via settings + feature flags.
