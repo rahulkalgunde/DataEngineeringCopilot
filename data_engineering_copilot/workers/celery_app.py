@@ -17,10 +17,10 @@ celery_app.conf.update(
     task_acks_late=True,
     # Reject task on worker lost for requeue
     task_reject_on_worker_lost=True,
-    # Hard time limit: kill task after 30 minutes
-    task_time_limit=1800,
-    # Soft time limit: raise SoftTimeLimitExceeded after 25 minutes
-    task_soft_time_limit=1500,
+    # Hard time limit: kill task after 60 minutes
+    task_time_limit=3600,
+    # Soft time limit: raise SoftTimeLimitExceeded after 50 minutes
+    task_soft_time_limit=3000,
     # Task routing: ingestion tasks go to dedicated queue
     task_routes={
         "data_engineering_copilot.workers.tasks.async_ingest_task": {"queue": "ingestion"},

@@ -6,6 +6,7 @@ carry document-level meaning during similarity search.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Protocol
 
@@ -51,9 +52,11 @@ class ContextualChunkEnricher:
         self,
         summarizer: ContextSummarizer | None = None,
         enabled: bool = False,
+        batch_size: int = 20,
     ) -> None:
         self._summarizer = summarizer
         self._enabled = enabled
+        self._batch_size = batch_size
 
     async def enrich(
         self,
@@ -102,23 +105,36 @@ class ContextualChunkEnricher:
 
         When called at batch level without document context, groups chunks
         by (source_name, title) and enriches each group with a title-based summary.
+        Processes multiple page-groups concurrently up to ``self._batch_size``.
         """
         if not self._enabled or self._summarizer is None:
             return chunks
 
         from collections import defaultdict
+
         groups: dict[tuple[str, str], list[DocumentChunk]] = defaultdict(list)
         for chunk in chunks:
             groups[(chunk.source_name, chunk.title)].append(chunk)
 
+        items = list(groups.items())
         enriched: list[DocumentChunk] = []
-        for (source_name, title), group_chunks in groups.items():
-            fake_doc = ParsedDocument(
-                source_name=source_name,
-                title=title,
-                url=group_chunks[0].url if group_chunks else "",
-                text=title,
-            )
-            enriched.extend(await self.enrich(fake_doc, group_chunks))
+
+        for i in range(0, len(items), self._batch_size):
+            batch = items[i : i + self._batch_size]
+            tasks = []
+            for (source_name, title), group_chunks in batch:
+                fake_doc = ParsedDocument(
+                    source_name=source_name,
+                    title=title,
+                    url=group_chunks[0].url if group_chunks else "",
+                    text=title,
+                )
+                tasks.append(self.enrich(fake_doc, group_chunks))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("Enrichment batch failed: %s", result)
+                else:
+                    enriched.extend(result)
 
         return enriched

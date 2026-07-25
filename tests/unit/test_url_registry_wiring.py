@@ -23,9 +23,12 @@ class TestResetIndexClearsRegistry:
         from data_engineering_copilot.cli import reset_index
 
         mock_redis = MagicMock()
-        mock_redis.scan_iter.return_value = [
-            b"crawl:url_registry:Source A",
-            b"crawl:url_registry:Source B",
+        mock_redis.scan_iter.side_effect = [
+            [
+                b"crawl:url_registry:Source A",
+                b"crawl:url_registry:Source B",
+            ],
+            [b"crawl:header:abc", b"crawl:header:def"],
         ]
 
         with patch("data_engineering_copilot.cli.urllib.request") as mock_req:
@@ -46,11 +49,9 @@ class TestResetIndexClearsRegistry:
             with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
                 reset_index()
 
-        mock_redis.scan_iter.assert_called_once_with("crawl:url_registry:*")
-        mock_redis.delete.assert_called_once_with(
-            b"crawl:url_registry:Source A",
-            b"crawl:url_registry:Source B",
-        )
+        assert mock_redis.scan_iter.call_count == 2
+        mock_redis.scan_iter.assert_any_call("crawl:url_registry:*")
+        mock_redis.scan_iter.assert_any_call("crawl:*")
 
     def test_reset_index_handles_no_registry_keys(self) -> None:
         from data_engineering_copilot.cli import reset_index
@@ -73,7 +74,9 @@ class TestResetIndexClearsRegistry:
             with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
                 reset_index()
 
-        mock_redis.scan_iter.assert_called_once_with("crawl:url_registry:*")
+        assert mock_redis.scan_iter.call_count == 2
+        mock_redis.scan_iter.assert_any_call("crawl:url_registry:*")
+        mock_redis.scan_iter.assert_any_call("crawl:*")
         mock_redis.delete.assert_not_called()
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 
 import structlog
 from celery.result import AsyncResult
@@ -43,41 +44,54 @@ async def ingest_documents(request: IngestRequest):
     )
 
     client = get_redis_client()
-    raw_task_id = client.get("ingestion:latest_task_id")
-    if raw_task_id:
-        try:
-            latest_task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else str(raw_task_id)
-            raw = client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
-            if raw:
-                raw = raw.decode() if isinstance(raw, bytes) else raw
-                existing_status = json.loads(raw).get("status")
-                if existing_status in ("PROCESSING", "DISPATCHED"):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Ingestion is already running (task {latest_task_id}). Cancel it or wait for completion.",
-                    )
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            pass
 
-    task = async_ingest_task.delay(request.source_names, request.max_pages or 0)
+    # Atomic SETNX lock to prevent concurrent dispatch (TOCTOU race).
+    dispatch_id = str(uuid.uuid4())
+    acquired = client.set("ingestion:dispatch_lock", dispatch_id, nx=True, ex=60)
+    if not acquired:
+        raise HTTPException(
+            status_code=409,
+            detail="Ingestion dispatch already in progress. Please wait.",
+        )
 
-    # Write an initial status so the polling endpoint has something to
-    # return immediately, before the worker picks up the task.
-    initial_status = json.dumps(
-        {
-            "task_id": task.id,
-            "status": "DISPATCHED",
-            "source_names": request.source_names or [],
-            "pages_fetched": 0,
-            "chunks_indexed": 0,
-            "current_url": "",
-            "error": None,
-        }
-    )
-    client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
-    client.set("ingestion:latest_task_id", task.id, ex=86400)
+    try:
+        raw_task_id = client.get("ingestion:latest_task_id")
+        if raw_task_id:
+            try:
+                latest_task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else str(raw_task_id)
+                raw = client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
+                if raw:
+                    raw = raw.decode() if isinstance(raw, bytes) else raw
+                    existing_status = json.loads(raw).get("status")
+                    if existing_status in ("PROCESSING", "DISPATCHED"):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"Ingestion is already running (task {latest_task_id}). Cancel it or wait for completion.",
+                        )
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
 
-    return TaskStatus(task_id=task.id, state=task.state)
+        task = async_ingest_task.delay(request.source_names, request.max_pages or 0)
+
+        # Write an initial status so the polling endpoint has something to
+        # return immediately, before the worker picks up the task.
+        initial_status = json.dumps(
+            {
+                "task_id": task.id,
+                "status": "DISPATCHED",
+                "source_names": request.source_names or [],
+                "pages_fetched": 0,
+                "chunks_indexed": 0,
+                "current_url": "",
+                "error": None,
+            }
+        )
+        client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
+        client.set("ingestion:latest_task_id", task.id, ex=86400)
+
+        return TaskStatus(task_id=task.id, state=task.state)
+    finally:
+        client.delete("ingestion:dispatch_lock")
 
 
 @router.get("/api/v1/task/{task_id}")
@@ -105,7 +119,13 @@ async def get_ingestion_status(task_id: str) -> dict:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
 
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Ingestion status record is corrupted.",
+        ) from exc
 
 
 @router.get("/api/v1/ingest/latest")

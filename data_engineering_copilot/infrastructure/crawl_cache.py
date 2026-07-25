@@ -23,11 +23,15 @@ class CrawlCache:
 
     async def get_headers(self, url_hash: str) -> dict[str, str] | None:
         """Return cached headers {status, etag, last_modified} or None."""
-        key = f"{self.prefix}{url_hash}"
-        data = await self._redis.hgetall(key)
-        if not data:
+        try:
+            key = f"{self.prefix}{url_hash}"
+            data = await self._redis.hgetall(key)
+            if not data:
+                return None
+            return data
+        except (ConnectionError, TimeoutError) as exc:
+            log.warning("CrawlCache.get_headers failed for %s: %s", url_hash, exc, exc_info=True)
             return None
-        return data
 
     async def set_headers(
         self,
@@ -37,13 +41,18 @@ class CrawlCache:
         last_modified: str | None = None,
     ) -> None:
         """Cache response headers for a URL."""
-        key = f"{self.prefix}{url_hash}"
-        mapping: dict[str, str] = {"status": str(status)}
-        if etag:
-            mapping["etag"] = etag
-        if last_modified:
-            mapping["last_modified"] = last_modified
-        await self._redis.hset(key, mapping=mapping)
+        try:
+            key = f"{self.prefix}{url_hash}"
+            mapping: dict[str, str] = {"status": str(status)}
+            if etag:
+                mapping["etag"] = etag
+            if last_modified:
+                mapping["last_modified"] = last_modified
+            await self._redis.hset(key, mapping=mapping)
+        except (ConnectionError, TimeoutError) as exc:
+            log.warning("CrawlCache.set_headers failed for %s: %s", url_hash, exc, exc_info=True)
 
     async def close(self) -> None:
-        await self._redis.close()
+        import contextlib
+        with contextlib.suppress(ConnectionError, TimeoutError):
+            await self._redis.close()

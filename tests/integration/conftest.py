@@ -1,7 +1,8 @@
-"""Integration test fixtures with testcontainers for Qdrant.
+"""Integration test fixtures with testcontainers for Qdrant and Redis.
 
 Provides:
 - Session-scoped Qdrant container via testcontainers
+- Session-scoped Redis container via testcontainers
 - worker_id-isolated collection names for xdist parallel execution
 - Fallback to external Docker Compose if testcontainers unavailable
 - Existing fixtures for Ollama/Langfuse (external services)
@@ -95,6 +96,78 @@ def fresh_qdrant_store(qdrant_url, worker_id):
         client = QdrantClient(url=qdrant_url, prefer_grpc=False)
         client.delete_collection(collection_name=collection)
         client.close()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Redis testcontainer (session-scoped, shared across workers)
+# ---------------------------------------------------------------------------
+
+_redis_container = None
+_redis_url = None
+
+
+def _get_or_start_redis_container():
+    """Start a Redis container if not already running. Returns the URL."""
+    global _redis_container, _redis_url
+
+    if _redis_url is not None:
+        return _redis_url
+
+    # First: check if Redis is already running (Docker Compose / local dev)
+    try:
+        import socket
+
+        sock = socket.create_connection(("localhost", 6379), timeout=3)
+        sock.sendall(b"PING\r\n")
+        response = sock.recv(1024)
+        sock.close()
+        if b"PONG" in response:
+            _redis_url = "redis://localhost:6379/0"
+            return _redis_url
+    except Exception:
+        pass
+
+    # Second: try testcontainers (self-contained, portable)
+    try:
+        from testcontainers.redis import RedisContainer
+
+        _redis_container = RedisContainer("redis:7-alpine")
+        _redis_container.start()
+        host = _redis_container.get_container_host_ip()
+        port = _redis_container.get_exposed_port(6379)
+        _redis_url = f"redis://{host}:{port}/0"
+        return _redis_url
+    except Exception:
+        pass
+
+    return None
+
+
+@pytest.fixture(scope="session")
+def redis_url():
+    """Session-scoped Redis URL (from testcontainers or Docker Compose)."""
+    url = _get_or_start_redis_container()
+    if url is None:
+        pytest.skip("Redis is not available (testcontainers failed and Docker Compose not running)")
+    return url
+
+
+@pytest.fixture
+def fresh_redis_client(redis_url):
+    """Isolated Redis client per test. Flushes test keys on teardown."""
+    import redis as redis_lib
+
+    client = redis_lib.from_url(redis_url, decode_responses=False, client_name="itest")
+    yield client
+
+    # Teardown: delete only keys created during this test
+    try:
+        for key in client.scan_iter("ingestion:*"):
+            client.delete(key)
+        for key in client.scan_iter("itest:*"):
+            client.delete(key)
     except Exception:
         pass
 

@@ -81,9 +81,39 @@ python main.py ingest --max-pages 40
 
 If Qdrant reports an incomplete local index, reset and ingest again:
 
+### When to Reset and Re-Ingest
+
+Run `reset-index` before re-ingesting in these scenarios:
+
+- **Switching embedding provider** (e.g. Ollama → OpenRouter) — different providers produce different vector dimensions
+- **Changing embedding model** — models may use incompatible vector spaces
+- **Changing chunking strategy** — new chunks have different boundaries than old ones
+- **Corrupted or incomplete index** — if ingestion partially failed or Qdrant reports errors
+- **Major documentation restructure** — if source URLs changed significantly
+
 ```bash
 python main.py reset-index
 python main.py ingest --max-pages 40
+```
+
+**Do NOT reset** for incremental ingestion — the system deduplicates via content hash and only updates changed pages.
+
+### Switching Embedding Providers
+
+Set these in `.env`:
+
+```bash
+# Switch from Ollama to OpenRouter
+LLM_PROVIDER=openrouter
+EMBEDDING_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_EMBEDDING_DIMENSION=2048
+```
+
+Then reset and re-ingest:
+```bash
+python main.py reset-index
+python main.py ingest --max-pages 20
 ```
 
 The configured documentation sources are:
