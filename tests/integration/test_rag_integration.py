@@ -264,3 +264,80 @@ class TestRAGEdgeCases:
             f"Expected the answer to acknowledge the gap. "
             f"confidence={answer.confidence:.4f}, text={answer.text[:200]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Wire-Mocked RAG Tests (respx for httpx)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.rag
+class TestRAGWireMocked:
+    """RAG pipeline with respx wire-mocked LLM and embeddings."""
+
+    @pytest.mark.skip(reason="Qdrant HTTP pass-through not supported by respx")
+    @pytest.mark.asyncio
+    async def test_rag_cache_hit_skips_llm(self):
+        pass
+
+
+    @pytest.mark.asyncio
+    async def test_rag_answer_with_wire_mocked_llm(self):
+        """Wire-mock Ollama generate, verify answer text comes through."""
+        import respx
+        from httpx import Response
+
+        from data_engineering_copilot.config.settings import AppSettings
+        from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+
+        settings = AppSettings()
+        with respx.mock(assert_all_mocked=False) as respx_mock:
+            respx_mock.post(f"{settings.ollama_base_url}/api/generate").mock(
+                return_value=Response(
+                    200,
+                    json={"response": "This is a wire-mocked answer.", "done": True},
+                )
+            )
+
+            client = AsyncOllamaClient(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                timeout_seconds=5,
+                num_ctx=2048,
+                num_predict=128,
+            )
+            result = await client.generate("What is Spark?")
+            assert "wire-mocked" in result
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_rag_embedding_with_wire_mocked(self):
+        """Wire-mock Ollama embed, verify vector returned."""
+        import respx
+        from httpx import Response
+
+        from data_engineering_copilot.config.settings import AppSettings
+        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+
+        settings = AppSettings()
+        dim = settings.embedding_dimension
+        fake_embedding = [0.01] * dim
+
+        with respx.mock(assert_all_mocked=False) as respx_mock:
+            respx_mock.post(f"{settings.ollama_base_url}/api/embed").mock(
+                return_value=Response(
+                    200,
+                    json={"embeddings": [fake_embedding]},
+                )
+            )
+
+            embedder = AsyncOllamaEmbeddings(model_name=settings.embedding_model_name)
+            result = await embedder.embed_query("test query")
+            assert len(result) == dim
+            assert abs(result[0] - 0.01) < 0.001
+
+            await embedder.close()
+
+

@@ -168,6 +168,8 @@ def fresh_redis_client(redis_url):
             client.delete(key)
         for key in client.scan_iter("itest:*"):
             client.delete(key)
+        for key in client.scan_iter("ratelimit:*"):
+            client.delete(key)
     except Exception:
         pass
 

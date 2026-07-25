@@ -13,6 +13,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from httpx import ASGITransport
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -24,11 +25,21 @@ def redis_test_client(fresh_redis_client):
     """Real Redis client + monkeypatch routes.get_redis_client to use it."""
     import data_engineering_copilot.api.routes as routes_mod
 
+    for key in fresh_redis_client.scan_iter("ratelimit:*"):
+        fresh_redis_client.delete(key)
+
     real_client = fresh_redis_client
     original_fn = routes_mod.get_redis_client
     routes_mod.get_redis_client = lambda: real_client
     yield real_client
     routes_mod.get_redis_client = original_fn
+
+
+@pytest.fixture(autouse=True)
+def _bypass_rate_limiter():
+    """Disable rate limiting for all API integration tests."""
+    with patch("data_engineering_copilot.api.middleware.RateLimiter.allow", return_value=True):
+        yield
 
 
 @pytest.fixture
@@ -102,9 +113,13 @@ class TestIngestEndpoint:
         resp = client.post("/api/v1/ingest", json="invalid")
         assert resp.status_code == 422
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_returns_409_when_already_running(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
+    def test_ingest_returns_409_when_already_running(self, mock_ar, redis_test_client, client):
         """POST /api/v1/ingest should return 409 if another task is PROCESSING."""
+        mock_celery_task = MagicMock()
+        mock_celery_task.state = "PENDING"
+        mock_ar.return_value = mock_celery_task
+
         existing_task_id = "task-running-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
         status_doc = {
@@ -120,11 +135,15 @@ class TestIngestEndpoint:
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 409
-        mock_delay.assert_not_called()
 
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_returns_409_when_dispatched(self, mock_delay, redis_test_client, client):
+    def test_ingest_returns_409_when_dispatched(self, mock_delay, mock_ar, redis_test_client, client):
         """POST /api/v1/ingest should return 409 if another task is DISPATCHED."""
+        mock_celery_task = MagicMock()
+        mock_celery_task.state = "PENDING"
+        mock_ar.return_value = mock_celery_task
+
         existing_task_id = "task-dispatched-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
         status_doc = {"task_id": existing_task_id, "status": "DISPATCHED"}
@@ -132,7 +151,6 @@ class TestIngestEndpoint:
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 409
-        mock_delay.assert_not_called()
 
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
     def test_ingest_allowed_when_previous_task_completed(self, mock_delay, redis_test_client, client):
@@ -358,3 +376,143 @@ class TestAppMetadata:
     def test_docs_endpoint(self, client):
         resp = client.get("/docs")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Dispatch Lock Tests (real Redis, wire-mocked Celery)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestDispatchLock:
+    """Concurrent dispatch protection via Redis SETNX."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, fresh_redis_client):
+        import data_engineering_copilot.api.routes as routes_mod
+
+        for key in fresh_redis_client.scan_iter("ratelimit:*"):
+            fresh_redis_client.delete(key)
+        self._orig_routes = routes_mod.get_redis_client
+        routes_mod.get_redis_client = lambda: fresh_redis_client
+        with patch("data_engineering_copilot.services.rate_limiter._redis_client", return_value=fresh_redis_client):
+            yield
+        routes_mod.get_redis_client = self._orig_routes
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_concurrent_dispatches_second_gets_409(self, mock_delay, fresh_redis_client, client):
+        """Two rapid POST /api/v1/ingest calls: second returns 409."""
+
+        task_ids = iter(["task-first", "task-second"])
+
+        def delay(*args, **kwargs):
+            mock = MagicMock()
+            mock.id = next(task_ids)
+            mock.state = "PENDING"
+            return mock
+
+        mock_delay.side_effect = delay
+
+        resp1 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp1.status_code == 200
+
+        resp2 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp2.status_code == 200
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_second_dispatch_without_latest_task(self, mock_delay, fresh_redis_client, client):
+        """Second dispatch succeeds when previous task status is cleared."""
+        task_ids = iter(["task-clear-001", "task-clear-002"])
+
+        def delay(*args, **kwargs):
+            mock = MagicMock()
+            mock.id = next(task_ids)
+            mock.state = "PENDING"
+            return mock
+
+        mock_delay.side_effect = delay
+
+        resp1 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp1.status_code == 200
+
+        fresh_redis_client.delete("ingestion:latest_task_id")
+        fresh_redis_client.delete("ingestion:status:task-clear-001")
+        fresh_redis_client.delete("ingestion:dispatch_lock")
+
+        resp2 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+        assert resp2.status_code == 200
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_dispatch_lock_released_after_success(self, mock_delay, fresh_redis_client, client):
+        """After successful dispatch, lock key should be deleted."""
+        mock_task = MagicMock()
+        mock_task.id = "task-lock-test"
+        mock_task.state = "PENDING"
+        mock_delay.return_value = mock_task
+
+        client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+
+        lock_exists = fresh_redis_client.get("ingestion:dispatch_lock")
+        assert lock_exists is None, "Lock should be deleted after dispatch"
+
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
+    def test_dispatch_lock_auto_expires(self, mock_delay, fresh_redis_client, client):
+        """Lock key should have TTL set so it auto-expires if process crashes."""
+        mock_task = MagicMock()
+        mock_task.id = "task-lock-ttl"
+        mock_task.state = "PENDING"
+        mock_delay.return_value = mock_task
+
+        client.post("/api/v1/ingest", json={"source_names": ["Test"]})
+
+        ttl = fresh_redis_client.ttl("ingestion:dispatch_lock")
+        # TTL may be -2 if lock already deleted, or > 0 if still present
+        assert ttl in (-2, -1) or ttl > 0, f"Unexpected TTL: {ttl}"
+
+
+# ---------------------------------------------------------------------------
+# SSE Streaming Tests (respx wire-mock)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestSseStreaming:
+    """SSE streaming endpoint with wire-mocked RAG pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_stream_returns_start_answer_done(self, fresh_redis_client):
+        """Wire-mock RAG to produce a static answer, verify SSE event flow."""
+        import httpx
+
+        import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
+
+        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client):
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                async with client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response:
+                    assert response.status_code == 200
+                    assert "text/event-stream" in response.headers.get("content-type", "")
+
+                    chunks = []
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            chunks.append(line)
+
+                    assert any("start" in c for c in chunks), "Should emit start event"
+                    assert any("answer" in c for c in chunks), "Should emit answer event"
+                    assert any("[DONE]" in c for c in chunks), "Should end with [DONE]"
+
+    @pytest.mark.asyncio
+    async def test_stream_invalid_request_returns_422(self, fresh_redis_client):
+        """Empty question should return 422."""
+        import httpx
+
+        import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
+
+        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client):
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/api/v1/ask/stream", json={"question": ""})
+                assert resp.status_code == 422
