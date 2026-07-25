@@ -13,6 +13,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.domain.models import LLMUsage
+from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class OpenRouterError(RuntimeError):
     """Raised when OpenRouter cannot return an answer."""
 
 
-class OpenRouterLLMClient:
+class OpenRouterLLMClient(SafeAsyncClientMixin):
     """Async OpenRouter LLM client using the OpenAI-compatible Chat Completions API."""
 
     def __init__(
@@ -35,33 +36,28 @@ class OpenRouterLLMClient:
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
-        self._base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/")
         self._temperature = temperature
-        self._client: httpx.AsyncClient | None = None
-        self._loop_id: int | None = None
         self._usage = LLMUsage()
 
     @property
     def last_usage(self) -> LLMUsage:
         return self._usage
 
-    def _get_client(self) -> httpx.AsyncClient:
-        import asyncio
+    @property
+    def _base_url(self) -> str:
+        return self.base_url
 
-        current_loop = id(asyncio.get_running_loop())
-        if self._client is not None and self._loop_id != current_loop:
-            self._client = None
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=httpx.Timeout(self.timeout_seconds),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "HTTP-Referer": "https://data-engineering-copilot.local",
-                },
-            )
-            self._loop_id = current_loop
-        return self._client
+    def _make_client_kwargs(self) -> dict:
+        return {
+            "headers": {
+                "Authorization": f"Bearer {self.api_key}",
+                "HTTP-Referer": "https://data-engineering-copilot.local",
+            }
+        }
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        return await self._get_safe_client()
 
     async def generate(self, prompt: str, temperature: float | None = None) -> str:
         temp = temperature if temperature is not None else self._temperature
@@ -120,7 +116,7 @@ class OpenRouterLLMClient:
         reraise=True,
     )
     async def _http_post(self, payload: dict) -> dict:
-        response = await self._get_client().post("/chat/completions", json=payload)
+        response = await (await self._get_client()).post("/chat/completions", json=payload)
         if response.status_code == 401:
             raise OpenRouterError("OpenRouter returned 401 Unauthorized. Check your API key.")
         if response.status_code == 429:

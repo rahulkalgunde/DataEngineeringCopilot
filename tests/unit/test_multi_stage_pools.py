@@ -197,9 +197,14 @@ class TestMultiStagePools:
 
         async def enrich_fn(chunks):
             return [
-                DocumentChunk(chunk_id=c.chunk_id, source_name=c.source_name,
-                              title=c.title, url=c.url, text="enriched " + c.text,
-                              content_hash=c.content_hash)
+                DocumentChunk(
+                    chunk_id=c.chunk_id,
+                    source_name=c.source_name,
+                    title=c.title,
+                    url=c.url,
+                    text="enriched " + c.text,
+                    content_hash=c.content_hash,
+                )
                 for c in chunks
             ]
 
@@ -221,8 +226,9 @@ class TestMultiStagePools:
 
         # This is the shared list (simulates _shared["batch_chunks"])
         shared_batch = [
-            DocumentChunk(chunk_id="c1", source_name="test", title="T",
-                          url="http://example.com", text="chunk", content_hash="abc")
+            DocumentChunk(
+                chunk_id="c1", source_name="test", title="T", url="http://example.com", text="chunk", content_hash="abc"
+            )
         ]
 
         import asyncio

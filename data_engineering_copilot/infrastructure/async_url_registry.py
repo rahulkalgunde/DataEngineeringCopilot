@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
 
 import structlog
 
@@ -16,23 +15,18 @@ log = structlog.get_logger(__name__)
 
 
 class AsyncUrlRegistry:
-    """Per-source URL state store backed by Redis hashes with async/await support."""
+    """Per-source URL state store backed by asyncio Redis hashes."""
 
-    def __init__(self, redis_client: Any, source_name: str) -> None:
-        if redis_client is not None and not hasattr(redis_client, "hget"):
-            raise TypeError(
-                f"redis_client must implement SyncRedisProtocol (got {type(redis_client).__name__})"
-            )
+    def __init__(self, redis_client: object | None, source_name: str) -> None:
         self._redis = redis_client
         self._key = f"crawl:url_registry:{source_name}"
         self._source_name = source_name
 
     async def get_html_hash(self, url: str) -> str | None:
-        """Return the stored ``html_hash`` for *url* asynchronously, or ``None``."""
         if self._redis is None:
             return None
         try:
-            raw = self._redis.hget(self._key, url)
+            raw = await self._redis.hget(self._key, url)  # type: ignore[union-attr]
         except (ConnectionError, TimeoutError, OSError) as exc:
             log.warning("async_url_registry.get_html_hash failed", url=url, error=str(exc), exc_info=True)
             return None
@@ -47,7 +41,6 @@ class AsyncUrlRegistry:
             return None
 
     async def set_html_hash(self, url: str, html_hash: str) -> None:
-        """Store or update the *html_hash* for *url* asynchronously."""
         if self._redis is None:
             return
         record = json.dumps(
@@ -57,16 +50,15 @@ class AsyncUrlRegistry:
             }
         )
         try:
-            self._redis.hset(self._key, url, record)
+            await self._redis.hset(self._key, url, record)  # type: ignore[union-attr]
         except (ConnectionError, TimeoutError, OSError) as exc:
             log.warning("async_url_registry.set_html_hash failed", url=url, error=str(exc), exc_info=True)
 
     async def clear(self) -> None:
-        """Remove all entries for this source asynchronously."""
         if self._redis is None:
             return
         try:
-            self._redis.delete(self._key)
+            await self._redis.delete(self._key)  # type: ignore[union-attr]
         except (ConnectionError, TimeoutError, OSError) as exc:
             log.warning("async_url_registry.clear failed", source=self._source_name, error=str(exc), exc_info=True)
         log.info("async_url_registry.cleared", source=self._source_name)

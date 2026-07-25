@@ -4,39 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import math
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 def _normalize_query(query: str) -> str:
-    """Lowercase, collapse whitespace, strip punctuation for canonical key."""
     q = query.lower().strip()
     q = re.sub(r"[^\w\s]", "", q)
     q = re.sub(r"\s+", " ", q)
     return q
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity between two equal-length vectors."""
-    if len(a) != len(b) or len(a) == 0:
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
 class QueryCache:
     """In-memory two-tier query cache.
 
-    Tier 1: exact match via SHA-256 of normalized query.
-    Tier 2: semantic similarity via cosine distance of query embeddings.
+    Tier 1: exact match via SHA-256 of normalized query (LRU eviction).
+    Tier 2: semantic similarity via NumPy SIMD batch dot product.
     Entries in the semantic tier expire after ``ttl_seconds``.
     """
 
@@ -53,7 +41,7 @@ class QueryCache:
         self._semantic_enabled = semantic_enabled
         self._similarity_threshold = similarity_threshold
         self._exact_cache: OrderedDict[str, str] = OrderedDict()
-        self._semantic_cache: list[tuple[list[float], str, str, float]] = []  # (embedding, query, answer, ts)
+        self._semantic_cache: deque[tuple[np.ndarray, str, str, float]] = deque()
         self._exact_max_size = exact_max_size
         self._semantic_max_size = semantic_max_size
         self._ttl_seconds = ttl_seconds
@@ -81,32 +69,51 @@ class QueryCache:
     # --- semantic tier ---
 
     def get_semantic(self, query: str, query_embedding: list[float]) -> str | None:
-        if not self._semantic_enabled or not self._semantic_cache:
+        if not self._semantic_enabled or not self._semantic_cache or not query_embedding:
             return None
+
+        q_vec = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q_vec)
+        if q_norm == 0:
+            return None
+        q_unit = q_vec / q_norm
+
         now = time.monotonic()
-        best_score = -1.0
-        best_answer = None
-        self._semantic_cache = [entry for entry in self._semantic_cache if now - entry[3] <= self._ttl_seconds]
-        for embedding, _cached_q, answer, _ts in self._semantic_cache:
-            score = _cosine_similarity(query_embedding, embedding)
-            if score > best_score:
-                best_score = score
-                best_answer = answer
+        cutoff = now - self._ttl_seconds
+        valid: list[tuple[np.ndarray, str, str, float]] = []
+        while self._semantic_cache and self._semantic_cache[0][3] < cutoff:
+            self._semantic_cache.popleft()
+        valid = list(self._semantic_cache)
+
+        if not valid:
+            return None
+
+        matrix = np.vstack([entry[0] for entry in valid])
+        similarities = np.dot(matrix, q_unit)
+        best_idx = int(np.argmax(similarities))
+        best_score = float(similarities[best_idx])
+
         if best_score >= self._similarity_threshold:
-            return best_answer
+            return valid[best_idx][2]
         return None
 
     def set_semantic(self, query: str, query_embedding: list[float], answer: str) -> None:
-        if not self._semantic_enabled:
+        if not self._semantic_enabled or not query_embedding:
             return
-        self._semantic_cache.append((list(query_embedding), query, answer, time.monotonic()))
+
+        vec = np.array(query_embedding, dtype=np.float32)
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            return
+        unit_vec = vec / norm
+
+        self._semantic_cache.append((unit_vec, query, answer, time.monotonic()))
         if len(self._semantic_cache) > self._semantic_max_size:
-            self._semantic_cache.pop(0)
+            self._semantic_cache.popleft()
 
     # --- combined ---
 
     def get(self, query: str, query_embedding: list[float] | None = None) -> str | None:
-        """Two-tier lookup: exact first, then semantic."""
         exact = self.get_exact(query)
         if exact is not None:
             return exact

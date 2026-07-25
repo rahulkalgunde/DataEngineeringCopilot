@@ -14,6 +14,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.domain.models import LLMUsage
+from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class AsyncOllamaError(RuntimeError):
     """Raised when async Ollama cannot return an answer."""
 
 
-class AsyncOllamaClient:
+class AsyncOllamaClient(SafeAsyncClientMixin):
     """Async Ollama generation client using httpx.AsyncClient."""
 
     def __init__(
@@ -50,35 +51,14 @@ class AsyncOllamaClient:
         self.timeout_seconds = timeout_seconds
         self.num_ctx = num_ctx
         self.num_predict = num_predict
-        self._client: httpx.AsyncClient | None = None
-        self._loop_id: int | None = None
         self._usage: LLMUsage = LLMUsage()
 
     @property
     def last_usage(self) -> LLMUsage:
         return self._usage
 
-    def _get_client(self) -> httpx.AsyncClient:
-        """Lazy-initialize the httpx client on the current event loop.
-
-        Re-creates the client if the event loop has changed (e.g. across
-        pytest-asyncio test functions with function-scoped loop scope).
-        """
-        import asyncio
-
-        current_loop = id(asyncio.get_running_loop())
-        if self._client is not None and self._loop_id != current_loop:
-            import warnings
-
-            warnings.warn("Recreating httpx client for new event loop", stacklevel=2)
-            self._client = None
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=httpx.Timeout(self.timeout_seconds),
-            )
-            self._loop_id = current_loop
-        return self._client
+    async def _get_client(self) -> httpx.AsyncClient:
+        return await self._get_safe_client()
 
     async def generate(self, prompt: str, num_predict: int | None = None, num_ctx: int | None = None) -> str:
         if num_predict is None:
@@ -163,7 +143,7 @@ class AsyncOllamaClient:
         reraise=True,
     )
     async def _http_post(self, payload: dict) -> dict:
-        response = await self._get_client().post("/api/generate", json=payload)
+        response = await (await self._get_client()).post("/api/generate", json=payload)
         response.raise_for_status()
         return response.json()
 

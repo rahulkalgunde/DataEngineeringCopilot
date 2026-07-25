@@ -54,5 +54,6 @@ class CrawlCache:
 
     async def close(self) -> None:
         import contextlib
+
         with contextlib.suppress(ConnectionError, TimeoutError):
             await self._redis.close()

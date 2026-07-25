@@ -13,41 +13,23 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import EmbeddingError
+from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 
 logger = logging.getLogger(__name__)
 
 
-class AsyncOllamaEmbeddings:
+class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
     """Async Ollama embedding provider using the /api/embed endpoint with httpx."""
 
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
-        self.ollama_base_url = settings.ollama_base_url.rstrip("/")
-        self._client: httpx.AsyncClient | None = None
-        self._loop_id: int | None = None
-        logger.info("Using async Ollama embedding model %s at %s", model_name, self.ollama_base_url)
+        self.base_url = settings.ollama_base_url.rstrip("/")
+        self.timeout_seconds = settings.ollama_timeout_seconds
+        self.ollama_base_url = self.base_url  # backward compat
+        logger.info("Using async Ollama embedding model %s at %s", model_name, self.base_url)
 
-    def _get_client(self) -> httpx.AsyncClient:
-        """Lazy-initialize the httpx client on the current event loop.
-
-        Re-creates the client if the event loop has changed (e.g. across
-        pytest-asyncio test functions with function-scoped loop scope).
-        """
-        import asyncio
-
-        current_loop = id(asyncio.get_running_loop())
-        if self._client is not None and self._loop_id != current_loop:
-            import warnings
-
-            warnings.warn("Recreating httpx client for new event loop", stacklevel=2)
-            self._client = None
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.ollama_base_url,
-                timeout=httpx.Timeout(settings.ollama_timeout_seconds),
-            )
-            self._loop_id = current_loop
-        return self._client
+    async def _get_client(self) -> httpx.AsyncClient:
+        return await self._get_safe_client()
 
     def _slice_texts_into_batches(self, texts: list[str], batch_size: int) -> list[list[str]]:
         if batch_size <= 0:
@@ -63,7 +45,7 @@ class AsyncOllamaEmbeddings:
     async def _aollama_embed_single_batch(self, texts: list[str]) -> list[list[float]]:
         """Call Ollama /api/embed for a single batch asynchronously."""
         try:
-            response = await self._get_client().post(
+            response = await (await self._get_client()).post(
                 "/api/embed",
                 json={"model": self.model_name, "input": texts},
             )

@@ -89,7 +89,8 @@ def reset_index() -> None:
             logger.info("Cleared %d crawl registry keys", len(registry_keys))
         all_crawl_keys = list(redis_client.scan_iter("crawl:*"))
         non_registry = [
-            k for k in all_crawl_keys
+            k
+            for k in all_crawl_keys
             if not (isinstance(k, str) and k.startswith("crawl:url_registry:"))
             and not (isinstance(k, bytes) and k.startswith(b"crawl:url_registry:"))
         ]
