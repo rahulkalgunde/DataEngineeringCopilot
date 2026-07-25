@@ -34,7 +34,8 @@ make test-smoke        # fast sanity: unit not slow, -q --no-header
 ## Services & Docker
 - `make docker-up` → Redis (auth: `local_secure_password_123`), Qdrant (6333/6334), Ollama (11434), Langfuse (3000), MinIO, ClickHouse, Celery worker, API backend.
 - After starting, pull models: `docker exec de_copilot_ollama ollama pull nomic-embed-text` and `llama3.2:3b`.
-- CI stack: `make docker-ci-up` (`docker-compose.ci.yml`, containers prefixed `dec_ci_*`).
+ - CI stack: `make docker-ci-up` (`docker-compose.ci.yml`, containers prefixed `dec_ci_*`).
+ - Rebuild after `pyproject.toml` changes: `docker compose build --no-cache backend-api && docker compose up -d backend-api celery_worker`
 
 ## Architecture & Gotchas
 - **Pipeline** (no LangChain/LlamaIndex): `AsyncCrawler` → `MarkdownParser` → `Chunker` → `Embeddings` → `QdrantVectorStore`.
