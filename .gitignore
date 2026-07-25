@@ -19,6 +19,7 @@ dist/
 build/
 *.egg-info/
 .env
+.env.secrets
 plans/
 sessions/
 scripts/

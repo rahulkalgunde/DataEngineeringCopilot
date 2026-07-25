@@ -79,6 +79,7 @@ def setup_logging(default_level=logging.INFO, log_dir="logs", log_filename="app.
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
+        structlog.processors.format_exc_info,
     ]
 
     structlog.configure(

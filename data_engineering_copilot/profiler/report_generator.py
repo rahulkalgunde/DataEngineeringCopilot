@@ -16,6 +16,7 @@ class ReportGenerator:
         self,
         summary: dict[str, Any],
         recommendations: list[StageRecommendation],
+        production_metrics: dict[str, Any] | None = None,
     ) -> str:
         """Generate a Markdown report with stage-level metrics and recommendations."""
         md: list[str] = []
@@ -27,6 +28,17 @@ class ReportGenerator:
         md.append(f"**Avg CPU Usage**: {summary.get('avg_cpu_pct', 0):.1f}%")
         md.append(f"**Peak RSS Memory**: {summary.get('peak_memory_mb', 0):.2f} MB")
         md.append("")
+
+        if production_metrics is not None:
+            md.append("## Production Ingestion Metrics (from Celery/Redis)")
+            md.append("")
+            md.append(f"- **Status**: {production_metrics.get('status', 'N/A')}")
+            md.append(f"- **Pages Fetched**: {production_metrics.get('pages_fetched', 0)}")
+            md.append(f"- **Chunks Indexed**: {production_metrics.get('chunks_indexed', 0)}")
+            md.append(f"- **Pages Skipped**: {production_metrics.get('pages_skipped', 0)}")
+            err = production_metrics.get("errors")
+            md.append(f"- **Errors**: {err if err else 'none'}")
+            md.append("")
 
         stages = summary.get("stages", {})
         if stages:
@@ -57,10 +69,16 @@ class ReportGenerator:
 
         return "\n".join(md)
 
-    def generate_json(self, summary: dict[str, Any], recommendations: list[StageRecommendation]) -> dict[str, Any]:
+    def generate_json(
+        self,
+        summary: dict[str, Any],
+        recommendations: list[StageRecommendation],
+        production_metrics: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Generate a structured JSON-serializable output."""
         return {
             "summary": summary,
+            "production_metrics": production_metrics,
             "recommendations": [
                 {
                     "stage_name": r.stage_name,
@@ -79,6 +97,7 @@ class ReportGenerator:
         self,
         summary: dict[str, Any],
         recommendations: list[StageRecommendation],
+        production_metrics: dict[str, Any] | None = None,
         output_dir: str = "./profiler_reports",
         name: str = "telemetry_report",
     ) -> Path:
@@ -86,11 +105,11 @@ class ReportGenerator:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        md = self.generate_markdown(summary, recommendations)
+        md = self.generate_markdown(summary, recommendations, production_metrics)
         md_path = out / f"{name}.md"
         md_path.write_text(md)
 
-        data = self.generate_json(summary, recommendations)
+        data = self.generate_json(summary, recommendations, production_metrics)
         json_path = out / f"{name}.json"
         json_path.write_text(json.dumps(data, indent=2))
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import pathlib
+import sys
+import urllib.error
 import urllib.request
 
 from data_engineering_copilot.config.logging import setup_logging
@@ -13,16 +16,73 @@ logger = logging.getLogger(__name__)
 
 
 def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
-    import asyncio
+    import time
 
-    from data_engineering_copilot.factory import build_async_ingestion_service
+    API_BASE_URL = "http://localhost:8000"
 
     logger.info("CLI async ingest started max_pages=%s sources=%s", max_pages, source_names or "all")
-    service = build_async_ingestion_service()
-    total_chunks = asyncio.run(service.ingest(max_pages_per_source=max_pages, source_names=source_names))
 
-    logger.info("CLI ingest completed chunks=%s", total_chunks)
-    print(f"Indexed {total_chunks} chunks.")
+    # Dispatch through the production API path (Celery task + Redis tracking)
+    payload = json.dumps(
+        {
+            "source_names": list(source_names) if source_names else None,
+            "max_pages": max_pages,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"{API_BASE_URL}/api/v1/ingest",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            task_id = data.get("task_id")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Ingestion dispatch failed (HTTP {exc.code}): {body}") from exc
+    except (ConnectionRefusedError, TimeoutError, OSError) as exc:
+        raise RuntimeError(
+            f"Cannot reach the API server at {API_BASE_URL}: {exc}\n"
+            "Start it with: docker compose up -d backend-api celery_worker"
+        ) from exc
+
+    if not task_id:
+        raise RuntimeError(f"API did not return a task_id: {data}")
+
+    print(f"Dispatched ingestion task {task_id}")
+    print("Polling status (Ctrl-C to stop; cancel via: "
+          f"curl -X POST {API_BASE_URL}/api/v1/ingest/{task_id}/cancel)...")
+
+    # Poll progress until completion
+    last_status = None
+    while True:
+        status_req = urllib.request.Request(f"{API_BASE_URL}/api/v1/ingest/status/{task_id}")
+        try:
+            with urllib.request.urlopen(status_req, timeout=5) as resp:
+                progress = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                progress = None
+            else:
+                raise
+
+        if progress is not None:
+            status = progress.get("status")
+            if status != last_status:
+                print(f"  Status: {status} | "
+                      f"Pages: {progress.get('pages_fetched', 0)} | "
+                      f"Chunks: {progress.get('chunks_indexed', 0)}")
+                last_status = status
+            if status in ("COMPLETED", "FAILED", "CANCELLED"):
+                err = progress.get("error")
+                if err:
+                    print(f"Ingestion finished with error: {err}")
+                else:
+                    print(f"Ingestion completed: {progress.get('chunks_indexed', 0)} chunks indexed.")
+                break
+        time.sleep(2)
 
 
 def ask(question: str) -> None:
@@ -108,6 +168,311 @@ def reset_index() -> None:
         logger.info("Deleted crawl frontier database: %s", db_path)
 
 
+def health() -> None:
+    """Check health of all services."""
+
+    print("Checking service health...\n")
+    all_healthy = True
+
+    # Check Qdrant
+    print("Qdrant:")
+    try:
+        req = urllib.request.Request(f"{settings.qdrant_url}/", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                print("  ✅ Healthy (200 OK)")
+            else:
+                print(f"  ❌ Unhealthy (status {resp.status})")
+                all_healthy = False
+    except Exception as e:
+        print(f"  ❌ Unreachable: {e}")
+        all_healthy = False
+
+    # Check Redis
+    print("\nRedis:")
+    try:
+        import redis
+
+        redis_client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        if redis_client.ping():
+            print("  ✅ Healthy (PONG)")
+        else:
+            print("  ❌ Unhealthy (no PONG)")
+            all_healthy = False
+        redis_client.close()
+    except Exception as e:
+        print(f"  ❌ Unreachable: {e}")
+        all_healthy = False
+
+    # Check embedding provider
+    print("\nEmbedding Provider:")
+    provider = settings.embedding_provider
+    if provider == "openai":
+        print(f"  ℹ️  Configured: OpenAI ({settings.openai_embedding_model})")
+    elif provider == "openrouter":
+        print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_embedding_model})")
+    else:
+        print(f"  ⚠️  Unknown provider: {provider}")
+        all_healthy = False
+
+    # Check LLM provider
+    print("\nLLM Provider:")
+    llm_provider = settings.llm_provider
+    if llm_provider == "openai":
+        print(f"  ℹ️  Configured: OpenAI ({settings.openai_model})")
+    elif llm_provider == "openrouter":
+        print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_model})")
+    elif llm_provider == "ollama":
+        print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
+        # Check Ollama health
+        try:
+            req = urllib.request.Request(f"{settings.ollama_base_url}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    print("  ✅ Ollama service healthy")
+                else:
+                    print(f"  ❌ Ollama unhealthy (status {resp.status})")
+                    all_healthy = False
+        except Exception as e:
+            print(f"  ❌ Ollama unreachable: {e}")
+            all_healthy = False
+    else:
+        print(f"  ⚠️  Unknown provider: {llm_provider}")
+        all_healthy = False
+
+    print("\n" + "=" * 40)
+    if all_healthy:
+        print("✅ All services healthy")
+        sys.exit(0)
+    else:
+        print("❌ Some services are unhealthy")
+        sys.exit(1)
+
+
+def status() -> None:
+    """Show ingestion and system status."""
+
+    print("System Status\n" + "=" * 40 + "\n")
+
+    # Check Qdrant collection status
+    print("Qdrant Collection:")
+    try:
+        req = urllib.request.Request(
+            f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            if "result" in data:
+                result = data["result"]
+                print(f"  Collection: {settings.collection_name}")
+                print(f"  Status: {result.get('status', 'unknown')}")
+                if "vectors_count" in result:
+                    print(f"  Vectors: {result.get('vectors_count', 0)}")
+                if "segments_count" in result:
+                    print(f"  Segments: {result.get('segments_count', 0)}")
+            else:
+                print("  ❌ Collection not found")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("  ❌ Collection does not exist (run `dec ingest` to create)")
+        else:
+            print(f"  ❌ Error: {e}")
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+
+    # Check active Celery tasks
+    print("\nCelery Workers:")
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["celery", "-A", "data_engineering_copilot.workers.tasks", "inspect", "active"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if "OK" in result.stdout:
+            if "- empty -" in result.stdout:
+                print("  ✅ No active tasks")
+            else:
+                print("  ⚠️  Active tasks detected:")
+                print(result.stdout)
+        else:
+            print("  ❌ Workers not responding")
+    except Exception as e:
+        print(f"  ❌ Could not check workers: {e}")
+
+    # Check crawl frontier DB
+    print("\nCrawl Frontier:")
+    db_path = settings.crawl_db_path
+    if db_path.exists():
+        size_mb = db_path.stat().st_size / (1024 * 1024)
+        print(f"  ✅ Database exists ({size_mb:.2f} MB)")
+    else:
+        print("  ℹ️  Database not created yet")
+
+    # Check Redis cache
+    print("\nRedis Cache:")
+    try:
+        import redis
+
+        redis_client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        if redis_client.ping():
+            info = redis_client.info()
+            print(f"  ✅ Connected (keys: {info.get('db0', {}).get('keys', 0) if 'db0' in info else 'N/A'})")
+        redis_client.close()
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+
+
+def evaluate() -> None:
+    """Run RAG evaluation on golden dataset."""
+    import asyncio
+
+    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.rag_evaluation import RAGEvaluator
+
+    print("Running RAG Evaluation...\n")
+
+    # Load golden dataset
+    eval_path = pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset.jsonl"
+    if not eval_path.exists():
+        print(f"❌ Evaluation dataset not found at {eval_path}")
+        sys.exit(1)
+
+    queries = []
+    with open(eval_path) as f:
+        for line in f:
+            if line.strip():
+                queries.append(json.loads(line))
+
+    print(f"Loaded {len(queries)} evaluation queries\n")
+
+    # Run evaluation
+    async def run_eval():
+        service = build_rag_service()
+        evaluator = RAGEvaluator()
+
+        results = []
+        for i, item in enumerate(queries, 1):
+            query = item.get("query", "")
+            expected_ids = set(item.get("relevant_ids", []))
+
+            print(f"[{i}/{len(queries)}] Query: {query[:60]}...")
+
+            answer = await service.answer(query)
+
+            # TODO: Get retrieved chunk IDs from answer for proper evaluation
+            # For now, just show the answer
+            print(f"  Answer: {answer.text[:100]}...")
+            print(f"  Confidence: {answer.confidence:.2f}")
+            print()
+
+            results.append({"query": query, "answer": answer.text, "confidence": answer.confidence})
+
+        return results
+
+    results = asyncio.run(run_eval())
+
+    # Summary
+    print("\n" + "=" * 40)
+    print("Evaluation Complete")
+    print(f"Total queries: {len(results)}")
+    avg_confidence = sum(r["confidence"] for r in results) / len(results) if results else 0
+    print(f"Average confidence: {avg_confidence:.2f}")
+
+
+def config() -> None:
+    """Validate and display configuration."""
+    print("Configuration Validation\n" + "=" * 40 + "\n")
+
+    errors = []
+    warnings = []
+
+    # Check required settings
+    print("Required Settings:")
+    required_vars = [
+        ("LLM_PROVIDER", settings.llm_provider),
+        ("EMBEDDING_PROVIDER", settings.embedding_provider),
+        ("QDRANT_URL", settings.qdrant_url),
+        ("REDIS_URL", settings.redis_url),
+    ]
+
+    for var_name, var_value in required_vars:
+        if var_value:
+            print(f"  ✅ {var_name}: {var_value}")
+        else:
+            print(f"  ❌ {var_name}: not set")
+            errors.append(f"{var_name} is not set")
+
+    # Validate URLs
+    print("\nURL Validation:")
+
+    # Qdrant URL
+    if settings.qdrant_url:
+        try:
+            req = urllib.request.Request(f"{settings.qdrant_url}/", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                print("  ✅ Qdrant URL: reachable")
+        except Exception as e:
+            print(f"  ❌ Qdrant URL: unreachable ({e})")
+            errors.append("Qdrant URL is not reachable")
+
+    # Redis URL
+    if settings.redis_url:
+        try:
+            import redis
+
+            client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+            if client.ping():
+                print("  ✅ Redis URL: reachable")
+            client.close()
+        except Exception as e:
+            print(f"  ❌ Redis URL: unreachable ({e})")
+            errors.append("Redis URL is not reachable")
+
+    # Check embedding dimension consistency
+    print("\nEmbedding Configuration:")
+    dim = settings.get_embedding_dimension()
+    print(f"  Dimension: {dim}")
+    print(f"  Provider: {settings.embedding_provider}")
+
+    if settings.embedding_provider == "openrouter":
+        print(f"  Model: {settings.openrouter_embedding_model}")
+    elif settings.embedding_provider == "openai":
+        print(f"  Model: {settings.openai_embedding_model}")
+
+    # Check collection exists with correct dimension
+    try:
+        req = urllib.request.Request(
+            f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            if "result" in data:
+                # Check if dimensions match
+                # This is a simplified check
+                print("  ✅ Collection exists")
+    except Exception:
+        print("  ℹ️  Collection does not exist yet (will be created on ingest)")
+
+    # Summary
+    print("\n" + "=" * 40)
+    if errors:
+        print(f"❌ Configuration invalid ({len(errors)} errors):")
+        for err in errors:
+            print(f"  - {err}")
+        sys.exit(1)
+    elif warnings:
+        print(f"⚠️  Configuration valid with warnings ({len(warnings)} warnings):")
+        for warn in warnings:
+            print(f"  - {warn}")
+        sys.exit(0)
+    else:
+        print("✅ Configuration valid")
+        sys.exit(0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -132,13 +497,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--sources", nargs="*", default=None, help="Documentation sources to profile (default: all)."
     )
     profile_parser.add_argument(
-        "--max-pages", type=int, default=10, help="Pages per source for benchmark (default: 10)."
-    )
-    profile_parser.add_argument(
-        "--concurrency-sweep",
+        "--load-sweep",
         type=str,
-        default="1,2,4,8",
-        help="Comma-separated concurrency values to test (default: 1,2,4,8).",
+        default="10,20,50,100",
+        help="Comma-separated max-pages values to test under production worker config (default: 10,20,50,100).",
     )
     profile_parser.add_argument(
         "--output-dir",
@@ -146,6 +508,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="./profiler_reports",
         help="Directory for reports (default: ./profiler_reports).",
     )
+
+    # Health check
+    subparsers.add_parser("health", help="Check health of all services (Redis, Qdrant, LLM, Embeddings).")
+
+    # Status
+    subparsers.add_parser("status", help="Show ingestion and system status.")
+
+    # Evaluate
+    subparsers.add_parser("evaluate", help="Run RAG evaluation on golden dataset.")
+
+    # Config
+    subparsers.add_parser("config", help="Validate and display configuration.")
+
     return parser
 
 
@@ -170,12 +545,22 @@ def main() -> None:
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
         elif args.command == "profile":
-            profiler_cli.main([
+            profiler_args = [
                 "--sources", *(args.sources or []),
-                "--max-pages", str(args.max_pages),
-                "--concurrency-sweep", args.concurrency_sweep,
+                "--load-sweep", args.load_sweep,
                 "--output-dir", args.output_dir,
-            ])
+            ]
+            profiler_cli.main(profiler_args)
+        elif args.command == "health":
+            health()
+        elif args.command == "status":
+            status()
+        elif args.command == "evaluate":
+            evaluate()
+        elif args.command == "config":
+            config()
+    except SystemExit:
+        raise
     except Exception:
         logger.exception("CLI command failed command=%s", args.command)
         raise

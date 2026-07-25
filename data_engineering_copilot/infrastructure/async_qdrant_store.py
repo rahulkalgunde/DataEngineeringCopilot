@@ -42,20 +42,14 @@ class AsyncQdrantVectorStore:
         self._hybrid_search = hybrid_search
         self._hybrid_rrf_k = hybrid_rrf_k
         self._bm25: BM25Tokenizer | None = BM25Tokenizer() if hybrid_search else None
-        self._client = None
+        self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         self._last_query_sparse = None
-        try:
-            self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
-        except Exception as exc:
-            logger.exception("Failed to initialise async Qdrant client: %s", exc)
 
     async def initialize(self) -> None:
         """Create collection and indexes if they don't exist.
 
         Must be called after construction and before first use.
         """
-        if self._client is None:
-            return
         if not await self._client.collection_exists(self._collection_name):
             if self._hybrid_search:
                 vectors_config = {
@@ -87,7 +81,7 @@ class AsyncQdrantVectorStore:
                 field_schema="keyword",
             )
         except Exception:
-            logger.debug("Payload index on 'url' already exists or could not be created.", exc_info=True)
+            logger.info("Payload index on 'url' already exists or could not be created.", exc_info=True)
         try:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
@@ -95,7 +89,7 @@ class AsyncQdrantVectorStore:
                 field_schema="keyword",
             )
         except Exception:
-            logger.debug("Payload index on 'source_name' already exists or could not be created.", exc_info=True)
+            logger.info("Payload index on 'source_name' already exists or could not be created.", exc_info=True)
         try:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
@@ -103,7 +97,7 @@ class AsyncQdrantVectorStore:
                 field_schema="keyword",
             )
         except Exception:
-            logger.debug("Payload index on 'chunk_type' already exists or could not be created.", exc_info=True)
+            logger.info("Payload index on 'chunk_type' already exists or could not be created.", exc_info=True)
         try:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
@@ -111,7 +105,7 @@ class AsyncQdrantVectorStore:
                 field_schema="keyword",
             )
         except Exception:
-            logger.debug("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
+            logger.info("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
         return settings.get_embedding_dimension()
@@ -137,30 +131,47 @@ class AsyncQdrantVectorStore:
         self,
         chunks: Iterable[DocumentChunk],
         embeddings: Iterable[Iterable[float]],
+        _sub_batch_size: int = 256,
     ) -> None:
-        """Insert or update a batch of chunks asynchronously."""
+        """Insert or update a batch of chunks asynchronously.
+
+        Splits the input into sub-batches of ``_sub_batch_size`` to stay
+        within Qdrant's ``max_request_size_mb`` (default 32 MB).
+        """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Cannot upsert chunks.")
             return
-        try:
-            chunks_list = list(chunks)
-            ids: list[str] = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in chunks_list]
-            vectors: list[list[float]] = [list(e) for e in embeddings]
-            payloads: list[dict] = [self._chunk_to_payload(chunk) for chunk in chunks_list]
+        chunks_list = list(chunks)
+        embeddings_list = list(embeddings)
+        if not chunks_list:
+            return
 
-            if self._hybrid_search and self._bm25 is not None:
-                sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in chunks_list]
-                vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
-            else:
-                vectors_dict = vectors
+        for i in range(0, len(chunks_list), _sub_batch_size):
+            sub_chunks = chunks_list[i : i + _sub_batch_size]
+            sub_embeddings = embeddings_list[i : i + _sub_batch_size]
+            try:
+                ids = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in sub_chunks]
+                vectors = [list(e) for e in sub_embeddings]
+                payloads = [self._chunk_to_payload(chunk) for chunk in sub_chunks]
 
-            await self._client.upsert(
-                collection_name=self._collection_name,
-                points=models.Batch(ids=ids, vectors=vectors_dict, payloads=payloads),
-            )
-        except Exception as exc:
-            logger.exception("Failed to async upsert chunks to Qdrant: %s", exc)
-            raise
+                if self._hybrid_search and self._bm25 is not None:
+                    sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in sub_chunks]
+                    vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
+                else:
+                    vectors_dict = vectors
+
+                await self._client.upsert(
+                    collection_name=self._collection_name,
+                    points=models.Batch(ids=ids, vectors=vectors_dict, payloads=payloads),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed to async upsert chunks to Qdrant (sub-batch %d/%d): %s",
+                    i // _sub_batch_size + 1,
+                    (len(chunks_list) + _sub_batch_size - 1) // _sub_batch_size,
+                    exc,
+                )
+                raise
 
     async def query(
         self,

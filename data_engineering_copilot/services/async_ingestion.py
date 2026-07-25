@@ -361,6 +361,7 @@ class AsyncIngestionService:
                         continue
                     chunks, content_hash, parsed = result
 
+                    pending_batch = None
                     async with _lock:
                         n_chunks = len(chunks)
                         _shared["total_chunks"] += n_chunks
@@ -384,8 +385,12 @@ class AsyncIngestionService:
                         )
 
                         if len(_shared["batch_chunks"]) >= self.settings.ingestion_batch_chunk_size:
-                            async with embed_semaphore:
-                                await self._flush_batch(wloop, _shared["batch_chunks"], on_event, _mk_event)
+                            pending_batch = list(_shared["batch_chunks"])
+                            _shared["batch_chunks"].clear()
+
+                    if pending_batch is not None:
+                        async with embed_semaphore:
+                            await self._flush_batch(wloop, pending_batch, on_event, _mk_event)
                 finally:
                     _queue.task_done()
 
@@ -410,8 +415,12 @@ class AsyncIngestionService:
                 await queue.put(None)
             await queue.join()
 
-            async with batch_lock, embed_semaphore:
-                await self._flush_batch(loop, shared["batch_chunks"], on_event, _make_event)
+            async with batch_lock:
+                pending_batch = list(shared["batch_chunks"])
+                shared["batch_chunks"].clear()
+
+            async with embed_semaphore:
+                await self._flush_batch(loop, pending_batch, on_event, _make_event)
 
             for w in w_tasks:
                 w.cancel()

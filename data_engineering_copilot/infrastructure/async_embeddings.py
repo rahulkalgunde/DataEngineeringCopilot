@@ -17,6 +17,9 @@ from data_engineering_copilot.infrastructure.async_client import SafeAsyncClient
 
 logger = logging.getLogger(__name__)
 
+# Retryable network errors — these should propagate to the @retry decorator
+_RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
+
 
 class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
     """Async Ollama embedding provider using the /api/embed endpoint with httpx."""
@@ -39,7 +42,7 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError)),
+        retry=retry_if_exception_type(_RETRYABLE_ERRORS),
         reraise=True,
     )
     async def _aollama_embed_single_batch(self, texts: list[str]) -> list[list[float]]:
@@ -50,9 +53,9 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
                 json={"model": self.model_name, "input": texts},
             )
             response.raise_for_status()
-            resp_data = response.json()
-        except Exception as exc:
+        except httpx.HTTPStatusError as exc:
             raise EmbeddingError(f"Failed to get embeddings from Ollama: {exc}") from exc
+        resp_data = response.json()
 
         if "embeddings" not in resp_data:
             raise EmbeddingError(

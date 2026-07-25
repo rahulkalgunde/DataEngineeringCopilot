@@ -14,6 +14,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
+from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         timeout_seconds: int = 120,
         base_url: str = "https://openrouter.ai/api/v1",
         temperature: float = 0.05,
+        rate_limiter: OpenRouterRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -39,6 +41,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         self.base_url = base_url.rstrip("/")
         self._temperature = temperature
         self._usage = LLMUsage()
+        self._rate_limiter = rate_limiter
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -79,6 +82,14 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         except httpx.TimeoutException as exc:
             logger.exception("OpenRouter generation timed out timeout_seconds=%s", self.timeout_seconds)
             raise OpenRouterError(f"OpenRouter timed out after {self.timeout_seconds} seconds.") from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                logger.exception("OpenRouter rate limit persistently exceeded after retries.")
+                raise OpenRouterError(
+                    "OpenRouter rate limit exceeded after all retries. Try again later."
+                ) from exc
+            logger.exception("OpenRouter HTTP error: %s", exc)
+            raise OpenRouterError(f"OpenRouter returned HTTP {exc.response.status_code}.") from exc
         except (httpx.ConnectError, httpx.HTTPError) as exc:
             logger.exception("OpenRouter connection failed")
             raise OpenRouterError("Could not reach OpenRouter. Check your network and API key.") from exc
@@ -110,17 +121,23 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         return clean_text
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError)),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
         reraise=True,
     )
     async def _http_post(self, payload: dict) -> dict:
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire()
         response = await (await self._get_client()).post("/chat/completions", json=payload)
+        if response.status_code == 429:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.handle_429(dict(response.headers))
+            raise httpx.HTTPStatusError(
+                "Rate limited by OpenRouter", request=response.request, response=response
+            )
         if response.status_code == 401:
             raise OpenRouterError("OpenRouter returned 401 Unauthorized. Check your API key.")
-        if response.status_code == 429:
-            raise OpenRouterError("OpenRouter rate limit exceeded (429). Try again later.")
         response.raise_for_status()
         return response.json()
 
