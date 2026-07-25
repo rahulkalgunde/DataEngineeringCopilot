@@ -18,6 +18,7 @@ dependencies = [
     "langchain-text-splitters>=0.3.0",
     "nltk>=3.8",
     "numpy>=1.26",
+    "psutil>=5.9",
     "qdrant-client>=1.7",
     "fastapi>=0.110",
     "pydantic>=2.5",
@@ -75,6 +76,7 @@ markers = [
     "ingestion: marks tests that exercise the full ingestion pipeline (Qdrant + Ollama)",
     "api: marks tests that exercise FastAPI endpoints (may require Celery/Redis)",
     "celery: marks tests that exercise Celery workers (requires Redis broker)",
+    "e2e: marks end-to-end tests that require a full running Docker stack (Qdrant, Redis, Ollama, API)",
     "evaluation: marks tests that evaluate RAG quality with mocked embedder (no infra needed)",
     "xdist_group(name): tests sharing a resource that must run in the same worker process",
 ]
