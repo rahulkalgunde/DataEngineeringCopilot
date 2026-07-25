@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 from urllib.parse import urldefrag, urljoin, urlparse
 
 import aiohttp
+import redis.exceptions
 import structlog
 from bs4 import BeautifulSoup
 
@@ -21,6 +22,12 @@ from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB, Cr
 log = structlog.get_logger(__name__)
 
 SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
+
+# Fatal errors that should not be retried — fail immediately
+FATAL_ERROR_TYPES = (
+    redis.exceptions.AuthenticationError,
+    redis.exceptions.AuthorizationError,
+)
 
 
 @dataclass
@@ -89,6 +96,7 @@ class AsyncDocumentationCrawler:
         self._domain_states: dict[str, _DomainState] = {}
         self._metrics = CrawlMetrics()
         self._executor = ThreadPoolExecutor(max_workers=thread_pool_size)
+        self._fatal_error: BaseException | None = None
 
     def _get_domain_priority(self, domain: str) -> int:
         for pattern, priority in self.priority_domains.items():
@@ -156,8 +164,23 @@ class AsyncDocumentationCrawler:
                     try:
                         doc = await self._process_url(session, record, source, on_event)
                         await results_queue.put(doc)
-                    except Exception:
-                        log.exception("crawler.worker_exception")
+                    except Exception as exc:
+                        if isinstance(exc, FATAL_ERROR_TYPES):
+                            self._fatal_error = exc
+                            log.error(
+                                "crawler.fatal_error",
+                                error_type=type(exc).__name__,
+                                error=str(exc),
+                                url=record.url,
+                            )
+                            queue.task_done()
+                            break
+                        log.warning(
+                            "crawler.worker_exception",
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                            url=record.url,
+                        )
                         await results_queue.put(None)
                     finally:
                         queue.task_done()
@@ -196,6 +219,10 @@ class AsyncDocumentationCrawler:
                 for w in workers:
                     w.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+
+            # Fail-fast: raise fatal errors instead of returning 0 results silently
+            if self._fatal_error is not None:
+                raise self._fatal_error
 
         log.info(
             "crawler.completed",

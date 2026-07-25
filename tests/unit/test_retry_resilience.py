@@ -76,26 +76,22 @@ class TestEmbeddingRetry:
         return AsyncOllamaEmbeddings(model_name="nomic-embed-text")
 
     @pytest.mark.asyncio
-    async def test_network_error_wrapped_in_embedding_error(self, embeddings):
-        """Network errors from Ollama are caught by the except block inside
-        _aollama_embed_single_batch and wrapped in EmbeddingError immediately.
-
-        The tenacity retry decorator on _aollama_embed_single_batch cannot
-        see the original httpx exception because the except Exception block
-        catches it first and re-raises as EmbeddingError.
-        """
+    async def test_network_error_retries_then_raises(self, embeddings):
+        """Retryable network errors (TimeoutException) are retried 3 times
+        by tenacity, then re-raised as the original exception type."""
         with respx.mock:
             respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(side_effect=httpx.TimeoutException("timeout"))
-            with pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"):
+            with pytest.raises(httpx.TimeoutException, match="timeout"):
                 await embeddings._aollama_embed(["test"])
 
     @pytest.mark.asyncio
-    async def test_connect_error_wrapped_in_embedding_error(self, embeddings):
+    async def test_connect_error_retries_then_raises(self, embeddings):
+        """Retryable connection errors are retried 3 times, then re-raised."""
         with respx.mock:
             respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(
                 side_effect=httpx.ConnectError("connection refused")
             )
-            with pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"):
+            with pytest.raises(httpx.ConnectError, match="connection refused"):
                 await embeddings._aollama_embed(["test"])
 
     @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import redis.asyncio as aioredis
+import redis.exceptions
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
@@ -14,6 +15,7 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
+from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
@@ -27,7 +29,20 @@ from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 logger = StructuredLogger(__name__)
 
 
-def build_llm_client(app_settings: AppSettings = settings):
+def build_openrouter_rate_limiter(app_settings: AppSettings = settings) -> OpenRouterRateLimiter | None:
+    """Build a shared rate limiter when OpenRouter is the active provider for either LLM or embeddings."""
+    if app_settings.llm_provider.lower() != "openrouter" and app_settings.embedding_provider.lower() != "openrouter":
+        return None
+    return OpenRouterRateLimiter(
+        rpm_limit=app_settings.openrouter_rpm_limit,
+        rpd_limit=app_settings.openrouter_rpd_limit,
+    )
+
+
+def build_llm_client(
+    app_settings: AppSettings = settings,
+    rate_limiter: OpenRouterRateLimiter | None = None,
+):
     """Build LLM client based on configured provider."""
     provider = app_settings.llm_provider.lower()
     if provider == "openrouter":
@@ -38,6 +53,7 @@ def build_llm_client(app_settings: AppSettings = settings):
             api_key=api_key,
             model=app_settings.openrouter_model,
             timeout_seconds=app_settings.ollama_timeout_seconds,
+            rate_limiter=rate_limiter,
         )
     elif provider == "ollama":
         return AsyncOllamaClient(
@@ -51,7 +67,10 @@ def build_llm_client(app_settings: AppSettings = settings):
         raise ValueError(f"Unsupported llm_provider: {provider!r}. Choose 'ollama' or 'openrouter'.")
 
 
-def build_embedder(app_settings: AppSettings = settings):
+def build_embedder(
+    app_settings: AppSettings = settings,
+    rate_limiter: OpenRouterRateLimiter | None = None,
+):
     """Build embedding provider based on configured provider."""
     provider = app_settings.embedding_provider.lower()
     if provider == "openai":
@@ -74,6 +93,7 @@ def build_embedder(app_settings: AppSettings = settings):
             model_name=app_settings.openrouter_embedding_model,
             embedding_dimension=app_settings.openrouter_embedding_dimension,
             batch_size=app_settings.embedding_batch_size,
+            rate_limiter=rate_limiter,
         )
     elif provider == "ollama":
         return AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name)
@@ -141,6 +161,49 @@ def build_chunker(app_settings: AppSettings = settings):
     )
 
 
+def _validate_redis(redis_url: str, component: str) -> None:
+    """Synchronous Redis connectivity check. Fails fast with clear message."""
+    import redis as sync_redis
+
+    try:
+        client = sync_redis.from_url(redis_url, decode_responses=True)
+        client.ping()
+        client.close()
+    except redis.exceptions.RedisError as exc:
+        raise ConnectionError(
+            f"Redis connection failed for {component}: {exc}. "
+            f"Check REDIS_URL in .env (password required if Redis has requirepass)."
+        ) from exc
+    except ConnectionError:
+        raise
+    except Exception as exc:
+        raise ConnectionError(
+            f"Redis connection failed for {component}: {exc}. "
+            f"Check REDIS_URL in .env (password required if Redis has requirepass)."
+        ) from exc
+
+
+def _validate_qdrant(qdrant_url: str) -> None:
+    """Synchronous Qdrant health check. Fails fast with clear message."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(f"{qdrant_url}/collections")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                raise ConnectionError(f"Qdrant health check returned status {resp.status}")
+    except urllib.error.URLError as exc:
+        raise ConnectionError(
+            f"Qdrant connection failed: {exc}. Check QDRANT_URL and ensure Qdrant is running."
+        ) from exc
+    except ConnectionError:
+        raise
+    except Exception as exc:
+        raise ConnectionError(
+            f"Qdrant connection failed: {exc}. Check QDRANT_URL and ensure Qdrant is running."
+        ) from exc
+
+
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
     logger.info(
         "building_async_crawler",
@@ -152,6 +215,7 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
     frontier = CrawlFrontierDB(db_path)
     cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
     cache = CrawlCache(cache_url)
+    _validate_redis(app_settings.redis_url, "CrawlCache")
     return AsyncDocumentationCrawler(
         frontier=frontier,
         cache=cache,
@@ -178,17 +242,18 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         qdrant_url=app_settings.qdrant_url,
         collection=app_settings.collection_name,
     )
-    try:
-        redis_client = aioredis.from_url(
-            app_settings.redis_url,
-            decode_responses=True,
-            max_connections=20,
-        )
-    except Exception:
-        redis_client = None
+    _validate_redis(app_settings.redis_url, "IngestionService")
+    _validate_qdrant(app_settings.qdrant_url)
+    redis_client = aioredis.from_url(
+        app_settings.redis_url,
+        decode_responses=True,
+        max_connections=20,
+    )
+
+    rate_limiter = build_openrouter_rate_limiter(app_settings)
 
     contextual_enricher = ContextualChunkEnricher(
-        summarizer=LLMContextSummarizer(llm_client=build_llm_client(app_settings)),
+        summarizer=LLMContextSummarizer(llm_client=build_llm_client(app_settings, rate_limiter)),
         enabled=app_settings.contextual_enrichment_enabled,
         batch_size=app_settings.enrichment_batch_size,
     )
@@ -198,7 +263,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         crawler=build_async_crawler(app_settings),
         parser=MarkdownParser(),
         chunker=build_chunker(app_settings),
-        embeddings=build_embedder(app_settings),
+        embeddings=build_embedder(app_settings, rate_limiter),
         vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
@@ -240,14 +305,15 @@ def build_rag_service(
         reranker_top_k=app_settings.reranker_top_k,
         max_context_chars=app_settings.max_context_chars,
     )
-    llm_client = build_llm_client(app_settings)
+    rate_limiter = build_openrouter_rate_limiter(app_settings)
+    llm_client = build_llm_client(app_settings, rate_limiter)
     vector_store = AsyncQdrantVectorStore(
         url=app_settings.qdrant_url,
         collection_name=app_settings.collection_name,
         hybrid_search=app_settings.hybrid_search_enabled,
         hybrid_rrf_k=app_settings.hybrid_rrf_k,
     )
-    embedder = build_embedder(app_settings)
+    embedder = build_embedder(app_settings, rate_limiter)
     reranker = None
     if app_settings.reranker_enabled:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)

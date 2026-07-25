@@ -1,0 +1,130 @@
+"""Shared rate limiter for OpenRouter API access.
+
+Both embeddings and LLM generation share the same OpenRouter API key,
+so they must coordinate to stay under the same RPM / RPD limits.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import deque
+
+logger = logging.getLogger(__name__)
+
+
+class OpenRouterRateLimiter:
+    """Sliding-window RPM + daily-counter RPD limiter.
+
+    Designed to be shared by ``OpenRouterEmbeddings`` and
+    ``OpenRouterLLMClient`` so that the combined request volume stays
+    under OpenRouter's per-key limits (default 20 RPM / 1000 RPD).
+
+    Parameters
+    ----------
+    rpm_limit:
+        Maximum requests per minute (sliding window).
+    rpd_limit:
+        Maximum requests per day (calendar-style window).
+    """
+
+    def __init__(self, rpm_limit: int = 20, rpd_limit: int = 1000) -> None:
+        self._rpm_limit = rpm_limit
+        self._rpd_limit = rpd_limit
+        self._request_timestamps: deque[float] = deque()
+        self._daily_count = 0
+        self._daily_reset = time.time() + 86400
+        self._lock = asyncio.Lock()
+        self._last_rpm_hit = 0.0
+        self._last_rpd_hit = 0.0
+
+    async def acquire(self) -> None:
+        """Block until a request slot is available under both RPM and RPD limits.
+
+        Raises ``RuntimeError`` if the daily limit is exhausted.
+        """
+        async with self._lock:
+            now = time.time()
+
+            # Purge timestamps older than 60 seconds
+            while self._request_timestamps and self._request_timestamps[0] < now - 60:
+                self._request_timestamps.popleft()
+
+            # Daily reset
+            if now >= self._daily_reset:
+                self._daily_count = 0
+                self._daily_reset = now + 86400
+
+            # RPD limit check
+            if self._daily_count >= self._rpd_limit:
+                wait = self._daily_reset - now
+                if wait > 0:
+                    logger.warning(
+                        "OpenRouter daily limit (%d RPD) reached. Sleeping %.0fs until reset.",
+                        self._rpd_limit,
+                        wait,
+                    )
+                    self._last_rpd_hit = time.time()
+                    await asyncio.sleep(wait)
+                    # Reset after sleep
+                    self._daily_count = 0
+                    self._daily_reset = time.time() + 86400
+
+            # RPM limit check
+            if len(self._request_timestamps) >= self._rpm_limit:
+                wait = self._request_timestamps[0] + 60 - now
+                if wait > 0:
+                    logger.debug(
+                        "OpenRouter RPM limit (%d) reached. Sleeping %.1fs.",
+                        self._rpm_limit,
+                        wait,
+                    )
+                    self._last_rpm_hit = time.time()
+                    await asyncio.sleep(wait)
+                # Purge again after sleeping
+                while self._request_timestamps and self._request_timestamps[0] < time.time() - 60:
+                    self._request_timestamps.popleft()
+
+            self._request_timestamps.append(time.time())
+            self._daily_count += 1
+
+    async def handle_429(self, response_headers: dict | None = None) -> None:
+        """React to a 429 response by waiting for the appropriate ``Retry-After``.
+
+        If OpenRouter includes a ``Retry-After`` header that value is used;
+        otherwise a default 60s backoff is applied.
+        """
+        import contextlib
+
+        retry_after = 60
+        if response_headers:
+            raw = response_headers.get("Retry-After")
+            if raw is not None:
+                with contextlib.suppress(ValueError, TypeError):
+                    retry_after = float(raw)
+        logger.warning("OpenRouter 429 rate limit hit. Waiting %.0fs before retry.", retry_after)
+        await asyncio.sleep(retry_after)
+
+    @property
+    def remaining_rpm(self) -> int:
+        """Approximate remaining requests available in the current RPM window."""
+        now = time.time()
+        while self._request_timestamps and self._request_timestamps[0] < now - 60:
+            self._request_timestamps.popleft()
+        return max(0, self._rpm_limit - len(self._request_timestamps))
+
+    @property
+    def remaining_rpd(self) -> int:
+        """Approximate remaining requests available today."""
+        return max(0, self._rpd_limit - self._daily_count)
+
+    @property
+    def stats(self) -> dict:
+        return {
+            "remaining_rpm": self.remaining_rpm,
+            "remaining_rpd": self.remaining_rpd,
+            "daily_count": self._daily_count,
+            "rpm_limit": self._rpm_limit,
+            "rpd_limit": self._rpd_limit,
+        }

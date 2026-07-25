@@ -16,6 +16,7 @@ import re
 import time
 
 import numpy as np
+import redis.exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -58,61 +59,91 @@ class RedisQueryCache:
         return f"{self._prefix}:semantic:{idx}"
 
     async def get_exact(self, query: str) -> str | None:
-        key = self._exact_key(query)
-        cached = await self._redis.get(key)
-        return cached if cached else None
-
-    async def set_exact(self, query: str, answer: str) -> None:
-        key = self._exact_key(query)
-        await self._redis.setex(key, self._exact_ttl, answer)
-
-    async def get_semantic(self, query_embedding: list[float]) -> str | None:
-        query_vec = np.array(query_embedding, dtype=np.float32)
-        query_norm = np.linalg.norm(query_vec)
-        if query_norm == 0:
+        try:
+            key = self._exact_key(query)
+            cached = await self._redis.get(key)
+            return cached if cached else None
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "RedisQueryCache.get_exact failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return None
 
-        best_score = -1.0
-        best_answer = None
+    async def set_exact(self, query: str, answer: str) -> None:
+        try:
+            key = self._exact_key(query)
+            await self._redis.setex(key, self._exact_ttl, answer)
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "RedisQueryCache.set_exact failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
 
-        cursor = 0
-        while True:
-            cursor, keys = await self._redis.scan(cursor=cursor, match=f"{self._prefix}:semantic:*", count=100)
-            for key in keys:
-                data = await self._redis.hgetall(key)
-                if "embedding" not in data or "answer" not in data:
-                    continue
-                stored_vec = np.array(json.loads(data["embedding"]), dtype=np.float32)
-                stored_norm = np.linalg.norm(stored_vec)
-                if stored_norm == 0:
-                    continue
-                score = float(np.dot(query_vec, stored_vec) / (query_norm * stored_norm))
-                if score > best_score:
-                    best_score = score
-                    best_answer = data["answer"]
-            if cursor == 0:
-                break
+    async def get_semantic(self, query_embedding: list[float]) -> str | None:
+        try:
+            query_vec = np.array(query_embedding, dtype=np.float32)
+            query_norm = np.linalg.norm(query_vec)
+            if query_norm == 0:
+                return None
 
-        if best_score >= self._similarity_threshold and best_answer:
-            return best_answer
-        return None
+            best_score = -1.0
+            best_answer = None
+
+            cursor = 0
+            while True:
+                cursor, keys = await self._redis.scan(cursor=cursor, match=f"{self._prefix}:semantic:*", count=100)
+                for key in keys:
+                    data = await self._redis.hgetall(key)
+                    if "embedding" not in data or "answer" not in data:
+                        continue
+                    stored_vec = np.array(json.loads(data["embedding"]), dtype=np.float32)
+                    stored_norm = np.linalg.norm(stored_vec)
+                    if stored_norm == 0:
+                        continue
+                    score = float(np.dot(query_vec, stored_vec) / (query_norm * stored_norm))
+                    if score > best_score:
+                        best_score = score
+                        best_answer = data["answer"]
+                if cursor == 0:
+                    break
+
+            if best_score >= self._similarity_threshold and best_answer:
+                return best_answer
+            return None
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "RedisQueryCache.get_semantic failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return None
 
     async def set_semantic(self, query: str, query_embedding: list[float], answer: str) -> None:
-        idx = int(await self._redis.incr(f"{self._prefix}:semantic:counter"))
-        if idx > self._max_semantic:
-            oldest = idx - self._max_semantic
-            await self._redis.delete(self._semantic_key(oldest))
-        key = self._semantic_key(idx)
-        await self._redis.hset(
-            key,
-            mapping={
-                "query": query,
-                "embedding": json.dumps(query_embedding),
-                "answer": answer,
-                "created_at": str(time.time()),
-            },
-        )
-        await self._redis.expire(key, self._semantic_ttl)
+        try:
+            idx = int(await self._redis.incr(f"{self._prefix}:semantic:counter"))
+            if idx > self._max_semantic:
+                oldest = idx - self._max_semantic
+                await self._redis.delete(self._semantic_key(oldest))
+            key = self._semantic_key(idx)
+            await self._redis.hset(
+                key,
+                mapping={
+                    "query": query,
+                    "embedding": json.dumps(query_embedding),
+                    "answer": answer,
+                    "created_at": str(time.time()),
+                },
+            )
+            await self._redis.expire(key, self._semantic_ttl)
+        except redis.exceptions.RedisError as exc:
+            logger.warning(
+                "RedisQueryCache.set_semantic failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
 
     async def get(self, query: str, query_embedding: list[float] | None = None) -> str | None:
         """Get cached answer: try exact first, then semantic."""

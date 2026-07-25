@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 
+import redis.exceptions
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -27,8 +28,13 @@ class AsyncUrlRegistry:
             return None
         try:
             raw = await self._redis.hget(self._key, url)  # type: ignore[union-attr]
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            log.warning("async_url_registry.get_html_hash failed", url=url, error=str(exc), exc_info=True)
+        except redis.exceptions.RedisError as exc:
+            log.warning(
+                "async_url_registry.get_html_hash failed",
+                url=url,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return None
         if raw is None:
             return None
@@ -51,14 +57,24 @@ class AsyncUrlRegistry:
         )
         try:
             await self._redis.hset(self._key, url, record)  # type: ignore[union-attr]
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            log.warning("async_url_registry.set_html_hash failed", url=url, error=str(exc), exc_info=True)
+        except redis.exceptions.RedisError as exc:
+            log.warning(
+                "async_url_registry.set_html_hash failed",
+                url=url,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
 
     async def clear(self) -> None:
         if self._redis is None:
             return
         try:
             await self._redis.delete(self._key)  # type: ignore[union-attr]
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            log.warning("async_url_registry.clear failed", source=self._source_name, error=str(exc), exc_info=True)
+        except redis.exceptions.RedisError as exc:
+            log.warning(
+                "async_url_registry.clear failed",
+                source=self._source_name,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
         log.info("async_url_registry.cleared", source=self._source_name)

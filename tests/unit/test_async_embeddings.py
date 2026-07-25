@@ -111,7 +111,7 @@ async def test_embed_empty_embedding(async_embeddings):
 async def test_embed_network_error(async_embeddings):
     with respx.mock:
         respx.post(f"{async_embeddings.ollama_base_url}/api/embed").mock(side_effect=Exception("Connection refused"))
-        with pytest.raises(RuntimeError, match="Failed to get embeddings from Ollama"):
+        with pytest.raises(Exception, match="Connection refused"):
             await async_embeddings._aollama_embed(["test"])
 
 

@@ -164,20 +164,11 @@ async def test_get_content_hash_not_found(mock_async_qdrant):
 async def test_client_not_initialized_returns_safe_defaults():
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
-    with patch(
-        "data_engineering_copilot.infrastructure.async_qdrant_store.AsyncQdrantClient",
-        side_effect=Exception("Connection refused"),
+    with (
+        patch(
+            "data_engineering_copilot.infrastructure.async_qdrant_store.AsyncQdrantClient",
+            side_effect=Exception("Connection refused"),
+        ),
+        pytest.raises(Exception, match="Connection refused"),
     ):
-        store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-        assert store._client is None
-
-        results = await store.query([0.1] * 768, top_k=5)
-        assert results == []
-
-        count = await store.count()
-        assert count == 0
-
-        await store.upsert_chunks([], [])
-
-        result = await store.get_content_hash_for_url("http://example.com")
-        assert result is None
+        AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")

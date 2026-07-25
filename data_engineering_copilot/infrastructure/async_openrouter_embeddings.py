@@ -15,8 +15,12 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
+from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Retryable network errors — these should propagate to the @retry decorator
+_RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
 
 # Fallback token encoder (matches OpenAI/OpenRouter common tokenizer tokenization ratio)
 _TOKENIZER = tiktoken.get_encoding("cl100k_base")
@@ -47,6 +51,7 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         embedding_dimension: int = 2048,
         batch_size: int = 32,
         timeout_seconds: int = 120,
+        rate_limiter: OpenRouterRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -54,6 +59,7 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         self._embedding_dimension = embedding_dimension
         self._batch_size = batch_size
         self.timeout_seconds = timeout_seconds
+        self._rate_limiter = rate_limiter
         logger.info("Using OpenRouter embedding model %s at %s", model_name, self.base_url)
 
     def _make_client_kwargs(self) -> dict:
@@ -73,28 +79,41 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         return [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError)),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
         reraise=True,
     )
     async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
+        # Acquire rate limiter slot before making the request
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire()
+
         # Pre-emptively truncate all texts to ensure no text exceeds 3800 tokens
         safe_texts = [_truncate_to_safe_tokens(t) for t in texts]
 
-        try:
-            response = await (await self._get_client()).post(
-                "/embeddings",
-                json={
-                    "model": self.model_name,
-                    "input": safe_texts,
-                    "provider": {"truncate": "END"},  # Instruct OpenRouter upstream to truncate if still oversized
-                },
+        response = await (await self._get_client()).post(
+            "/embeddings",
+            json={
+                "model": self.model_name,
+                "input": safe_texts,
+                "provider": {"truncate": "END"},
+            },
+        )
+
+        # Handle 429 rate limit — parse Retry-After and retry after backoff
+        if response.status_code == 429:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.handle_429(dict(response.headers))
+            raise httpx.HTTPStatusError(  # tenacity will retry this
+                "Rate limited by OpenRouter", request=response.request, response=response
             )
+
+        try:
             response.raise_for_status()
-            resp_data = response.json()
-        except Exception as exc:
+        except httpx.HTTPStatusError as exc:
             raise EmbeddingError(f"Failed to get embeddings from OpenRouter: {exc}") from exc
+        resp_data = response.json()
 
         # FIX: Check for OpenRouter 200 OK Embedded Error Body
         if isinstance(resp_data, dict) and "error" in resp_data:

@@ -74,7 +74,7 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         frozen=True,
-        env_file=".env",
+        env_file=(".env", ".env.secrets", ".env.local"),
         env_file_encoding="utf-8",
         env_ignore_empty=True,
         extra="ignore",
@@ -115,12 +115,15 @@ class AppSettings(BaseSettings):
     # Provider selection: "ollama" | "openrouter" | "openai"
     llm_provider: str = "ollama"
     embedding_provider: str = "ollama"
+    ollama_model: str = "llama3.2:3b"
 
     # OpenRouter settings (LLM + Embeddings)
     openrouter_api_key: SecretStr = SecretStr("")
-    openrouter_model: str = "anthropic/claude-3.5-sonnet"
+    openrouter_model: str = "openrouter/free"
     openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
     openrouter_embedding_dimension: int = 2048
+    openrouter_rpm_limit: int = 20
+    openrouter_rpd_limit: int = 1000
 
     # OpenAI settings (Embeddings only)
     openai_api_key: SecretStr = SecretStr("")
@@ -128,7 +131,7 @@ class AppSettings(BaseSettings):
     openai_embedding_base_url: str = "https://api.openai.com"
     openai_embedding_dimension: int = 1536
 
-    ollama_model: str = "llama3.2:3b"
+
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
     chunk_size_words: int = 375

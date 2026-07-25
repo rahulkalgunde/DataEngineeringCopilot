@@ -32,7 +32,7 @@ def _ensure_tracer() -> Any:
         trace.set_tracer_provider(provider)
         _tracer = trace.get_tracer("data-engineering-copilot")
     except Exception as exc:
-        logger.debug("OpenTelemetry unavailable: %s", exc)
+        logger.warning("OpenTelemetry unavailable, falling back to NoOp tracer: %s", exc)
         _tracer = None
     return _tracer
 
