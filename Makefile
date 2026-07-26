@@ -1,7 +1,8 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
+PROJECT_NAME := dataengineeringcopilot
 
-.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-ci-up
+.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-cleanup docker-setup docker-ci-up
 
 install:
 	uv pip install -e ".[dev]"
@@ -68,6 +69,47 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+docker-status:
+	@echo "=== Project Containers ==="
+	docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.RunningFor}}"
+	@echo ""
+	@echo "=== Health Checks ==="
+	@for svc in redis qdrant ollama; do \
+		echo -n "$$svc: "; \
+		docker inspect --format='{{.State.Health.Status}}' "$(PROJECT_NAME)_$$svc-1" 2>/dev/null || echo "no health check"; \
+	done
+
+docker-rebuild:
+	docker compose build --no-cache
+	docker compose up -d
+
+docker-logs:
+	docker compose logs --tail=100 -f
+
+docker-logs-worker:
+	docker compose logs --tail=50 -f celery_worker
+
+docker-health:
+	@echo "=== Component Health ==="
+	@dec_venv/bin/dec health
+
+docker-stop-all:
+	docker compose stop
+	@echo "All services stopped"
+
+docker-cleanup:
+	docker system prune -f --volumes
+	docker images prune -f
+	@echo "Docker cleanup complete"
+
+docker-setup: docker-up
+	@echo "Waiting for services to be ready..."
+	@sleep 5
+	@echo "Pulling Ollama models..."
+	docker exec $(PROJECT_NAME)_ollama-1 ollama pull nomic-embed-text 2>/dev/null || echo "Ollama not ready, pull manually"
+	docker exec $(PROJECT_NAME)_ollama-1 ollama pull llama3.2:3b 2>/dev/null || echo "Ollama not ready, pull manually"
+	@echo "Setup complete. Run 'make docker-status' to verify."
 
 docker-ci-up:
 	docker compose -f docker-compose.ci.yml up -d --wait

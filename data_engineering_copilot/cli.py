@@ -330,7 +330,6 @@ def evaluate() -> None:
     import asyncio
 
     from data_engineering_copilot.factory import build_rag_service
-    from data_engineering_copilot.services.rag_evaluation import RAGEvaluator
 
     print("Running RAG Evaluation...\n")
 
@@ -351,12 +350,10 @@ def evaluate() -> None:
     # Run evaluation
     async def run_eval():
         service = build_rag_service()
-        evaluator = RAGEvaluator()
 
         results = []
         for i, item in enumerate(queries, 1):
             query = item.get("query", "")
-            expected_ids = set(item.get("relevant_ids", []))
 
             print(f"[{i}/{len(queries)}] Query: {query[:60]}...")
 
