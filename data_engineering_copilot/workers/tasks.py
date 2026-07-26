@@ -8,9 +8,11 @@ IngestionService pipeline with Redis progress tracking.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.signals import task_failure
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
@@ -18,7 +20,11 @@ from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllama
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.workers.celery_app import celery_app
-from data_engineering_copilot.workers.progress import IngestionProgressTracker, get_redis_client
+from data_engineering_copilot.workers.progress import (
+    _STATUS_KEY_TTL_SECONDS,
+    IngestionProgressTracker,
+    get_redis_client,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -125,3 +131,30 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         log.exception("async_ingest_task.failed", task_id=task_id, error=str(e))
         tracker.mark_failed(str(e))
         raise
+
+
+@task_failure.connect
+def _on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
+    """Update the Redis progress tracker when a task fails unexpectedly.
+
+    This catches failures that bypass the try/except block in the task body,
+    most notably the hard time limit (``TimeLimitExceeded``) which kills
+    the worker process before Python exception handling can execute.
+    """
+    if not task_id:
+        return
+    try:
+        client = get_redis_client()
+        redis_key = f"ingestion:status:{task_id}"
+        raw = client.get(redis_key)
+        if raw is None:
+            return
+        state = json.loads(raw) if isinstance(raw, bytes) else json.loads(raw.decode("utf-8"))
+        if state.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
+            return
+        state["status"] = "FAILED"
+        state["error"] = str(exception or "Task failed unexpectedly (hard time limit?).")
+        client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
+        log.info("task_failure.updated_redis", task_id=task_id, error=state["error"])
+    except Exception as exc:
+        log.warning("task_failure.update_failed", task_id=task_id, error=str(exc))
