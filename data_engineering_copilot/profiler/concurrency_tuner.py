@@ -100,8 +100,7 @@ class ConcurrencyTuner:
                     recommended_concurrency=rec,
                     action="SCALE_UP",
                     bottleneck_reason=(
-                        f"Stage under-utilized (CPU {current_cpu:.1f}%). "
-                        f"Headroom exists to increase concurrency."
+                        f"Stage under-utilized (CPU {current_cpu:.1f}%). Headroom exists to increase concurrency."
                     ),
                     max_throughput_achieved=metrics.throughput_per_sec,
                     p99_latency=metrics.p99,

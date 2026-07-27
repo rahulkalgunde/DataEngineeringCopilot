@@ -169,9 +169,7 @@ async def run_sweep(args: argparse.Namespace) -> None:
         print(f"\n--- Load sweep (max_pages={sweep_val}) ---")
 
         profiler = Profiler(sample_interval_sec=args.sample_interval)
-        progress = await _run_single(
-            profiler, args.sources, sweep_val, args.poll_interval
-        )
+        progress = await _run_single(profiler, args.sources, sweep_val, args.poll_interval)
 
         summary = profiler.get_summary()
         stages_summary = summary["stages"]
@@ -207,9 +205,7 @@ async def run_sweep(args: argparse.Namespace) -> None:
         all_results.append(result)
 
         # Throughput is based on profiler host metrics; fallback to chunks indexed.
-        total_throughput = sum(
-            s.get("throughput_per_sec", 0) for s in stages_summary.values()
-        )
+        total_throughput = sum(s.get("throughput_per_sec", 0) for s in stages_summary.values())
         if total_throughput <= 0 and prod_metrics is not None:
             total_throughput = prod_metrics["chunks_indexed"] / max(summary["total_duration_sec"], 0.1)
         if total_throughput > best_throughput:

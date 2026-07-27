@@ -30,8 +30,8 @@ class TestRagStreaming:
     """Journey 3: Ingest → RAG query → verify answer with real Ollama."""
 
     @pytest.fixture(autouse=True)
-    def _skip_if_no_infra(self):
-        require_qdrant_and_ollama()
+    def _skip_if_no_infra(self, e2e_settings):
+        require_qdrant_and_ollama(e2e_settings.qdrant_url)
 
     async def test_full_rag_pipeline_returns_answer(self, e2e_settings, e2e_embedder, e2e_llm):
         """Full RAG: parse → chunk → embed → upsert → retrieve → generate with real Ollama."""
@@ -42,6 +42,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
+                embedding_dimension=768,
             )
             await store.initialize()
 
@@ -87,6 +88,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
+                embedding_dimension=768,
             )
             await store.initialize()
 
@@ -125,6 +127,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
+                embedding_dimension=768,
             )
             await store.initialize()
 
@@ -151,8 +154,7 @@ class TestRagStreaming:
             answer = await rag.answer("What is the capital of France?")
             text_lower = answer.text.lower()
             acknowledges = any(
-                phrase in text_lower
-                for phrase in ["cannot answer", "does not provide", "outside", "does not contain"]
+                phrase in text_lower for phrase in ["cannot answer", "does not provide", "outside", "does not contain"]
             )
             assert acknowledges or answer.confidence < 0.5, (
                 f"Expected gap acknowledgment. confidence={answer.confidence:.4f}, text={answer.text[:200]!r}"

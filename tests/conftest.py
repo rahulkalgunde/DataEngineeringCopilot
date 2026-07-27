@@ -68,8 +68,13 @@ def _redis_is_reachable(url: str = "redis://localhost:6379/0", timeout: int = 3)
     """Return True if Redis responds to PING."""
     try:
         import socket
+        from urllib.parse import urlparse
 
-        sock = socket.create_connection(("localhost", 6379), timeout=timeout)
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 6379
+
+        sock = socket.create_connection((host, port), timeout=timeout)
         sock.sendall(b"PING\r\n")
         response = sock.recv(1024)
         sock.close()
@@ -113,8 +118,9 @@ def redis_available() -> bool:
     return _redis_ok
 
 
-def require_qdrant():
-    if not qdrant_available():
+def require_qdrant(url: str | None = None):
+    target = url or "http://localhost:6333"
+    if not _qdrant_is_reachable(target):
         pytest.skip("Qdrant is not reachable — skipping test")
 
 
@@ -128,13 +134,14 @@ def require_langfuse():
         pytest.skip("Langfuse is not reachable — skipping test")
 
 
-def require_redis():
-    if not redis_available():
+def require_redis(url: str | None = None):
+    target = url or "redis://localhost:6379/0"
+    if not _redis_is_reachable(target):
         pytest.skip("Redis is not reachable — skipping test")
 
 
-def require_qdrant_and_ollama():
-    require_qdrant()
+def require_qdrant_and_ollama(qdrant_url: str | None = None):
+    require_qdrant(qdrant_url)
     require_ollama()
 
 
@@ -185,9 +192,17 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def integration_settings():
     """AppSettings tuned for integration testing."""
+    import tempfile
+
     from data_engineering_copilot.config.settings import AppSettings
 
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        temp_db_path = f.name
+
     return AppSettings(
+        embedding_provider="ollama",
+        embedding_dimension=768,
+        embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
         max_context_chars=2000,
@@ -196,6 +211,7 @@ def integration_settings():
         chunk_size_words=200,
         chunk_overlap_words=40,
         ingestion_batch_chunk_size=64,
+        crawl_db_path=temp_db_path,
     )
 
 
@@ -235,6 +251,7 @@ def qdrant_store(integration_settings):
     store = AsyncQdrantVectorStore(
         url=integration_settings.qdrant_url,
         collection_name=coll_name,
+        embedding_dimension=768,
     )
     asyncio.run(store.initialize())
     yield store

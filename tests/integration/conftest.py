@@ -36,27 +36,17 @@ _qdrant_url = None
 
 
 def _get_or_start_qdrant_container():
-    """Start a Qdrant container if not already running. Returns the URL."""
+    """Start a Qdrant testcontainer. Returns the URL."""
     global _qdrant_container, _qdrant_url
 
     if _qdrant_url is not None:
         return _qdrant_url
 
-    # First: check if Qdrant is already running (Docker Compose / local dev)
-    try:
-        req = urllib.request.Request("http://localhost:6333/collections", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                _qdrant_url = "http://localhost:6333"
-                return _qdrant_url
-    except Exception:
-        pass
-
-    # Second: try testcontainers (self-contained, portable)
+    # Always use testcontainers for isolation — never connect to Docker Compose
     try:
         from testcontainers.qdrant import QdrantContainer
 
-        _qdrant_container = QdrantContainer("qdrant/qdrant:latest")
+        _qdrant_container = QdrantContainer("qdrant/qdrant:v1.18.3")
         _qdrant_container.start()
         host = _qdrant_container.get_container_host_ip()
         port = _qdrant_container.get_exposed_port(6333)
@@ -85,7 +75,8 @@ def fresh_qdrant_store(qdrant_url, worker_id):
     suffix = _worker_suffix(worker_id)
     collection = f"itest_{suffix}_{os.getpid()}"
 
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection)
+    # Use Ollama dimension (768) for test isolation
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=768)
     asyncio.run(store.initialize())
     yield store
 
@@ -109,27 +100,13 @@ _redis_url = None
 
 
 def _get_or_start_redis_container():
-    """Start a Redis container if not already running. Returns the URL."""
+    """Start a Redis testcontainer. Returns the URL."""
     global _redis_container, _redis_url
 
     if _redis_url is not None:
         return _redis_url
 
-    # First: check if Redis is already running (Docker Compose / local dev)
-    try:
-        import socket
-
-        sock = socket.create_connection(("localhost", 6379), timeout=3)
-        sock.sendall(b"PING\r\n")
-        response = sock.recv(1024)
-        sock.close()
-        if b"PONG" in response:
-            _redis_url = "redis://localhost:6379/0"
-            return _redis_url
-    except Exception:
-        pass
-
-    # Second: try testcontainers (self-contained, portable)
+    # Always use testcontainers for isolation — never connect to Docker Compose
     try:
         from testcontainers.redis import RedisContainer
 
@@ -229,9 +206,18 @@ def require_ollama():
 
 @pytest.fixture
 def integration_settings():
+    import tempfile
+
     from data_engineering_copilot.config.settings import AppSettings
 
+    # Create temp SQLite DB for test isolation
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        temp_db_path = f.name
+
     return AppSettings(
+        embedding_provider="ollama",
+        embedding_dimension=768,
+        embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
         max_context_chars=2000,
@@ -240,6 +226,7 @@ def integration_settings():
         chunk_size_words=200,
         chunk_overlap_words=40,
         ingestion_batch_chunk_size=64,
+        crawl_db_path=temp_db_path,
     )
 
 

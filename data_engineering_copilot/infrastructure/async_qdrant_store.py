@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from typing import Self
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -36,7 +37,14 @@ class AsyncQdrantVectorStore:
         embeddings and use Qdrant native RRF fusion at query time.
     """
 
-    def __init__(self, url: str, collection_name: str, hybrid_search: bool = True, hybrid_rrf_k: int = 60) -> None:
+    def __init__(
+        self,
+        url: str,
+        collection_name: str,
+        hybrid_search: bool = True,
+        hybrid_rrf_k: int = 60,
+        embedding_dimension: int | None = None,
+    ) -> None:
         self._url = url
         self._collection_name = collection_name
         self._hybrid_search = hybrid_search
@@ -44,6 +52,13 @@ class AsyncQdrantVectorStore:
         self._bm25: BM25Tokenizer | None = BM25Tokenizer() if hybrid_search else None
         self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         self._last_query_sparse = None
+        self._embedding_dimension_override = embedding_dimension
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
 
     async def initialize(self) -> None:
         """Create collection and indexes if they don't exist.
@@ -108,6 +123,8 @@ class AsyncQdrantVectorStore:
             logger.info("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
+        if self._embedding_dimension_override is not None:
+            return self._embedding_dimension_override
         return settings.get_embedding_dimension()
 
     def _chunk_to_payload(self, chunk: DocumentChunk) -> dict:
@@ -380,3 +397,4 @@ class AsyncQdrantVectorStore:
         """Close the async client connection."""
         if self._client is not None:
             await self._client.close()
+            self._client = None

@@ -3,7 +3,7 @@
 Tests the complete flow: parse HTML → chunk → embed → upsert → query.
 Uses sample HTML to avoid depending on external site availability.
 
-Requires Qdrant and Ollama to be running.
+Requires Qdrant (testcontainer) and Ollama (Docker Compose).
 
 Run with: ``dec_venv/bin/python -m pytest tests/e2e/ -v -m ingestion``
 """
@@ -15,13 +15,12 @@ import time
 
 import pytest
 
-from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import RawDocument
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.services.chunker import DocumentChunker
-from tests.conftest import require_qdrant_and_ollama, unique_collection_name
+from tests.conftest import require_qdrant_and_ollama
 
 SAMPLE_HTML = """<html><head><title>Apache Spark Overview</title></head><body>
 <nav>Navigation sidebar</nav>
@@ -60,22 +59,26 @@ df.show()</code></pre>
 
 
 @pytest.fixture
-def embedder():
-    require_qdrant_and_ollama()
-    return AsyncOllamaEmbeddings(model_name=AppSettings().embedding_model_name)
+def embedder(e2e_settings):
+    require_qdrant_and_ollama(e2e_settings.qdrant_url)
+    return AsyncOllamaEmbeddings(model_name=e2e_settings.embedding_model_name)
 
 
 @pytest.fixture
-def vector_store():
-    require_qdrant_and_ollama()
+def vector_store(e2e_settings):
+    require_qdrant_and_ollama(e2e_settings.qdrant_url)
     from qdrant_client import QdrantClient
 
-    coll = unique_collection_name("e2e_ingest")
-    store = AsyncQdrantVectorStore(url=AppSettings().qdrant_url, collection_name=coll)
+    coll = f"e2e_ingest_{__import__('uuid').uuid4().hex[:8]}"
+    store = AsyncQdrantVectorStore(
+        url=e2e_settings.qdrant_url,
+        collection_name=coll,
+        embedding_dimension=768,
+    )
     asyncio.run(store.initialize())
     yield store
     try:
-        c = QdrantClient(url=AppSettings().qdrant_url, prefer_grpc=False)
+        c = QdrantClient(url=e2e_settings.qdrant_url, prefer_grpc=False)
         c.delete_collection(collection_name=coll)
         c.close()
     except Exception:
@@ -164,9 +167,8 @@ class TestIngestionPipelineE2E:
         assert asyncio.run(vector_store.count()) == 0
 
 
-@pytest.mark.ingestion
 class TestParserAndChunker:
-    """Parser and chunker edge cases with sample HTML."""
+    """Parser and chunker edge cases with sample HTML (pure unit tests, no infra)."""
 
     def test_parser_strips_nav_and_footer(self):
         raw = RawDocument(

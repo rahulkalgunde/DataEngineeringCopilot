@@ -109,14 +109,16 @@ class ResourceMonitor:
                 mem_info = self.process.memory_info()
                 net_io = psutil.net_io_counters()
 
-                self.snapshots.append({
-                    "timestamp": time.time(),
-                    "cpu_percent": cpu_pct,
-                    "rss_mb": mem_info.rss / (1024 * 1024),
-                    "bytes_sent_mb": net_io.bytes_sent / (1024 * 1024),
-                    "bytes_recv_mb": net_io.bytes_recv / (1024 * 1024),
-                    "active_asyncio_tasks": len(asyncio.all_tasks()),
-                })
+                self.snapshots.append(
+                    {
+                        "timestamp": time.time(),
+                        "cpu_percent": cpu_pct,
+                        "rss_mb": mem_info.rss / (1024 * 1024),
+                        "bytes_sent_mb": net_io.bytes_sent / (1024 * 1024),
+                        "bytes_recv_mb": net_io.bytes_recv / (1024 * 1024),
+                        "active_asyncio_tasks": len(asyncio.all_tasks()),
+                    }
+                )
             except Exception:
                 pass
             await asyncio.sleep(self.sample_interval)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Self
 
 import httpx
 
@@ -45,3 +46,9 @@ class SafeAsyncClientMixin:
             self._loop_id = current_loop
 
         return self._client
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()

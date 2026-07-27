@@ -106,13 +106,13 @@ class AppSettings(BaseSettings):
         validation_alias="LANGFUSE_HOST",
     )
 
-    embedding_model_name: str = "nomic-embed-text"
     # Default dm is 768 for the nomic-embed-text model
     embedding_dimension: int = 768
     embedding_batch_size: int = 256
     enrichment_batch_size: int = 20
 
     # Provider selection: "ollama" | "openrouter" | "openai"
+    embedding_model_name: str = "nomic-embed-text"
     llm_provider: str = "ollama"
     embedding_provider: str = "ollama"
     ollama_model: str = "llama3.2:3b"
@@ -130,7 +130,6 @@ class AppSettings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_base_url: str = "https://api.openai.com"
     openai_embedding_dimension: int = 1536
-
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"

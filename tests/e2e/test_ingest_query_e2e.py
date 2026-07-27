@@ -51,8 +51,8 @@ class TestIngestQueryPipeline:
     """Journey 1: Ingest sample HTML → query → verify answer."""
 
     @pytest.fixture(autouse=True)
-    def _skip_if_no_infra(self):
-        require_qdrant_and_ollama()
+    def _skip_if_no_infra(self, e2e_settings):
+        require_qdrant_and_ollama(e2e_settings.qdrant_url)
 
     async def test_ingest_sample_then_query(self, e2e_settings):
         """Full pipeline: parse → chunk → embed → upsert → query → answer."""

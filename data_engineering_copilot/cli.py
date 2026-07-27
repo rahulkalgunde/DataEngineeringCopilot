@@ -52,8 +52,7 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
         raise RuntimeError(f"API did not return a task_id: {data}")
 
     print(f"Dispatched ingestion task {task_id}")
-    print("Polling status (Ctrl-C to stop; cancel via: "
-          f"curl -X POST {API_BASE_URL}/api/v1/ingest/{task_id}/cancel)...")
+    print(f"Polling status (Ctrl-C to stop; cancel via: curl -X POST {API_BASE_URL}/api/v1/ingest/{task_id}/cancel)...")
 
     # Poll progress until completion
     last_status = None
@@ -71,9 +70,11 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
         if progress is not None:
             status = progress.get("status")
             if status != last_status:
-                print(f"  Status: {status} | "
-                      f"Pages: {progress.get('pages_fetched', 0)} | "
-                      f"Chunks: {progress.get('chunks_indexed', 0)}")
+                print(
+                    f"  Status: {status} | "
+                    f"Pages: {progress.get('pages_fetched', 0)} | "
+                    f"Chunks: {progress.get('chunks_indexed', 0)}"
+                )
                 last_status = status
             if status in ("COMPLETED", "FAILED", "CANCELLED"):
                 err = progress.get("error")
@@ -257,9 +258,7 @@ def status() -> None:
     # Check Qdrant collection status
     print("Qdrant Collection:")
     try:
-        req = urllib.request.Request(
-            f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET"
-        )
+        req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
             if "result" in data:
@@ -348,9 +347,9 @@ def evaluate() -> None:
     print(f"Loaded {len(queries)} evaluation queries\n")
 
     # Run evaluation
-    async def run_eval():
-        service = build_rag_service()
+    service = build_rag_service()
 
+    async def run_eval():
         results = []
         for i, item in enumerate(queries, 1):
             query = item.get("query", "")
@@ -441,9 +440,7 @@ def config() -> None:
 
     # Check collection exists with correct dimension
     try:
-        req = urllib.request.Request(
-            f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET"
-        )
+        req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
             if "result" in data:
@@ -543,9 +540,12 @@ def main() -> None:
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
         elif args.command == "profile":
             profiler_args = [
-                "--sources", *(args.sources or []),
-                "--load-sweep", args.load_sweep,
-                "--output-dir", args.output_dir,
+                "--sources",
+                *(args.sources or []),
+                "--load-sweep",
+                args.load_sweep,
+                "--output-dir",
+                args.output_dir,
             ]
             profiler_cli.main(profiler_args)
         elif args.command == "health":

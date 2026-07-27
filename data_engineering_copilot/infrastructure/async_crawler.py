@@ -412,7 +412,7 @@ class AsyncDocumentationCrawler:
             parser.feed(html)
             raw_hrefs = parser.links
         except Exception:
-            log.warning("crawler.html_parser_failed", url=base_url)
+            log.warning("crawler.html_parser_failed", extra={"url": base_url})
             raw_hrefs = []
 
         # Phase 2: Fallback to BeautifulSoup if HTMLParser extracted absolutely nothing

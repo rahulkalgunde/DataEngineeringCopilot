@@ -269,6 +269,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             collection_name=app_settings.collection_name,
             hybrid_search=app_settings.hybrid_search_enabled,
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
+            embedding_dimension=app_settings.get_embedding_dimension(),
         ),
         redis_client=redis_client,
         contextual_enricher=contextual_enricher,
@@ -312,6 +313,7 @@ def build_rag_service(
         collection_name=app_settings.collection_name,
         hybrid_search=app_settings.hybrid_search_enabled,
         hybrid_rrf_k=app_settings.hybrid_rrf_k,
+        embedding_dimension=app_settings.get_embedding_dimension(),
     )
     embedder = build_embedder(app_settings, rate_limiter)
     reranker = None
