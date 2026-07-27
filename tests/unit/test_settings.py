@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
 
 
@@ -59,7 +57,7 @@ def test_app_settings_hybrid_search_overridable() -> None:
 
 
 def test_code_llm_defaults_empty() -> None:
-    settings = AppSettings()
+    settings = AppSettings(code_llm_provider="", code_llm_model="")
     assert settings.code_llm_provider == ""
     assert settings.code_llm_model == ""
     assert settings.nvidia_nim_rpm_limit == 40
@@ -80,6 +78,27 @@ def test_code_llm_overridable() -> None:
     assert settings.nvidia_nim_base_url == "https://custom.nvidia.com/v1"
 
 
-def test_nvidia_missing_api_key_raises() -> None:
+def test_nvidia_embedding_dimension_default() -> None:
+    settings = AppSettings()
+    assert settings.nvidia_embedding_dimension == 2048
+    assert settings.nvidia_embedding_model == "nvidia/nemotron-3-embed-1b"
+
+
+def test_local_embedding_dimension_default() -> None:
+    settings = AppSettings()
+    assert settings.local_embedding_dimension == 768
+
+
+def test_nvidia_nim_rpd_limit_default() -> None:
+    settings = AppSettings()
+    assert settings.nvidia_nim_rpd_limit == 1000
+
+
+def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
+    import pytest
+
     with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
-        AppSettings(code_llm_provider="nvidia")
+        AppSettings(
+            embedding_provider="nvidia",
+            nvidia_nim_api_key="",
+        )

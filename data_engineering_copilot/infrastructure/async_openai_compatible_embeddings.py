@@ -1,8 +1,7 @@
-"""Async OpenRouter embedding provider using httpx.AsyncClient.
+"""Async OpenAI-compatible embedding provider using httpx.AsyncClient.
 
-Provides an EmbedderProtocol-compatible interface for OpenRouter's
-embedding API at /api/v1/embeddings. Supports models like
-nvidia/nemotron-3-embed-1b:free.
+Provides an EmbedderProtocol-compatible interface for any OpenAI-compatible
+/v1/embeddings endpoint. Used by both OpenRouter and NVIDIA NIM.
 """
 
 from __future__ import annotations
@@ -40,18 +39,22 @@ def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> st
     return text
 
 
-class OpenRouterEmbeddings(SafeAsyncClientMixin):
-    """Async OpenRouter embedding provider using the /api/v1/embeddings endpoint."""
+class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
+    """Async embedding provider for any OpenAI-compatible /v1/embeddings endpoint.
+
+    Works with OpenRouter, NVIDIA NIM, and other OpenAI-compatible APIs.
+    """
 
     def __init__(
         self,
         api_key: str,
-        model_name: str = "nvidia/nemotron-3-embed-1b:free",
+        model_name: str = "nvidia/nemotron-3-embed-1b",
         base_url: str = "https://openrouter.ai/api/v1",
         embedding_dimension: int = 2048,
         batch_size: int = 32,
         timeout_seconds: int = 120,
         rate_limiter: SlidingWindowRateLimiter | None = None,
+        include_provider_param: bool = True,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -60,7 +63,11 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         self._batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         self._rate_limiter = rate_limiter
-        logger.info("Using OpenRouter embedding model %s at %s", model_name, self.base_url)
+        self._include_provider_param = include_provider_param
+        if include_provider_param:
+            logger.info("Using OpenRouter embedding model %s at %s", model_name, self.base_url)
+        else:
+            logger.info("Using NVIDIA NIM embedding model %s at %s", model_name, self.base_url)
 
     def _make_client_kwargs(self) -> dict:
         return {
@@ -92,13 +99,16 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         # Pre-emptively truncate all texts to ensure no text exceeds 3800 tokens
         safe_texts = [_truncate_to_safe_tokens(t) for t in texts]
 
+        payload: dict = {
+            "model": self.model_name,
+            "input": safe_texts,
+        }
+        if self._include_provider_param:
+            payload["provider"] = {"truncate": "END"}
+
         response = await (await self._get_client()).post(
             "/embeddings",
-            json={
-                "model": self.model_name,
-                "input": safe_texts,
-                "provider": {"truncate": "END"},
-            },
+            json=payload,
         )
 
         # Handle 429 rate limit — parse Retry-After and retry after backoff

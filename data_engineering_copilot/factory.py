@@ -9,8 +9,7 @@ from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumenta
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
 from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
-from data_engineering_copilot.infrastructure.async_openai_embeddings import OpenAIEmbeddings
-from data_engineering_copilot.infrastructure.async_openrouter_embeddings import OpenRouterEmbeddings
+from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
@@ -88,7 +87,7 @@ def build_code_llm_client(
             raise ValueError("NVIDIA_NIM_API_KEY is required when code_llm_provider='nvidia'")
         nvidia_limiter = SlidingWindowRateLimiter(
             rpm_limit=app_settings.nvidia_nim_rpm_limit,
-            rpd_limit=0,
+            rpd_limit=app_settings.nvidia_nim_rpd_limit,
         )
         return OpenAICompatibleLLMClient(
             api_key=api_key,
@@ -110,32 +109,38 @@ def build_embedder(
 ):
     """Build embedding provider based on configured provider."""
     provider = app_settings.embedding_provider.lower()
-    if provider == "openai":
-        api_key = app_settings.openai_api_key.get_secret_value()
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is required when embedding_provider='openai'")
-        return OpenAIEmbeddings(
-            api_key=api_key,
-            model_name=app_settings.openai_embedding_model,
-            base_url=app_settings.openai_embedding_base_url,
-            embedding_dimension=app_settings.openai_embedding_dimension,
-            batch_size=app_settings.embedding_batch_size,
-        )
-    elif provider == "openrouter":
+    if provider == "openrouter":
         api_key = app_settings.openrouter_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required when embedding_provider='openrouter'")
-        return OpenRouterEmbeddings(
+        return OpenAICompatibleEmbeddings(
             api_key=api_key,
             model_name=app_settings.openrouter_embedding_model,
             embedding_dimension=app_settings.openrouter_embedding_dimension,
             batch_size=app_settings.embedding_batch_size,
             rate_limiter=rate_limiter,
         )
-    elif provider == "ollama":
+    elif provider == "nvidia":
+        api_key = app_settings.nvidia_nim_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("NVIDIA_NIM_API_KEY is required when embedding_provider='nvidia'")
+        nvidia_embedding_limiter = SlidingWindowRateLimiter(
+            rpm_limit=app_settings.nvidia_nim_rpm_limit,
+            rpd_limit=app_settings.nvidia_nim_rpd_limit,
+        )
+        return OpenAICompatibleEmbeddings(
+            api_key=api_key,
+            model_name=app_settings.nvidia_embedding_model,
+            base_url=app_settings.nvidia_nim_base_url,
+            embedding_dimension=app_settings.nvidia_embedding_dimension,
+            batch_size=app_settings.embedding_batch_size,
+            rate_limiter=nvidia_embedding_limiter,
+            include_provider_param=False,
+        )
+    elif provider in ("ollama", "local"):
         return AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name)
     else:
-        raise ValueError(f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openai', or 'openrouter'.")
+        raise ValueError(f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openrouter', 'nvidia'.")
 
 
 def build_chunker(app_settings: AppSettings = settings):

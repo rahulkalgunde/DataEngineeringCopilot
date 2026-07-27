@@ -229,10 +229,13 @@ class TestAsyncFactoryWiring:
         assert isinstance(crawler, AsyncDocumentationCrawler)
 
     @patch("data_engineering_copilot.factory.AsyncQdrantVectorStore")
-    def test_build_async_ingestion_service_returns_service(self, mock_qdrant):
+    @patch("data_engineering_copilot.factory.build_embedder")
+    @patch("data_engineering_copilot.factory.build_llm_client")
+    def test_build_async_ingestion_service_returns_service(self, mock_llm, mock_embedder, mock_qdrant):
         from data_engineering_copilot.factory import build_async_ingestion_service
         from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 
+        mock_llm.return_value = MagicMock()
         service = build_async_ingestion_service()
         assert isinstance(service, AsyncIngestionService)
 
