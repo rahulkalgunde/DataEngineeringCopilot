@@ -20,8 +20,8 @@ DataEngineeringCopilot/
     domain/
       models.py
     infrastructure/
-      rate_limiter.py          # OpenRouter RPM/RPD coordination
-      async_openrouter_client.py
+      rate_limiter.py          # RPM/RPD coordination
+      async_openai_compatible_client.py
       async_openrouter_embeddings.py
       qdrant_store.py
       redis_store.py
@@ -205,7 +205,7 @@ Each chunk stores:
 
 ## Rate Limiting
 
-- **OpenRouter Rate Limiter**: Shared `OpenRouterRateLimiter` coordinates RPM (20 req/min) and RPD (1000 req/day) between embeddings and LLM clients.
+- **Sliding Window Rate Limiter**: Shared `SlidingWindowRateLimiter` coordinates RPM and RPD between embeddings and LLM clients. Configured per-provider (OpenRouter: 20 RPM / 1000 RPD; NVIDIA NIM: 40 RPM).
 - **429 Handling**: Both clients parse `Retry-After` header and retry up to 5 times with exponential backoff.
 
 ## Ingestion & Workers

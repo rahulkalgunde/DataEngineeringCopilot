@@ -1,7 +1,7 @@
-"""Shared rate limiter for OpenRouter API access.
+"""Shared sliding-window rate limiter for LLM API providers.
 
-Both embeddings and LLM generation share the same OpenRouter API key,
-so they must coordinate to stay under the same RPM / RPD limits.
+Both embeddings and LLM generation share the same API key for a given
+provider, so they must coordinate to stay under the same RPM / RPD limits.
 """
 
 from __future__ import annotations
@@ -14,12 +14,11 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 
-class OpenRouterRateLimiter:
+class SlidingWindowRateLimiter:
     """Sliding-window RPM + daily-counter RPD limiter.
 
-    Designed to be shared by ``OpenRouterEmbeddings`` and
-    ``OpenRouterLLMClient`` so that the combined request volume stays
-    under OpenRouter's per-key limits (default 20 RPM / 1000 RPD).
+    Designed to be shared by multiple clients that share the same API
+    key / rate limit budget (e.g. embeddings + LLM generation).
 
     Parameters
     ----------
@@ -27,6 +26,7 @@ class OpenRouterRateLimiter:
         Maximum requests per minute (sliding window).
     rpd_limit:
         Maximum requests per day (calendar-style window).
+        Set to 0 to disable daily limit.
     """
 
     def __init__(self, rpm_limit: int = 20, rpd_limit: int = 1000) -> None:
@@ -56,12 +56,12 @@ class OpenRouterRateLimiter:
                 self._daily_count = 0
                 self._daily_reset = now + 86400
 
-            # RPD limit check
-            if self._daily_count >= self._rpd_limit:
+            # RPD limit check (skip if rpd_limit is 0)
+            if self._rpd_limit > 0 and self._daily_count >= self._rpd_limit:
                 wait = self._daily_reset - now
                 if wait > 0:
                     logger.warning(
-                        "OpenRouter daily limit (%d RPD) reached. Sleeping %.0fs until reset.",
+                        "Daily limit (%d RPD) reached. Sleeping %.0fs until reset.",
                         self._rpd_limit,
                         wait,
                     )
@@ -76,7 +76,7 @@ class OpenRouterRateLimiter:
                 wait = self._request_timestamps[0] + 60 - now
                 if wait > 0:
                     logger.debug(
-                        "OpenRouter RPM limit (%d) reached. Sleeping %.1fs.",
+                        "RPM limit (%d) reached. Sleeping %.1fs.",
                         self._rpm_limit,
                         wait,
                     )
@@ -92,7 +92,7 @@ class OpenRouterRateLimiter:
     async def handle_429(self, response_headers: dict | None = None) -> None:
         """React to a 429 response by waiting for the appropriate ``Retry-After``.
 
-        If OpenRouter includes a ``Retry-After`` header that value is used;
+        If the provider includes a ``Retry-After`` header that value is used;
         otherwise a default 60s backoff is applied.
         """
         import contextlib
@@ -103,7 +103,7 @@ class OpenRouterRateLimiter:
             if raw is not None:
                 with contextlib.suppress(ValueError, TypeError):
                     retry_after = float(raw)
-        logger.warning("OpenRouter 429 rate limit hit. Waiting %.0fs before retry.", retry_after)
+        logger.warning("Rate limit 429 hit. Waiting %.0fs before retry.", retry_after)
         await asyncio.sleep(retry_after)
 
     @property

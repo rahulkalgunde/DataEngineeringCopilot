@@ -58,7 +58,7 @@ class TestBuildLLMClient:
 
     def test_openrouter(self):
         from data_engineering_copilot.factory import build_llm_client
-        from data_engineering_copilot.infrastructure.async_openrouter_client import OpenRouterLLMClient
+        from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
 
         s = _make_settings(
             llm_provider="openrouter",
@@ -66,7 +66,7 @@ class TestBuildLLMClient:
             openrouter_model="anthropic/claude-3.5-sonnet",
         )
         client = build_llm_client(s)
-        assert isinstance(client, OpenRouterLLMClient)
+        assert isinstance(client, OpenAICompatibleLLMClient)
         assert client.model == "anthropic/claude-3.5-sonnet"
 
     def test_openrouter_missing_api_key_raises(self):
@@ -140,3 +140,82 @@ class TestBuildEmbedder:
         s = _make_settings(embedding_provider="voyage")
         with pytest.raises(ValueError, match="Unsupported embedding_provider"):
             build_embedder(s)
+
+
+class TestBuildCodeLlmClient:
+    def test_empty_provider_returns_none(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+
+        s = _make_settings(code_llm_provider="")
+        assert build_code_llm_client(s) is None
+
+    def test_nvidia(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+        from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
+
+        s = _make_settings(
+            code_llm_provider="nvidia",
+            code_llm_model="qwen/qwen2.5-coder-32b-instruct",
+            nvidia_nim_api_key="nvapi-test",
+        )
+        client = build_code_llm_client(s)
+        assert isinstance(client, OpenAICompatibleLLMClient)
+        assert client.model == "qwen/qwen2.5-coder-32b-instruct"
+
+    def test_nvidia_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+
+        s = _make_settings(
+            code_llm_provider="nvidia",
+            nvidia_nim_api_key="nvapi-placeholder",
+        )
+        object.__setattr__(s, "nvidia_nim_api_key", AppSettings.model_fields["nvidia_nim_api_key"].annotation(""))
+        with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
+            build_code_llm_client(s)
+
+    def test_ollama_delegates(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+        from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+
+        s = _make_settings(
+            llm_provider="ollama",
+            code_llm_provider="ollama",
+        )
+        client = build_code_llm_client(s, shared_rate_limiter=None)
+        assert isinstance(client, AsyncOllamaClient)
+        assert client.model == "llama3.2:3b"
+
+    def test_openrouter_delegates(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+        from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
+
+        s = _make_settings(
+            llm_provider="openrouter",
+            code_llm_provider="openrouter",
+            openrouter_api_key="sk-or-v1-test",
+            code_llm_model="anthropic/claude-3.5-sonnet",
+        )
+        client = build_code_llm_client(s, shared_rate_limiter=None)
+        assert isinstance(client, OpenAICompatibleLLMClient)
+        assert client.model == "anthropic/claude-3.5-sonnet"
+
+    def test_unsupported_provider_raises(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+
+        s = _make_settings(code_llm_provider="bedrock")
+        with pytest.raises(ValueError, match="Unsupported code_llm_provider"):
+            build_code_llm_client(s)
+
+    def test_nvidia_creates_separate_rate_limiter(self):
+        from data_engineering_copilot.factory import build_code_llm_client
+        from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
+
+        s = _make_settings(
+            code_llm_provider="nvidia",
+            code_llm_model="qwen/qwen2.5-coder-32b-instruct",
+            nvidia_nim_api_key="nvapi-test",
+            nvidia_nim_rpm_limit=80,
+        )
+        client = build_code_llm_client(s)
+        assert isinstance(client, OpenAICompatibleLLMClient)
+        assert client.model == "qwen/qwen2.5-coder-32b-instruct"

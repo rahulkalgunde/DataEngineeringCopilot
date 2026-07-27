@@ -15,7 +15,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
-from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
+from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class OpenRouterEmbeddings(SafeAsyncClientMixin):
         embedding_dimension: int = 2048,
         batch_size: int = 32,
         timeout_seconds: int = 120,
-        rate_limiter: OpenRouterRateLimiter | None = None,
+        rate_limiter: SlidingWindowRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name

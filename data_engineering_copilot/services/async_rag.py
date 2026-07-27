@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import logging
+import re
 from collections.abc import Callable
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
@@ -16,7 +18,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
-from data_engineering_copilot.services.prompt_builder import PromptBuilder
+from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
 from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
@@ -41,10 +43,12 @@ class AsyncRagService:
         retrieval_tracker: object | None = None,
         faithfulness_evaluator: FaithfulnessEvaluator | None = None,
         ragas_evaluator: object | None = None,
+        code_llm_client: LLMClientProtocol | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
         self.llm_client = llm_client
+        self.code_llm_client = code_llm_client
         self.embedder = embedder
         self.reranker = reranker
         self.telemetry = telemetry
@@ -249,16 +253,21 @@ class AsyncRagService:
 
             if on_step:
                 on_step("Generating answer")
-            prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=question)
+            intent = rewritten.intent if rewritten else "factual"
+            prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=question, intent=intent)
 
             if generation_span:
                 generation_span.update(input=prompt)
 
-            answer_text = await self.llm_client.generate(prompt)
+            llm_client = self._select_llm_client(intent)
+            answer_text = await llm_client.generate(prompt)
+
+            # Post-generation syntax check for code intents
+            answer_text = await self._validate_and_fix_code_syntax(answer_text, intent, llm_client)
 
             # Track token usage from LLM provider
-            if self.token_tracker is not None and hasattr(self.llm_client, "last_usage"):
-                usage = getattr(self.llm_client, "last_usage", None)
+            if self.token_tracker is not None and hasattr(llm_client, "last_usage"):
+                usage = getattr(llm_client, "last_usage", None)
                 if usage is not None:
                     self.token_tracker.record(
                         prompt_tokens=usage.prompt_tokens,
@@ -367,10 +376,48 @@ class AsyncRagService:
                 trace.end()
             raise LLMGenerationError(f"LLM generation failed: {exc}") from exc
 
+    def _select_llm_client(self, intent: str) -> LLMClientProtocol:
+        """Route code intents to the code-specific LLM if configured."""
+        if self.code_llm_client and intent in CODE_INTENTS:
+            return self.code_llm_client
+        return self.llm_client
+
+    async def _validate_and_fix_code_syntax(self, answer_text: str, intent: str, llm_client: LLMClientProtocol) -> str:
+        """Validate Python code blocks in answer. Retry once if syntax fails."""
+        if intent not in CODE_INTENTS:
+            return answer_text
+
+        code_blocks = re.findall(r"```python\n(.*?)```", answer_text, re.DOTALL)
+        if not code_blocks:
+            return answer_text
+
+        invalid_blocks = []
+        for block in code_blocks:
+            try:
+                ast.parse(block.strip())
+            except SyntaxError:
+                invalid_blocks.append(block)
+
+        if not invalid_blocks:
+            return answer_text
+
+        fix_prompt = (
+            "The following Python code has syntax errors. Fix ONLY the code, "
+            "keeping the same structure and imports. Return valid Python only.\n\n"
+            f"Broken code:\n```python\n{invalid_blocks[0]}\n```"
+        )
+        try:
+            fixed = await llm_client.generate(fix_prompt)
+            fixed_code = fixed.strip().strip("`").removeprefix("python").strip()
+            return answer_text.replace(invalid_blocks[0], fixed_code)
+        except Exception:
+            logger.warning("Code syntax fix retry failed, returning original")
+            return answer_text
+
     async def close(self) -> None:
         """Close underlying clients."""
-        for component in (self.vector_store, self.llm_client, self.embedder):
-            if not hasattr(component, "close"):
+        for component in (self.vector_store, self.llm_client, self.embedder, self.code_llm_client):
+            if component is None or not hasattr(component, "close"):
                 continue
             with contextlib.suppress(TypeError, AttributeError):
                 await component.close()

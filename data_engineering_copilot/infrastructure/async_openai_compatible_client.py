@@ -1,7 +1,7 @@
-"""Async OpenRouter generation client using httpx.AsyncClient.
+"""Async OpenAI-compatible generation client using httpx.AsyncClient.
 
-Provides an LLMProvider-compatible interface for OpenRouter's
-OpenAI-compatible Chat Completions API at /api/v1/chat/completions.
+Provides an LLMProvider-compatible interface for any OpenAI-compatible
+Chat Completions API at /v1/chat/completions (OpenRouter, NVIDIA NIM, etc.).
 """
 
 from __future__ import annotations
@@ -14,17 +14,21 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
-from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
+from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
 
 
-class OpenRouterError(RuntimeError):
-    """Raised when OpenRouter cannot return an answer."""
+class LLMClientError(RuntimeError):
+    """Raised when the LLM provider cannot return an answer."""
 
 
-class OpenRouterLLMClient(SafeAsyncClientMixin):
-    """Async OpenRouter LLM client using the OpenAI-compatible Chat Completions API."""
+class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
+    """Async LLM client for any OpenAI-compatible Chat Completions API.
+
+    Supports providers like OpenRouter, NVIDIA NIM, etc. by passing the
+    appropriate ``base_url`` and ``api_key``.
+    """
 
     def __init__(
         self,
@@ -33,7 +37,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         timeout_seconds: int = 120,
         base_url: str = "https://openrouter.ai/api/v1",
         temperature: float = 0.05,
-        rate_limiter: OpenRouterRateLimiter | None = None,
+        rate_limiter: SlidingWindowRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -65,7 +69,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
     async def generate(self, prompt: str, temperature: float | None = None) -> str:
         temp = temperature if temperature is not None else self._temperature
         logger.info(
-            "OpenRouter generation started model=%s prompt_chars=%s temperature=%.2f",
+            "LLM generation started model=%s prompt_chars=%s temperature=%.2f",
             self.model,
             len(prompt),
             temp,
@@ -80,17 +84,17 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         try:
             body = await self._http_post(payload)
         except httpx.TimeoutException as exc:
-            logger.exception("OpenRouter generation timed out timeout_seconds=%s", self.timeout_seconds)
-            raise OpenRouterError(f"OpenRouter timed out after {self.timeout_seconds} seconds.") from exc
+            logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
+            raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
-                logger.exception("OpenRouter rate limit persistently exceeded after retries.")
-                raise OpenRouterError("OpenRouter rate limit exceeded after all retries. Try again later.") from exc
-            logger.exception("OpenRouter HTTP error: %s", exc)
-            raise OpenRouterError(f"OpenRouter returned HTTP {exc.response.status_code}.") from exc
+                logger.exception("Rate limit persistently exceeded after retries.")
+                raise LLMClientError("Rate limit exceeded after all retries. Try again later.") from exc
+            logger.exception("LLM provider HTTP error: %s", exc)
+            raise LLMClientError(f"LLM provider returned HTTP {exc.response.status_code}.") from exc
         except (httpx.ConnectError, httpx.HTTPError) as exc:
-            logger.exception("OpenRouter connection failed")
-            raise OpenRouterError("Could not reach OpenRouter. Check your network and API key.") from exc
+            logger.exception("LLM provider connection failed")
+            raise LLMClientError("Could not reach LLM provider. Check your network and API key.") from exc
 
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage_data = body.get("usage", {})
@@ -107,8 +111,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         clean_text = self._extract_final_response(content)
 
         logger.info(
-            "OpenRouter generation completed model=%s response_chars=%s final_chars=%s "
-            "prompt_tokens=%d completion_tokens=%d",
+            "LLM generation completed model=%s response_chars=%s final_chars=%s prompt_tokens=%d completion_tokens=%d",
             self.model,
             len(content),
             len(clean_text),
@@ -131,9 +134,9 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         if response.status_code == 429:
             if self._rate_limiter is not None:
                 await self._rate_limiter.handle_429(dict(response.headers))
-            raise httpx.HTTPStatusError("Rate limited by OpenRouter", request=response.request, response=response)
+            raise httpx.HTTPStatusError("Rate limited by provider", request=response.request, response=response)
         if response.status_code == 401:
-            raise OpenRouterError("OpenRouter returned 401 Unauthorized. Check your API key.")
+            raise LLMClientError("LLM provider returned 401 Unauthorized. Check your API key.")
         response.raise_for_status()
         return response.json()
 

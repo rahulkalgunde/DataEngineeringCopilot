@@ -219,10 +219,11 @@ def health() -> None:
     # Check LLM provider
     print("\nLLM Provider:")
     llm_provider = settings.llm_provider
-    if llm_provider == "openai":
-        print(f"  ℹ️  Configured: OpenAI ({settings.openai_model})")
-    elif llm_provider == "openrouter":
+    if llm_provider == "openrouter":
         print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_model})")
+        # Check code model if configured
+        if settings.code_llm_provider:
+            print(f"  ℹ️  Code Model: {settings.code_llm_provider} ({settings.code_llm_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health

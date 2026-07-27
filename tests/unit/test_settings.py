@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
 
 
@@ -54,3 +56,30 @@ def test_app_settings_hybrid_search_overridable() -> None:
     assert settings.hybrid_rrf_k == 100
     assert settings.context_compression_enabled is True
     assert settings.max_context_tokens == 8192
+
+
+def test_code_llm_defaults_empty() -> None:
+    settings = AppSettings()
+    assert settings.code_llm_provider == ""
+    assert settings.code_llm_model == ""
+    assert settings.nvidia_nim_rpm_limit == 40
+    assert settings.nvidia_nim_base_url == "https://integrate.api.nvidia.com/v1"
+
+
+def test_code_llm_overridable() -> None:
+    settings = AppSettings(
+        code_llm_provider="nvidia",
+        code_llm_model="qwen/qwen2.5-coder-32b-instruct",
+        nvidia_nim_api_key="nvapi-test",
+        nvidia_nim_rpm_limit=80,
+        nvidia_nim_base_url="https://custom.nvidia.com/v1",
+    )
+    assert settings.code_llm_provider == "nvidia"
+    assert settings.code_llm_model == "qwen/qwen2.5-coder-32b-instruct"
+    assert settings.nvidia_nim_rpm_limit == 80
+    assert settings.nvidia_nim_base_url == "https://custom.nvidia.com/v1"
+
+
+def test_nvidia_missing_api_key_raises() -> None:
+    with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
+        AppSettings(code_llm_provider="nvidia")
