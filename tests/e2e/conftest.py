@@ -120,7 +120,7 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
         collection_name=collection,
         ollama_base_url="http://localhost:11434",
         embedding_provider="ollama",
-        embedding_dimension=768,
+        local_embedding_dimension=768,
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,

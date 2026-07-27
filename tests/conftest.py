@@ -201,7 +201,7 @@ def integration_settings():
 
     return AppSettings(
         embedding_provider="ollama",
-        embedding_dimension=768,
+        local_embedding_dimension=768,
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
@@ -251,7 +251,7 @@ def qdrant_store(integration_settings):
     store = AsyncQdrantVectorStore(
         url=integration_settings.qdrant_url,
         collection_name=coll_name,
-        embedding_dimension=768,
+        local_embedding_dimension=768,
     )
     asyncio.run(store.initialize())
     yield store

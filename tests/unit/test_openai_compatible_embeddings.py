@@ -1,4 +1,4 @@
-"""Tests for OpenRouterEmbeddings — async httpx-based OpenRouter embedding provider."""
+"""Tests for OpenAICompatibleEmbeddings — async httpx-based OpenAI-compatible embedding provider."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import httpx
 import pytest
 import respx
 
-from data_engineering_copilot.infrastructure.async_openrouter_embeddings import OpenRouterEmbeddings
+from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 
 
 @pytest.fixture
 def embeddings():
-    return OpenRouterEmbeddings(
+    return OpenAICompatibleEmbeddings(
         api_key="sk-or-v1-test-key",
         model_name="nvidia/nemotron-3-embed-1b:free",
         embedding_dimension=2048,
@@ -136,14 +136,14 @@ async def test_embed_http_error(embeddings):
 
 
 def test_truncate_to_safe_tokens_short_text():
-    from data_engineering_copilot.infrastructure.async_openrouter_embeddings import _truncate_to_safe_tokens
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import _truncate_to_safe_tokens
 
     result = _truncate_to_safe_tokens("short text", max_tokens=100)
     assert result == "short text"
 
 
 def test_truncate_to_safe_tokens_long_text():
-    from data_engineering_copilot.infrastructure.async_openrouter_embeddings import _truncate_to_safe_tokens
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import _truncate_to_safe_tokens
 
     text = "hello world " * 1000
     result = _truncate_to_safe_tokens(text, max_tokens=10)
@@ -152,7 +152,7 @@ def test_truncate_to_safe_tokens_long_text():
 
 @pytest.mark.asyncio
 async def test_embed_sends_truncate_provider_param():
-    embs = OpenRouterEmbeddings(api_key="key")
+    embs = OpenAICompatibleEmbeddings(api_key="key")
     with respx.mock:
         route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
             return_value=httpx.Response(
@@ -182,7 +182,7 @@ async def test_embed_handles_error_in_response(embeddings):
 
 @pytest.mark.asyncio
 async def test_embed_batching():
-    embs = OpenRouterEmbeddings(
+    embs = OpenAICompatibleEmbeddings(
         api_key="key",
         model_name="nvidia/nemotron-3-embed-1b:free",
         embedding_dimension=2048,

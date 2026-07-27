@@ -31,7 +31,7 @@ def _settings():
 
     return AppSettings(
         embedding_provider="ollama",
-        embedding_dimension=768,
+        local_embedding_dimension=768,
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=10,
@@ -330,7 +330,7 @@ class TestRAGWireMocked:
         from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
         settings = AppSettings()
-        dim = settings.embedding_dimension
+        dim = settings.local_embedding_dimension
         fake_embedding = [0.01] * dim
 
         with respx.mock(assert_all_mocked=False) as respx_mock:

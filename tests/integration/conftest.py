@@ -216,7 +216,7 @@ def integration_settings():
 
     return AppSettings(
         embedding_provider="ollama",
-        embedding_dimension=768,
+        local_embedding_dimension=768,
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
