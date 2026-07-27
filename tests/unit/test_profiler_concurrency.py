@@ -28,8 +28,11 @@ class TestConcurrencyTuner:
         metrics.record(latency=10.0, items=10)
 
         rec = tuner.analyze_stage(
-            "embedder", current_concurrency=10, metrics=metrics,
-            peak_cpu_pct=30.0, rate_limit_hits=3,
+            "embedder",
+            current_concurrency=10,
+            metrics=metrics,
+            peak_cpu_pct=30.0,
+            rate_limit_hits=3,
         )
         assert rec.action == "RATE_LIMITED"
         assert rec.recommended_concurrency < rec.current_concurrency
@@ -40,8 +43,11 @@ class TestConcurrencyTuner:
         metrics.record(latency=5.0, items=50)
 
         rec = tuner.analyze_stage(
-            "crawler", current_concurrency=20, metrics=metrics,
-            peak_cpu_pct=95.0, rate_limit_hits=0,
+            "crawler",
+            current_concurrency=20,
+            metrics=metrics,
+            peak_cpu_pct=95.0,
+            rate_limit_hits=0,
         )
         assert rec.action == "SCALE_DOWN"
         expected = max(1, int(20 * (80.0 / 95.0)))
@@ -53,8 +59,11 @@ class TestConcurrencyTuner:
         metrics.record(latency=1.0, items=10)
 
         rec = tuner.analyze_stage(
-            "chunker", current_concurrency=4, metrics=metrics,
-            peak_cpu_pct=40.0, rate_limit_hits=0,
+            "chunker",
+            current_concurrency=4,
+            metrics=metrics,
+            peak_cpu_pct=40.0,
+            rate_limit_hits=0,
         )
         assert rec.action == "SCALE_UP"
         assert rec.recommended_concurrency == int(4 * 1.5)
@@ -65,8 +74,11 @@ class TestConcurrencyTuner:
         metrics.record(latency=2.0, items=5)
 
         rec = tuner.analyze_stage(
-            "parser", current_concurrency=2, metrics=metrics,
-            peak_cpu_pct=30.0, rate_limit_hits=0,
+            "parser",
+            current_concurrency=2,
+            metrics=metrics,
+            peak_cpu_pct=30.0,
+            rate_limit_hits=0,
         )
         assert rec.action in ("SCALE_UP", "OPTIMAL")
 
@@ -76,20 +88,26 @@ class TestConcurrencyTuner:
         metrics.record(latency=1.0, items=5)
 
         rec = tuner.analyze_stage(
-            "parser", current_concurrency=2, metrics=metrics,
-            peak_cpu_pct=30.0, rate_limit_hits=0,
+            "parser",
+            current_concurrency=2,
+            metrics=metrics,
+            peak_cpu_pct=30.0,
+            rate_limit_hits=0,
         )
         assert rec.action == "OPTIMAL"
 
     def test_compute_optimal_concurrency(self):
         result = ConcurrencyTuner.compute_optimal_concurrency(
-            peak_throughput=100.0, avg_latency=0.5, headroom_factor=1.2,
+            peak_throughput=100.0,
+            avg_latency=0.5,
+            headroom_factor=1.2,
         )
         assert result == 60  # 100 * 0.5 * 1.2 = 60
 
     def test_compute_optimal_concurrency_zero_throughput(self):
         result = ConcurrencyTuner.compute_optimal_concurrency(
-            peak_throughput=0.0, avg_latency=0.5,
+            peak_throughput=0.0,
+            avg_latency=0.5,
         )
         assert result == 1
 

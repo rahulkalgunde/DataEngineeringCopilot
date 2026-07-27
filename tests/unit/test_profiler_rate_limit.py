@@ -87,7 +87,8 @@ class TestRateLimitTracker:
     def test_saturation_from_ratelimit_headers(self):
         rlt = RateLimitTracker()
         rlt.record_response(
-            "openrouter", 200,
+            "openrouter",
+            200,
             headers={"x-ratelimit-remaining": "20", "x-ratelimit-limit": "100"},
         )
         sat = rlt.get_provider_saturation("openrouter")

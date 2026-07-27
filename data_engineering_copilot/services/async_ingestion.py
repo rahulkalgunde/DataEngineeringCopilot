@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import time
@@ -271,14 +272,26 @@ class AsyncIngestionService:
         await self.crawler.frontier.close()
 
         if errors:
+            await self.close()
             raise IngestionError(f"Source ingestion errors: {'; '.join(errors)}")
         self._parse_executor.shutdown(wait=True)
         self._chunk_executor.shutdown(wait=True)
+        await self.close()
         return total_chunks
 
     def stop(self) -> None:
         self._parse_executor.shutdown(wait=True)
         self._chunk_executor.shutdown(wait=True)
+
+    async def close(self) -> None:
+        """Close underlying clients and shut down thread pools."""
+        for component in (self.vector_store, self.embeddings, self.crawler):
+            if not hasattr(component, "close"):
+                continue
+            with contextlib.suppress(TypeError, AttributeError):
+                await component.close()
+        self._parse_executor.shutdown(wait=False)
+        self._chunk_executor.shutdown(wait=False)
 
     async def _run_source_task(
         self,

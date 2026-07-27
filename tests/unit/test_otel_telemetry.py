@@ -44,7 +44,9 @@ class TestOTelTelemetryTracer:
         mock_otel_tracer = MagicMock()
         mock_span = MagicMock()
         mock_otel_tracer.start_span.return_value = mock_span
-        with patch("data_engineering_copilot.observability.otel_telemetry._ensure_tracer", return_value=mock_otel_tracer):
+        with patch(
+            "data_engineering_copilot.observability.otel_telemetry._ensure_tracer", return_value=mock_otel_tracer
+        ):
             tracer = otel_telemetry.OTelTelemetryTracer()
             tracer.start_observation(name="test", input="hello", as_type="generation", model="test-model")
             mock_otel_tracer.start_span.assert_called_once_with("test")

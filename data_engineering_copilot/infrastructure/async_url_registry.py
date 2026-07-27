@@ -19,6 +19,8 @@ class AsyncUrlRegistry:
     """Per-source URL state store backed by asyncio Redis hashes."""
 
     def __init__(self, redis_client: object | None, source_name: str) -> None:
+        if redis_client is not None and not hasattr(redis_client, "hset"):
+            raise TypeError(f"redis_client must implement SyncRedisProtocol (got {type(redis_client).__name__})")
         self._redis = redis_client
         self._key = f"crawl:url_registry:{source_name}"
         self._source_name = source_name

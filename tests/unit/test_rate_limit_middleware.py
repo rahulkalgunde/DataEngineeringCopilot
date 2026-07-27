@@ -54,6 +54,7 @@ class TestRateLimitMiddleware:
 
         # Clean up in-memory state so parallel tests aren't affected
         from data_engineering_copilot.services.rate_limiter import _IN_MEMORY_STORE
+
         keys_to_remove = [k for k in _IN_MEMORY_STORE if k.startswith("ratelimit:/api/v1/ask:")]
         for k in keys_to_remove:
             del _IN_MEMORY_STORE[k]

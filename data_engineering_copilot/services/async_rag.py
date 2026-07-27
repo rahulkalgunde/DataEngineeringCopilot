@@ -366,3 +366,11 @@ class AsyncRagService:
                 trace.update(output=str(exc))
                 trace.end()
             raise LLMGenerationError(f"LLM generation failed: {exc}") from exc
+
+    async def close(self) -> None:
+        """Close underlying clients."""
+        for component in (self.vector_store, self.llm_client, self.embedder):
+            if not hasattr(component, "close"):
+                continue
+            with contextlib.suppress(TypeError, AttributeError):
+                await component.close()

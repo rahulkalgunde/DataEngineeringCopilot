@@ -13,6 +13,15 @@ pytestmark = [
 
 
 @pytest.fixture
+async def async_redis_client(redis_url):
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(redis_url, decode_responses=False)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
 def sync_redis_client(redis_url):
     import redis
 
@@ -21,8 +30,8 @@ def sync_redis_client(redis_url):
     client.close()
 
 
-async def test_async_url_registry_roundtrip(sync_redis_client):
-    registry = AsyncUrlRegistry(sync_redis_client, "test_source")
+async def test_async_url_registry_roundtrip(async_redis_client):
+    registry = AsyncUrlRegistry(async_redis_client, "test_source")
     url = "https://example.com/page.html"
     html_hash = "abc123def456"
 
@@ -32,14 +41,14 @@ async def test_async_url_registry_roundtrip(sync_redis_client):
     assert result == html_hash
 
 
-async def test_async_url_registry_returns_none_for_missing(sync_redis_client):
-    registry = AsyncUrlRegistry(sync_redis_client, "test_source")
+async def test_async_url_registry_returns_none_for_missing(async_redis_client):
+    registry = AsyncUrlRegistry(async_redis_client, "test_source")
     result = await registry.get_html_hash("https://example.com/nonexistent")
     assert result is None
 
 
-async def test_async_url_registry_clear(sync_redis_client):
-    registry = AsyncUrlRegistry(sync_redis_client, "test_clear_source")
+async def test_async_url_registry_clear(async_redis_client):
+    registry = AsyncUrlRegistry(async_redis_client, "test_clear_source")
     await registry.set_html_hash("https://example.com/a", "hash_a")
     await registry.set_html_hash("https://example.com/b", "hash_b")
 

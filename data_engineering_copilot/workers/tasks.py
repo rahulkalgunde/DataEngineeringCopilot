@@ -155,6 +155,6 @@ def _on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
         state["status"] = "FAILED"
         state["error"] = str(exception or "Task failed unexpectedly (hard time limit?).")
         client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
-        log.info("task_failure.updated_redis", task_id=task_id, error=state["error"])
+        log.info("task_failure.updated_redis", extra={"task_id": task_id, "error": state["error"]})
     except Exception as exc:
-        log.warning("task_failure.update_failed", task_id=task_id, error=str(exc))
+        log.warning("task_failure.update_failed", extra={"task_id": task_id, "error": str(exc)})

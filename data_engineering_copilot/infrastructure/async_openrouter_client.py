@@ -85,9 +85,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 logger.exception("OpenRouter rate limit persistently exceeded after retries.")
-                raise OpenRouterError(
-                    "OpenRouter rate limit exceeded after all retries. Try again later."
-                ) from exc
+                raise OpenRouterError("OpenRouter rate limit exceeded after all retries. Try again later.") from exc
             logger.exception("OpenRouter HTTP error: %s", exc)
             raise OpenRouterError(f"OpenRouter returned HTTP {exc.response.status_code}.") from exc
         except (httpx.ConnectError, httpx.HTTPError) as exc:
@@ -133,9 +131,7 @@ class OpenRouterLLMClient(SafeAsyncClientMixin):
         if response.status_code == 429:
             if self._rate_limiter is not None:
                 await self._rate_limiter.handle_429(dict(response.headers))
-            raise httpx.HTTPStatusError(
-                "Rate limited by OpenRouter", request=response.request, response=response
-            )
+            raise httpx.HTTPStatusError("Rate limited by OpenRouter", request=response.request, response=response)
         if response.status_code == 401:
             raise OpenRouterError("OpenRouter returned 401 Unauthorized. Check your API key.")
         response.raise_for_status()

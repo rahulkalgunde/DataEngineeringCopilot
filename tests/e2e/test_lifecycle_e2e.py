@@ -1,7 +1,8 @@
 """E2E lifecycle tests: dispatch → status → cancel.
 
-Hits the live FastAPI at localhost:8000 with real httpx client.
-Uses real Docker Redis for status verification (no mocks).
+Uses in-process FastAPI (ASGITransport) with real testcontainer Redis.
+Verifies the full dispatch → Redis status → polling → cancel flow
+without requiring a running backend-api or Celery worker.
 """
 
 from __future__ import annotations
@@ -14,6 +15,18 @@ import pytest
 @pytest.mark.e2e
 class TestIngestLifecycle:
     """Journey 2: API ingest → Redis status → polling → cancel."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_redis(self, e2e_redis_url, e2e_redis, monkeypatch):
+        """Patch get_redis_client and flush Redis before each test."""
+        import redis
+
+        sync_client = redis.from_url(e2e_redis_url, decode_responses=False)
+        import data_engineering_copilot.api.routes as routes_mod
+
+        sync_client.flushdb()
+        monkeypatch.setattr(routes_mod, "get_redis_client", lambda: sync_client)
+        yield
 
     async def test_dispatch_creates_redis_status(self, e2e_api_client, e2e_redis):
         """POST /api/v1/ingest writes DISPATCHED status to Redis."""

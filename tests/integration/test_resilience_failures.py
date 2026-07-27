@@ -1,6 +1,6 @@
 """Integration tests for resilience: rate limits, Redis fallback, API timeouts.
 
-Real Redis for rate limiter testing. Wire-mocked external APIs via respx.
+Real Redis for rate limiter testing. Mocked RAG service for timeout testing.
 """
 
 from __future__ import annotations
@@ -9,11 +9,9 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-import respx
 from httpx import ASGITransport
 
 from data_engineering_copilot.api.app import app
-from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.services.rate_limiter import (
     _IN_MEMORY_STORE,
     RateLimiter,
@@ -40,7 +38,7 @@ class TestRateLimiterInMemory:
     def test_allows_requests_under_limit(self):
         limiter = RateLimiter(path="/api/v1/ask", max_calls=5, period_seconds=60)
         for i in range(5):
-            assert limiter.allow("client-1"), f"Request {i+1} should be allowed"
+            assert limiter.allow("client-1"), f"Request {i + 1} should be allowed"
 
     def test_blocks_requests_over_limit(self):
         limiter = RateLimiter(path="/api/v1/ask", max_calls=5, period_seconds=60)
@@ -71,7 +69,7 @@ class TestRateLimiterRedis:
         with patch("data_engineering_copilot.services.rate_limiter._redis_client", return_value=fresh_redis_client):
             for i in range(60):
                 allowed = sliding_window_allow("/api/v1/ask", "test-ip", 60, 60)
-                assert allowed, f"Request {i+1} should be allowed"
+                assert allowed, f"Request {i + 1} should be allowed"
             blocked = not sliding_window_allow("/api/v1/ask", "test-ip", 60, 60)
             assert blocked, "61st request should be blocked"
 
@@ -99,18 +97,19 @@ class TestApiTimeouts:
     @pytest.mark.asyncio
     async def test_ask_stream_timeout_emits_error(self, fresh_redis_client):
         """Wire-mock LLM to hang, verify SSE emits timeout error and [DONE]."""
-        import data_engineering_copilot.api.routes as routes_mod
+        from unittest.mock import AsyncMock
 
-        ollama_url = f"{settings.ollama_base_url.rstrip('/')}/api/generate"
+        import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.services.async_rag import LLMGenerationError
+
+        # Create a mock RAG service that simulates LLM timeout
+        mock_service = AsyncMock()
+        mock_service.answer.side_effect = LLMGenerationError("LLM timed out")
 
         with (
             patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client),
-            respx.mock as respx_mock,
+            patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service),
         ):
-            respx_mock.post(ollama_url).mock(
-                side_effect=httpx.TimeoutException("LLM timed out")
-            )
-
             async with (
                 httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
                 client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response,

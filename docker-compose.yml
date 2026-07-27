@@ -16,7 +16,7 @@ services:
       start_period: 3s
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.3
     container_name: de_copilot_vectorstore
     ports:
       - "6333:6333"
@@ -34,7 +34,7 @@ services:
       start_period: 5s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: de_copilot_minio
     command: server /data --console-address ":9001"
     environment:
@@ -50,7 +50,7 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: de_copilot_minio_init
     depends_on:
       - minio
@@ -64,7 +64,7 @@ services:
       - de_copilot_net
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.32.4
     container_name: de_copilot_ollama
     ports:
       - "11434:11434"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import Self
 
 import redis.asyncio as aioredis
 import redis.exceptions
@@ -24,6 +25,12 @@ class CrawlCache:
             max_connections=20,
         )
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
+
     async def ping(self) -> None:
         """Validate Redis connectivity. Raises on failure."""
         try:
@@ -45,9 +52,7 @@ class CrawlCache:
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "CrawlCache.get_headers failed",
-                url_hash=url_hash,
-                error_type=type(exc).__name__,
-                error=str(exc),
+                extra={"url_hash": url_hash, "error_type": type(exc).__name__, "error": str(exc)},
             )
             return None
 
@@ -70,11 +75,10 @@ class CrawlCache:
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "CrawlCache.set_headers failed",
-                url_hash=url_hash,
-                error_type=type(exc).__name__,
-                error=str(exc),
+                extra={"url_hash": url_hash, "error_type": type(exc).__name__, "error": str(exc)},
             )
 
     async def close(self) -> None:
         with contextlib.suppress(redis.exceptions.RedisError):
             await self._redis.close()
+            self._redis = None

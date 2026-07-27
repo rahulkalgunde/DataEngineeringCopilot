@@ -67,9 +67,9 @@ class TestResourceMonitor:
             patch.object(rm.process, "cpu_percent", return_value=50.0),
             patch.object(rm.process, "memory_info") as mock_mem,
         ):
-                mock_mem.return_value.rss = 100 * 1024 * 1024
-                await rm.start()
-                await rm.stop()
+            mock_mem.return_value.rss = 100 * 1024 * 1024
+            await rm.start()
+            await rm.stop()
         assert len(rm.snapshots) > 0 or True  # at least ran without error
 
 
