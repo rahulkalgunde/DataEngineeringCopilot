@@ -8,14 +8,14 @@ from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+from data_engineering_copilot.infrastructure.async_openai_compatible_client import OpenAICompatibleLLMClient
 from data_engineering_copilot.infrastructure.async_openai_embeddings import OpenAIEmbeddings
-from data_engineering_copilot.infrastructure.async_openrouter_client import OpenRouterLLMClient
 from data_engineering_copilot.infrastructure.async_openrouter_embeddings import OpenRouterEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
-from data_engineering_copilot.infrastructure.rate_limiter import OpenRouterRateLimiter
+from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
@@ -29,11 +29,11 @@ from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 logger = StructuredLogger(__name__)
 
 
-def build_openrouter_rate_limiter(app_settings: AppSettings = settings) -> OpenRouterRateLimiter | None:
+def build_rate_limiter(app_settings: AppSettings = settings) -> SlidingWindowRateLimiter | None:
     """Build a shared rate limiter when OpenRouter is the active provider for either LLM or embeddings."""
     if app_settings.llm_provider.lower() != "openrouter" and app_settings.embedding_provider.lower() != "openrouter":
         return None
-    return OpenRouterRateLimiter(
+    return SlidingWindowRateLimiter(
         rpm_limit=app_settings.openrouter_rpm_limit,
         rpd_limit=app_settings.openrouter_rpd_limit,
     )
@@ -41,7 +41,7 @@ def build_openrouter_rate_limiter(app_settings: AppSettings = settings) -> OpenR
 
 def build_llm_client(
     app_settings: AppSettings = settings,
-    rate_limiter: OpenRouterRateLimiter | None = None,
+    rate_limiter: SlidingWindowRateLimiter | None = None,
 ):
     """Build LLM client based on configured provider."""
     provider = app_settings.llm_provider.lower()
@@ -49,7 +49,7 @@ def build_llm_client(
         api_key = app_settings.openrouter_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required when llm_provider='openrouter'")
-        return OpenRouterLLMClient(
+        return OpenAICompatibleLLMClient(
             api_key=api_key,
             model=app_settings.openrouter_model,
             timeout_seconds=app_settings.ollama_timeout_seconds,
@@ -63,13 +63,50 @@ def build_llm_client(
             num_ctx=app_settings.ollama_num_ctx,
             num_predict=app_settings.ollama_num_predict,
         )
+
     else:
         raise ValueError(f"Unsupported llm_provider: {provider!r}. Choose 'ollama' or 'openrouter'.")
 
 
+def build_code_llm_client(
+    app_settings: AppSettings = settings,
+    shared_rate_limiter: SlidingWindowRateLimiter | None = None,
+):
+    """Build optional code-specific LLM client. Returns None if not configured.
+
+    When the code provider differs from the primary provider (e.g. primary=ollama,
+    code=nvidia), a separate rate limiter is created. When they match (e.g. both
+    openrouter), the shared rate limiter is reused.
+    """
+    provider = app_settings.code_llm_provider.lower()
+    if not provider:
+        return None
+
+    if provider == "nvidia":
+        api_key = app_settings.nvidia_nim_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("NVIDIA_NIM_API_KEY is required when code_llm_provider='nvidia'")
+        nvidia_limiter = SlidingWindowRateLimiter(
+            rpm_limit=app_settings.nvidia_nim_rpm_limit,
+            rpd_limit=0,
+        )
+        return OpenAICompatibleLLMClient(
+            api_key=api_key,
+            model=app_settings.code_llm_model,
+            base_url=app_settings.nvidia_nim_base_url,
+            timeout_seconds=app_settings.ollama_timeout_seconds,
+            rate_limiter=nvidia_limiter,
+        )
+
+    if provider in ("ollama", "openrouter"):
+        return build_llm_client(app_settings, shared_rate_limiter)
+
+    raise ValueError(f"Unsupported code_llm_provider: {provider!r}. Choose 'ollama', 'openrouter', or 'nvidia'.")
+
+
 def build_embedder(
     app_settings: AppSettings = settings,
-    rate_limiter: OpenRouterRateLimiter | None = None,
+    rate_limiter: SlidingWindowRateLimiter | None = None,
 ):
     """Build embedding provider based on configured provider."""
     provider = app_settings.embedding_provider.lower()
@@ -250,7 +287,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         max_connections=20,
     )
 
-    rate_limiter = build_openrouter_rate_limiter(app_settings)
+    rate_limiter = build_rate_limiter(app_settings)
 
     contextual_enricher = ContextualChunkEnricher(
         summarizer=LLMContextSummarizer(llm_client=build_llm_client(app_settings, rate_limiter)),
@@ -306,8 +343,9 @@ def build_rag_service(
         reranker_top_k=app_settings.reranker_top_k,
         max_context_chars=app_settings.max_context_chars,
     )
-    rate_limiter = build_openrouter_rate_limiter(app_settings)
+    rate_limiter = build_rate_limiter(app_settings)
     llm_client = build_llm_client(app_settings, rate_limiter)
+    code_llm_client = build_code_llm_client(app_settings, shared_rate_limiter=rate_limiter)
     vector_store = AsyncQdrantVectorStore(
         url=app_settings.qdrant_url,
         collection_name=app_settings.collection_name,
@@ -347,6 +385,7 @@ def build_rag_service(
         config=rag_config,
         vector_store=vector_store,
         llm_client=llm_client,
+        code_llm_client=code_llm_client,
         embedder=embedder,
         reranker=reranker,
         telemetry=telemetry,

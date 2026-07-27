@@ -8,6 +8,7 @@ import pytest
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
 from data_engineering_copilot.domain.models import Answer, RagConfig
+from data_engineering_copilot.services.async_rag import AsyncRagService
 
 
 class TestQueryCache:
@@ -140,7 +141,15 @@ class TestAsyncRagService:
         return chunk
 
     def _make_service(
-        self, config=None, vector_store=None, llm=None, embedder=None, reranker=None, telemetry=None, cache=None
+        self,
+        config=None,
+        vector_store=None,
+        llm=None,
+        embedder=None,
+        reranker=None,
+        telemetry=None,
+        cache=None,
+        code_llm=None,
     ):
         from data_engineering_copilot.services.async_rag import AsyncRagService
 
@@ -148,6 +157,7 @@ class TestAsyncRagService:
             config=config or RagConfig(),
             vector_store=vector_store or MagicMock(query=AsyncMock(return_value=[])),
             llm_client=llm or MagicMock(generate=AsyncMock(return_value="answer")),
+            code_llm_client=code_llm,
             embedder=embedder or MagicMock(embed_query=AsyncMock(return_value=[0.1] * 768)),
             reranker=reranker,
             telemetry=telemetry,
@@ -419,3 +429,61 @@ class TestAsyncRagService:
         await service.answer("what is spark")
         mock_telemetry.start_observation.assert_called()
         mock_telemetry.flush.assert_called_once()
+
+    def test_select_llm_client_no_code_llm_returns_primary(self, config):
+        service = self._make_service(config=config)
+        llm = service.llm_client
+        assert service._select_llm_client("code_example") is llm
+        assert service._select_llm_client("api_lookup") is llm
+        assert service._select_llm_client("factual") is llm
+
+    def test_select_llm_client_code_intent_returns_code_llm(self, config):
+        code_llm = MagicMock()
+        service = self._make_service(config=config, code_llm=code_llm)
+        assert service._select_llm_client("code_example") is code_llm
+        assert service._select_llm_client("api_lookup") is code_llm
+
+    def test_select_llm_client_non_code_intent_returns_primary(self, config):
+        code_llm = MagicMock()
+        service = self._make_service(config=config, code_llm=code_llm)
+        llm = service.llm_client
+        assert service._select_llm_client("factual") is llm
+        assert service._select_llm_client("how_to") is llm
+        assert service._select_llm_client("comparative") is llm
+        assert service._select_llm_client("debugging") is llm
+        assert service._select_llm_client("unknown") is llm
+
+    @pytest.mark.asyncio
+    async def test_answer_routes_code_intent_to_code_llm(self, mock_embedder, mock_llm, config):
+        from data_engineering_copilot.services.query_rewriting import QueryRewriter
+
+        code_llm = MagicMock()
+        code_llm.generate = AsyncMock(return_value="```python\nx = 1\n```")
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_qr = MagicMock(spec=QueryRewriter)
+        mock_qr.async_rewrite = AsyncMock()
+        rewritten = MagicMock()
+        rewritten.intent = "code_example"
+        rewritten.decomposed_steps = []
+        rewritten.hyde_query = None
+        mock_qr.async_rewrite.return_value = rewritten
+        mock_qr.expand_queries = AsyncMock(return_value=[])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            code_llm_client=code_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=mock_qr,
+        )
+
+        await service.answer("show me spark code")
+        assert code_llm.generate.called
+        assert not mock_llm.generate.called

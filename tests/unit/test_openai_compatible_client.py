@@ -1,4 +1,4 @@
-"""Tests for OpenRouterLLMClient — async httpx-based OpenRouter generation client."""
+"""Tests for OpenAICompatibleLLMClient — async httpx-based OpenAI-compatible generation client."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ import pytest
 import respx
 
 from data_engineering_copilot.domain.models import LLMUsage
-from data_engineering_copilot.infrastructure.async_openrouter_client import (
-    OpenRouterError,
-    OpenRouterLLMClient,
+from data_engineering_copilot.infrastructure.async_openai_compatible_client import (
+    LLMClientError,
+    OpenAICompatibleLLMClient,
 )
 
 
 @pytest.fixture
 def client():
-    return OpenRouterLLMClient(
+    return OpenAICompatibleLLMClient(
         api_key="sk-or-v1-test-key",
         model="anthropic/claude-3.5-sonnet",
         timeout_seconds=120,
@@ -120,7 +120,7 @@ async def test_generate_http_error(client):
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
             return_value=httpx.Response(401, json={"error": "Unauthorized"})
         )
-        with pytest.raises(OpenRouterError, match="Unauthorized"):
+        with pytest.raises(LLMClientError, match="Unauthorized"):
             await client.generate("test")
 
 
@@ -130,7 +130,7 @@ async def test_generate_connection_error(client):
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
             side_effect=httpx.ConnectError("Connection refused")
         )
-        with pytest.raises(OpenRouterError, match="Could not reach OpenRouter"):
+        with pytest.raises(LLMClientError, match="Could not reach LLM provider"):
             await client.generate("test")
 
 
@@ -140,7 +140,7 @@ async def test_generate_timeout_error(client):
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
             side_effect=httpx.TimeoutException("timed out")
         )
-        with pytest.raises(OpenRouterError, match="timed out"):
+        with pytest.raises(LLMClientError, match="timed out"):
             await client.generate("test")
 
 
@@ -183,7 +183,7 @@ async def test_generate_custom_temperature(client):
 
 
 def test_custom_base_url():
-    c = OpenRouterLLMClient(
+    c = OpenAICompatibleLLMClient(
         api_key="key",
         model="model",
         base_url="https://custom.api.com/v1",

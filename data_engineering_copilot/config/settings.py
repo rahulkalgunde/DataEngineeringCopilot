@@ -91,7 +91,7 @@ class AppSettings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
 
     # URLs accessed within docker
-    redis_url: str = "redis://redis:6379/0"
+    redis_url: str = "redis://:local_secure_password_123@localhost:6379/0"
     langfuse_url: str = "http://langfuse:3000"
     langfuse_public_key: SecretStr = Field(
         default=SecretStr(""),
@@ -111,7 +111,8 @@ class AppSettings(BaseSettings):
     embedding_batch_size: int = 256
     enrichment_batch_size: int = 20
 
-    # Provider selection: "ollama" | "openrouter" | "openai"
+    # LLM Provider selection: "ollama" | "openrouter"
+    # Embedding provider selection: "ollama" | "openrouter" | "openai"
     embedding_model_name: str = "nomic-embed-text"
     llm_provider: str = "ollama"
     embedding_provider: str = "ollama"
@@ -130,6 +131,15 @@ class AppSettings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_base_url: str = "https://api.openai.com"
     openai_embedding_dimension: int = 1536
+
+    # Code-specific LLM override (optional, for code_example/api_lookup intents)
+    code_llm_provider: str = ""  # "" = use primary llm_provider for everything
+    code_llm_model: str = ""  # Model name for code-specific provider
+
+    # NVIDIA NIM (cloud API, OpenAI-compatible)
+    nvidia_nim_api_key: SecretStr = SecretStr("")
+    nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_nim_rpm_limit: int = 40
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
@@ -204,6 +214,8 @@ class AppSettings(BaseSettings):
             raise ValueError("OPENROUTER_API_KEY is required when EMBEDDING_PROVIDER='openrouter'")
         if self.embedding_provider == "openai" and not self.openai_api_key.get_secret_value():
             raise ValueError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER='openai'")
+        if self.code_llm_provider == "nvidia" and not self.nvidia_nim_api_key.get_secret_value():
+            raise ValueError("NVIDIA_NIM_API_KEY is required when CODE_LLM_PROVIDER='nvidia'")
         return self
 
     def get_embedding_dimension(self) -> int:

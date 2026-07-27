@@ -6,6 +6,24 @@ HTTP client infrastructure.
 
 from __future__ import annotations
 
+CODE_INTENTS = frozenset({"code_example", "api_lookup"})
+
+_CODE_INSTRUCTIONS = (
+    "1. Output clean, runnable Python/PySpark code with type hints.\n"
+    "2. Include concise inline comments for non-obvious logic.\n"
+    "3. Do NOT include long introductory or concluding text outside the code.\n"
+    "4. Cite the source documentation for API signatures used.\n"
+    "5. If context lacks sufficient API details, state the limitation explicitly."
+)
+
+_DOCUMENTATION_INSTRUCTIONS = (
+    "1. For factual questions: State facts from the docs clearly.\n"
+    "2. For comparative questions: Show differences between the documented options.\n"
+    "3. For procedural questions: Outline steps from the documentation.\n"
+    "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
+    "5. When uncertain: Explicitly say 'The documentation does not clearly address this'."
+)
+
 
 class PromptBuilder:
     """Builds structured prompts for RAG context synthesis."""
@@ -13,8 +31,17 @@ class PromptBuilder:
     def __init__(self, system_role: str | None = None) -> None:
         self.system_role = system_role or "You are DataEngineeringCopilot, an expert data engineering assistant."
 
-    def build_rag_prompt(self, context: str, question: str) -> str:
-        """Construct a structured system prompt combining context and question."""
+    def build_rag_prompt(self, context: str, question: str, intent: str = "factual") -> str:
+        """Construct a structured system prompt combining context and question.
+
+        Parameters
+        ----------
+        intent:
+            Query intent from ``QueryRewriter.classify_intent()``.
+            ``code_example`` and ``api_lookup`` get code-focused instructions;
+            all others get the default documentation-focused instructions.
+        """
+        instructions = _CODE_INSTRUCTIONS if intent in CODE_INTENTS else _DOCUMENTATION_INSTRUCTIONS
         return "\n".join(
             [
                 "## SYSTEM",
@@ -39,11 +66,7 @@ class PromptBuilder:
                 'If no sources are directly referenced, return "citations": [].',
                 "",
                 "## INSTRUCTIONS",
-                "1. For factual questions: State facts from the docs clearly.",
-                "2. For comparative questions: Show differences between the documented options.",
-                "3. For procedural questions: Outline steps from the documentation.",
-                "4. For open-ended questions: Provide a thoughtful synthesis of available info.",
-                "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.",
+                instructions,
                 "",
                 "## USER QUESTION AND CONTEXT",
                 f"Context:\n{context}\n\nQuestion: {question}",
