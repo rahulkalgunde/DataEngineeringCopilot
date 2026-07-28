@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,7 +35,8 @@ def create_test_chunks(num_chunks=5):
 
 
 def create_test_scores(num_scores):
-    return [0.95 - (i * 0.1) for i in range(num_scores)]
+    """Return realistic cross-encoder logits (raw, unnormalized)."""
+    return [2.0 - (i * 0.8) for i in range(num_scores)]
 
 
 class TestCrossEncoderReranker:
@@ -134,6 +136,34 @@ class TestCrossEncoderReranker:
             assert len(result) == 3
             for i in range(len(result) - 1):
                 assert result[i].confidence >= result[i + 1].confidence
+            for chunk in result:
+                assert 0.0 <= chunk.confidence <= 1.0
+
+    def test_rerank_negative_logits_normalized(self):
+        """Verify raw negative logits from cross-encoder are sigmoid-normalized to [0, 1]."""
+        test_chunks, query = create_test_chunks(num_chunks=5)
+        # Realistic ms-marco-MiniLM-L-6-v2 logits (can be negative)
+        negative_logits = [-3.0, -1.5, 0.2, 1.8, 4.0]
+
+        with patch("sentence_transformers.CrossEncoder") as mock_cross_encoder:
+            mock_model = MagicMock()
+            mock_model.predict.return_value = negative_logits
+            mock_cross_encoder.return_value = mock_model
+
+            reranker = CrossEncoderReranker(model_name="test_model")
+            # top_k < num_chunks to force actual reranking
+            result = reranker.rerank(query, test_chunks, top_k=3)
+
+            assert len(result) == 3
+            # All confidence values must be in [0, 1]
+            for chunk in result:
+                assert 0.0 <= chunk.confidence <= 1.0, f"confidence={chunk.confidence} out of range"
+            # Check sigmoid normalization for the first chunk (highest logit = 4.0)
+            expected_top = 1.0 / (1.0 + math.exp(-4.0))
+            assert abs(result[0].confidence - expected_top) < 1e-6
+            # Verify descending order
+            for i in range(len(result) - 1):
+                assert result[i].confidence >= result[i + 1].confidence
 
     def test_rerank_model_prediction_error(self):
         test_chunks, query = create_test_chunks(num_chunks=3)
@@ -188,6 +218,8 @@ class TestCrossEncoderReranker:
 
             assert len(result) == 10
             assert result[0].confidence >= result[9].confidence
+            for chunk in result:
+                assert 0.0 <= chunk.confidence <= 1.0
 
 
 if __name__ == "__main__":

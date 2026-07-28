@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -540,7 +542,7 @@ def _render_sources_tab(progress: IngestionProgress) -> None:
             "Chunks": st.column_config.NumberColumn("Chunks", width="small"),
             "Errors": st.column_config.NumberColumn("Errors", width="small"),
         },
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -625,7 +627,7 @@ def _render_history_tab(progress: IngestionProgress) -> None:
             "Chunks": st.column_config.NumberColumn("Chunks", width="small"),
             "Duration": st.column_config.TextColumn("Duration", width="small"),
         },
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -678,18 +680,43 @@ def render_qa_tab() -> None:
                 return
 
             logger.info("Streamlit ask started question=%r", question.strip()[:200])
+
             completed_steps: list[str] = []
-            try:
-                with st.status("Searching...", expanded=True) as status:
+            result_box: list = []
+            error_box: list = []
+
+            def _run_in_background() -> None:
+                """Run the async pipeline in a background thread with its own event loop."""
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
 
                     def on_step(step_name: str) -> None:
                         completed_steps.append(step_name)
-                        label = f"Step {len(completed_steps)}/4: {step_name}"
-                        status.update(label=label, state="running")
 
-                    import asyncio
+                    result_box.append(loop.run_until_complete(service.answer(question.strip(), on_step=on_step)))
+                except Exception as e:
+                    error_box.append(e)
+                finally:
+                    loop.close()
 
-                    answer = asyncio.run(service.answer(question.strip(), on_step=on_step))
+            worker = threading.Thread(target=_run_in_background, daemon=True)
+            worker.start()
+
+            try:
+                with st.status("Searching...", expanded=True) as status:
+                    while worker.is_alive():
+                        if completed_steps:
+                            label = f"Step {len(completed_steps)}/4: {completed_steps[-1]}"
+                            status.update(label=label, state="running")
+                        time.sleep(0.3)
+
+                    if error_box:
+                        raise error_box[0]
+                    if not result_box:
+                        raise RuntimeError("Background thread completed without result")
+
+                    answer = result_box[0]
                     status.update(label="✅ Answer ready", state="complete")
             except Exception as exc:
                 logger.exception("RAG answer failed")
@@ -777,12 +804,12 @@ def render_ingestion_tab() -> None:
         with ccol3:
             if progress.is_running or progress.success_message or progress.error:
                 if progress.is_running:
-                    stop = st.button("⏹ Stop", type="primary", use_container_width=True, key="stop_btn")
+                    stop = st.button("⏹ Stop", type="primary", width="stretch", key="stop_btn")
                     if stop:
                         IngestionManager.stop()
                         st.rerun()
                 else:
-                    dismiss = st.button("Dismiss", type="secondary", use_container_width=True, key="dismiss_btn")
+                    dismiss = st.button("Dismiss", type="secondary", width="stretch", key="dismiss_btn")
                     if dismiss:
                         # Save to history before clearing
                         if progress.success_message:
@@ -806,7 +833,7 @@ def render_ingestion_tab() -> None:
                 start = st.button(
                     "🔄 Start",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=start_disabled,
                     key="start_btn",
                 )
@@ -959,7 +986,7 @@ def render_health_tab() -> None:
                         }
                         for r in history_rows
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=min(len(history_rows) * 35 + 38, 400),
                 )
@@ -1034,7 +1061,7 @@ def render_metrics_tab() -> None:
                     "Answer Words": qm.answer_metrics.answer_length if qm.answer_metrics else "—",
                 }
             )
-        st.dataframe(table_data, use_container_width=True, hide_index=True)
+        st.dataframe(table_data, width="stretch", hide_index=True)
 
     st.divider()
 

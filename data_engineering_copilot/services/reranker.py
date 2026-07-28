@@ -98,17 +98,20 @@ class CrossEncoderReranker:
             chunk_texts = [chunk.chunk.text for chunk in chunks]
             pairs = [[query, text] for text in chunk_texts]
 
-            # Score each (query, chunk) pair
-            scores = self.model.predict(pairs)
+            # Score each (query, chunk) pair — raw logits from cross-encoder
+            raw_scores = self.model.predict(pairs)
 
-            # Sort chunks by score (highest first)
+            # Normalize logits to [0, 1] via sigmoid
+            scores = [1.0 / (1.0 + math.exp(-float(s))) for s in raw_scores]
+
+            # Sort chunks by normalized score (highest first)
             scored_chunks = list(zip(chunks, scores, strict=False))
             scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
-            # Write cross-encoder scores back to chunk.confidence
+            # Write normalized scores back to chunk.confidence
             # so downstream MMR and sorting use the better relevance score
             for chunk, score in scored_chunks:
-                object.__setattr__(chunk, "confidence", float(score))
+                object.__setattr__(chunk, "confidence", score)
 
             # Keep top_k results
             reranked = [chunk for chunk, score in scored_chunks[:top_k]]
@@ -123,7 +126,7 @@ class CrossEncoderReranker:
             # Log score comparison (before vs after)
             original_top_score = chunks[0].confidence if chunks else 0.0
             new_top_score = scored_chunks[0][1] if scored_chunks else 0.0
-            if abs(new_top_score - original_top_score) > 0.1:
+            if abs(new_top_score - original_top_score) > 0.05:
                 logger.info("Score improvement: embedding=%.4f → reranker=%.4f", original_top_score, new_top_score)
 
             return reranked
