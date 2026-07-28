@@ -30,7 +30,8 @@ _DOCUMENTATION_INSTRUCTIONS = (
     "2. For comparative questions: Show differences between the documented options.\n"
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
-    "5. When uncertain: Explicitly say 'The documentation does not clearly address this'."
+    "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
+    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing."
 )
 
 # Safety net: allow code blocks in documentation answers when query contains code keywords
@@ -40,7 +41,8 @@ _DOCUMENTATION_INSTRUCTIONS_WITH_CODE = (
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block."
+    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
+    "7. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block."
 )
 
 # Code-intent output format — allows fenced code blocks in the answer
@@ -57,16 +59,14 @@ _CODE_OUTPUT_FORMAT = (
     "Sources: [list of source names]"
 )
 
-# Documentation output format — structured JSON
+# Documentation output format — structured JSON with status/missing_info
 _DOC_OUTPUT_FORMAT = (
-    'Return ONLY valid JSON with this exact structure (no markdown, no code fences):\n'
-    '{\n'
-    '  "answer": "Your detailed answer here, 2-4 sentences.",\n'
-    '  "citations": [\n'
-    '    {"source": "Source Name", "snippet": "Direct quote from documentation"}\n'
-    '  ]\n'
-    '}\n'
-    'If no sources are directly referenced, return "citations": [].'
+    "Return ONLY valid JSON with this exact structure (no markdown, no code fences):\n"
+    "{\n"
+    '  "status": "SUCCESS" or "INSUFFICIENT_CONTEXT",\n'
+    '  "answer": "Your detailed answer here, 2-4 sentences, or null if context is insufficient.",\n'
+    '  "missing_info": "Description of missing details if context is low-density and status is INSUFFICIENT_CONTEXT, otherwise null."\n'
+    "}"
 )
 
 
@@ -102,6 +102,9 @@ class PromptBuilder:
             instructions = _DOCUMENTATION_INSTRUCTIONS
             output_format = _DOC_OUTPUT_FORMAT
 
+        density_tag = self._compute_density_tag(context)
+        tagged_context = f"<chunk>\n[DENSITY: {density_tag}]\n{context}\n</chunk>"
+
         return "\n".join(
             [
                 "## SYSTEM",
@@ -114,6 +117,8 @@ class PromptBuilder:
                 "3. If information is missing or unclear, explicitly state the limitation.",
                 "4. Cite specific documentation sources when possible.",
                 "5. Use precise technical terminology from the context.",
+                "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
+                "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
                 "",
                 "## OUTPUT FORMAT",
                 output_format,
@@ -122,8 +127,22 @@ class PromptBuilder:
                 instructions,
                 "",
                 "## USER QUESTION AND CONTEXT",
-                f"Context:\n{context}\n\nQuestion: {question}",
+                f"Context:\n{tagged_context}\n\nQuestion: {question}",
                 "",
                 "## YOUR ANSWER",
             ]
         )
+
+    @staticmethod
+    def _compute_density_tag(text: str) -> str:
+        words = text.split()
+        word_count = len(words)
+        char_count = len(text)
+        alpha_count = sum(c.isalnum() for c in text)
+        alpha_ratio = alpha_count / char_count if char_count > 0 else 0.0
+
+        if word_count > 100 and alpha_ratio > 0.7:
+            return "HIGH"
+        if word_count > 30 and alpha_ratio > 0.5:
+            return "MEDIUM"
+        return "LOW"

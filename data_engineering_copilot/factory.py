@@ -12,7 +12,7 @@ from data_engineering_copilot.infrastructure.async_openai_compatible_client impo
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
-from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB, PostgresCrawlFrontierDB
+from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
@@ -24,6 +24,7 @@ from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.services.text_filter import ChunkFilter
 
 logger = StructuredLogger(__name__)
 
@@ -248,23 +249,18 @@ def _validate_qdrant(qdrant_url: str) -> None:
 
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
     db_url = app_settings.crawl_db_url
-    if db_url:
-        logger.info(
-            "building_async_crawler",
-            db_url=db_url,
-            concurrency=app_settings.crawl_async_concurrency,
-            max_concurrency=app_settings.crawl_async_max_concurrency,
+    if not db_url:
+        raise ValueError(
+            "CRAWL_DB_URL is required. Set it to a PostgreSQL connection string "
+            "(e.g. postgresql://user:pass@host:5432/crawl_frontier)."
         )
-        frontier = PostgresCrawlFrontierDB(db_url)
-    else:
-        logger.info(
-            "building_async_crawler",
-            db=str(app_settings.crawl_db_path),
-            concurrency=app_settings.crawl_async_concurrency,
-            max_concurrency=app_settings.crawl_async_max_concurrency,
-        )
-        db_path = str(app_settings.crawl_db_path)
-        frontier = CrawlFrontierDB(db_path)
+    logger.info(
+        "building_async_crawler",
+        db_url=db_url,
+        concurrency=app_settings.crawl_async_concurrency,
+        max_concurrency=app_settings.crawl_async_max_concurrency,
+    )
+    frontier = PostgresCrawlFrontierDB(db_url)
     cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
     cache = CrawlCache(cache_url)
     _validate_redis(app_settings.redis_url, "CrawlCache")
@@ -327,6 +323,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         contextual_enricher=contextual_enricher,
         api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
         code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
+        chunk_filter=ChunkFilter(enabled=getattr(app_settings, "chunk_filtering_enabled", True)),
     )
 
 

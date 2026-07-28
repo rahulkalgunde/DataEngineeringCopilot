@@ -1,4 +1,4 @@
-"""Tests for ContextualChunkEnricher (contextual_chunk_enricher.py:43)."""
+"""Tests for ContextualChunkEnricher (contextual_chunk_enricher.py)."""
 
 from __future__ import annotations
 
@@ -17,12 +17,17 @@ def _chunk(cid="c1", text="test text", source="s", title="t", url="http://x") ->
     return DocumentChunk(chunk_id=cid, source_name=source, title=title, url=url, text=text)
 
 
-def _doc(source="s", title="t", text="doc text") -> ParsedDocument:
-    return ParsedDocument(source_name=source, title=title, url="http://x", text=text)
+def _doc(
+    source="s",
+    title="t",
+    text="this is a sufficiently long document text that has many many words so it passes the minimum word count threshold of forty words and here are some more filler words to be absolutely sure because we want the enrichment to trigger in all the test cases that need it and this should now be enough words",
+    url="http://x",
+) -> ParsedDocument:
+    return ParsedDocument(source_name=source, title=title, url=url, text=text)
 
 
 class TestLLMContextSummarizer:
-    """LLMContextSummarizer (line 22)."""
+    """LLMContextSummarizer."""
 
     async def test_summarize_success(self):
         llm = AsyncMock()
@@ -31,17 +36,31 @@ class TestLLMContextSummarizer:
         result = await summarizer.summarize(_doc())
         assert result == "This is a short summary."
 
-    async def test_summarize_truncates_long_result(self):
+    async def test_summarize_collapses_multiline(self):
         llm = AsyncMock()
-        llm.generate.return_value = "line1\nline2\nline3"
+        llm.generate.return_value = "line1\n\nline2\nline3"
         summarizer = LLMContextSummarizer(llm_client=llm)
         result = await summarizer.summarize(_doc())
-        assert result == "line1"
+        assert result == "line1 line2 line3"
         assert "\n" not in result
 
     async def test_summarize_error_returns_empty(self):
         llm = AsyncMock()
         llm.generate.side_effect = RuntimeError("LLM down")
+        summarizer = LLMContextSummarizer(llm_client=llm)
+        result = await summarizer.summarize(_doc())
+        assert result == ""
+
+    async def test_summarize_no_preamble_stripped(self):
+        llm = AsyncMock()
+        llm.generate.return_value = "Here is a summary: This page covers Apache Spark."
+        summarizer = LLMContextSummarizer(llm_client=llm)
+        result = await summarizer.summarize(_doc())
+        assert result == "This page covers Apache Spark."
+
+    async def test_summarize_no_content_sentinel_returns_empty(self):
+        llm = AsyncMock()
+        llm.generate.return_value = "NO_CONTENT_TO_SUMMARIZE"
         summarizer = LLMContextSummarizer(llm_client=llm)
         result = await summarizer.summarize(_doc())
         assert result == ""
@@ -55,19 +74,19 @@ class TestLLMContextSummarizer:
         assert "Test Title" in prompt
         assert "Content here" in prompt
 
-    async def test_summarize_text_truncated_to_2000_chars(self):
+    async def test_summarize_text_truncated_to_3000_chars(self):
         llm = AsyncMock()
         llm.generate.return_value = "summary"
         summarizer = LLMContextSummarizer(llm_client=llm)
         long_text = "A" * 5000
         await summarizer.summarize(_doc(text=long_text))
         prompt = llm.generate.call_args[0][0]
-        assert "A" * 2000 in prompt
-        assert "A" * 2001 not in prompt
+        assert "A" * 3000 in prompt
+        assert "A" * 3001 not in prompt
 
 
 class TestContextualChunkEnricher:
-    """ContextualChunkEnricher (line 43)."""
+    """ContextualChunkEnricher."""
 
     @pytest.fixture
     def summarizer(self):
@@ -99,7 +118,7 @@ class TestContextualChunkEnricher:
         chunks = [_chunk("c1", "original text")]
         result = await enricher.enrich(_doc(), chunks)
         assert len(result) == 1
-        assert "[Context: Document summary here.]" in result[0].text
+        assert "[Document Context: Document summary here.]" in result[0].text
         assert "original text" in result[0].text
 
     async def test_enrich_multiple_chunks(self, summarizer):
@@ -107,7 +126,7 @@ class TestContextualChunkEnricher:
         chunks = [_chunk("c1", "text1"), _chunk("c2", "text2")]
         result = await enricher.enrich(_doc(), chunks)
         assert len(result) == 2
-        assert all("[Context: Document summary here.]" in c.text for c in result)
+        assert all("[Document Context: Document summary here.]" in c.text for c in result)
 
     async def test_enrich_preserves_chunk_fields(self, summarizer):
         enricher = ContextualChunkEnricher(enabled=True, summarizer=summarizer)
@@ -117,23 +136,18 @@ class TestContextualChunkEnricher:
         assert result[0].source_name == "src"
         assert result[0].title == "ttl"
 
-    async def test_enrich_chunks_batch_level(self, summarizer):
-        enricher = ContextualChunkEnricher(enabled=True, summarizer=summarizer, batch_size=10)
-        chunks = [_chunk("c1", "text", source="s1"), _chunk("c2", "text2", source="s1")]
-        result = await enricher.enrich_chunks(chunks)
-        assert len(result) == 2
-        assert "[Context:" in result[0].text
-
-    async def test_enrich_chunks_disabled(self):
-        enricher = ContextualChunkEnricher(enabled=False)
-        chunks = [_chunk("c1", "text")]
-        result = await enricher.enrich_chunks(chunks)
+    async def test_enrich_short_document_skip(self, summarizer):
+        enricher = ContextualChunkEnricher(enabled=True, summarizer=summarizer)
+        chunks = [_chunk("c1", "some text")]
+        doc = _doc(text="short")  # 1 word, below 40-word threshold
+        result = await enricher.enrich(doc, chunks)
         assert result == chunks
+        summarizer.summarize.assert_not_called()
 
-    async def test_enrich_chunks_batch_error_handling(self, summarizer):
-        summarizer.summarize.side_effect = [RuntimeError("fail"), "summary"]
-        enricher = ContextualChunkEnricher(enabled=True, summarizer=summarizer, batch_size=10)
-        chunks = [_chunk("c1", "text", source="s1"), _chunk("c2", "text2", source="s2")]
-        result = await enricher.enrich_chunks(chunks)
-        assert len(result) == 1
-        assert "[Context: summary]" in result[0].text
+    async def test_enrich_blacklisted_url_skip(self, summarizer):
+        enricher = ContextualChunkEnricher(enabled=True, summarizer=summarizer)
+        chunks = [_chunk("c1", "some text")]
+        doc = _doc(text="word " * 50, url="http://example.com/index-all.html")
+        result = await enricher.enrich(doc, chunks)
+        assert result == chunks
+        summarizer.summarize.assert_not_called()

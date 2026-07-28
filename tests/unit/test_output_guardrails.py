@@ -27,9 +27,9 @@ class TestGuardrailedAnswerModel:
         assert ans.citations == []
         assert ans.confidence == 0.0
 
-    def test_rejects_empty_answer(self):
-        with pytest.raises(ValidationError):
-            GuardrailedAnswer(answer="")
+    def test_accepts_empty_answer(self):
+        ans = GuardrailedAnswer(answer="")
+        assert ans.answer == ""
 
     def test_rejects_too_long_answer(self):
         with pytest.raises(ValidationError):
@@ -85,9 +85,12 @@ class TestVerify:
     def test_invalid_json_returns_none(self):
         assert OutputGuardrails.verify("not json at all", source_count=1) is None
 
-    def test_missing_answer_field_returns_none(self):
+    def test_missing_answer_field_uses_default(self):
         raw = json.dumps({"citations": [], "confidence": 0.5})
-        assert OutputGuardrails.verify(raw, source_count=1) is None
+        result = OutputGuardrails.verify(raw, source_count=1)
+        assert result is not None
+        assert result.answer == ""
+        assert result.status == "SUCCESS"
 
     def test_wrong_answer_type_returns_none(self):
         raw = json.dumps({"answer": 123, "citations": [], "confidence": 0.5})
