@@ -65,7 +65,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Test isolation**: `unique_collection_name()` creates per-test Qdrant collections; teardown deletes them.
 
 ## Docker Services
-`redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `backend-api`, `celery_worker`
+`redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `postgres` (app crawl frontier), `backend-api`, `celery_worker`
 - Commands: `make docker-up/down/status/rebuild/logs/health/setup/cleanup/stop-all`
 - `make docker-setup` = `docker-up` + pulls `nomic-embed-text` + `llama3.2:3b` into Ollama.
 - CI stack: `make docker-ci-up` (uses `docker-compose.ci.yml`, prefix `dec_ci_*`).
@@ -80,7 +80,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Chunking** (`settings.chunking_strategy`): `"sentence_preserving"` (default, 1875-char chunks), `"semantic"`, `"header_aware"`, `"fixed_size"`.
 - **Hybrid Search**: Enabled by default (dense + sparse). Configured via `hybrid_search_enabled`, `hybrid_rrf_k=60`.
 - **RAG Pipeline**: Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic) with NumPy SIMD scoring.
-- **Crawl Database**: SQLite at `data/crawl_frontier.db` via `CrawlFrontierDB`.
+- **Crawl Database**: SQLite at `data/crawl_frontier.db` via `CrawlFrontierDB` or PostgreSQL via `PostgresCrawlFrontierDB` (set `CRAWL_DB_URL`).
 - **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` via `sentence-transformers`. Downloaded at runtime (~450MB). Singleton-cached in `reranker.py`.
 - **Output parsing**: `parse_rag_response()` + `verify_citations()` in `services/structured_output.py`.
 
@@ -98,7 +98,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **URL Dedup**: SHA-256 via `AsyncUrlRegistry` in Redis.
 - **Ingestion Lock**: Atomic SETNX on `ingestion:dispatch_lock` (60s TTL). Released before flush to prevent unbounded chunk accumulation.
 - **Streamlit**: UI uses SSE to poll `/api/v1/ingest/status/{task_id}`.
-- **reset-index behavior**: Deletes Qdrant collection, recreates it with correct dim (provider-dependent), deletes all Redis `crawl:*` keys, and removes `crawl_frontier.db`.
+- **reset-index behavior**: Deletes Qdrant collection, recreates it with correct dim (provider-dependent), deletes all Redis `crawl:*` keys, and drops crawl frontier tables (SQLite file or PostgreSQL DB).
 
 ## Plan Mode Discipline
 - **No edits in plan mode**: When the system says "Plan mode ACTIVE — READ-ONLY", do not modify files. Only present the plan. Wait for explicit transition to build mode.

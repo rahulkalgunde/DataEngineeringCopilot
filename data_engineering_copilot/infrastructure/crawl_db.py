@@ -6,6 +6,7 @@ import time
 from enum import StrEnum
 
 import aiosqlite
+import asyncpg
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,34 @@ CREATE TABLE IF NOT EXISTS crawl_frontier (
     last_error    TEXT,
     created_at    REAL NOT NULL,
     updated_at    REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_frontier_state
+    ON crawl_frontier(source_name, state, depth, created_at);
+
+CREATE TABLE IF NOT EXISTS sitemap_edges (
+    parent_hash TEXT NOT NULL,
+    child_hash  TEXT NOT NULL,
+    PRIMARY KEY (parent_hash, child_hash),
+    FOREIGN KEY (parent_hash) REFERENCES crawl_frontier(url_hash),
+    FOREIGN KEY (child_hash)  REFERENCES crawl_frontier(url_hash)
+);
+"""
+
+PG_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS crawl_frontier (
+    url_hash      TEXT PRIMARY KEY,
+    url           TEXT NOT NULL,
+    source_name   TEXT NOT NULL,
+    state         TEXT NOT NULL DEFAULT 'DISCOVERED',
+    parent_hash   TEXT,
+    depth         INTEGER NOT NULL DEFAULT 0,
+    etag          TEXT,
+    last_modified TEXT,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    created_at    DOUBLE PRECISION NOT NULL,
+    updated_at    DOUBLE PRECISION NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_frontier_state
@@ -79,13 +108,6 @@ class CrawlFrontierDB:
         parent_hash: str | None,
         depth: int,
     ) -> str | None:
-        """Insert a URL as DISCOVERED if not already present.
-
-        If the URL already exists and is in PROCESSED or FAILED state,
-        reset it to DISCOVERED so it gets re-crawled.
-
-        Returns the url_hash if newly inserted or reset, None if already DISCOVERED/FETCHING.
-        """
         assert self._db is not None
         url_hash = self.hash_url(url)
         now = time.time()
@@ -124,7 +146,6 @@ class CrawlFrontierDB:
         return url_hash
 
     async def claim(self, url_hash: str) -> CrawlRecord | None:
-        """Atomically set state → FETCHING. Returns None if not DISCOVERED."""
         assert self._db is not None
         now = time.time()
         cursor = await self._db.execute(
@@ -176,7 +197,6 @@ class CrawlFrontierDB:
         return _row_to_record(row)
 
     async def reset_stranded(self) -> int:
-        """Reset FETCHING → DISCOVERED on boot. Returns count of reset records."""
         assert self._db is not None
         cursor = await self._db.execute(
             "UPDATE crawl_frontier SET state = ? WHERE state = ?",
@@ -213,6 +233,207 @@ class CrawlFrontierDB:
             cursor = await self._db.execute("SELECT state, COUNT(*) as cnt FROM crawl_frontier GROUP BY state")
         rows = await cursor.fetchall()
         return {row["state"]: row["cnt"] for row in rows}
+
+
+class PostgresCrawlFrontierDB:
+    """Async PostgreSQL manager for the crawl frontier and sitemap edges."""
+
+    def __init__(self, dsn: str, pool_min_size: int = 2, pool_max_size: int = 10) -> None:
+        self._dsn = dsn
+        self._pool_min_size = pool_min_size
+        self._pool_max_size = pool_max_size
+        self._pool: asyncpg.Pool | None = None
+
+    @property
+    def _db(self) -> asyncpg.Pool | None:
+        return self._pool
+
+    async def initialize(self) -> None:
+        self._pool = await asyncpg.create_pool(
+            self._dsn,
+            min_size=self._pool_min_size,
+            max_size=self._pool_max_size,
+        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(PG_SCHEMA_SQL)
+        reset_count = await self.reset_stranded()
+        if reset_count:
+            log.warning("crawler.crash_recovery_reset count=%d", reset_count)
+        log.info("crawler.frontier_initialized PostgreSQL dsn=%s", self._dsn)
+
+    async def close(self) -> None:
+        if self._pool:
+            await self._pool.close()
+            self._pool = None
+
+    @staticmethod
+    def hash_url(url: str) -> str:
+        return hashlib.sha256(url.encode()).hexdigest()
+
+    async def discover(
+        self,
+        url: str,
+        source_name: str,
+        parent_hash: str | None,
+        depth: int,
+    ) -> str | None:
+        assert self._pool is not None
+        url_hash = self.hash_url(url)
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            result = await conn.fetchrow(
+                """INSERT INTO crawl_frontier
+                   (url_hash, url, source_name, state, parent_hash, depth, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT(url_hash) DO NOTHING
+                   RETURNING url_hash""",
+                url_hash,
+                url,
+                source_name,
+                CrawlState.DISCOVERED.value,
+                parent_hash,
+                depth,
+                now,
+                now,
+            )
+            if result:
+                if parent_hash is not None:
+                    await conn.execute(
+                        "INSERT INTO sitemap_edges (parent_hash, child_hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        parent_hash,
+                        url_hash,
+                    )
+                return url_hash
+            row = await conn.fetchrow(
+                "SELECT state FROM crawl_frontier WHERE url_hash = $1",
+                url_hash,
+            )
+            if row and row["state"] in (CrawlState.PROCESSED.value, CrawlState.FAILED.value):
+                await conn.execute(
+                    "UPDATE crawl_frontier SET state = $1, parent_hash = $2, depth = $3, updated_at = $4 WHERE url_hash = $5",
+                    CrawlState.DISCOVERED.value,
+                    parent_hash,
+                    depth,
+                    now,
+                    url_hash,
+                )
+                if parent_hash is not None:
+                    await conn.execute(
+                        "INSERT INTO sitemap_edges (parent_hash, child_hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        parent_hash,
+                        url_hash,
+                    )
+                return url_hash
+            return None
+
+    async def claim(self, url_hash: str) -> CrawlRecord | None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            row = await conn.fetchrow(
+                "UPDATE crawl_frontier SET state = $1, updated_at = $2, attempts = attempts + 1 "
+                "WHERE url_hash = $3 AND state = $4 RETURNING *",
+                CrawlState.FETCHING.value,
+                now,
+                url_hash,
+                CrawlState.DISCOVERED.value,
+            )
+            if row is None:
+                return None
+            return _pg_row_to_record(row)
+
+    async def mark_processed(self, url_hash: str) -> None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
+                CrawlState.PROCESSED.value,
+                now,
+                url_hash,
+            )
+
+    async def mark_failed(self, url_hash: str, error: str) -> None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, last_error = $2, updated_at = $3 WHERE url_hash = $4",
+                CrawlState.FAILED.value,
+                error,
+                now,
+                url_hash,
+            )
+
+    async def get_pending(self, source_name: str, limit: int = 50) -> list[CrawlRecord]:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM crawl_frontier WHERE source_name = $1 AND state = $2 ORDER BY depth ASC, created_at ASC LIMIT $3",
+                source_name,
+                CrawlState.DISCOVERED.value,
+                limit,
+            )
+            return [_pg_row_to_record(row) for row in rows]
+
+    async def get_record(self, url_hash: str) -> CrawlRecord | None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM crawl_frontier WHERE url_hash = $1",
+                url_hash,
+            )
+            if row is None:
+                return None
+            return _pg_row_to_record(row)
+
+    async def reset_stranded(self) -> int:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE crawl_frontier SET state = $1 WHERE state = $2",
+                CrawlState.DISCOVERED.value,
+                CrawlState.FETCHING.value,
+            )
+            return int(result.split()[1]) if result and result.startswith("UPDATE") else 0
+
+    async def add_edge(self, parent_hash: str, child_hash: str) -> None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO sitemap_edges (parent_hash, child_hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                parent_hash,
+                child_hash,
+            )
+
+    async def get_edges(self, parent_hash: str) -> list[str]:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT child_hash FROM sitemap_edges WHERE parent_hash = $1",
+                parent_hash,
+            )
+            return [row["child_hash"] for row in rows]
+
+    async def stats(self, source_name: str | None = None) -> dict[str, int]:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            if source_name:
+                rows = await conn.fetch(
+                    "SELECT state, COUNT(*)::int as cnt FROM crawl_frontier WHERE source_name = $1 GROUP BY state",
+                    source_name,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT state, COUNT(*)::int as cnt FROM crawl_frontier GROUP BY state",
+                )
+            return {row["state"]: row["cnt"] for row in rows}
+
+    async def drop_all(self) -> None:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            await conn.execute("DROP TABLE IF EXISTS sitemap_edges CASCADE")
+            await conn.execute("DROP TABLE IF EXISTS crawl_frontier CASCADE")
 
 
 class CrawlRecord:
@@ -263,6 +484,23 @@ class CrawlRecord:
 
 
 def _row_to_record(row: aiosqlite.Row) -> CrawlRecord:
+    return CrawlRecord(
+        url_hash=row["url_hash"],
+        url=row["url"],
+        source_name=row["source_name"],
+        state=row["state"],
+        parent_hash=row["parent_hash"],
+        depth=row["depth"],
+        etag=row["etag"],
+        last_modified=row["last_modified"],
+        attempts=row["attempts"],
+        last_error=row["last_error"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _pg_row_to_record(row: asyncpg.Record) -> CrawlRecord:
     return CrawlRecord(
         url_hash=row["url_hash"],
         url=row["url"],

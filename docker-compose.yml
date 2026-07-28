@@ -167,6 +167,27 @@ services:
       - de_copilot_net
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: de_copilot_postgres
+    environment:
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: local_secure_password_123
+      POSTGRES_DB: crawl_frontier
+    volumes:
+      - crawl_frontier_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - de_copilot_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot -d crawl_frontier"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     container_name: de_copilot_langfuse_worker
@@ -235,6 +256,7 @@ services:
       - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
+      - CRAWL_DB_URL=postgresql://copilot:local_secure_password_123@postgres:5432/crawl_frontier
       - LOG_LEVEL=INFO
       - LANGFUSE_HOST=http://langfuse:3000
     networks:
@@ -274,6 +296,7 @@ services:
       - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
+      - CRAWL_DB_URL=postgresql://copilot:local_secure_password_123@postgres:5432/crawl_frontier
       - LOG_LEVEL=INFO
       - LANGFUSE_HOST=http://langfuse:3000
     networks:
@@ -291,3 +314,4 @@ volumes:
   minio_data:
   langfuse_pg_data:
   ollama_data:
+  crawl_frontier_pg_data:
