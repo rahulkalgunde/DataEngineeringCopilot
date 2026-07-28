@@ -645,13 +645,15 @@ def render_qa_tab() -> None:
 
     # Pre-flight: check services before showing the input
     qdrant_ok, qdrant_msg = _check_qdrant_reachable()
-    ollama_ok, ollama_msg = _check_ollama_reachable()
+    llm_ok, llm_msg = True, ""
+    if settings.llm_provider.lower() == "ollama" or settings.embedding_provider.lower() == "ollama":
+        llm_ok, llm_msg = _check_ollama_reachable()
 
-    if not qdrant_ok or not ollama_ok:
+    if not qdrant_ok or not llm_ok:
         if not qdrant_ok:
             st.error(f"**Qdrant unavailable**\n\n{qdrant_msg}")
-        if not ollama_ok:
-            st.error(f"**Ollama unavailable**\n\n{ollama_msg}")
+        if not llm_ok:
+            st.error(f"**LLM provider unavailable**\n\n{llm_msg}")
         st.info("Fix the issues above and refresh the page to use Q&A.")
         return
 
@@ -670,7 +672,7 @@ def render_qa_tab() -> None:
             if service is None:
                 st.error(
                     "Could not connect to the RAG service.\n\n"
-                    "**Check that Qdrant and Ollama are running.**\n"
+                    "**Check that Qdrant and the LLM provider are reachable.**\n"
                     "See the **System Health** tab for details."
                 )
                 return
@@ -694,7 +696,7 @@ def render_qa_tab() -> None:
                 st.error(
                     f"**Failed to get answer:** {exc}\n\n"
                     "**Possible causes:**\n"
-                    "- Ollama may have timed out or the model is still loading\n"
+                    "- LLM provider may have timed out or hit rate limits\n"
                     "- Qdrant may have lost connectivity\n\n"
                     "Check the **System Health** tab and try again."
                 )

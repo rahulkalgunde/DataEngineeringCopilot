@@ -159,6 +159,24 @@ services:
     networks:
       - de_copilot_net
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: de_copilot_postgres
+    environment:
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: local_secure_password_123
+      POSTGRES_DB: crawl_frontier
+    ports:
+      - "5433:5432"
+    networks:
+      - de_copilot_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot -d crawl_frontier"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     container_name: de_copilot_langfuse_worker

@@ -172,6 +172,7 @@ class AppSettings(BaseSettings):
     store_concurrency: int = 2
     # Async crawler settings
     crawl_db_path: Path = PROJECT_ROOT / "data" / "crawl_frontier.db"
+    crawl_db_url: str = ""
     crawl_async_concurrency: int = 20
     crawl_async_max_concurrency: int = 40
     crawl_async_per_domain_concurrency: int = 3

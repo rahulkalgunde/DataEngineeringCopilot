@@ -12,7 +12,7 @@ from data_engineering_copilot.infrastructure.async_openai_compatible_client impo
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
-from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
+from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB, PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
@@ -247,14 +247,24 @@ def _validate_qdrant(qdrant_url: str) -> None:
 
 
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
-    logger.info(
-        "building_async_crawler",
-        db=str(app_settings.crawl_db_path),
-        concurrency=app_settings.crawl_async_concurrency,
-        max_concurrency=app_settings.crawl_async_max_concurrency,
-    )
-    db_path = str(app_settings.crawl_db_path)
-    frontier = CrawlFrontierDB(db_path)
+    db_url = app_settings.crawl_db_url
+    if db_url:
+        logger.info(
+            "building_async_crawler",
+            db_url=db_url,
+            concurrency=app_settings.crawl_async_concurrency,
+            max_concurrency=app_settings.crawl_async_max_concurrency,
+        )
+        frontier = PostgresCrawlFrontierDB(db_url)
+    else:
+        logger.info(
+            "building_async_crawler",
+            db=str(app_settings.crawl_db_path),
+            concurrency=app_settings.crawl_async_concurrency,
+            max_concurrency=app_settings.crawl_async_max_concurrency,
+        )
+        db_path = str(app_settings.crawl_db_path)
+        frontier = CrawlFrontierDB(db_path)
     cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
     cache = CrawlCache(cache_url)
     _validate_redis(app_settings.redis_url, "CrawlCache")

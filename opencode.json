@@ -1,8 +1,26 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": {
-    "bash": {
+"read": {
       "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.pem": "deny",
+      "*.key": "deny"
+    },
+    "edit": "allow",    
+    "bash": {
+      "*": "ask",
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "docker build *": "deny",
+      "docker push *": "ask",
+      "git commit *": "ask",
+      "git push *": "ask",
+      "git reset --hard *": "deny",
+      "git clean *": "deny",
+      "sudo *": "deny",
       "docker volume rm *": "deny",
       "docker volume prune *": "deny",
       "docker compose down -v*": "deny",
