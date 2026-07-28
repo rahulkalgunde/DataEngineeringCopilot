@@ -1,39 +1,51 @@
+"""Tests for PostgresCrawlFrontierDB.
+
+These tests require a running PostgreSQL instance (Docker).
+They are marked as integration tests and will be skipped in unit test runs
+when the database is unreachable.
+"""
+
 from __future__ import annotations
 
 import os
-import tempfile
 
 import pytest
 import pytest_asyncio
 
 from data_engineering_copilot.infrastructure.crawl_db import (
-    CrawlFrontierDB,
+    PostgresCrawlFrontierDB,
 )
 
 
 @pytest.fixture
-def db_path():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    yield path
-    os.unlink(path)
+def pg_dsn():
+    dsn = os.environ.get(
+        "CRAWL_DB_URL",
+        "postgresql://copilot:local_secure_password_123@localhost:5433/crawl_frontier",
+    )
+    return dsn
 
 
 @pytest_asyncio.fixture
-async def frontier(db_path):
-    f = CrawlFrontierDB(db_path)
-    await f.initialize()
+async def frontier(pg_dsn):
+    f = PostgresCrawlFrontierDB(pg_dsn)
+    try:
+        await f.initialize()
+    except Exception:
+        pytest.skip("PostgreSQL unreachable")
     yield f
+    await f.drop_all()
     await f.close()
 
 
 @pytest.mark.asyncio
 async def test_initialize_creates_tables(frontier):
-    assert frontier._db is not None
-    cursor = await frontier._db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row["name"] for row in await cursor.fetchall()}
-    assert "crawl_frontier" in tables
-    assert "sitemap_edges" in tables
+    assert frontier._pool is not None
+    async with frontier._pool.acquire() as conn:
+        tables = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        table_names = {row["tablename"] for row in tables}
+        assert "crawl_frontier" in table_names
+        assert "sitemap_edges" in table_names
 
 
 @pytest.mark.asyncio
@@ -60,6 +72,37 @@ async def test_discover_duplicate_returns_none(frontier):
     h2 = await frontier.discover("https://example.com", "test", None, 0)
     assert h1 is not None
     assert h2 is None
+
+
+@pytest.mark.asyncio
+async def test_discover_processed_not_rediscovered(frontier):
+    """Bug fix: PROCESSED pages must NOT be re-discovered by discover()."""
+    h1 = await frontier.discover("https://example.com", "test", None, 0)
+    await frontier.claim(h1)
+    await frontier.mark_processed(h1)
+
+    # Attempt to re-discover the same URL from a different parent
+    h2 = await frontier.discover("https://example.com", "test", h1, 1)
+    assert h2 is None
+
+    # Verify the page stayed PROCESSED (not reset to DISCOVERED)
+    record = await frontier.get_record(h1)
+    assert record.state == "PROCESSED"
+
+
+@pytest.mark.asyncio
+async def test_discover_failed_can_be_rediscovered(frontier):
+    """FAILED pages CAN be re-discovered (retry transient failures)."""
+    h1 = await frontier.discover("https://example.com", "test", None, 0)
+    await frontier.claim(h1)
+    await frontier.mark_failed(h1, "HTTP 500")
+
+    # Re-discover should work for FAILED pages
+    h2 = await frontier.discover("https://example.com", "test", h1, 1)
+    assert h2 is not None
+
+    record = await frontier.get_record(h1)
+    assert record.state == "DISCOVERED"
 
 
 @pytest.mark.asyncio
@@ -147,3 +190,76 @@ async def test_stats(frontier):
     assert stats.get("PROCESSED") == 1
     stats_src1 = await frontier.stats("src1")
     assert stats_src1.get("DISCOVERED") == 2
+
+
+@pytest.mark.asyncio
+async def test_rediscover_children(frontier):
+    """Test that rediscover_children sets PROCESSED children back to DISCOVERED."""
+    h_parent = await frontier.discover("https://parent.com", "test", None, 0)
+    h_child1 = await frontier.discover("https://child1.com", "test", h_parent, 1)
+    h_child2 = await frontier.discover("https://child2.com", "test", h_parent, 1)
+
+    await frontier.claim(h_child1)
+    await frontier.mark_processed(h_child1)
+    await frontier.claim(h_child2)
+    await frontier.mark_processed(h_child2)
+
+    r1 = await frontier.get_record(h_child1)
+    r2 = await frontier.get_record(h_child2)
+    assert r1.state == "PROCESSED"
+    assert r2.state == "PROCESSED"
+
+    rediscovered = await frontier.rediscover_children(h_parent, "test", 2)
+    assert rediscovered == 2
+
+    r1 = await frontier.get_record(h_child1)
+    r2 = await frontier.get_record(h_child2)
+    assert r1.state == "DISCOVERED"
+    assert r1.depth == 2
+    assert r2.state == "DISCOVERED"
+    assert r2.depth == 2
+
+
+@pytest.mark.asyncio
+async def test_rediscover_children_skips_discovered(frontier):
+    """Test that rediscover_children doesn't change children already in DISCOVERED state."""
+    h_parent = await frontier.discover("https://parent.com", "test", None, 0)
+    h_child = await frontier.discover("https://child.com", "test", h_parent, 1)
+
+    r = await frontier.get_record(h_child)
+    assert r.state == "DISCOVERED"
+
+    rediscovered = await frontier.rediscover_children(h_parent, "test", 2)
+    assert rediscovered == 0
+
+    r = await frontier.get_record(h_child)
+    assert r.state == "DISCOVERED"
+    assert r.depth == 1
+
+
+@pytest.mark.asyncio
+async def test_rediscover_children_no_edges(frontier):
+    """Test that rediscover_children returns 0 when parent has no edges."""
+    h_parent = await frontier.discover("https://parent.com", "test", None, 0)
+    rediscovered = await frontier.rediscover_children(h_parent, "test", 2)
+    assert rediscovered == 0
+
+
+@pytest.mark.asyncio
+async def test_rediscover_children_includes_failed(frontier):
+    """Test that rediscover_children also re-discovers FAILED children."""
+    h_parent = await frontier.discover("https://parent.com", "test", None, 0)
+    h_child = await frontier.discover("https://child.com", "test", h_parent, 1)
+
+    await frontier.claim(h_child)
+    await frontier.mark_failed(h_child, "HTTP 500")
+
+    r = await frontier.get_record(h_child)
+    assert r.state == "FAILED"
+
+    rediscovered = await frontier.rediscover_children(h_parent, "test", 2)
+    assert rediscovered == 1
+
+    r = await frontier.get_record(h_child)
+    assert r.state == "DISCOVERED"
+    assert r.depth == 2

@@ -192,12 +192,8 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def integration_settings():
     """AppSettings tuned for integration testing."""
-    import tempfile
 
     from data_engineering_copilot.config.settings import AppSettings
-
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        temp_db_path = f.name
 
     return AppSettings(
         embedding_provider="ollama",
@@ -211,7 +207,6 @@ def integration_settings():
         chunk_size_words=200,
         chunk_overlap_words=40,
         ingestion_batch_chunk_size=64,
-        crawl_db_path=temp_db_path,
     )
 
 

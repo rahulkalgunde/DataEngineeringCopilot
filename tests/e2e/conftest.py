@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import tempfile
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
@@ -98,7 +97,7 @@ def e2e_redis_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Settings (Ollama provider, testcontainer URLs, temp SQLite)
+# Settings (Ollama provider, testcontainer URLs)
 # ---------------------------------------------------------------------------
 
 
@@ -110,9 +109,6 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
     from data_engineering_copilot.config.settings import AppSettings
 
     collection = f"e2e_test_{uuid.uuid4().hex[:8]}"
-
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        temp_db_path = f.name
 
     return AppSettings(
         qdrant_url=e2e_qdrant_url,
@@ -128,7 +124,6 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
         confidence_threshold=0.10,
         reranker_enabled=False,
         query_rewrite_enabled=False,
-        crawl_db_path=temp_db_path,
     )
 
 

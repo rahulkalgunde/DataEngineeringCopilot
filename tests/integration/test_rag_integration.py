@@ -22,12 +22,7 @@ from tests.integration.conftest import require_ollama
 
 @pytest.fixture(scope="module")
 def _settings():
-    import tempfile
-
     from data_engineering_copilot.config.settings import AppSettings
-
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        temp_db_path = f.name
 
     return AppSettings(
         embedding_provider="ollama",
@@ -38,7 +33,6 @@ def _settings():
         max_context_chars=2000,
         confidence_threshold=0.10,
         reranker_enabled=True,
-        crawl_db_path=temp_db_path,
     )
 
 
