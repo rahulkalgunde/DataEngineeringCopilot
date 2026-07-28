@@ -213,6 +213,8 @@ def health() -> None:
         print(f"  ℹ️  Configured: OpenAI ({settings.openai_embedding_model})")
     elif provider == "openrouter":
         print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_embedding_model})")
+    elif provider == "nvidia":
+        print(f"  ℹ️  Configured: NVIDIA NIM ({settings.nvidia_embedding_model})")
     else:
         print(f"  ⚠️  Unknown provider: {provider}")
         all_healthy = False
@@ -437,6 +439,8 @@ def config() -> None:
 
     if settings.embedding_provider == "openrouter":
         print(f"  Model: {settings.openrouter_embedding_model}")
+    elif settings.embedding_provider == "nvidia":
+        print(f"  Model: {settings.nvidia_embedding_model}")
     elif settings.embedding_provider == "openai":
         print(f"  Model: {settings.openai_embedding_model}")
 

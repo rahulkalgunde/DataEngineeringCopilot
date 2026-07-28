@@ -90,3 +90,8 @@
 
 ## Plan Mode Discipline
 - **No edits in plan mode**: When the system says "Plan mode ACTIVE — READ-ONLY", do not modify files. Only present the plan. Wait for explicit transition to build mode.
+
+## Session Persistence
+- **Save plan before presenting**: Before presenting any multi-step plan to the user, save it to `plans/` or `sessions/` with a timestamped filename.
+- **Save session state on completion**: After completing a significant unit of work, save a session summary to `sessions/SESSION_<topic>_<YYYY-MM-DD_HHmm>.md` describing what was done, what changed, and next steps.
+- **Save ingestion bottleneck analysis**: Named like `plans/ingestion_bottleneck_analysis.md` for log analysis findings.

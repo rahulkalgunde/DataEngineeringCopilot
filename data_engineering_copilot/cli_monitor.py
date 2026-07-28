@@ -65,9 +65,7 @@ def render_dashboard(
     pages = current.get("pages_fetched", 0)
     chunks = current.get("chunks_indexed", 0)
     skipped = current.get("pages_skipped", 0)
-    error_count = len(
-        [s for s in current.get("source_stats", {}).values() if s.get("errors", 0) > 0]
-    )
+    error_count = len([s for s in current.get("source_stats", {}).values() if s.get("errors", 0) > 0])
     current_url = current.get("current_url", "")
     error_msg = current.get("error")
 
