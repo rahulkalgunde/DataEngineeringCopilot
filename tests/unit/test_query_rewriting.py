@@ -32,6 +32,141 @@ class TestIntentClassification:
         assert result == "factual"
 
 
+class TestCodeIntentClassification:
+    """Tests for expanded code_example regex patterns."""
+
+    def test_give_me_code_to_read(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Give me code to read from delta lake table")
+        assert result == "code_example"
+
+    def test_write_code_for_spark(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Write code for Spark streaming job")
+        assert result == "code_example"
+
+    def test_show_me_code_to_implement(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Show me code to implement custom transformer")
+        assert result == "code_example"
+
+    def test_generate_sample_code(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Generate sample code for data pipeline")
+        assert result == "code_example"
+
+    def test_code_to_connect(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Code to connect to Kafka")
+        assert result == "code_example"
+
+    def test_code_for_etl(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Code for ETL process")
+        assert result == "code_example"
+
+    def test_write_a_script(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Write a script to clean data")
+        assert result == "code_example"
+
+    def test_how_to_write_code(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("How to write code for streaming")
+        assert result == "code_example"
+
+    def test_how_to_implement(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("How to implement window functions")
+        assert result == "code_example"
+
+    def test_provide_code_example(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Provide code example for joins")
+        assert result == "code_example"
+
+    def test_send_me_sample_code(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Send me sample code for aggregation")
+        assert result == "code_example"
+
+    def test_get_code_for(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Get code for reading parquet files")
+        assert result == "code_example"
+
+    def test_code_snippet(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Code snippet for DataFrame operations")
+        assert result == "code_example"
+
+    def test_code_sample(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("Code sample for Spark SQL queries")
+        assert result == "code_example"
+
+
+class TestHybridIntentClassification:
+    """Tests for LLM fallback in intent classification."""
+
+    def test_llm_fallback_disabled_by_default(self):
+        rw = QueryRewriter(llm_client=None, enabled=True, intent_llm_enabled=False)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "factual"
+
+    def test_llm_fallback_enabled_no_client(self):
+        rw = QueryRewriter(llm_client=None, enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "factual"
+
+    def test_llm_fallback_success(self):
+        class FakeLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return '{"intent": "code_example"}'
+
+        rw = QueryRewriter(llm_client=FakeLLM(), enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "code_example"
+
+    def test_llm_fallback_failure_returns_factual(self):
+        class FailingLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                raise RuntimeError("LLM unavailable")
+
+        rw = QueryRewriter(llm_client=FailingLLM(), enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "factual"
+
+    def test_llm_fallback_invalid_json_returns_factual(self):
+        class FakeLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "not valid json"
+
+        rw = QueryRewriter(llm_client=FakeLLM(), enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "factual"
+
+    def test_llm_fallback_invalid_intent_returns_factual(self):
+        class FakeLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return '{"intent": "unknown_intent"}'
+
+        rw = QueryRewriter(llm_client=FakeLLM(), enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me something to read")
+        assert result == "factual"
+
+    def test_regex_fast_path_takes_priority(self):
+        """Regex match should take priority over LLM fallback."""
+
+        class FakeLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return '{"intent": "factual"}'  # LLM would say factual
+
+        rw = QueryRewriter(llm_client=FakeLLM(), enabled=True, intent_llm_enabled=True)
+        result = rw.classify_intent("Give me code to read from delta lake")
+        assert result == "code_example"  # Regex wins
+
+
 class TestDecomposeQuery:
     def test_single_step_for_factual(self):
         rw = QueryRewriter(llm_client=None, enabled=True)
