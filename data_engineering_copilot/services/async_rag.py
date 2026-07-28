@@ -383,7 +383,11 @@ class AsyncRagService:
         return self.llm_client
 
     async def _validate_and_fix_code_syntax(self, answer_text: str, intent: str, llm_client: LLMClientProtocol) -> str:
-        """Validate Python code blocks in answer. Retry once if syntax fails."""
+        """Validate Python code blocks in answer. Retry once if syntax fails.
+
+        Only validates Python code blocks — other languages (Scala, SQL, etc.)
+        are returned as-is since we can't syntax-check them with ast.parse.
+        """
         if intent not in CODE_INTENTS:
             return answer_text
 

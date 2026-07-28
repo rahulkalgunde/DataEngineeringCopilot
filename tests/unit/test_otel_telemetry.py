@@ -121,7 +121,8 @@ class TestEnsureTracer:
 
     def test_opentelemetry_import_success(self):
         otel_telemetry._tracer = None
-        result = otel_telemetry._ensure_tracer()
+        with patch.object(otel_telemetry, "_endpoint_reachable", return_value=True):
+            result = otel_telemetry._ensure_tracer()
         assert result is not None
 
     def test_opentelemetry_exception_falls_through(self):

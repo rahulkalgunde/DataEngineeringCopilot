@@ -3,17 +3,33 @@
 Creates real OTel spans that appear in any OTLP-compatible backend
 (Grafana Tempo, Jaeger, SigNoz, Datadog, etc.).
 
-Falls back gracefully if ``opentelemetry`` is not installed.
+Falls back gracefully if ``opentelemetry`` is not installed or
+the OTLP collector is unreachable.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 _tracer: Any = None
+
+
+def _endpoint_reachable(endpoint: str, timeout: float = 2.0) -> bool:
+    """Quick TCP check to see if the OTLP gRPC endpoint is reachable."""
+    try:
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 4317
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, TimeoutError):
+        return False
 
 
 def _ensure_tracer() -> Any:
@@ -25,6 +41,11 @@ def _ensure_tracer() -> Any:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+        if not _endpoint_reachable(endpoint):
+            logger.info("OTLP endpoint %s unreachable, skipping OpenTelemetry tracer", endpoint)
+            return _tracer
 
         provider = TracerProvider()
         processor = BatchSpanProcessor(OTLPSpanExporter())
