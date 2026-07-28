@@ -189,6 +189,7 @@ class AppSettings(BaseSettings):
     # Query rewriting / grounding
     query_rewrite_enabled: bool = True
     groundedness_enabled: bool = True
+    intent_classification_llm_enabled: bool = False  # Enable LLM fallback for intent classification
     # Context management
     context_compression_enabled: bool = False
     max_context_tokens: int = 4096

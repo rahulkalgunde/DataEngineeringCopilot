@@ -383,6 +383,7 @@ def build_rag_service(
     query_rewriter = QueryRewriter(
         llm_client=llm_client,
         enabled=app_settings.query_rewrite_enabled,
+        intent_llm_enabled=app_settings.intent_classification_llm_enabled,
     )
     groundedness = GroundednessVerifier(
         llm_client=llm_client,

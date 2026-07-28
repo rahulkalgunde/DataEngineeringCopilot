@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -9,6 +10,18 @@ from dataclasses import dataclass
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
 
 logger = logging.getLogger(__name__)
+
+# Comprehensive pattern matching explicit code intent
+_CODE_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"(give|show|provide|send|write|generate|get)\s+(me\s+)?(a\s+)?\w*\s*(sample|example|snippet|code)"
+    r"|(give|show|provide|send|write|generate|get)\s+(me\s+)?(the\s+)?(sample\s+|example\s+)?code"
+    r"|how\s+to\s+(write|code|implement|build|script|program)"
+    r"|code\s+(to|for|example|snippet|sample)"
+    r"|write\s+(a\s+)?(script|function|program|query|pipeline)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
@@ -18,13 +31,7 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             re.IGNORECASE,
         ),
     ),
-    (
-        "code_example",
-        re.compile(
-            r"\b(example|snippet|code (for|sample)|sample (code|implementation)|how to (write|code|implement)|pyspark code|scala code)\b",
-            re.IGNORECASE,
-        ),
-    ),
+    ("code_example", _CODE_INTENT_PATTERN),
     ("comparative", re.compile(r"\b(compare|vs\.?|versus|difference between|pros and cons)\b", re.IGNORECASE)),
     (
         "debugging",
@@ -38,6 +45,20 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     ("factual", re.compile(r".*", re.DOTALL)),  # fallback
 ]
+
+# Pattern to detect code-related keywords in queries (for safety net)
+_CODE_KEYWORDS = re.compile(
+    r"\b(code|script|function|implement|snippet|sample|example|pyspark|scala|python)\b",
+    re.IGNORECASE,
+)
+
+_CLASSIFY_INTENT_PROMPT = (
+    'Classify the user query into exactly one category: "code_example" or "factual".\n'
+    '- Choose "code_example" if the user wants code snippets, programming examples, or scripts.\n'
+    '- Choose "factual" if the user wants conceptual explanations, documentation text, or theory.\n\n'
+    'Query: "{query}"\n'
+    'JSON Response: {{"intent": "code_example" | "factual"}}'
+)
 
 _REWRITE_PROMPT = (
     "You are a search query rewriter. Given a user question, produce a concise, "
@@ -60,9 +81,9 @@ class RewrittenQuery:
 
 
 class QueryRewriter:
-    """Lightweight rule-based query rewriter.
+    """Lightweight rule-based query rewriter with optional LLM fallback.
 
-    - Intent classification via regex (no LLM needed)
+    - Intent classification via regex (fast path) + optional LLM fallback
     - Multi-step decomposition via rule-based heuristics
     - Optional HyDE (hypothetical document embedding) via LLM client
     """
@@ -72,22 +93,71 @@ class QueryRewriter:
         llm_client: object | None,
         enabled: bool = True,
         hyde_enabled: bool = True,
+        intent_llm_enabled: bool = False,
     ) -> None:
         self._llm_client = llm_client
         self._enabled = enabled
         self._hyde_enabled = hyde_enabled
+        self._intent_llm_enabled = intent_llm_enabled
 
     def classify_intent(self, query: str) -> str:
-        """Classify query intent into factual / comparative / how_to / debugging."""
+        """Classify query intent into factual / comparative / how_to / debugging / code_example.
+
+        Uses regex fast-path first. If no match and intent_llm_enabled is True,
+        falls back to LLM classifier for ambiguous queries.
+        """
         if not self._enabled:
             return "factual"
 
+        # Fast path: regex classification
         for intent, pattern in _INTENT_PATTERNS:
             if intent == "factual":
                 continue  # checked last as fallback
             if pattern.search(query):
                 return intent
+
+        # Fallback: LLM classifier for ambiguous queries (if enabled)
+        if self._intent_llm_enabled and self._llm_client is not None:
+            llm_intent = self._classify_intent_with_llm(query)
+            if llm_intent is not None:
+                return llm_intent
+
         return "factual"
+
+    def _classify_intent_with_llm(self, query: str) -> str | None:
+        """Use LLM to classify intent for ambiguous queries.
+
+        Returns intent string or None on failure.
+        """
+        try:
+            import asyncio
+
+            prompt = _CLASSIFY_INTENT_PROMPT.format(query=query)
+
+            # Try async first if event loop is running
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    # Cannot use asyncio.run() in async context; skip LLM fallback
+                    logger.debug("LLM intent classification skipped: event loop already running")
+                    return None
+            except RuntimeError:
+                pass
+
+            result = asyncio.run(self._llm_client.generate(prompt))
+            if not result:
+                return None
+
+            # Parse JSON response
+            parsed = json.loads(result.strip())
+            intent = parsed.get("intent", "")
+            if intent in ("code_example", "factual"):
+                logger.info("LLM intent classification: %s (query=%r)", intent, query[:80])
+                return intent
+            return None
+        except Exception as exc:
+            logger.warning("LLM intent classification failed, falling back to regex: %s", exc)
+            return None
 
     def decompose(self, query: str, *, intent: str = "factual") -> tuple[str, ...]:
         """Break a query into sub-steps based on intent."""
@@ -157,6 +227,37 @@ class QueryRewriter:
         except Exception as exc:
             logger.warning("LLM rewrite failed, falling back to rule-based: %s", exc)
             return self.rewrite(query)
+
+    async def async_classify_intent(self, query: str) -> str:
+        """Async LLM-based intent classification with regex fast-path.
+
+        Uses LLM fallback if enabled and regex doesn't match.
+        """
+        if not self._enabled:
+            return "factual"
+
+        # Fast path: regex classification
+        for intent, pattern in _INTENT_PATTERNS:
+            if intent == "factual":
+                continue
+            if pattern.search(query):
+                return intent
+
+        # Fallback: async LLM classifier (if enabled)
+        if self._intent_llm_enabled and self._llm_client is not None:
+            try:
+                prompt = _CLASSIFY_INTENT_PROMPT.format(query=query)
+                result = await self._llm_client.generate(prompt)
+                if result:
+                    parsed = json.loads(result.strip())
+                    intent = parsed.get("intent", "")
+                    if intent in ("code_example", "factual"):
+                        logger.info("Async LLM intent classification: %s (query=%r)", intent, query[:80])
+                        return intent
+            except Exception as exc:
+                logger.warning("Async LLM intent classification failed: %s", exc)
+
+        return "factual"
 
     async def hyde(
         self,

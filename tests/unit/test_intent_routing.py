@@ -8,6 +8,7 @@ def _rewriter() -> QueryRewriter:
     rw._enabled = True
     rw._llm_client = None
     rw._hyde_enabled = False
+    rw._intent_llm_enabled = False
     return rw
 
 
