@@ -14,12 +14,12 @@ import pytest
 from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
-from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB, CrawlRecord
+from data_engineering_copilot.infrastructure.crawl_db import CrawlRecord, PostgresCrawlFrontierDB
 
 
 def _make_record(url: str = "https://example.com", state: str = "DISCOVERED") -> CrawlRecord:
     return CrawlRecord(
-        url_hash=CrawlFrontierDB.hash_url(url),
+        url_hash=PostgresCrawlFrontierDB.hash_url(url),
         url=url,
         source_name="test",
         state=state,
@@ -55,8 +55,8 @@ def _make_context_response(**attrs):
 
 @pytest.fixture
 def mock_frontier():
-    f = AsyncMock(spec=CrawlFrontierDB)
-    f.hash_url = CrawlFrontierDB.hash_url
+    f = AsyncMock(spec=PostgresCrawlFrontierDB)
+    f.hash_url = PostgresCrawlFrontierDB.hash_url
     return f
 
 

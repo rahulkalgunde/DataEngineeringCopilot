@@ -265,7 +265,6 @@ services:
 
   celery_worker:
     image: de_copilot_base_image:latest  # Reuses backend-api build instantly
-    container_name: de_copilot_worker
     command: celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import redis; r=redis.Redis.from_url('redis://:local_secure_password_123@redis:6379/0'); r.ping(); open('/proc/1/cmdline').read().find('celery') > -1 and exit(0) or exit(1)\""]

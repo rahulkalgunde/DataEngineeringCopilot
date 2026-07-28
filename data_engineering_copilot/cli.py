@@ -177,115 +177,6 @@ def reset_index() -> None:
             logger.info("Reset PostgreSQL crawl frontier database via %s", db_url)
 
         asyncio.run(_reset_pg())
-    db_path = settings.crawl_db_path
-    if db_path.exists():
-        db_path.unlink()
-        logger.info("Deleted crawl frontier database: %s", db_path)
-
-
-def migrate_crawl_db() -> None:
-    """Migrate crawl frontier from SQLite to PostgreSQL."""
-    sqlite_path = settings.crawl_db_path
-    pg_url = settings.crawl_db_url
-
-    if not pg_url:
-        print("ERROR: CRAWL_DB_URL is not set. Set it to a PostgreSQL connection string.")
-        raise SystemExit(1)
-    if not sqlite_path.exists():
-        print(f"ERROR: SQLite database not found at {sqlite_path}")
-        raise SystemExit(1)
-
-    async def _migrate():
-        import aiosqlite
-        import asyncpg
-
-        # Read from SQLite
-        sq_db = await aiosqlite.connect(str(sqlite_path))
-        sq_db.row_factory = aiosqlite.Row
-        logger.info("Connected to SQLite at %s", sqlite_path)
-
-        frontier_cursor = await sq_db.execute("SELECT * FROM crawl_frontier ORDER BY url_hash")
-        frontier_rows = await frontier_cursor.fetchall()
-        logger.info("Read %d rows from crawl_frontier", len(frontier_rows))
-
-        edges_cursor = await sq_db.execute("SELECT * FROM sitemap_edges ORDER BY parent_hash, child_hash")
-        edges_rows = await edges_cursor.fetchall()
-        logger.info("Read %d rows from sitemap_edges", len(edges_rows))
-
-        # Connect to PostgreSQL
-        pool = await asyncpg.create_pool(pg_url, min_size=2, max_size=5)
-        logger.info("Connected to PostgreSQL at %s", pg_url)
-
-        # Create schema
-        from data_engineering_copilot.infrastructure.crawl_db import PG_SCHEMA_SQL
-
-        async with pool.acquire() as conn:
-            await conn.execute(PG_SCHEMA_SQL)
-        logger.info("Created PostgreSQL schema")
-
-        # Insert crawl_frontier in batches
-        BATCH_SIZE = 500
-        frontier_cols = [
-            "url_hash",
-            "url",
-            "source_name",
-            "state",
-            "parent_hash",
-            "depth",
-            "etag",
-            "last_modified",
-            "attempts",
-            "last_error",
-            "created_at",
-            "updated_at",
-        ]
-        placeholders = ", ".join(f"${i + 1}" for i in range(len(frontier_cols)))
-        cols_str = ", ".join(frontier_cols)
-        insert_sql = f"INSERT INTO crawl_frontier ({cols_str}) VALUES ({placeholders}) ON CONFLICT(url_hash) DO NOTHING"
-
-        inserted_frontier = 0
-        for i in range(0, len(frontier_rows), BATCH_SIZE):
-            batch = frontier_rows[i : i + BATCH_SIZE]
-            async with pool.acquire() as conn:
-                for row in batch:
-                    await conn.execute(insert_sql, *(row[col] for col in frontier_cols))
-                    inserted_frontier += 1
-            if (i + BATCH_SIZE) % 2000 == 0 or (i + BATCH_SIZE) >= len(frontier_rows):
-                logger.info("  crawl_frontier: %d / %d inserted", inserted_frontier, len(frontier_rows))
-
-        # Insert sitemap_edges in batches
-        edge_cols = ["parent_hash", "child_hash"]
-        edge_placeholders = ", ".join(f"${i + 1}" for i in range(len(edge_cols)))
-        edge_cols_str = ", ".join(edge_cols)
-        edge_insert_sql = (
-            f"INSERT INTO sitemap_edges ({edge_cols_str}) VALUES ({edge_placeholders}) ON CONFLICT DO NOTHING"
-        )
-
-        inserted_edges = 0
-        for i in range(0, len(edges_rows), BATCH_SIZE):
-            batch = edges_rows[i : i + BATCH_SIZE]
-            async with pool.acquire() as conn:
-                for row in batch:
-                    await conn.execute(edge_insert_sql, row["parent_hash"], row["child_hash"])
-                    inserted_edges += 1
-            if (i + BATCH_SIZE) % 2000 == 0 or (i + BATCH_SIZE) >= len(edges_rows):
-                logger.info("  sitemap_edges: %d / %d inserted", inserted_edges, len(edges_rows))
-
-        # Verify
-        async with pool.acquire() as conn:
-            pg_frontier = await conn.fetchval("SELECT COUNT(*) FROM crawl_frontier")
-            pg_edges = await conn.fetchval("SELECT COUNT(*) FROM sitemap_edges")
-
-        await pool.close()
-        await sq_db.close()
-
-        print("\nMigration complete!")
-        print(f"  crawl_frontier: {len(frontier_rows)} SQLite → {pg_frontier} PostgreSQL")
-        print(f"  sitemap_edges:  {len(edges_rows)} SQLite → {pg_edges} PostgreSQL")
-        print(f"\nSQLite database preserved at: {sqlite_path}")
-        print("Set CRAWL_DB_URL to empty to revert to SQLite.")
-
-    asyncio.run(_migrate())
 
 
 def health() -> None:
@@ -425,12 +316,28 @@ def status() -> None:
 
     # Check crawl frontier DB
     print("\nCrawl Frontier:")
-    db_path = settings.crawl_db_path
-    if db_path.exists():
-        size_mb = db_path.stat().st_size / (1024 * 1024)
-        print(f"  ✅ Database exists ({size_mb:.2f} MB)")
+    db_url = settings.crawl_db_url
+    if not db_url:
+        print("  ⚠️  CRAWL_DB_URL not set")
     else:
-        print("  ℹ️  Database not created yet")
+        try:
+            import asyncpg
+
+            async def _check_pg():
+                conn = await asyncpg.connect(db_url, timeout=5)
+                try:
+                    frontier_count = await conn.fetchval("SELECT COUNT(*) FROM crawl_frontier")
+                    edge_count = await conn.fetchval("SELECT COUNT(*) FROM sitemap_edges")
+                    states = await conn.fetch("SELECT state, COUNT(*)::int as cnt FROM crawl_frontier GROUP BY state")
+                    print(f"  ✅ Connected ({frontier_count} pages, {edge_count} edges)")
+                    for row in states:
+                        print(f"     {row['state']}: {row['cnt']}")
+                finally:
+                    await conn.close()
+
+            asyncio.run(_check_pg())
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
 
     # Check Redis cache
     print("\nRedis Cache:")
@@ -639,9 +546,6 @@ def build_parser() -> argparse.ArgumentParser:
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
 
-    # Migrate
-    subparsers.add_parser("migrate-crawl-db", help="Migrate crawl frontier from SQLite to PostgreSQL.")
-
     # Monitor
     monitor_parser = subparsers.add_parser("monitor", help="Live ingestion dashboard (auto-refresh < 30s).")
     monitor_parser.add_argument("--api-url", default="http://localhost:8000", help="API base URL.")
@@ -689,8 +593,6 @@ def main() -> None:
             evaluate()
         elif args.command == "config":
             config()
-        elif args.command == "migrate-crawl-db":
-            migrate_crawl_db()
         elif args.command == "monitor":
             monitor_main(
                 api_url=args.api_url,

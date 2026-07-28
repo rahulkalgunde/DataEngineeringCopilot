@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.domain.models import IngestionEvent, RawDocument
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
-from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB, CrawlRecord
+from data_engineering_copilot.infrastructure.crawl_db import CrawlRecord, PostgresCrawlFrontierDB
 
 log = structlog.get_logger(__name__)
 
@@ -35,6 +35,7 @@ class CrawlMetrics:
     pages_discovered: int = 0
     pages_fetched: int = 0
     pages_skipped_304: int = 0
+    pages_rediscovered_304: int = 0
     pages_failed: int = 0
 
 
@@ -64,7 +65,7 @@ class AsyncDocumentationCrawler:
 
     def __init__(
         self,
-        frontier: CrawlFrontierDB,
+        frontier: PostgresCrawlFrontierDB,
         cache: CrawlCache,
         timeout_seconds: int = 15,
         delay_seconds: float = 0.5,
@@ -249,6 +250,19 @@ class AsyncDocumentationCrawler:
                     if is_304:
                         await self.frontier.mark_processed(record.url_hash)
                         self._metrics.pages_skipped_304 += 1
+                        # BFS expansion: re-discover children from sitemap_edges
+                        rediscovered = await self.frontier.rediscover_children(
+                            record.url_hash,
+                            record.source_name,
+                            record.depth + 1,
+                        )
+                        self._metrics.pages_rediscovered_304 += rediscovered
+                        if rediscovered:
+                            log.debug(
+                                "crawler.bfs_304_rediscovered parent=%s children=%d",
+                                record.url[:80],
+                                rediscovered,
+                            )
                         self._emit(
                             on_event,
                             IngestionEvent(

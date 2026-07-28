@@ -6,13 +6,13 @@ import pytest
 
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
-from data_engineering_copilot.infrastructure.crawl_db import CrawlFrontierDB
+from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 
 
 @pytest.fixture
 def mock_frontier():
-    f = AsyncMock(spec=CrawlFrontierDB)
-    f.hash_url = CrawlFrontierDB.hash_url
+    f = AsyncMock(spec=PostgresCrawlFrontierDB)
+    f.hash_url = PostgresCrawlFrontierDB.hash_url
     return f
 
 
@@ -23,7 +23,7 @@ def mock_cache():
 
 def _make_crawler(**kwargs):
     defaults = dict(
-        frontier=AsyncMock(spec=CrawlFrontierDB),
+        frontier=AsyncMock(spec=PostgresCrawlFrontierDB),
         cache=AsyncMock(spec=CrawlCache),
         timeout_seconds=5,
         delay_seconds=0.0,
