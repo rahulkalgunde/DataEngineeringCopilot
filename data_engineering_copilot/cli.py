@@ -8,6 +8,7 @@ import sys
 import urllib.error
 import urllib.request
 
+from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.profiler import cli as profiler_cli
@@ -516,6 +517,12 @@ def build_parser() -> argparse.ArgumentParser:
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
 
+    # Monitor
+    monitor_parser = subparsers.add_parser("monitor", help="Live ingestion dashboard (auto-refresh < 30s).")
+    monitor_parser.add_argument("--api-url", default="http://localhost:8000", help="API base URL.")
+    monitor_parser.add_argument("--task-id", default=None, help="Specific task ID to monitor.")
+    monitor_parser.add_argument("--interval", type=int, default=30, help="Refresh interval in seconds.")
+
     return parser
 
 
@@ -557,6 +564,12 @@ def main() -> None:
             evaluate()
         elif args.command == "config":
             config()
+        elif args.command == "monitor":
+            monitor_main(
+                api_url=args.api_url,
+                task_id=args.task_id,
+                interval=args.interval,
+            )
     except SystemExit:
         raise
     except Exception:
