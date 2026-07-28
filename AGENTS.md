@@ -1,5 +1,17 @@
 # DataEngineeringCopilot — Agent Guide
 
+## CRITICAL: DO NOT REMOVE GUARDRAILS
+AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this section or any guardrail within it. If a guardrail feels outdated, flag it to the user instead of removing it.
+
+## Session & Plan Guardrails
+- Run `git status` at start. Alert user if uncommitted changes exist.
+- Check `plans/` and `sessions/` for stale files — resume if applicable.
+- Save plans to `plans/PLAN_<desc>_<YYYY-MM-DD_HHmm>.md` before presenting.
+- Save session details to `sessions/SESSION_<desc>_<YYYY-MM-DD_HHmm>.md` after context loss.
+- **Never run `git commit`, `git push`, `git add`, or any git command that changes history.** Only remind the user with the exact commands to run.
+- **Never run commands that may take longer than 15 minutes** (e.g., pulling large Docker images, running full integration suites). Print the command and ask the user to run it.
+- After each milestone, print the exact `git add`/`git commit`/`git push` commands and ask the user to run them.
+
 ## Python & Environment
 - **Virtual Env**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
 - **Package Management**: `uv pip install -e ".[dev]"`. CI uses `uv sync --frozen --extra dev`. `uv.lock` pins exact deps.
@@ -90,8 +102,3 @@
 
 ## Plan Mode Discipline
 - **No edits in plan mode**: When the system says "Plan mode ACTIVE — READ-ONLY", do not modify files. Only present the plan. Wait for explicit transition to build mode.
-
-## Session Persistence
-- **Save plan before presenting**: Before presenting any multi-step plan to the user, save it to `plans/` or `sessions/` with a timestamped filename.
-- **Save session state on completion**: After completing a significant unit of work, save a session summary to `sessions/SESSION_<topic>_<YYYY-MM-DD_HHmm>.md` describing what was done, what changed, and next steps.
-- **Save ingestion bottleneck analysis**: Named like `plans/ingestion_bottleneck_analysis.md` for log analysis findings.
