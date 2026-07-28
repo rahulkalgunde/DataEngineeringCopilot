@@ -16,7 +16,7 @@ from celery.signals import task_failure
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+from data_engineering_copilot.factory import build_embedder
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.workers.celery_app import celery_app
@@ -47,9 +47,7 @@ def execute_background_ingestion(urls: list[str]):
     async def _pipeline():
         raw_docs = await _run_async_crawl(urls)
 
-        embedder = AsyncOllamaEmbeddings(
-            model_name=settings.embedding_model_name,
-        )
+        embedder = build_embedder(settings)
         chunker = DocumentChunker(
             chunk_size=settings.chunk_size_words * 5,
             chunk_overlap=settings.chunk_overlap_words * 5,
