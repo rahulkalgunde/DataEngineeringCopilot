@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field
 class GuardrailedAnswer(BaseModel):
     """Pydantic-validated structured output from the LLM."""
 
-    answer: str = Field(..., min_length=1, max_length=8192)
+    status: str = "SUCCESS"
+    answer: str = Field(default="", min_length=0, max_length=8192)
+    missing_info: str | None = None
     citations: list[dict] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
@@ -91,6 +93,8 @@ class OutputGuardrails:
     @classmethod
     def _check_quality(cls, result: GuardrailedAnswer, source_count: int) -> GuardrailedAnswer | None:
         """Reject empty / boilerplate answers when we have sources."""
+        if result.status == "INSUFFICIENT_CONTEXT":
+            return result
         if result.answer and source_count > 0:
             if len(result.answer.strip()) < 20:
                 return None

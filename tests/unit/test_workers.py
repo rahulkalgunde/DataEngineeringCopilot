@@ -29,7 +29,7 @@ async def test_run_async_crawl(mock_crawler_class):
 
 
 @patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
-@patch("data_engineering_copilot.workers.tasks.AsyncOllamaEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.build_embedder")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
 def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):
@@ -68,7 +68,7 @@ def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embe
 
 
 @patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
-@patch("data_engineering_copilot.workers.tasks.AsyncOllamaEmbeddings")
+@patch("data_engineering_copilot.workers.tasks.build_embedder")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
 def test_execute_background_ingestion_failure(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):

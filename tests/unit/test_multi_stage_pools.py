@@ -183,33 +183,14 @@ class TestMultiStagePools:
         assert len(store_called) == 1
 
     @pytest.mark.asyncio
-    async def test_flush_batch_clears_shared_list(self):
-        """Verify that _flush_batch clears the shared batch list immediately.
+    async def test_flush_batch_does_not_mutate_caller_list(self):
+        """Verify that _flush_batch does NOT clear the caller's input list.
 
-        Regression test: previously batch_chunks.clear() operated on a local
-        variable reassignmed by enrichment/extract, leaving the original shared
-        list intact and causing O(n²) re-processing.
+        The shared-list clear now lives in _ingest_source under batch_lock,
+        before _flush_batch is called. _flush_batch receives an already-
+        isolated pending_batch and must not mutate the original list.
         """
         service = _make_service()
-
-        # Mock enricher that returns a NEW list (triggers reassignment path)
-        mock_enricher = MagicMock()
-
-        async def enrich_fn(chunks):
-            return [
-                DocumentChunk(
-                    chunk_id=c.chunk_id,
-                    source_name=c.source_name,
-                    title=c.title,
-                    url=c.url,
-                    text="enriched " + c.text,
-                    content_hash=c.content_hash,
-                )
-                for c in chunks
-            ]
-
-        mock_enricher.enrich_chunks = enrich_fn
-        service._contextual_enricher = mock_enricher
 
         # Mock api_extractor that returns a NEW list
         mock_api = MagicMock()
@@ -224,7 +205,7 @@ class TestMultiStagePools:
         service.embeddings.embed_texts = AsyncMock(return_value=[[0.1] * 768])
         service.vector_store.upsert_chunks = AsyncMock()
 
-        # This is the shared list (simulates _shared["batch_chunks"])
+        # This simulates a pending_batch — already isolated from the shared list
         shared_batch = [
             DocumentChunk(
                 chunk_id="c1", source_name="test", title="T", url="http://example.com", text="chunk", content_hash="abc"
@@ -242,8 +223,8 @@ class TestMultiStagePools:
             lambda *a, **kw: IngestionEvent(event_type="test", source_name="", message=""),
         )
 
-        # The shared list must be empty after flush — this was the bug
-        assert shared_batch == [], f"Expected empty list after flush, got {len(shared_batch)} items"
+        # _flush_batch must NOT mutate the caller's list
+        assert len(shared_batch) == 1 and shared_batch[0].text == "chunk"
         assert service.vector_store.upsert_chunks.called
 
     def test_legacy_single_executor_removed(self):

@@ -280,9 +280,13 @@ class AsyncRagService:
 
             validated = OutputGuardrails.verify(answer_text, len(retrieved_chunks))
             if validated is not None:
-                answer_text = validated.answer
+                if validated.status == "INSUFFICIENT_CONTEXT" and validated.missing_info:
+                    answer_text = f"{validated.answer}\n\nMissing information: {validated.missing_info}"
+                else:
+                    answer_text = validated.answer
                 logger.info(
-                    "output_guardrails passed confidence=%.2f citations=%d",
+                    "output_guardrails passed status=%s confidence=%.2f citations=%d",
+                    validated.status,
                     validated.confidence,
                     len(validated.citations),
                 )

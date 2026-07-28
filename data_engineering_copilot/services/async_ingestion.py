@@ -40,6 +40,7 @@ class AsyncIngestionService:
         contextual_enricher: object | None = None,
         api_extractor: object | None = None,
         code_block_parser: object | None = None,
+        chunk_filter: object | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -54,6 +55,7 @@ class AsyncIngestionService:
         self._contextual_enricher = contextual_enricher
         self._api_extractor = api_extractor
         self._code_block_parser = code_block_parser
+        self._chunk_filter = chunk_filter
 
         if parse_executor is not None:
             self._parse_executor = parse_executor
@@ -119,15 +121,17 @@ class AsyncIngestionService:
             if not sentences:
                 return None
             embeddings = await self.embeddings.embed_texts(sentences)
-            import asyncio as _asyncio
-
-            if _asyncio.iscoroutinefunction(self.chunker.chunk):
+            if asyncio.iscoroutinefunction(self.chunker.chunk):
                 chunks = await self.chunker.chunk(parsed, embeddings)
             else:
                 chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed, embeddings)
         else:
             chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
+
+        if self._contextual_enricher is not None:
+            chunks = await self._contextual_enricher.enrich(parsed, chunks)
+
         return chunks, content_hash, parsed
 
     async def _flush_batch(
@@ -140,35 +144,16 @@ class AsyncIngestionService:
         if not batch_chunks:
             return
 
-        # Snapshot the shared list and clear it immediately so that new
-        # chunks arriving during enrichment/embedding accumulate in a fresh list.
-        local_chunks = list(batch_chunks)
-        batch_chunks.clear()
+        if self._chunk_filter is not None:
+            batch_chunks = self._chunk_filter.extract(batch_chunks)
 
-        # Contextual enrichment (optional)
-        if hasattr(self, "_contextual_enricher") and self._contextual_enricher is not None:
-            log.info("async_ingestion.enrichment_start batch_size=%d", len(local_chunks))
-            try:
-                local_chunks = await asyncio.wait_for(
-                    self._contextual_enricher.enrich_chunks(local_chunks),
-                    timeout=120.0,
-                )
-            except TimeoutError:
-                log.warning(
-                    "async_ingestion.enrichment_timeout batch_size=%d timeout=120",
-                    len(local_chunks),
-                )
-            log.info("async_ingestion.enrichment_done batch_size=%d", len(local_chunks))
+        if self._api_extractor is not None:
+            batch_chunks = self._api_extractor.extract(batch_chunks)
 
-        # API documentation extraction (optional)
-        if hasattr(self, "_api_extractor") and self._api_extractor is not None:
-            local_chunks = self._api_extractor.extract(local_chunks)
+        if self._code_block_parser is not None:
+            batch_chunks = self._code_block_parser.extract(batch_chunks)
 
-        # Code block parsing (optional)
-        if hasattr(self, "_code_block_parser") and self._code_block_parser is not None:
-            local_chunks = self._code_block_parser.extract(local_chunks)
-
-        batch_size = len(local_chunks)
+        batch_size = len(batch_chunks)
         self._emit(
             on_event,
             make_event(
@@ -180,12 +165,12 @@ class AsyncIngestionService:
             ),
         )
         try:
-            texts = [chunk.text for chunk in local_chunks]
+            texts = [chunk.text for chunk in batch_chunks]
             batch_vectors = await self.embeddings.embed_texts(texts)
         except EmbeddingError as exc:
             log.error(
                 "async_ingestion.embed_batch_failed",
-                batch_size=len(local_chunks),
+                batch_size=len(batch_chunks),
                 error=str(exc),
             )
             raise IngestionError(f"Embedding failed: {exc}") from exc
@@ -200,19 +185,19 @@ class AsyncIngestionService:
             ),
         )
         try:
-            await self.vector_store.upsert_chunks(local_chunks, batch_vectors)
+            await self.vector_store.upsert_chunks(batch_chunks, batch_vectors)
             if hasattr(self.vector_store, "fit_bm25"):
                 self._corpus_texts.extend(texts)
         except Exception as exc:
             log.error(
                 "async_ingestion.upsert_batch_failed",
-                batch_size=len(local_chunks),
+                batch_size=len(batch_chunks),
                 error=str(exc),
             )
             raise VectorStoreError(f"Vector store upsert failed: {exc}") from exc
 
         seen: set[tuple[str, str]] = set()
-        for chunk in local_chunks:
+        for chunk in batch_chunks:
             key = (chunk.url, chunk.source_name)
             if key not in seen and chunk.content_hash:
                 seen.add(key)
@@ -423,6 +408,16 @@ class AsyncIngestionService:
             async for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 await queue.put(raw_document)
             log.info("async_ingestion._ingest_source.crawl_done source=%s", source.name)
+        except Exception:
+            # Crawler failed mid-stream: drain unconsumed items so sentinel puts
+            # cannot block, then surface the failure to the caller.
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+            raise
         finally:
             for _ in range(self._processing_concurrency):
                 await queue.put(None)

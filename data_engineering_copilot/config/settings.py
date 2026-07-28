@@ -171,7 +171,6 @@ class AppSettings(BaseSettings):
     embed_concurrency: int = 4
     store_concurrency: int = 2
     # Async crawler settings
-    crawl_db_path: Path = PROJECT_ROOT / "data" / "crawl_frontier.db"
     crawl_db_url: str = ""
     crawl_async_concurrency: int = 20
     crawl_async_max_concurrency: int = 40
@@ -197,6 +196,7 @@ class AppSettings(BaseSettings):
     contextual_enrichment_enabled: bool = True
     api_extraction_enabled: bool = True
     code_block_parsing_enabled: bool = True
+    chunk_filtering_enabled: bool = True
     sources: tuple[DocumentationSource, ...] = ()
 
     @model_validator(mode="after")
