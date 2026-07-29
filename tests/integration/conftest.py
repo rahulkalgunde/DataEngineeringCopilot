@@ -1,19 +1,18 @@
-"""Integration test fixtures with testcontainers for Qdrant and Redis.
+"""Integration test fixtures with testcontainers for Qdrant, Redis, and Ollama.
 
 Provides:
 - Session-scoped Qdrant container via testcontainers
 - Session-scoped Redis container via testcontainers
+- Session-scoped Ollama container via testcontainers
 - worker_id-isolated collection names for xdist parallel execution
 - Fallback to external Docker Compose if testcontainers unavailable
-- Existing fixtures for Ollama/Langfuse (external services)
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import urllib.request
+import pathlib
 
 import pytest
 
@@ -152,51 +151,73 @@ def fresh_redis_client(redis_url):
 
 
 # ---------------------------------------------------------------------------
-# Ollama health check (external service — skip if unreachable)
+# Ollama testcontainer (session-scoped, shared across workers)
 # ---------------------------------------------------------------------------
 
-_ollama_ok: bool | None = None
-_ollama_models_ok: bool | None = None
+_OLLAMA_IMAGE = "ollama/ollama:0.32.4"
+_OLLAMA_HOME = pathlib.Path.home() / ".ollama"
+_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b", "qwen2.5-coder:7b"]
+
+_ollama_container = None
+_ollama_url: str | None = None
 
 
-def _ollama_is_reachable(url: str = "http://localhost:11434", timeout: int = 3) -> bool:
+def _get_or_start_ollama_container() -> str | None:
+    """Start an Ollama testcontainer. Returns the URL."""
+    global _ollama_container, _ollama_url
+
+    if _ollama_url is not None:
+        return _ollama_url
+
     try:
-        req = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
+        from testcontainers.ollama import OllamaContainer
+
+        _ollama_container = OllamaContainer(
+            image=_OLLAMA_IMAGE,
+            ollama_home=str(_OLLAMA_HOME),
+        )
+        _ollama_container.start()
+        _ollama_url = _ollama_container.get_endpoint()
+
+        # Pull models needed by tests
+        existing = set()
+        for m in _ollama_container.list_models():
+            name = m["name"]
+            existing.add(name)
+            existing.add(name.split(":")[0])
+        for model in _OLLAMA_MODELS:
+            if model not in existing:
+                _ollama_container.pull_model(model)
+
+        return _ollama_url
     except Exception:
-        return False
+        pass
+
+    return None
 
 
-def _ollama_has_models(url: str = "http://localhost:11434", timeout: int = 3) -> bool:
-    try:
-        req = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode())
-            return len(data.get("models", [])) > 0
-    except Exception:
-        return False
+@pytest.fixture(scope="session")
+def ollama_url():
+    """Session-scoped Ollama URL (from testcontainer)."""
+    url = _get_or_start_ollama_container()
+    if url is None:
+        pytest.skip("Ollama testcontainer could not be started")
+    return url
 
 
-def ollama_available() -> bool:
-    global _ollama_ok
-    if _ollama_ok is None:
-        _ollama_ok = _ollama_is_reachable()
-    return _ollama_ok
+# ---------------------------------------------------------------------------
+# Eager container start so shared conftest's collection-time check passes
+# ---------------------------------------------------------------------------
 
 
-def ollama_has_models() -> bool:
-    global _ollama_models_ok
-    if _ollama_models_ok is None:
-        _ollama_models_ok = _ollama_has_models()
-    return _ollama_models_ok
+def pytest_configure(config):
+    """Start the Ollama container before test collection so the shared conftest's
+    ``pytest_collection_modifyitems`` hook sees Ollama as available."""
+    url = _get_or_start_ollama_container()
+    if url:
+        import tests.conftest as shared_conftest
 
-
-def require_ollama():
-    if not ollama_available():
-        pytest.skip("Ollama is not reachable — skipping test")
-    if not ollama_has_models():
-        pytest.skip("Ollama has no models pulled — skipping test")
+        shared_conftest._ollama_ok = True
 
 
 # ---------------------------------------------------------------------------
@@ -205,13 +226,16 @@ def require_ollama():
 
 
 @pytest.fixture
-def integration_settings():
+def integration_settings(ollama_url):
     from data_engineering_copilot.config.settings import AppSettings
 
     return AppSettings(
+        ollama_base_url=ollama_url,
         embedding_provider="ollama",
-
         embedding_model_name="nomic-embed-text",
+        llm_provider="ollama",
+        code_llm_provider="ollama",
+        code_llm_model="qwen2.5-coder:7b",
         embedding_batch_size=32,
         retrieval_top_k=5,
         max_context_chars=2000,
@@ -225,15 +249,16 @@ def integration_settings():
 
 @pytest.fixture
 def embeddings_provider(integration_settings):
-    require_ollama()
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-    return AsyncOllamaEmbeddings(model_name=integration_settings.embedding_model_name)
+    return AsyncOllamaEmbeddings(
+        model_name=integration_settings.embedding_model_name,
+        base_url=integration_settings.ollama_base_url,
+    )
 
 
 @pytest.fixture
 def ollama_client(integration_settings):
-    require_ollama()
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     return LLMClient(

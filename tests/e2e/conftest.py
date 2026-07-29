@@ -1,7 +1,6 @@
-"""E2E test fixtures using isolated testcontainers for Qdrant and Redis.
+"""E2E test fixtures using isolated testcontainers for Qdrant, Redis, and Ollama.
 
-Qdrant and Redis run in ephemeral testcontainers (never Docker Compose).
-Ollama is an external service — always uses Docker Compose Ollama at localhost:11434.
+Qdrant, Redis, and Ollama run in ephemeral testcontainers (never Docker Compose).
 FastAPI is tested in-process via ASGITransport (no live server needed).
 """
 
@@ -9,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import pathlib
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
@@ -97,12 +97,66 @@ def e2e_redis_url() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ollama testcontainer (session-scoped, shared across workers)
+# ---------------------------------------------------------------------------
+
+_OLLAMA_IMAGE = "ollama/ollama:0.32.4"
+_OLLAMA_HOME = pathlib.Path.home() / ".ollama"
+_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b", "qwen2.5-coder:7b"]
+
+_ollama_container = None
+_e2e_ollama_url: str | None = None
+
+
+def _get_or_start_ollama_container() -> str | None:
+    """Start an Ollama testcontainer. Returns the URL."""
+    global _ollama_container, _e2e_ollama_url
+
+    if _e2e_ollama_url is not None:
+        return _e2e_ollama_url
+
+    try:
+        from testcontainers.ollama import OllamaContainer
+
+        _ollama_container = OllamaContainer(
+            image=_OLLAMA_IMAGE,
+            ollama_home=str(_OLLAMA_HOME),
+        )
+        _ollama_container.start()
+        _e2e_ollama_url = _ollama_container.get_endpoint()
+
+        existing = set()
+        for m in _ollama_container.list_models():
+            name = m["name"]
+            existing.add(name)
+            existing.add(name.split(":")[0])
+        for model in _OLLAMA_MODELS:
+            if model not in existing:
+                _ollama_container.pull_model(model)
+
+        return _e2e_ollama_url
+    except Exception:
+        pass
+
+    return None
+
+
+@pytest.fixture(scope="session")
+def e2e_ollama_url() -> str:
+    """Session-scoped Ollama URL from testcontainer."""
+    url = _get_or_start_ollama_container()
+    if url is None:
+        pytest.skip("Ollama testcontainer could not be started")
+    return url
+
+
+# ---------------------------------------------------------------------------
 # Settings (Ollama provider, testcontainer URLs)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
+def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str, e2e_ollama_url: str) -> AppSettings:
     """AppSettings tuned for E2E testing with isolated testcontainer URLs."""
     import uuid
 
@@ -114,10 +168,11 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
         qdrant_url=e2e_qdrant_url,
         redis_url=e2e_redis_url,
         collection_name=collection,
-        ollama_base_url="http://localhost:11434",
+        ollama_base_url=e2e_ollama_url,
         llm_provider="ollama",
         embedding_provider="ollama",
-
+        code_llm_provider="ollama",
+        code_llm_model="qwen2.5-coder:7b",
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
@@ -163,32 +218,19 @@ async def e2e_redis(e2e_redis_url: str) -> AsyncGenerator:
 
 
 # ---------------------------------------------------------------------------
-# Ollama (external Docker Compose service, session-scoped)
+# Ollama fixtures (session-scoped, use testcontainer)
 # ---------------------------------------------------------------------------
-
-OLLAMA_URL = "http://localhost:11434"
-
-
-def _ollama_reachable() -> bool:
-    import urllib.request
-
-    try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
 
 
 @pytest.fixture(scope="session")
 def e2e_embedder(e2e_settings: AppSettings):
-    """Real Ollama embeddings provider (session-scoped). Skips if Ollama unreachable."""
-    if not _ollama_reachable():
-        pytest.skip("Ollama is not reachable")
-
+    """Real Ollama embeddings provider from testcontainer (session-scoped)."""
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-    embedder = AsyncOllamaEmbeddings(model_name=e2e_settings.embedding_model_name)
+    embedder = AsyncOllamaEmbeddings(
+        model_name=e2e_settings.embedding_model_name,
+        base_url=e2e_settings.ollama_base_url,
+    )
     yield embedder
     with contextlib.suppress(RuntimeError):
         asyncio.run(embedder.close())
@@ -196,10 +238,7 @@ def e2e_embedder(e2e_settings: AppSettings):
 
 @pytest.fixture(scope="session")
 def e2e_llm(e2e_settings: AppSettings):
-    """Real Ollama LLM client (session-scoped). Skips if Ollama unreachable."""
-    if not _ollama_reachable():
-        pytest.skip("Ollama is not reachable")
-
+    """Real Ollama LLM client from testcontainer (session-scoped)."""
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     client = LLMClient(

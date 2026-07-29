@@ -24,9 +24,9 @@ _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
 class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
     """Async Ollama embedding provider using the /api/embed endpoint with httpx."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, base_url: str | None = None) -> None:
         self.model_name = model_name
-        self.base_url = settings.ollama_base_url.rstrip("/")
+        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.timeout_seconds = settings.ollama_timeout_seconds
         self.ollama_base_url = self.base_url  # backward compat
         logger.info("Using async Ollama embedding model %s at %s", model_name, self.base_url)
