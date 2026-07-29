@@ -20,9 +20,22 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _rate_limit_key(request: Request) -> str:
+    """Derive a rate-limit key from API key or client IP.
+
+    API keys get their own quota; unauthenticated requests are grouped by IP.
+    """
+    api_key = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if api_key:
+        return api_key[:48]
+    return _client_ip(request)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """ASGI middleware that applies per-path rate limiting.
 
+    Uses API key as the rate-limit identifier when available,
+    falling back to client IP for unauthenticated requests.
     Only enforces limits for paths listed in ``DEFAULT_LIMITS``.
     Other paths pass through without rate limiting.
     """
@@ -36,14 +49,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Only rate-limit configured paths
         limiter = self._limiters.get(path)
         if limiter is None:
             return await call_next(request)
 
-        client_ip = _client_ip(request)
-        if not limiter.allow(client_ip):
-            logger.warning("rate_limit_exceeded path=%s ip=%s", path, client_ip)
+        rl_key = _rate_limit_key(request)
+        if not limiter.allow(rl_key):
+            logger.warning("rate_limit_exceeded path=%s key=%s", path, rl_key)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again later."},

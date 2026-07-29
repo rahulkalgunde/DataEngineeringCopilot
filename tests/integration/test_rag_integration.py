@@ -335,6 +335,7 @@ class TestRAGWireMocked:
                 nonlocal call_count
                 call_count += 1
                 return "Spark is an analytics engine."
+
             async def close(self) -> None:
                 pass
 

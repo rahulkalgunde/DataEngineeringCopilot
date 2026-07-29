@@ -138,10 +138,7 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
-    raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. "
-        f"Supported: 'ollama', 'openrouter', 'nvidia'."
-    )
+    raise ValueError(f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia'.")
 
 
 def build_global_llm_client(
@@ -255,8 +252,8 @@ def build_chunker(app_settings: AppSettings = settings):
     )
 
     return DocumentChunker(
-        chunk_size=app_settings.chunk_size_words * 5,
-        chunk_overlap=app_settings.chunk_overlap_words * 5,
+        chunk_size_chars=app_settings.chunk_size_words * 5,
+        chunk_overlap_chars=app_settings.chunk_overlap_words * 5,
     )
 
 
@@ -463,6 +460,9 @@ def build_rag_service(
         embedding_dimension=app_settings.get_embedding_dimension(),
     )
     embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
+    from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+    embedder = CachedEmbedder(embedder)
     reranker = None
     if app_settings.reranker_enabled:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
@@ -490,10 +490,15 @@ def build_rag_service(
     )
 
     from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
-    from data_engineering_copilot.services.ragas_evaluation import RagasEvaluator
 
-    ragas_evaluator = RagasEvaluator()
     faithfulness_evaluator = FaithfulnessEvaluator(llm_client=evaluation_client or llm_client)
+
+    # PII redaction
+    pii_redactor = None
+    if app_settings.pii_redaction_enabled:
+        from data_engineering_copilot.infrastructure.pii_redactor import PiiRedactor, RedactionMode
+
+        pii_redactor = PiiRedactor(mode=RedactionMode(app_settings.pii_redaction_mode))
 
     return AsyncRagService(
         config=rag_config,
@@ -508,6 +513,7 @@ def build_rag_service(
             semantic_enabled=True,
             similarity_threshold=app_settings.semantic_cache_threshold,
             ttl_seconds=app_settings.semantic_cache_ttl,
+            redis_url=app_settings.redis_url,
         ),
         query_rewriter=query_rewriter,
         groundedness_verifier=groundedness,
@@ -515,5 +521,5 @@ def build_rag_service(
         token_tracker=token_tracker,
         retrieval_tracker=retrieval_tracker,
         faithfulness_evaluator=faithfulness_evaluator,
-        ragas_evaluator=ragas_evaluator,
+        pii_redactor=pii_redactor,
     )

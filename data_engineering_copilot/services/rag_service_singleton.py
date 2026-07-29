@@ -17,11 +17,11 @@ _instance: AsyncRagService | None = None
 _lock = threading.Lock()
 
 
-def get_rag_service() -> AsyncRagService:
+async def get_rag_service() -> AsyncRagService:
     """Get or create a singleton AsyncRagService instance.
 
-    Thread-safe via threading.Lock. The instance is created once
-    and reused across all requests, avoiding per-request model loading.
+    Thread-safe via threading.Lock. Asynchronously initializes the
+    cross-encoder reranker off the event loop to avoid blocking.
     """
     global _instance
     if _instance is None:
@@ -40,6 +40,8 @@ def get_rag_service() -> AsyncRagService:
                     token_tracker=token_tracker,
                     retrieval_tracker=retrieval_tracker,
                 )
+                if _instance.reranker is not None:
+                    await _instance.reranker.initialize()
                 set_trackers(
                     retrieval_tracker=retrieval_tracker,
                     token_tracker=token_tracker,

@@ -7,6 +7,7 @@ to the query.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -53,16 +54,25 @@ class CrossEncoderReranker:
     def __init__(self, model_name: str = "cross-encoder/qnli-distilroberta-base"):
         """Initialize the cross-encoder reranker.
 
-        Args:
-            model_name: HuggingFace model identifier for the cross-encoder
+        Model loading is deferred — call ``await initialize()`` before first use
+        to avoid blocking the event loop during the ~450MB download.
         """
         self.model_name = model_name
         self.model: CrossEncoder | None = None
+
+    async def initialize(self) -> None:
+        """Load the cross-encoder model off the event loop.
+
+        Safe to call multiple times — subsequent calls are no-ops.
+        """
+        if self.model is not None:
+            return
         try:
             from sentence_transformers import CrossEncoder
 
-            self.model = CrossEncoder(model_name)
-            logger.info("Initialized CrossEncoder reranker: %s", model_name)
+            loop = asyncio.get_running_loop()
+            self.model = await loop.run_in_executor(None, lambda: CrossEncoder(self.model_name))
+            logger.info("Initialized CrossEncoder reranker: %s", self.model_name)
         except ImportError:
             logger.warning(
                 "sentence_transformers not available; reranking disabled. "
@@ -86,7 +96,10 @@ class CrossEncoderReranker:
             return []
 
         if not self.model:
-            logger.warning("Reranker model not loaded; returning chunks unchanged")
+            logger.info("Reranker model not loaded; attempting synchronous init")
+            self._init_sync()
+        if not self.model:
+            logger.warning("Reranker model not available; returning chunks unchanged")
             return chunks[:top_k]
 
         if len(chunks) <= top_k:
@@ -108,13 +121,15 @@ class CrossEncoderReranker:
             scored_chunks = list(zip(chunks, scores, strict=False))
             scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
-            # Write normalized scores back to chunk.confidence
-            # so downstream MMR and sorting use the better relevance score
-            for chunk, score in scored_chunks:
-                object.__setattr__(chunk, "confidence", score)
-
-            # Keep top_k results
-            reranked = [chunk for chunk, score in scored_chunks[:top_k]]
+            # Build new RetrievedChunk instances with reranker score as confidence
+            reranked = [
+                RetrievedChunk(
+                    chunk=chunk.chunk,
+                    distance=1.0 - score,
+                    confidence=score,
+                )
+                for chunk, score in scored_chunks[:top_k]
+            ]
 
             logger.info(
                 "Reranked %d chunks → %d chunks; top score=%.4f",
@@ -134,6 +149,16 @@ class CrossEncoderReranker:
         except Exception as exc:
             logger.exception("Reranking failed; returning original chunks: %s", exc)
             return chunks[:top_k]
+
+    def _init_sync(self) -> None:
+        """Fallback synchronous model init for CLI/test contexts."""
+        try:
+            from sentence_transformers import CrossEncoder
+
+            self.model = CrossEncoder(self.model_name)
+            logger.info("Initialized CrossEncoder reranker (sync): %s", self.model_name)
+        except Exception as exc:
+            logger.warning("Failed to initialize CrossEncoder reranker (sync): %s", exc)
 
     def is_available(self) -> bool:
         """Check if reranker model is available.

@@ -76,6 +76,11 @@ class PromptBuilder:
     def __init__(self, system_role: str | None = None) -> None:
         self.system_role = system_role or "You are DataEngineeringCopilot, an expert data engineering assistant."
 
+    @staticmethod
+    def sanitize_query(question: str) -> str:
+        cleaned = question.replace("```", "").replace("## ", "# ")
+        return cleaned[:2000].strip()
+
     def build_rag_prompt(self, context: str, question: str, intent: str = "factual") -> str:
         """Construct a structured system prompt combining context and question.
 

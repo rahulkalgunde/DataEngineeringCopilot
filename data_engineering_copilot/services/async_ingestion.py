@@ -121,12 +121,9 @@ class AsyncIngestionService:
             if not sentences:
                 return None
             embeddings = await self.embeddings.embed_texts(sentences)
-            if asyncio.iscoroutinefunction(self.chunker.chunk):
-                chunks = await self.chunker.chunk(parsed, embeddings)
-            else:
-                chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed, embeddings)
+            chunks = await self.chunker.chunk(parsed, embeddings)
         else:
-            chunks = await loop.run_in_executor(self._chunk_executor, self.chunker.chunk, parsed)
+            chunks = await self.chunker.chunk(parsed)
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
 
         if self._contextual_enricher is not None:

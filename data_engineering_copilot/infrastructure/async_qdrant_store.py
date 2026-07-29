@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Self
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import SparseIndexParams, SparseVectorParams
 
-from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.config.settings import PROJECT_ROOT, settings
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
 
@@ -44,12 +45,24 @@ class AsyncQdrantVectorStore:
         hybrid_search: bool = True,
         hybrid_rrf_k: int = 60,
         embedding_dimension: int | None = None,
+        bm25_persist_path: Path | None = None,
     ) -> None:
         self._url = url
         self._collection_name = collection_name
         self._hybrid_search = hybrid_search
         self._hybrid_rrf_k = hybrid_rrf_k
-        self._bm25: BM25Tokenizer | None = BM25Tokenizer() if hybrid_search else None
+        self._bm25_persist_path = bm25_persist_path or (PROJECT_ROOT / ".bm25_cache" / f"{collection_name}.json")
+        self._bm25 = None
+        if hybrid_search:
+            if self._bm25_persist_path.exists():
+                try:
+                    self._bm25 = BM25Tokenizer.load(self._bm25_persist_path)
+                    logger.info("Loaded persisted BM25 tokenizer from %s", self._bm25_persist_path)
+                except Exception:
+                    logger.warning("Failed to load BM25 from %s, creating fresh", self._bm25_persist_path)
+                    self._bm25 = BM25Tokenizer()
+            else:
+                self._bm25 = BM25Tokenizer()
         self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         self._last_query_sparse = None
         self._embedding_dimension_override = embedding_dimension
@@ -337,6 +350,11 @@ class AsyncQdrantVectorStore:
         if self._bm25 is None:
             return
         self._bm25.fit(texts)
+        try:
+            self._bm25.save(self._bm25_persist_path)
+            logger.info("Persisted BM25 tokenizer to %s", self._bm25_persist_path)
+        except Exception:
+            logger.warning("Failed to persist BM25 tokenizer to %s", self._bm25_persist_path)
         logger.info(
             "BM25 tokenizer fitted: vocab=%d corpus_size=%d avg_doc_len=%.1f",
             self._bm25.vocab_size,

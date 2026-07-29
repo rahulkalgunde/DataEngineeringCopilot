@@ -7,8 +7,10 @@ endpoint; differences are captured in constructor parameters.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from collections.abc import AsyncIterator
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -135,9 +137,7 @@ class LLMClient(SafeAsyncClientMixin):
             body = await self._http_post(payload)
         except httpx.TimeoutException as exc:
             logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
-            raise LLMClientError(
-                f"LLM provider timed out after {self.timeout_seconds} seconds."
-            ) from exc
+            raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 logger.exception("Rate limit persistently exceeded after retries.")
@@ -163,8 +163,7 @@ class LLMClient(SafeAsyncClientMixin):
         clean_text = self._extract_final_response(content)
 
         logger.info(
-            "LLM generation completed model=%s response_chars=%s final_chars=%s "
-            "prompt_tokens=%d completion_tokens=%d",
+            "LLM generation completed model=%s response_chars=%s final_chars=%s prompt_tokens=%d completion_tokens=%d",
             self.model,
             len(content),
             len(clean_text),
@@ -207,3 +206,51 @@ class LLMClient(SafeAsyncClientMixin):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream tokens from the LLM via SSE chunks.
+
+        Yields individual token strings as they arrive from the provider.
+        Falls back to non-streaming ``generate()`` if streaming fails.
+        """
+        temp = temperature if temperature is not None else self._temperature
+        payload: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temp,
+            "stream": True,
+        }
+        if self._extra_body:
+            payload.update(self._extra_body)
+
+        try:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire()
+            client = await self._get_client()
+            async with client.stream("POST", self._endpoint_path, json=payload) as response:
+                if response.status_code == 429:
+                    if self._rate_limiter is not None:
+                        await self._rate_limiter.handle_429(dict(response.headers))
+                    raise httpx.HTTPStatusError("Rate limited", request=response.request, response=response)
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        continue
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError):
+            logger.warning("Streaming failed, falling back to non-streaming generate()")
+            result = await self.generate(prompt, temperature=temperature)
+            yield result

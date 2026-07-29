@@ -7,7 +7,7 @@ protocol — no inheritance required.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any, Protocol
 
 from data_engineering_copilot.domain.models import (
@@ -34,7 +34,9 @@ class ParserProtocol(Protocol):
 
 
 class ChunkerProtocol(Protocol):
-    def chunk(self, document: ParsedDocument) -> list[DocumentChunk]: ...
+    async def chunk(
+        self, document: ParsedDocument, precomputed_embeddings: list[list[float]] | None = None
+    ) -> list[DocumentChunk]: ...
 
 
 class EmbedderProtocol(Protocol):
@@ -68,6 +70,8 @@ class SyncRedisProtocol(Protocol):
 class LLMClientProtocol(Protocol):
     async def generate(self, prompt: str) -> str: ...
 
+    async def generate_stream(self, prompt: str) -> AsyncIterator[str]: ...
+
     @property
     def last_usage(self) -> LLMUsage: ...
 
@@ -75,6 +79,7 @@ class LLMClientProtocol(Protocol):
 class RerankerProtocol(Protocol):
     def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]: ...
     def is_available(self) -> bool: ...
+    async def initialize(self) -> None: ...
 
 
 class TelemetryTracerProtocol(Protocol):

@@ -33,11 +33,14 @@ class TestLLMClientRetry:
             route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 httpx.TimeoutException("timeout 1"),
-                httpx.Response(200, json={
-                    "choices": [{"message": {"content": "success after retry"}}],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                    "model": "llama3.2:3b",
-                }),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "success after retry"}}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                        "model": "llama3.2:3b",
+                    },
+                ),
             ]
             result = await client.generate("test prompt")
             assert result == "success after retry"
@@ -49,11 +52,14 @@ class TestLLMClientRetry:
             route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 httpx.ConnectError("connection refused"),
-                httpx.Response(200, json={
-                    "choices": [{"message": {"content": "connected"}}],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                    "model": "llama3.2:3b",
-                }),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "connected"}}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                        "model": "llama3.2:3b",
+                    },
+                ),
             ]
             result = await client.generate("test prompt")
             assert result == "connected"
@@ -74,11 +80,14 @@ class TestLLMClientRetry:
             route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 OSError("connection reset"),
-                httpx.Response(200, json={
-                    "choices": [{"message": {"content": "recovered"}}],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                    "model": "llama3.2:3b",
-                }),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "recovered"}}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                        "model": "llama3.2:3b",
+                    },
+                ),
             ]
             result = await client.generate("test prompt")
             assert result == "recovered"

@@ -22,7 +22,11 @@ app = FastAPI(
 app.add_middleware(RateLimitMiddleware)
 
 # API key authentication (no-op if API_KEY env var not set)
-app.add_middleware(ApiKeyAuthMiddleware)
+app.add_middleware(
+    ApiKeyAuthMiddleware,
+    rbac_enabled=settings.rbac_enabled,
+    rbac_users_json=settings.rbac_users_json,
+)
 
 # CORS — allow all origins for local development; restrict in production
 app.add_middleware(

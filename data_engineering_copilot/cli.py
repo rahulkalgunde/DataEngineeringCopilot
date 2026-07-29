@@ -409,6 +409,34 @@ def evaluate() -> None:
     avg_confidence = sum(r["confidence"] for r in results) / len(results) if results else 0
     print(f"Average confidence: {avg_confidence:.2f}")
 
+    # Drift detection
+    if settings.drift_detection_enabled and results:
+        from data_engineering_copilot.services.drift_detector import DriftDetector, EvalSnapshot, hash_eval_dataset
+
+        detector = DriftDetector(
+            storage_path=settings.drift_eval_history_path,
+            window_days=settings.drift_window_days,
+        )
+        snapshot = EvalSnapshot(
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            metrics={"confidence": avg_confidence},
+            eval_dataset_hash=hash_eval_dataset(eval_path),
+        )
+        detector.record(snapshot)
+        report = detector.compare(snapshot)
+
+        if report.drifted:
+            print("\n⚠️  DRIFT DETECTED:")
+            for c in report.comparisons:
+                if c.drifted:
+                    print(
+                        f"  {c.metric}: {c.baseline:.2f} → {c.current:.2f} (delta: {c.delta:+.2f}, threshold: {c.threshold:.2f})"
+                    )
+        elif report.comparisons:
+            print("\n✅ No drift detected (within thresholds)")
+        else:
+            print("\n📊 First eval recorded — baseline will be established on next run")
+
 
 def config() -> None:
     """Validate and display configuration."""
