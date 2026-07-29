@@ -13,7 +13,6 @@ from __future__ import annotations
 import pytest
 
 from data_engineering_copilot.domain.models import Answer, DocumentChunk
-from tests.integration.conftest import require_ollama
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -21,13 +20,16 @@ from tests.integration.conftest import require_ollama
 
 
 @pytest.fixture(scope="module")
-def _settings():
+def _settings(ollama_url):
     from data_engineering_copilot.config.settings import AppSettings
 
     return AppSettings(
+        ollama_base_url=ollama_url,
         embedding_provider="ollama",
-
         embedding_model_name="nomic-embed-text",
+        llm_provider="ollama",
+        code_llm_provider="ollama",
+        code_llm_model="qwen2.5-coder:7b",
         embedding_batch_size=32,
         retrieval_top_k=10,
         max_context_chars=2000,
@@ -38,15 +40,16 @@ def _settings():
 
 @pytest.fixture(scope="module")
 def _embedder(_settings):
-    require_ollama()
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-    return AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
+    return AsyncOllamaEmbeddings(
+        model_name=_settings.embedding_model_name,
+        base_url=_settings.ollama_base_url,
+    )
 
 
 @pytest.fixture(scope="module")
 def _ollama(_settings):
-    require_ollama()
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     return LLMClient(
@@ -92,7 +95,10 @@ def _populated(_store, _settings):
 
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-    embedder = AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
+    embedder = AsyncOllamaEmbeddings(
+        model_name=_settings.embedding_model_name,
+        base_url=_settings.ollama_base_url,
+    )
 
     topics = [
         (
@@ -166,7 +172,10 @@ def _rag(_store, _ollama, _settings):
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
-    embedder = AsyncOllamaEmbeddings(model_name=_settings.embedding_model_name)
+    embedder = AsyncOllamaEmbeddings(
+        model_name=_settings.embedding_model_name,
+        base_url=_settings.ollama_base_url,
+    )
     return AsyncRagService(
         config=RagConfig(),
         vector_store=_store,
@@ -285,9 +294,8 @@ class TestRAGWireMocked:
 
     @pytest.mark.serial
     @pytest.mark.asyncio
-    async def test_rag_cache_hit_skips_llm(self, fresh_qdrant_store):
+    async def test_rag_cache_hit_skips_llm(self, fresh_qdrant_store, ollama_url):
         """Real Qdrant, mock LLM client — verify cache hit skips LLM."""
-        require_ollama()
 
         from data_engineering_copilot.config.settings import AppSettings
         from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
@@ -298,13 +306,17 @@ class TestRAGWireMocked:
 
         settings = AppSettings(
             _env_file=None,
+            ollama_base_url=ollama_url,
             embedding_provider="ollama",
             embedding_model_name="nomic-embed-text",
             llm_provider="ollama",
             code_llm_provider="",
         )
 
-        embedder = AsyncOllamaEmbeddings(model_name=settings.embedding_model_name)
+        embedder = AsyncOllamaEmbeddings(
+            model_name=settings.embedding_model_name,
+            base_url=settings.ollama_base_url,
+        )
 
         chunk = DocumentChunk(
             chunk_id="test_cache_001",

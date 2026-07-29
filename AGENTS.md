@@ -1,5 +1,21 @@
 # DataEngineeringCopilot — Agent Guide
 
+## Tech Stack & Tooling
+- **Language:** Python 3.11+
+- **Type Checker:** Pyright (via LSP & CLI)
+- **Linter & Formatter:** Ruff (`ruff`)
+- **Test Runner:** Pytest (`pytest`)
+
+---
+
+## 1. Quality Verification Workflow
+After writing, modifying, or refactoring code, you **must** execute the following verification loop in order before declaring a task complete:
+
+1. **Check LSP Diagnostics:** Monitor active Pyright LSP alerts in your context. Resolve all reported type errors and unresolved imports immediately.
+2. **Run Ruff Linter:** Execute auto-fixes and inspect non-fixable warnings.
+   ```bash
+   ruff check . --fix
+
 ## CRITICAL: DO NOT REMOVE GUARDRAILS
 AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this section or any guardrail within it. If a guardrail feels outdated, flag it to the user instead of removing it.
 
