@@ -1,7 +1,7 @@
 # DataEngineeringCopilot — Agent Guide
 
 ## Tech Stack & Tooling
-- **Language:** Python 3.11+
+- **Language:** Python 3.12+ (per `pyproject.toml` requires-python)
 - **Type Checker:** Pyright (via LSP & CLI)
 - **Linter & Formatter:** Ruff (`ruff`)
 - **Test Runner:** Pytest (`pytest`)
@@ -34,6 +34,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Virtual Env**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
 - **Package Management**: `uv pip install -e ".[dev]"`. CI uses `uv sync --frozen --extra dev`. `uv.lock` pins exact deps.
 - **Config Load Chain**: `.env` → `.env.secrets` → `.env.local` (later overrides earlier). See `.env.example` for all names.
+- **`AppSettings(_env_file=None)` caveat**: Creating `AppSettings(_env_file=None, ...)` does not reliably prevent `.env` from being read when other modules are collected in the same pytest session. Explicitly pass all relevant kwargs (e.g., `code_llm_provider=""`, `embedding_provider="ollama"`) to override env file values.
 - **Default Redis URL** (`settings.py:94`): `redis://:local_secure_password_123@localhost:6379/0`. Docker compose overrides to `redis://:local_secure_password_123@redis:6379/0`.
 - **Logging**: structlog, JSON (prod) or console (DEBUG). Toggle via `LOG_LEVEL`.
 
@@ -71,30 +72,35 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 | `make test-unit` | All unit tests |
 | `make test-unit-serial` | Sequential (`-n 0`) |
 | `make test-smoke` | Unit, no slow, no header, quiet |
-| `make test-integration` | Sequential + 2 reruns; needs Docker |
+| `make test-integration` | Sequential + 2 reruns; needs Docker (testcontainers) |
 | `make test-integration-parallel` | `-n 2 --dist=loadgroup` |
-| `make test-e2e` | Full pipeline; needs Docker |
+| `make test-e2e` | Full pipeline; needs Docker (testcontainers) |
 | `make test-eval` | Mocked embedder, no infra |
 | `make test-ci-unit` | With coverage (XML + term-missing) |
 | `make lint` / `make format` | Ruff only |
 
 - **Pytest quirks** (`pyproject.toml`): `asyncio_mode = auto` — never `@pytest.mark.asyncio`. Default `addopts = "-n auto --dist worksteal --strict-markers"`. Coverage omits `ui/`.
-- **Shared fixtures** (`tests/conftest.py`): `integration_settings`, `embeddings_provider`, `qdrant_store`, `ollama_client`, `populated_store`, `rag_service`, `api_client`. Auto-skips integration tests when Docker services unreachable (checks at collection time via `pytest_collection_modifyitems`).
+- **Shared fixtures** (`tests/conftest.py`): `integration_settings`, `embeddings_provider`, `qdrant_store`, `ollama_client`, `populated_store`, `rag_service`, `api_client`.
+- **Integration/e2e conftests** (`tests/integration/conftest.py`, `tests/e2e/conftest.py`): Use testcontainers for Qdrant (`qdrant/qdrant:v1.18.3`), Redis (`redis:7-alpine`), and Ollama (`ollama/ollama:0.32.4`). No external Docker Compose services needed for tests.
 - **Test isolation**: `unique_collection_name()` creates per-test Qdrant collections; teardown deletes them.
+- **Auto-skip mechanism**: `pytest_collection_modifyitems` in shared conftest checks service availability at collection time. Integration conftest's `pytest_configure` eagerly starts the Ollama container and monkey-patches the shared conftest so tests aren't skipped when host Ollama is absent.
 
-## Docker Services
+## Docker Services (full app stack)
 `redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `postgres` (app crawl frontier), `backend-api`, `celery_worker`
 - Commands: `make docker-up/down/status/rebuild/logs/health/setup/cleanup/stop-all`
 - `make docker-setup` = `docker-up` + pulls `nomic-embed-text` + `llama3.2:3b` into Ollama.
 - CI stack: `make docker-ci-up` (uses `docker-compose.ci.yml`, prefix `dec_ci_*`).
 - Worker volume mount `.:/app` — code changes need worker restart, not rebuild.
 - `backend-api` and `celery_worker` share the same Docker image (`de_copilot_base_image`).
+- Integration and e2e tests do NOT require Docker Compose — they use testcontainers (Qdrant, Redis, Ollama). Only full manual testing or `dec ingest` needs the full stack.
 
 ## Architecture & Constraints
 - **No LangChain/LlamaIndex** (except `langchain-text-splitters`).
 - **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()`, etc. in `factory.py`. Never instantiate manually.
 - **Async Only**: `SafeAsyncClientMixin` in `infrastructure/async_client.py`. Uses `httpx.AsyncClient` / `aiohttp`.
 - **Providers**: LLM → ollama, openrouter, nvidia. Embeddings → ollama, openrouter, nvidia, openai. Switching providers requires `dec reset-index` (dimensions change).
+- **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use a different provider+model via `{purpose}_llm_provider` / `{purpose}_llm_model` settings. Empty = fall back to global `llm_provider` / `llm_model`. See `factory.py:69-96` (`_build_purpose_llm_client`).
+- **Embedding dimension is model-dependent**: Looked up in `embedding_model_dimensions: dict[str, int]` (settings.py:117). Not provider-dependent.
 - **Chunking** (`settings.chunking_strategy`): `"sentence_preserving"` (default, 1875-char chunks), `"semantic"`, `"header_aware"`, `"fixed_size"`.
 - **Hybrid Search**: Enabled by default (dense + sparse). Configured via `hybrid_search_enabled`, `hybrid_rrf_k=60`.
 - **RAG Pipeline**: Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic) with NumPy SIMD scoring.
@@ -107,6 +113,13 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - `sentence-transformers` → downloads cross-encoder model on first rerank.
 - `qdrant-client`, `redis`, `celery`, `langfuse`, `structlog`.
 
+## CI & Workflows
+- CI workflows are in `.github/workflows.disabled/test.yml` — disabled (not in `.github/workflows/`).
+- CI runs three jobs: `lint`, `test-unit` (with coverage), `test-integration`, `test-e2e`.
+- CI uses `uv sync --frozen --extra dev` and `docker compose -f docker-compose.ci.yml`.
+- Integration CI starts full Docker Compose stack (Ollama, Qdrant, Redis, etc.) via `docker-compose.ci.yml`.
+- Unit CI has no Docker dependency — runs with `make test-ci-unit`.
+
 ## Operational Gotchas
 - **Qdrant Health**: Use `GET /` (port 6333). `/health` returns 404.
 - **Ollama `raw: True`**: Strips `<think>` tags from responses. Empty response = output budget exhausted (increase `ollama_num_predict` in settings).
@@ -117,6 +130,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Ingestion Lock**: Atomic SETNX on `ingestion:dispatch_lock` (60s TTL). Released before flush to prevent unbounded chunk accumulation.
 - **Streamlit**: UI uses SSE to poll `/api/v1/ingest/status/{task_id}`.
 - **reset-index behavior**: Deletes Qdrant collection, recreates it with correct dim (provider-dependent), deletes all Redis `crawl:*` keys, and drops crawl frontier tables (PostgreSQL).
+- **Ollama testcontainer model caching**: Integration/e2e conftests mount `~/.ollama` into the `OllamaContainer` via `ollama_home`. Models are shared with the host Ollama (if any). First test run pulls missing models; subsequent runs use the cache.
 - **respx + Ollama embedding**: `respx` passthrough (`assert_all_mocked=False`) returns empty bodies for Ollama `/api/embed` calls. If you need to mock the LLM while using real Ollama for embeddings, implement `LLMClientProtocol` with a simple class instead of wire-mocking with `respx`.
 
 ## Plan Mode Discipline
