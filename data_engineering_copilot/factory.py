@@ -95,6 +95,11 @@ def _build_purpose_llm_client(
     if not eff_provider or not eff_model:
         return None
 
+    # When the purpose-specific model is empty (falling back to global), use the
+    # provider-specific default model to avoid model-provider mismatch.
+    if not model and eff_provider == "openrouter":
+        eff_model = app_settings.openrouter_model
+
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
     if eff_provider == "ollama":
