@@ -152,6 +152,7 @@ jobs:
         run: |
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -233,6 +234,7 @@ jobs:
         run: |
           docker exec de_copilot_ollama ollama pull nomic-embed-text
           docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
