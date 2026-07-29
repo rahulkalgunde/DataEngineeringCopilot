@@ -175,12 +175,11 @@ class LLMClient(SafeAsyncClientMixin):
 
     @staticmethod
     def _is_retryable_llm_error(exc: BaseException) -> bool:
-        """Only retry on transient errors: timeout, connection, 5xx, 429."""
+        """Retry on transient errors only. 429 is handled by rate limiter, not retried."""
         if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, OSError)):
             return True
         if isinstance(exc, httpx.HTTPStatusError):
-            status = exc.response.status_code
-            return status == 429 or status >= 500
+            return exc.response.status_code >= 500
         return False
 
     @retry(
