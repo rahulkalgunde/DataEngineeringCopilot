@@ -1,4 +1,5 @@
 import asyncio
+import os
 from urllib.parse import urlparse
 
 import httpx
@@ -28,12 +29,13 @@ app.add_middleware(
     rbac_users_json=settings.rbac_users_json,
 )
 
-# CORS — allow all origins for local development; restrict in production
+# CORS — restrict in production via CORS_ORIGINS env var
+cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:8501").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 

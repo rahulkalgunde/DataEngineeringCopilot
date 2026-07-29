@@ -81,11 +81,11 @@ class TestRbacMiddlewareResolvePermissions:
             rbac_users_json=rbac_json,
         )
 
-    def test_resolve_longest_prefix(self) -> None:
+    def test_resolve_exact_match(self) -> None:
         rbac_json = json.dumps(
             {
+                "sk-abc-def-xyz": {"allowed_sources": ["B"], "role": "admin"},
                 "sk-abc": {"allowed_sources": ["A"], "role": "reader"},
-                "sk-abc-def": {"allowed_sources": ["B"], "role": "admin"},
             }
         )
         mw = self._make_middleware(rbac_json)
@@ -93,6 +93,11 @@ class TestRbacMiddlewareResolvePermissions:
         assert perms is not None
         assert perms.allowed_sources == ("B",)
         assert perms.role == "admin"
+
+    def test_resolve_parent_prefix_does_not_match(self) -> None:
+        rbac_json = json.dumps({"sk-abc": {"allowed_sources": ["A"]}})
+        mw = self._make_middleware(rbac_json)
+        assert mw._resolve_permissions("sk-abc-def") is None
 
     def test_resolve_no_match(self) -> None:
         rbac_json = json.dumps({"sk-abc": {"allowed_sources": ["A"]}})

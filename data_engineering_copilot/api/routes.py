@@ -44,8 +44,8 @@ def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str
 
 
 class IngestRequest(BaseModel):
-    source_names: list[str] | None = None
-    max_pages: int | None = None
+    source_names: list[str] | None = Field(default=None, max_length=20)
+    max_pages: int | None = Field(default=None, ge=1, le=10000)
 
 
 class TaskStatus(BaseModel):
@@ -276,7 +276,7 @@ async def ask(request: AskRequest, fastapi_request: Request):
         raise HTTPException(status_code=504, detail="Request timed out. Try a simpler question.") from None
     except Exception as exc:
         logger.exception("RAG ask failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"RAG pipeline error: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/api/v1/ask/stream")
@@ -300,7 +300,7 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
             yield f"data: {json.dumps({'type': 'error', 'message': 'Request timed out'})}\n\n"
         except Exception as exc:
             logger.exception("RAG streaming ask failed: %s", exc)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error'})}\n\n"
         finally:
             yield "data: [DONE]\n\n"
 

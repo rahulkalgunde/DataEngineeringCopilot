@@ -445,12 +445,6 @@ def build_rag_service(
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
-    evaluation_client = _build_purpose_llm_client(
-        provider=app_settings.evaluation_llm_provider,
-        model=app_settings.evaluation_llm_model,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
-    )
 
     vector_store = AsyncQdrantVectorStore(
         url=app_settings.qdrant_url,
@@ -489,10 +483,6 @@ def build_rag_service(
         max_chunks=app_settings.retrieval_top_k,
     )
 
-    from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
-
-    faithfulness_evaluator = FaithfulnessEvaluator(llm_client=evaluation_client or llm_client)
-
     # PII redaction
     pii_redactor = None
     if app_settings.pii_redaction_enabled:
@@ -520,6 +510,5 @@ def build_rag_service(
         context_compressor=context_compressor,
         token_tracker=token_tracker,
         retrieval_tracker=retrieval_tracker,
-        faithfulness_evaluator=faithfulness_evaluator,
         pii_redactor=pii_redactor,
     )

@@ -69,14 +69,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         self._rbac_map = _build_rbac_map(rbac_users_json) if rbac_enabled else {}
 
     def _resolve_permissions(self, provided_key: str | None) -> UserPermissions | None:
-        """Look up API key prefix in the RBAC map."""
+        """Look up API key in the RBAC map by exact match."""
         if not provided_key or not self._rbac_map:
             return None
-        # Try prefixes from longest to shortest for best match
-        for prefix in sorted(self._rbac_map, key=len, reverse=True):
-            if provided_key.startswith(prefix):
-                return self._rbac_map[prefix]
-        return None
+        return self._rbac_map.get(provided_key)
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in self.EXEMPT_PATHS:

@@ -24,7 +24,7 @@ from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
-from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
+from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,6 @@ class AsyncRagService:
         context_compressor: ContextCompressor | None = None,
         token_tracker: object | None = None,
         retrieval_tracker: object | None = None,
-        faithfulness_evaluator: FaithfulnessEvaluator | None = None,
         code_llm_client: LLMClientProtocol | None = None,
         pii_redactor: PiiRedactor | None = None,
     ) -> None:
@@ -66,7 +65,6 @@ class AsyncRagService:
         self.context_compressor = context_compressor
         self.token_tracker = token_tracker
         self.retrieval_tracker = retrieval_tracker
-        self.faithfulness_evaluator = faithfulness_evaluator
         self._pii_redactor = pii_redactor
         self._prompt_builder = PromptBuilder()
 
@@ -247,10 +245,14 @@ class AsyncRagService:
         try:
             if on_step:
                 on_step("Reranking results")
-            if self.config.reranker_enabled and self.reranker is not None and self.reranker.is_available():
-                expanded_chunks = await self.vector_store.query(query_emb, top_k=self.config.retrieval_top_k * 2)
+            if (
+                self.config.reranker_enabled
+                and self.reranker is not None
+                and self.reranker.is_available()
+                and len(retrieved_chunks) > 1
+            ):
                 retrieved_chunks = self.reranker.rerank(
-                    effective_query, expanded_chunks, top_k=self.config.reranker_top_k
+                    effective_query, retrieved_chunks, top_k=self.config.reranker_top_k
                 )
 
             # MMR diversity reranking — ensures diverse context
@@ -268,7 +270,10 @@ class AsyncRagService:
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
-            context_str, source_names = assembler.assemble(sorted_chunks)
+            context_str, source_names = assembler.assemble(
+                sorted_chunks,
+                deduplicate=self.context_compressor is None,
+            )
 
             if on_step:
                 on_step("Generating answer")
@@ -324,6 +329,14 @@ class AsyncRagService:
                 if pii_types_answer:
                     logger.info("pii_redacted_in_answer types=%s", pii_types_answer)
 
+            # Citation verification: keep only citations matching retrieved sources
+            parsed = parse_rag_response(answer_text)
+            source_names = [c.chunk.source_name for c in retrieved_chunks]
+            verified_citations = verify_citations(parsed.citations, source_names)
+            if verified_citations:
+                answer_text = parsed.answer
+                logger.info("citations_verified=%d total=%d", len(verified_citations), len(parsed.citations))
+
             if generation_span:
                 generation_span.update(output=answer_text)
                 generation_span.end()
@@ -364,26 +377,6 @@ class AsyncRagService:
                         groundedness_score=groundedness_score,
                     )
                 else:
-                    result = Answer(
-                        text=result.text,
-                        sources=result.sources,
-                        confidence=result.confidence,
-                        groundedness_score=groundedness_score,
-                    )
-
-            # Phase 2B2: Faithfulness evaluation (RAGAS-compatible)
-            if self.faithfulness_evaluator is not None:
-                context_text = " ".join(c.chunk.text for c in retrieved_chunks[:5])
-                faith_result = await self.faithfulness_evaluator.evaluate(result.text, context_text)
-                logger.info(
-                    "faithfulness_score=%.2f supported=%d unsupported=%d",
-                    faith_result.faithfulness_score,
-                    faith_result.supported_claims,
-                    faith_result.unsupported_claims,
-                )
-                # Update groundedness_score with faithfulness if lower
-                if faith_result.faithfulness_score < groundedness_score:
-                    groundedness_score = faith_result.faithfulness_score
                     result = Answer(
                         text=result.text,
                         sources=result.sources,
@@ -489,10 +482,30 @@ class AsyncRagService:
             async for token in llm_client.generate_stream(prompt):
                 full_text += token
                 yield _sse({"type": "token", "content": token})
-        except Exception as exc:
-            logger.exception("Streaming generation failed: %s", exc)
-            yield _sse({"type": "error", "message": str(exc)})
+        except Exception:
+            logger.exception("Streaming generation failed")
+            yield _sse({"type": "error", "message": "Generation failed"})
             return
+
+        # Post-generation validation: PII redaction, output guardrails, caching
+        if self._pii_redactor is not None:
+            full_text, _pii_types = self._pii_redactor.redact(full_text)
+            if _pii_types:
+                logger.info("pii_redacted_in_stream types=%s", _pii_types)
+
+        from data_engineering_copilot.services.output_guardrails import OutputGuardrails
+
+        validated = OutputGuardrails.verify(full_text, len(retrieved_chunks))
+        if validated is not None:
+            full_text = validated.answer
+
+        if self.cache is not None:
+            try:
+                query_emb_for_cache = await self.embedder.embed_query(effective_query)
+                await self.cache.aset_exact(question, full_text)
+                await self.cache.aset_semantic(question, query_emb_for_cache, full_text)
+            except Exception:
+                logger.warning("Cache write failed in stream", exc_info=True)
 
         # Done event with metadata
         confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
