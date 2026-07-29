@@ -176,7 +176,10 @@ def reset_index() -> None:
             await f.close()
             logger.info("Reset PostgreSQL crawl frontier database via %s", db_url)
 
-        asyncio.run(_reset_pg())
+        try:
+            asyncio.run(_reset_pg())
+        except RuntimeError:
+            logger.warning("Skipping PostgreSQL reset — already running in an event loop")
 
 
 def health() -> None:
@@ -456,18 +459,38 @@ def config() -> None:
             print(f"  ❌ Redis URL: unreachable ({e})")
             errors.append("Redis URL is not reachable")
 
-    # Check embedding dimension consistency
+    # Check embedding configuration
     print("\nEmbedding Configuration:")
     dim = settings.get_embedding_dimension()
+    provider = settings.embedding_provider
+    if provider == "openrouter":
+        model = settings.openrouter_embedding_model
+    elif provider == "nvidia":
+        model = settings.nvidia_embedding_model
+    elif provider == "openai":
+        model = getattr(settings, "openai_embedding_model", "unknown")
+    else:
+        model = settings.embedding_model_name
+    print(f"  Provider: {provider}")
+    print(f"  Model: {model}")
     print(f"  Dimension: {dim}")
-    print(f"  Provider: {settings.embedding_provider}")
 
-    if settings.embedding_provider == "openrouter":
-        print(f"  Model: {settings.openrouter_embedding_model}")
-    elif settings.embedding_provider == "nvidia":
-        print(f"  Model: {settings.nvidia_embedding_model}")
-    elif settings.embedding_provider == "openai":
-        print(f"  Model: {settings.openai_embedding_model}")
+    # Per-purpose LLM configuration
+    print("\nPer-Purpose LLM Configuration:")
+    purposes = [
+        ("Answer", settings.answer_llm_provider, settings.answer_llm_model),
+        ("Rewrite", settings.rewrite_llm_provider, settings.rewrite_llm_model),
+        ("Groundedness", settings.groundedness_llm_provider, settings.groundedness_llm_model),
+        ("Intent", settings.intent_llm_provider, settings.intent_llm_model),
+        ("Enrichment", settings.enrichment_llm_provider, settings.enrichment_llm_model),
+        ("Evaluation", settings.evaluation_llm_provider, settings.evaluation_llm_model),
+        ("Code", settings.code_llm_provider, settings.code_llm_model),
+    ]
+    for name, provider, model in purposes:
+        if provider:
+            print(f"  {name}: {provider}/{model or '(global model)'}")
+        else:
+            print(f"  {name}: (global default — {settings.llm_provider}/{settings.llm_model})")
 
     # Check collection exists with correct dimension
     try:

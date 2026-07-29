@@ -26,7 +26,7 @@ def _settings():
 
     return AppSettings(
         embedding_provider="ollama",
-        local_embedding_dimension=768,
+
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=10,
@@ -47,14 +47,18 @@ def _embedder(_settings):
 @pytest.fixture(scope="module")
 def _ollama(_settings):
     require_ollama()
-    from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+    from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
-    return AsyncOllamaClient(
-        base_url=_settings.ollama_base_url,
+    return LLMClient(
+        base_url=f"{_settings.ollama_base_url}/v1",
         model=_settings.ollama_model,
         timeout_seconds=_settings.ollama_timeout_seconds,
-        num_ctx=_settings.ollama_num_ctx,
-        num_predict=_settings.ollama_num_predict,
+        extra_body={
+            "options": {
+                "num_ctx": _settings.ollama_num_ctx,
+                "num_predict": _settings.ollama_num_predict,
+            }
+        },
     )
 
 
@@ -279,10 +283,74 @@ class TestRAGEdgeCases:
 class TestRAGWireMocked:
     """RAG pipeline with respx wire-mocked LLM and embeddings."""
 
-    @pytest.mark.skip(reason="Qdrant HTTP pass-through not supported by respx")
+    @pytest.mark.serial
     @pytest.mark.asyncio
-    async def test_rag_cache_hit_skips_llm(self):
-        pass
+    async def test_rag_cache_hit_skips_llm(self, fresh_qdrant_store):
+        """Real Qdrant, mock LLM client — verify cache hit skips LLM."""
+        require_ollama()
+
+        from data_engineering_copilot.config.settings import AppSettings
+        from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
+        from data_engineering_copilot.domain.protocols import LLMClientProtocol
+        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
+
+        settings = AppSettings(
+            _env_file=None,
+            embedding_provider="ollama",
+            embedding_model_name="nomic-embed-text",
+            llm_provider="ollama",
+            code_llm_provider="",
+        )
+
+        embedder = AsyncOllamaEmbeddings(model_name=settings.embedding_model_name)
+
+        chunk = DocumentChunk(
+            chunk_id="test_cache_001",
+            source_name="Test",
+            title="Apache Spark",
+            url="https://example.com/spark.html",
+            text="Apache Spark is a unified analytics engine for large-scale data processing.",
+        )
+        emb = await embedder.embed_texts([chunk.text])
+        await fresh_qdrant_store.upsert_chunks([chunk], emb)
+
+        call_count = 0
+
+        class MockLLM(LLMClientProtocol):
+            async def generate(self, prompt: str, **kwargs) -> str:
+                nonlocal call_count
+                call_count += 1
+                return "Spark is an analytics engine."
+            async def close(self) -> None:
+                pass
+
+        llm_client = MockLLM()
+        cache = TwoTierCache(similarity_threshold=0.95)
+        rag_config = RagConfig(
+            confidence_threshold=0.10,
+            retrieval_top_k=5,
+            max_context_chars=2000,
+        )
+
+        rag_service = AsyncRagService(
+            config=rag_config,
+            vector_store=fresh_qdrant_store,
+            llm_client=llm_client,
+            embedder=embedder,
+            cache=cache,
+        )
+
+        result1 = await rag_service.answer("What is Spark?")
+        assert "Spark" in result1.text
+        assert call_count == 1, "LLM should be called once on first query"
+
+        result2 = await rag_service.answer("What is Spark?")
+        assert result2.text == result1.text
+        assert call_count == 1, "LLM should NOT be called again (cache hit)"
+
+        await embedder.close()
 
     @pytest.mark.asyncio
     async def test_rag_answer_with_wire_mocked_llm(self):
@@ -291,23 +359,31 @@ class TestRAGWireMocked:
         from httpx import Response
 
         from data_engineering_copilot.config.settings import AppSettings
-        from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
         settings = AppSettings()
         with respx.mock(assert_all_mocked=False) as respx_mock:
-            respx_mock.post(f"{settings.ollama_base_url}/api/generate").mock(
+            respx_mock.post(f"{settings.ollama_base_url}/v1/chat/completions").mock(
                 return_value=Response(
                     200,
-                    json={"response": "This is a wire-mocked answer.", "done": True},
+                    json={
+                        "choices": [{"message": {"content": "This is a wire-mocked answer."}}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+                        "model": settings.ollama_model,
+                    },
                 )
             )
 
-            client = AsyncOllamaClient(
-                base_url=settings.ollama_base_url,
+            client = LLMClient(
+                base_url=f"{settings.ollama_base_url}/v1",
                 model=settings.ollama_model,
                 timeout_seconds=5,
-                num_ctx=2048,
-                num_predict=128,
+                extra_body={
+                    "options": {
+                        "num_ctx": 2048,
+                        "num_predict": 128,
+                    }
+                },
             )
             result = await client.generate("What is Spark?")
             assert "wire-mocked" in result
@@ -323,8 +399,11 @@ class TestRAGWireMocked:
         from data_engineering_copilot.config.settings import AppSettings
         from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-        settings = AppSettings()
-        dim = settings.local_embedding_dimension
+        settings = AppSettings(
+            embedding_provider="ollama",
+            embedding_model_name="nomic-embed-text",
+        )
+        dim = settings.get_embedding_dimension()
         fake_embedding = [0.01] * dim
 
         with respx.mock(assert_all_mocked=False) as respx_mock:

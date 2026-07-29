@@ -146,10 +146,16 @@ class TestLangfuseConfiguration:
         custom = AppSettings()
         assert custom.langfuse_host == "http://custom:9999"
 
+    @pytest.mark.serial
     def test_langfuse_defaults_when_no_env(self, monkeypatch):
         for var in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
             monkeypatch.delenv(var, raising=False)
         from data_engineering_copilot.config.settings import AppSettings
 
-        custom = AppSettings(_env_file=None)
+        custom = AppSettings(
+            _env_file=None,
+            llm_provider="ollama",
+            code_llm_provider="",
+            embedding_provider="ollama",
+        )
         assert custom.langfuse_host == "http://langfuse:3000"

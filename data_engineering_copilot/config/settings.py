@@ -106,15 +106,25 @@ class AppSettings(BaseSettings):
         validation_alias="LANGFUSE_HOST",
     )
 
-    # Default dm is 768 for the nomic-embed-text model
-    local_embedding_dimension: int = 768
     embedding_batch_size: int = 256
     enrichment_batch_size: int = 20
 
     # LLM Provider selection: "ollama" | "openrouter"
     # Embedding provider selection: "ollama" | "openrouter"
     embedding_model_name: str = "nomic-embed-text"
+    # Embedding dimension is model-dependent, not provider-dependent.
+    # Map model names to their known output dimensions.
+    embedding_model_dimensions: dict[str, int] = {
+        "nomic-embed-text": 768,
+        "mxbai-embed-large": 1024,
+        "snowflake-arctic-embed2": 1024,
+        "llama3.2:3b": 3072,
+        "nvidia/nemotron-3-embed-1b": 2048,
+        "nvidia/nemotron-3-embed-1b:free": 2048,
+    }
+    default_embedding_dimension: int = 768
     llm_provider: str = "ollama"
+    llm_model: str = "llama3.2:3b"
     embedding_provider: str = "ollama"
     ollama_model: str = "llama3.2:3b"
 
@@ -122,21 +132,32 @@ class AppSettings(BaseSettings):
     openrouter_api_key: SecretStr = SecretStr("")
     openrouter_model: str = "openrouter/free"
     openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
-    openrouter_embedding_dimension: int = 2048
     openrouter_rpm_limit: int = 20
     openrouter_rpd_limit: int = 1000
 
     # NVIDIA NIM settings (embeddings + LLM)
     nvidia_embedding_model: str = "nvidia/nemotron-3-embed-1b"
-    nvidia_embedding_dimension: int = 2048
     nvidia_nim_api_key: SecretStr = SecretStr("")
     nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_nim_rpm_limit: int = 40
     nvidia_nim_rpd_limit: int = 1000
 
+    # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
+    answer_llm_provider: str = ""
+    answer_llm_model: str = ""
+    rewrite_llm_provider: str = ""
+    rewrite_llm_model: str = ""
+    groundedness_llm_provider: str = ""
+    groundedness_llm_model: str = ""
+    intent_llm_provider: str = ""
+    intent_llm_model: str = ""
+    enrichment_llm_provider: str = ""
+    enrichment_llm_model: str = ""
+    evaluation_llm_provider: str = ""
+    evaluation_llm_model: str = ""
     # Code-specific LLM override (optional, for code_example/api_lookup intents)
-    code_llm_provider: str = ""  # "" = use primary llm_provider for everything
-    code_llm_model: str = ""  # Model name for code-specific provider
+    code_llm_provider: str = ""
+    code_llm_model: str = ""
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
@@ -207,24 +228,43 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_provider_api_keys(self) -> AppSettings:
-        if self.llm_provider == "openrouter" and not self.openrouter_api_key.get_secret_value():
-            raise ValueError("OPENROUTER_API_KEY is required when LLM_PROVIDER='openrouter'")
+        all_llm_providers = {
+            p for p in [
+                self.llm_provider,
+                self.answer_llm_provider,
+                self.rewrite_llm_provider,
+                self.groundedness_llm_provider,
+                self.intent_llm_provider,
+                self.enrichment_llm_provider,
+                self.evaluation_llm_provider,
+                self.code_llm_provider,
+            ] if p
+        }
+        if "openrouter" in all_llm_providers and not self.openrouter_api_key.get_secret_value():
+            raise ValueError("OPENROUTER_API_KEY is required when any LLM provider is 'openrouter'")
         if self.embedding_provider == "openrouter" and not self.openrouter_api_key.get_secret_value():
             raise ValueError("OPENROUTER_API_KEY is required when EMBEDDING_PROVIDER='openrouter'")
+        if "nvidia" in all_llm_providers and not self.nvidia_nim_api_key.get_secret_value():
+            raise ValueError("NVIDIA_NIM_API_KEY is required when any LLM provider is 'nvidia'")
         if self.embedding_provider == "nvidia" and not self.nvidia_nim_api_key.get_secret_value():
             raise ValueError("NVIDIA_NIM_API_KEY is required when EMBEDDING_PROVIDER='nvidia'")
-        if self.code_llm_provider == "nvidia" and not self.nvidia_nim_api_key.get_secret_value():
-            raise ValueError("NVIDIA_NIM_API_KEY is required when CODE_LLM_PROVIDER='nvidia'")
         return self
 
     def get_embedding_dimension(self) -> int:
-        """Return the correct embedding dimension for the active provider."""
+        """Return the embedding dimension for the active model.
+
+        Dimension is model-dependent — looks up the configured model in
+        ``embedding_model_dimensions`` and falls back to
+        ``default_embedding_dimension`` if the model is unrecognised.
+        """
         provider = self.embedding_provider.lower()
         if provider == "openrouter":
-            return self.openrouter_embedding_dimension
+            model_name = self.openrouter_embedding_model
         elif provider == "nvidia":
-            return self.nvidia_embedding_dimension
-        return self.local_embedding_dimension
+            model_name = self.nvidia_embedding_model
+        else:
+            model_name = self.embedding_model_name
+        return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
 
 
 settings = AppSettings()

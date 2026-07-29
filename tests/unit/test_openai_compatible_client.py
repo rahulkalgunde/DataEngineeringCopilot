@@ -1,4 +1,4 @@
-"""Tests for OpenAICompatibleLLMClient — async httpx-based OpenAI-compatible generation client."""
+"""Tests for LLMClient with OpenRouter-style parametrization."""
 
 from __future__ import annotations
 
@@ -7,18 +7,17 @@ import pytest
 import respx
 
 from data_engineering_copilot.domain.models import LLMUsage
-from data_engineering_copilot.infrastructure.async_openai_compatible_client import (
-    LLMClientError,
-    OpenAICompatibleLLMClient,
-)
+from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
 
 
 @pytest.fixture
 def client():
-    return OpenAICompatibleLLMClient(
+    return LLMClient(
         api_key="sk-or-v1-test-key",
         model="anthropic/claude-3.5-sonnet",
         timeout_seconds=120,
+        base_url="https://openrouter.ai/api/v1",
+        extra_headers={"HTTP-Referer": "https://data-engineering-copilot.local"},
     )
 
 
@@ -26,6 +25,7 @@ def test_init(client):
     assert client.model == "anthropic/claude-3.5-sonnet"
     assert client.api_key == "sk-or-v1-test-key"
     assert client.timeout_seconds == 120
+    assert client.base_url == "https://openrouter.ai/api/v1"
 
 
 def test_last_usage_initial(client):
@@ -120,7 +120,7 @@ async def test_generate_http_error(client):
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
             return_value=httpx.Response(401, json={"error": "Unauthorized"})
         )
-        with pytest.raises(LLMClientError, match="Unauthorized"):
+        with pytest.raises(LLMClientError, match="401 Unauthorized"):
             await client.generate("test")
 
 
@@ -183,10 +183,10 @@ async def test_generate_custom_temperature(client):
 
 
 def test_custom_base_url():
-    c = OpenAICompatibleLLMClient(
+    c = LLMClient(
         api_key="key",
         model="model",
         base_url="https://custom.api.com/v1",
         timeout_seconds=60,
     )
-    assert c._base_url == "https://custom.api.com/v1"
+    assert c.base_url == "https://custom.api.com/v1"

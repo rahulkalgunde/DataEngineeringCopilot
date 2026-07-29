@@ -94,8 +94,10 @@ class QueryRewriter:
         enabled: bool = True,
         hyde_enabled: bool = True,
         intent_llm_enabled: bool = False,
+        intent_llm_client: object | None = None,
     ) -> None:
         self._llm_client = llm_client
+        self._intent_llm_client = intent_llm_client or llm_client
         self._enabled = enabled
         self._hyde_enabled = hyde_enabled
         self._intent_llm_enabled = intent_llm_enabled
@@ -117,7 +119,7 @@ class QueryRewriter:
                 return intent
 
         # Fallback: LLM classifier for ambiguous queries (if enabled)
-        if self._intent_llm_enabled and self._llm_client is not None:
+        if self._intent_llm_enabled and self._intent_llm_client is not None:
             llm_intent = self._classify_intent_with_llm(query)
             if llm_intent is not None:
                 return llm_intent
@@ -144,7 +146,7 @@ class QueryRewriter:
             except RuntimeError:
                 pass
 
-            result = asyncio.run(self._llm_client.generate(prompt))
+            result = asyncio.run(self._intent_llm_client.generate(prompt))
             if not result:
                 return None
 
@@ -244,10 +246,10 @@ class QueryRewriter:
                 return intent
 
         # Fallback: async LLM classifier (if enabled)
-        if self._intent_llm_enabled and self._llm_client is not None:
+        if self._intent_llm_enabled and self._intent_llm_client is not None:
             try:
                 prompt = _CLASSIFY_INTENT_PROMPT.format(query=query)
-                result = await self._llm_client.generate(prompt)
+                result = await self._intent_llm_client.generate(prompt)
                 if result:
                     parsed = json.loads(result.strip())
                     intent = parsed.get("intent", "")

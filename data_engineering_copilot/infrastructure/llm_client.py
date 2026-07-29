@@ -1,7 +1,8 @@
-"""Async OpenAI-compatible generation client using httpx.AsyncClient.
+"""Unified async LLM client for any OpenAI-compatible provider.
 
-Provides an LLMProvider-compatible interface for any OpenAI-compatible
-Chat Completions API at /v1/chat/completions (OpenRouter, NVIDIA NIM, etc.).
+Supports Ollama, OpenRouter, NVIDIA NIM, OpenAI, etc. via a single
+parametrized class. All providers use the ``/v1/chat/completions``
+endpoint; differences are captured in constructor parameters.
 """
 
 from __future__ import annotations
@@ -23,27 +24,64 @@ class LLMClientError(RuntimeError):
     """Raised when the LLM provider cannot return an answer."""
 
 
-class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
-    """Async LLM client for any OpenAI-compatible Chat Completions API.
+class LLMClient(SafeAsyncClientMixin):
+    """Unified async client for any OpenAI-compatible Chat Completions API.
 
-    Supports providers like OpenRouter, NVIDIA NIM, etc. by passing the
-    appropriate ``base_url`` and ``api_key``.
+    Differences between providers are handled purely through constructor
+    parameters — no subclassing required.
+
+    Parameters
+    ----------
+    base_url:
+        Base URL of the provider API (e.g. ``"http://localhost:11434/v1"``
+        for Ollama or ``"https://openrouter.ai/api/v1"`` for OpenRouter).
+    model:
+        Model name to use for generation.
+    api_key:
+        API key for authentication. Empty string for providers that do not
+        require auth (e.g. local Ollama).
+    timeout_seconds:
+        HTTP request timeout.
+    temperature:
+        Sampling temperature.
+    max_retries:
+        Number of retry attempts for transient failures (timeout, connect,
+        5xx). 429s are retried up to this limit as well.
+    endpoint_path:
+        API endpoint path (default ``"/chat/completions"``).
+    extra_body:
+        Additional fields merged into the request body (e.g.
+        ``{"options": {"num_ctx": 4096}}`` for Ollama-specific options).
+    extra_headers:
+        Additional HTTP headers sent with every request (e.g.
+        ``{"HTTP-Referer": "https://..."}`` for OpenRouter).
+    rate_limiter:
+        Optional shared rate limiter for providers that enforce RPM/RPD
+        limits (OpenRouter, NVIDIA NIM, etc.).
     """
 
     def __init__(
         self,
-        api_key: str,
+        base_url: str,
         model: str,
+        api_key: str = "",
         timeout_seconds: int = 120,
-        base_url: str = "https://openrouter.ai/api/v1",
         temperature: float = 0.05,
+        max_retries: int = 3,
+        endpoint_path: str = "/chat/completions",
+        extra_body: dict | None = None,
+        extra_headers: dict | None = None,
         rate_limiter: SlidingWindowRateLimiter | None = None,
     ) -> None:
-        self.api_key = api_key
-        self.model = model
-        self.timeout_seconds = timeout_seconds
         self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.timeout_seconds = timeout_seconds
         self._temperature = temperature
+        self._max_retries = max_retries
+        self._endpoint_path = endpoint_path
+        self._extra_body = extra_body or {}
+        self._extra_headers = extra_headers or {}
         self._usage = LLMUsage()
         self._rate_limiter = rate_limiter
 
@@ -51,22 +89,24 @@ class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
     def last_usage(self) -> LLMUsage:
         return self._usage
 
-    @property
-    def _base_url(self) -> str:
-        return self.base_url
-
     def _make_client_kwargs(self) -> dict:
-        return {
-            "headers": {
-                "Authorization": f"Bearer {self.api_key}",
-                "HTTP-Referer": "https://data-engineering-copilot.local",
-            }
-        }
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self._extra_headers:
+            headers.update(self._extra_headers)
+        return {"headers": headers} if headers else {}
 
     async def _get_client(self) -> httpx.AsyncClient:
         return await self._get_safe_client()
 
-    async def generate(self, prompt: str, temperature: float | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float | None = None,
+        num_predict: int | None = None,
+        num_ctx: int | None = None,
+    ) -> str:
         temp = temperature if temperature is not None else self._temperature
         logger.info(
             "LLM generation started model=%s prompt_chars=%s temperature=%.2f",
@@ -75,17 +115,29 @@ class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
             temp,
         )
 
-        payload = {
+        payload: dict = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temp,
         }
+        if self._extra_body:
+            payload.update(self._extra_body)
+
+        options: dict = {}
+        if num_predict is not None:
+            options["num_predict"] = num_predict
+        if num_ctx is not None:
+            options["num_ctx"] = num_ctx
+        if options:
+            payload.setdefault("options", {}).update(options)
 
         try:
             body = await self._http_post(payload)
         except httpx.TimeoutException as exc:
             logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
-            raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
+            raise LLMClientError(
+                f"LLM provider timed out after {self.timeout_seconds} seconds."
+            ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 logger.exception("Rate limit persistently exceeded after retries.")
@@ -111,7 +163,8 @@ class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
         clean_text = self._extract_final_response(content)
 
         logger.info(
-            "LLM generation completed model=%s response_chars=%s final_chars=%s prompt_tokens=%d completion_tokens=%d",
+            "LLM generation completed model=%s response_chars=%s final_chars=%s "
+            "prompt_tokens=%d completion_tokens=%d",
             self.model,
             len(content),
             len(clean_text),
@@ -130,7 +183,7 @@ class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
     async def _http_post(self, payload: dict) -> dict:
         if self._rate_limiter is not None:
             await self._rate_limiter.acquire()
-        response = await (await self._get_client()).post("/chat/completions", json=payload)
+        response = await (await self._get_client()).post(self._endpoint_path, json=payload)
         if response.status_code == 429:
             if self._rate_limiter is not None:
                 await self._rate_limiter.handle_429(dict(response.headers))
@@ -140,7 +193,8 @@ class OpenAICompatibleLLMClient(SafeAsyncClientMixin):
         response.raise_for_status()
         return response.json()
 
-    def _extract_final_response(self, response: str) -> str:
+    @staticmethod
+    def _extract_final_response(response: str) -> str:
         response = response.strip()
         if not response:
             return ""

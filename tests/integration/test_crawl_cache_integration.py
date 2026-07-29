@@ -46,6 +46,7 @@ async def test_crawl_cache_close_handles_error():
     await cache.close()
 
 
+@pytest.mark.serial
 async def test_crawl_cache_set_headers_without_optional_fields(redis_url, url_hash):
     cache = CrawlCache(redis_url)
     try:

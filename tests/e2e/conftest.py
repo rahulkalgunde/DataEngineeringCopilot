@@ -115,8 +115,9 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str) -> AppSettings:
         redis_url=e2e_redis_url,
         collection_name=collection,
         ollama_base_url="http://localhost:11434",
+        llm_provider="ollama",
         embedding_provider="ollama",
-        local_embedding_dimension=768,
+
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
@@ -199,14 +200,18 @@ def e2e_llm(e2e_settings: AppSettings):
     if not _ollama_reachable():
         pytest.skip("Ollama is not reachable")
 
-    from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+    from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
-    client = AsyncOllamaClient(
-        base_url=e2e_settings.ollama_base_url,
+    client = LLMClient(
+        base_url=f"{e2e_settings.ollama_base_url}/v1",
         model=e2e_settings.ollama_model,
         timeout_seconds=e2e_settings.ollama_timeout_seconds,
-        num_ctx=e2e_settings.ollama_num_ctx,
-        num_predict=e2e_settings.ollama_num_predict,
+        extra_body={
+            "options": {
+                "num_ctx": e2e_settings.ollama_num_ctx,
+                "num_predict": e2e_settings.ollama_num_predict,
+            }
+        },
     )
     yield client
     with contextlib.suppress(RuntimeError):

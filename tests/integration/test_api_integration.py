@@ -10,7 +10,7 @@ Run with: pytest tests/integration/test_api_integration.py -v -m integration
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport
@@ -488,8 +488,20 @@ class TestSseStreaming:
 
         import data_engineering_copilot.api.routes as routes_mod
         from data_engineering_copilot.api.app import app
+        from data_engineering_copilot.domain.models import Answer
+        from data_engineering_copilot.services.async_rag import AsyncRagService
 
-        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client):
+        mock_answer = Answer(
+            text="This is a wire-mocked answer about Spark.",
+            confidence=0.95,
+            groundedness_score=0.9,
+            sources=(),
+        )
+        mock_service = MagicMock(spec=AsyncRagService)
+        mock_service.answer = AsyncMock(return_value=mock_answer)
+
+        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client), \
+             patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service):
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 async with client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response:
                     assert response.status_code == 200

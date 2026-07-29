@@ -6,41 +6,54 @@ import httpx
 import pytest
 import respx
 
-from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient, AsyncOllamaError
+from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
+
+OLLAMA_ENDPOINT = "/chat/completions"
 
 
 @pytest.fixture
 def client():
-    return AsyncOllamaClient(
-        base_url="http://localhost:11434",
+    return LLMClient(
+        base_url="http://localhost:11434/v1",
         model="llama3.2:3b",
         timeout_seconds=300,
-        num_ctx=4096,
-        num_predict=512,
+        extra_body={
+            "options": {
+                "num_ctx": 4096,
+                "num_predict": 512,
+            }
+        },
     )
 
 
-class TestOllamaRetry:
+class TestLLMClientRetry:
     @pytest.mark.asyncio
     async def test_retries_on_timeout_then_succeeds(self, client):
         with respx.mock:
-            route = respx.post("http://localhost:11434/api/generate")
+            route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 httpx.TimeoutException("timeout 1"),
-                httpx.TimeoutException("timeout 2"),
-                httpx.Response(200, json={"response": "success after retry", "done_reason": "stop"}),
+                httpx.Response(200, json={
+                    "choices": [{"message": {"content": "success after retry"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    "model": "llama3.2:3b",
+                }),
             ]
             result = await client.generate("test prompt")
             assert result == "success after retry"
-            assert route.call_count == 3
+            assert route.call_count == 2
 
     @pytest.mark.asyncio
     async def test_retries_on_connect_error_then_succeeds(self, client):
         with respx.mock:
-            route = respx.post("http://localhost:11434/api/generate")
+            route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 httpx.ConnectError("connection refused"),
-                httpx.Response(200, json={"response": "connected", "done_reason": "stop"}),
+                httpx.Response(200, json={
+                    "choices": [{"message": {"content": "connected"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    "model": "llama3.2:3b",
+                }),
             ]
             result = await client.generate("test prompt")
             assert result == "connected"
@@ -49,19 +62,23 @@ class TestOllamaRetry:
     @pytest.mark.asyncio
     async def test_fails_after_max_retries(self, client):
         with respx.mock:
-            route = respx.post("http://localhost:11434/api/generate")
+            route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = httpx.TimeoutException("persistent timeout")
-            with pytest.raises(AsyncOllamaError, match="timed out"):
+            with pytest.raises(LLMClientError, match="timed out"):
                 await client.generate("test prompt")
-            assert route.call_count == 3
+            assert route.call_count == 5
 
     @pytest.mark.asyncio
     async def test_retries_on_os_error(self, client):
         with respx.mock:
-            route = respx.post("http://localhost:11434/api/generate")
+            route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = [
                 OSError("connection reset"),
-                httpx.Response(200, json={"response": "recovered", "done_reason": "stop"}),
+                httpx.Response(200, json={
+                    "choices": [{"message": {"content": "recovered"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    "model": "llama3.2:3b",
+                }),
             ]
             result = await client.generate("test prompt")
             assert result == "recovered"

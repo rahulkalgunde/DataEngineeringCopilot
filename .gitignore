@@ -38,6 +38,7 @@ Thumbs.db
 .idea/
 .vscode/
 .opencode/
+opencode.json
 profil*
 profil*/
 .ollama_cache/

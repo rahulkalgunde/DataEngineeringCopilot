@@ -25,15 +25,17 @@ test-unit-serial:
 
 # Integration tests — sequential by default (testcontainers + shared Docker services)
 test-integration:
-	$(PYTEST) tests/integration/ -v -n 0 --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -m "not serial" -v -n auto --dist worksteal --reruns 2 --reruns-delay 1
 
 # Integration tests with controlled parallelism (xdist loadgroup for shared containers)
 test-integration-parallel:
-	$(PYTEST) tests/integration/ -v -n 2 --dist=loadgroup --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -m "not serial" -v -n 2 --dist=loadgroup --reruns 2 --reruns-delay 1
 
 # E2E tests — full pipeline
 test-e2e:
-	$(PYTEST) tests/e2e/ -v
+	$(PYTEST) tests/e2e/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/e2e/ -m "not serial" -v -n auto --dist worksteal --reruns 2 --reruns-delay 1
 
 # CI: unit tests with coverage (parallel)
 test-ci-unit:
@@ -51,6 +53,9 @@ test-smoke:
 
 test-eval:
 	$(PYTEST) tests/evaluation/ -v
+
+streamlit:
+	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
 lint:
 	$(PYTHON) -m ruff check data_engineering_copilot/ tests/
