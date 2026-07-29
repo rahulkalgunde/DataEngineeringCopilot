@@ -141,14 +141,11 @@ class AsyncIngestionService:
         if not batch_chunks:
             return
 
-        if self._chunk_filter is not None:
-            batch_chunks = self._chunk_filter.extract(batch_chunks)
-
-        if self._api_extractor is not None:
-            batch_chunks = self._api_extractor.extract(batch_chunks)
-
-        if self._code_block_parser is not None:
-            batch_chunks = self._code_block_parser.extract(batch_chunks)
+        if self._chunk_filter is not None or self._api_extractor is not None or self._code_block_parser is not None:
+            batch_chunks = await loop.run_in_executor(
+                self._chunk_executor,
+                lambda: self._apply_enrichers(batch_chunks),
+            )
 
         batch_size = len(batch_chunks)
         self._emit(
@@ -199,6 +196,15 @@ class AsyncIngestionService:
             if key not in seen and chunk.content_hash:
                 seen.add(key)
                 await self._set_content_hash(chunk.url, chunk.source_name, chunk.content_hash)
+
+    def _apply_enrichers(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+        if self._chunk_filter is not None:
+            chunks = self._chunk_filter.extract(chunks)
+        if self._api_extractor is not None:
+            chunks = self._api_extractor.extract(chunks)
+        if self._code_block_parser is not None:
+            chunks = self._code_block_parser.extract(chunks)
+        return chunks
 
     async def ingest(
         self,

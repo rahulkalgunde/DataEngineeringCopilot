@@ -28,7 +28,12 @@ class ContextAssembler:
         """
         self.max_context_chars = max_context_chars
 
-    def assemble(self, chunks: list[RetrievedChunk], mitigate_lost_in_middle: bool = True) -> tuple[str, list[str]]:
+    def assemble(
+        self,
+        chunks: list[RetrievedChunk],
+        mitigate_lost_in_middle: bool = True,
+        deduplicate: bool = True,
+    ) -> tuple[str, list[str]]:
         """Assemble context from chunks with deduplication and truncation.
 
         Args:
@@ -36,6 +41,8 @@ class ContextAssembler:
             mitigate_lost_in_middle: When True, reorders chunks so the most
                 relevant ones appear at the beginning AND end of the context,
                 reducing the "lost in the middle" effect.
+            deduplicate: When True, deduplicate chunks before assembly.
+                Set to False if upstream (ContextCompressor) already deduplicated.
 
         Returns:
             Tuple of (context_string, list_of_source_names)
@@ -43,8 +50,7 @@ class ContextAssembler:
         if not chunks:
             return "", []
 
-        # Step 1: Deduplicate semantically similar chunks
-        deduped = self._deduplicate_chunks(chunks)
+        deduped = self._deduplicate_chunks(chunks) if deduplicate else chunks
         logger.info("Deduplication: %d chunks → %d chunks", len(chunks), len(deduped))
 
         # Step 2: Lost-in-the-middle mitigation — reorder so top chunks

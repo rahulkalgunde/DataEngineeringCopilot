@@ -13,7 +13,7 @@ import re
 from collections.abc import AsyncIterator
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
@@ -173,10 +173,20 @@ class LLMClient(SafeAsyncClientMixin):
 
         return clean_text
 
+    @staticmethod
+    def _is_retryable_llm_error(exc: BaseException) -> bool:
+        """Only retry on transient errors: timeout, connection, 5xx, 429."""
+        if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, OSError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            return status == 429 or status >= 500
+        return False
+
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
+        retry=retry_if_exception(_is_retryable_llm_error),  # type: ignore[arg-type]
         reraise=True,
     )
     async def _http_post(self, payload: dict) -> dict:

@@ -56,8 +56,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         rl_key = _rate_limit_key(request)
         if not limiter.allow(rl_key):
             logger.warning("rate_limit_exceeded path=%s key=%s", path, rl_key)
+            period = getattr(limiter, "_period_seconds", 60)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again later."},
+                headers={"Retry-After": str(period)},
             )
         return await call_next(request)
