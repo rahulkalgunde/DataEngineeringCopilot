@@ -114,6 +114,7 @@ docker-setup: docker-up
 	@echo "Pulling Ollama models..."
 	docker exec $(PROJECT_NAME)_ollama-1 ollama pull nomic-embed-text 2>/dev/null || echo "Ollama not ready, pull manually"
 	docker exec $(PROJECT_NAME)_ollama-1 ollama pull llama3.2:3b 2>/dev/null || echo "Ollama not ready, pull manually"
+	docker exec $(PROJECT_NAME)_ollama-1 ollama pull qwen2.5-coder:7b 2>/dev/null || echo "Ollama not ready, pull manually"
 	@echo "Setup complete. Run 'make docker-status' to verify."
 
 docker-ci-up:
