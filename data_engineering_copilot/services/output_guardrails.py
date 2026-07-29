@@ -69,6 +69,8 @@ class OutputGuardrails:
         """Try to parse as JSON."""
         try:
             parsed = json.loads(cls._clean_json(raw))
+            if not isinstance(parsed, dict) or "answer" not in parsed:
+                return None
             validated = GuardrailedAnswer(**parsed)
             return validated
         except (json.JSONDecodeError, ValueError, TypeError):
@@ -92,10 +94,12 @@ class OutputGuardrails:
 
     @classmethod
     def _check_quality(cls, result: GuardrailedAnswer, source_count: int) -> GuardrailedAnswer | None:
-        """Reject empty / boilerplate answers when we have sources."""
+        """Reject empty / boilerplate answers."""
         if result.status == "INSUFFICIENT_CONTEXT":
             return result
-        if result.answer and source_count > 0:
+        if not result.answer or not result.answer.strip():
+            return None
+        if source_count > 0:
             if len(result.answer.strip()) < 20:
                 return None
             for pattern in cls.BOILERPLATE_PATTERNS:

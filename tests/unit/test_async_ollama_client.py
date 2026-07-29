@@ -1,4 +1,4 @@
-"""Tests for AsyncOllamaClient — async httpx-based Ollama generation client."""
+"""Tests for LLMClient with Ollama-style parametrization."""
 
 from __future__ import annotations
 
@@ -6,143 +6,126 @@ import httpx
 import pytest
 import respx
 
-from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient, AsyncOllamaError
+from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
 
 
 @pytest.fixture
-def async_client():
-    return AsyncOllamaClient(
-        base_url="http://localhost:11434",
+def ollama_client():
+    return LLMClient(
+        base_url="http://localhost:11434/v1",
         model="llama3.2:3b",
         timeout_seconds=300,
-        num_ctx=4096,
-        num_predict=512,
+        extra_body={
+            "options": {
+                "num_ctx": 4096,
+                "num_predict": 512,
+            }
+        },
     )
 
 
-def test_init(async_client):
-    assert async_client.model == "llama3.2:3b"
-    assert async_client.base_url == "http://localhost:11434"
-    assert async_client.timeout_seconds == 300
-    assert async_client.num_ctx == 4096
-    assert async_client.num_predict == 512
+def test_init(ollama_client):
+    assert ollama_client.model == "llama3.2:3b"
+    assert ollama_client.base_url == "http://localhost:11434/v1"
+    assert ollama_client.timeout_seconds == 300
+    assert ollama_client._extra_body == {"options": {"num_ctx": 4096, "num_predict": 512}}
 
 
-@pytest.mark.asyncio
-async def test_prompt_passthrough_no_formatting(async_client):
-    """Client passes prompt as-is to Ollama (prompt formatting lives in PromptBuilder)."""
-    with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "response": "Direct answer.",
-                    "done_reason": "stop",
-                },
-            )
-        )
-        raw_prompt = "My custom prompt with no system instruction"
-        result = await async_client.generate(raw_prompt)
-        assert result == "Direct answer."
-        sent_payload = respx.calls.last.request.content
-        import json
-
-        body = json.loads(sent_payload)
-        assert body["prompt"] == raw_prompt
-        assert body["raw"] is True
-
-
-def test_extract_strips_thinking_block(async_client):
+def test_extract_strips_thinking_block(ollama_client):
     raw = "<think>reasoning here</think>Final answer."
-    result = async_client._extract_final_response(raw)
+    result = ollama_client._extract_final_response(raw)
     assert "<think>" not in result
     assert "Final answer." in result
 
 
-def test_extract_reasoning_only_returns_empty(async_client):
+def test_extract_reasoning_only_returns_empty(ollama_client):
     raw = "<think>I ran out of tokens."
-    result = async_client._extract_final_response(raw)
+    result = ollama_client._extract_final_response(raw)
     assert result == ""
 
 
 @pytest.mark.asyncio
-async def test_generate_success(async_client):
+async def test_generate_success(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "response": "<think>I should reason.</think>\nDelta Lake supports ACID transactions.",
-                    "done_reason": "stop",
+                    "choices": [{"message": {"content": "<think>I should reason.</think>\nDelta Lake supports ACID transactions."}}],
+                    "usage": {"prompt_tokens": 50, "completion_tokens": 10},
+                    "model": "llama3.2:3b",
                 },
             )
         )
-        result = await async_client.generate("Answer from context")
+        result = await ollama_client.generate("Answer from context")
         assert result == "Delta Lake supports ACID transactions."
 
 
 @pytest.mark.asyncio
-async def test_generate_strips_thinking_block(async_client):
+async def test_generate_strips_thinking_block(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "response": "<think>reasoning here</think>Final answer here.",
-                    "done_reason": "stop",
+                    "choices": [{"message": {"content": "<think>reasoning here</think>Final answer here."}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    "model": "llama3.2:3b",
                 },
             )
         )
-        result = await async_client.generate("test")
+        result = await ollama_client.generate("test")
         assert "<think>" not in result
         assert "Final answer here" in result
 
 
 @pytest.mark.asyncio
-async def test_generate_reasoning_only_raises(async_client):
+async def test_generate_reasoning_only_returns_empty(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "response": "<think>I ran out of tokens.",
-                    "done_reason": "length",
+                    "choices": [{"message": {"content": "<think>I ran out of tokens."}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0},
+                    "model": "llama3.2:3b",
                 },
             )
         )
-        with pytest.raises(AsyncOllamaError, match="spent its output budget on reasoning"):
-            await async_client.generate("test")
+        result = await ollama_client.generate("test")
+        assert result == ""
 
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_generate_http_error(async_client):
+async def test_generate_http_error(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(side_effect=httpx.ConnectError("Connection refused"))
-        with pytest.raises(AsyncOllamaError, match="Could not reach Ollama"):
-            await async_client.generate("test")
+        respx.post("http://localhost:11434/v1/chat/completions").mock(side_effect=httpx.ConnectError("Connection refused"))
+        with pytest.raises(LLMClientError, match="Could not reach LLM provider"):
+            await ollama_client.generate("test")
 
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_generate_timeout_error(async_client):
+async def test_generate_timeout_error(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(side_effect=httpx.TimeoutException("Request timed out"))
-        with pytest.raises(AsyncOllamaError, match="timed out"):
-            await async_client.generate("test")
+        respx.post("http://localhost:11434/v1/chat/completions").mock(side_effect=httpx.TimeoutException("Request timed out"))
+        with pytest.raises(LLMClientError, match="timed out"):
+            await ollama_client.generate("test")
 
 
 @pytest.mark.asyncio
-async def test_generate_empty_response(async_client):
+async def test_generate_empty_response(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/api/generate").mock(
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
             return_value=httpx.Response(
                 200,
                 json={
-                    "response": "",
-                    "done_reason": "stop",
+                    "choices": [{"message": {"content": ""}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0},
+                    "model": "llama3.2:3b",
                 },
             )
         )
-        with pytest.raises(AsyncOllamaError, match="returned no final answer"):
-            await async_client.generate("test")
+        result = await ollama_client.generate("test")
+        assert result == ""

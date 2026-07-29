@@ -93,7 +93,9 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         return all_embeddings
 
     def _validate_embedding_dimensions(self, embeddings: list[list[float]], texts: list[str]) -> None:
-        expected_dim = settings.local_embedding_dimension
+        expected_dim = settings.embedding_model_dimensions.get(
+            self.model_name, settings.default_embedding_dimension
+        )
         for i, emb in enumerate(embeddings):
             if not isinstance(emb, list):
                 raise EmbeddingError(

@@ -34,7 +34,7 @@ async def test_reset_index_clears_all_cache_keys(sync_redis_client, monkeypatch,
         qdrant_url="http://localhost:6333",
         collection_name="test_collection",
         embedding_provider="ollama",
-        local_embedding_dimension=768,
+        crawl_db_url="",
     )
     monkeypatch.setattr(cli, "settings", test_settings)
 
@@ -61,7 +61,7 @@ async def test_reset_index_enables_fresh_crawl(sync_redis_client, monkeypatch, r
         qdrant_url="http://localhost:6333",
         collection_name="test_collection",
         embedding_provider="ollama",
-        local_embedding_dimension=768,
+        crawl_db_url="",
     )
     monkeypatch.setattr(cli, "settings", test_settings)
 

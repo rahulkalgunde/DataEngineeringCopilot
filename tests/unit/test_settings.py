@@ -78,15 +78,19 @@ def test_code_llm_overridable() -> None:
     assert settings.nvidia_nim_base_url == "https://custom.nvidia.com/v1"
 
 
-def test_nvidia_embedding_dimension_default() -> None:
-    settings = AppSettings()
-    assert settings.nvidia_embedding_dimension == 2048
-    assert settings.nvidia_embedding_model == "nvidia/nemotron-3-embed-1b"
+def test_embedding_model_dimensions_lookup() -> None:
+    settings = AppSettings(embedding_provider="ollama", embedding_model_name="nomic-embed-text")
+    assert settings.get_embedding_dimension() == 768
 
 
-def test_local_embedding_dimension_default() -> None:
-    settings = AppSettings()
-    assert settings.local_embedding_dimension == 768
+def test_get_embedding_dimension_nvidia() -> None:
+    s = AppSettings(embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b")
+    assert s.get_embedding_dimension() == 2048
+
+
+def test_get_embedding_dimension_unknown_model() -> None:
+    s = AppSettings(embedding_provider="ollama", embedding_model_name="unknown-model")
+    assert s.get_embedding_dimension() == s.default_embedding_dimension
 
 
 def test_nvidia_nim_rpd_limit_default() -> None:

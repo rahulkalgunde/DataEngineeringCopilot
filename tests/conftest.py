@@ -197,7 +197,6 @@ def integration_settings():
 
     return AppSettings(
         embedding_provider="ollama",
-        local_embedding_dimension=768,
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
@@ -246,7 +245,6 @@ def qdrant_store(integration_settings):
     store = AsyncQdrantVectorStore(
         url=integration_settings.qdrant_url,
         collection_name=coll_name,
-        local_embedding_dimension=768,
     )
     asyncio.run(store.initialize())
     yield store
@@ -269,14 +267,18 @@ def qdrant_store(integration_settings):
 def ollama_client(integration_settings):
     """Real Ollama async client. Skips if Ollama is unreachable."""
     require_ollama()
-    from data_engineering_copilot.infrastructure.async_ollama_client import AsyncOllamaClient
+    from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
-    return AsyncOllamaClient(
-        base_url=integration_settings.ollama_base_url,
+    return LLMClient(
+        base_url=f"{integration_settings.ollama_base_url}/v1",
         model=integration_settings.ollama_model,
         timeout_seconds=integration_settings.ollama_timeout_seconds,
-        num_ctx=integration_settings.ollama_num_ctx,
-        num_predict=integration_settings.ollama_num_predict,
+        extra_body={
+            "options": {
+                "num_ctx": integration_settings.ollama_num_ctx,
+                "num_predict": integration_settings.ollama_num_predict,
+            }
+        },
     )
 
 

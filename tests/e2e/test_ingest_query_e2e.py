@@ -116,6 +116,7 @@ class TestIngestQueryPipeline:
         finally:
             await service.embeddings.close()
 
+    @pytest.mark.serial
     async def test_query_before_ingest_returns_low_confidence(self, e2e_settings):
         """Querying an empty collection should return low confidence."""
         rag = _build_rag_service(e2e_settings)

@@ -21,7 +21,7 @@ DataEngineeringCopilot/
       models.py
     infrastructure/
       rate_limiter.py          # RPM/RPD coordination
-      async_openai_compatible_client.py
+      llm_client.py                # Unified OpenAI-compatible LLM client
       async_openrouter_embeddings.py
       qdrant_store.py
       redis_store.py
