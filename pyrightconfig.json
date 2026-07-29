@@ -1,0 +1,22 @@
+{
+    "typeCheckingMode": "standard",
+    "pythonVersion": "3.12",
+    "venvPath": ".",
+    "venv": "dec_venv",
+    "include": [
+        "data_engineering_copilot",
+        "tests"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "**/.*",
+        "**/__pycache__"
+    ],
+    "useLibraryCodeForTypes": true,
+    "reportMissingTypeStubs": false,
+    "reportUnknownParameterType": false,
+    "reportUnknownVariableType": false,
+    "reportFunctionMemberAccess": "warning",
+    "reportPrivateImportUsage": false
+}
