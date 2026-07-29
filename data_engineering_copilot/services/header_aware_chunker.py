@@ -7,6 +7,7 @@ embedded code blocks.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -64,8 +65,14 @@ class HeaderAwareChunker:
         self.overlap_words = overlap_words
         self.min_chunk_words = min_chunk_words
 
-    def chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
+    async def chunk(
+        self, document: ParsedDocument, precomputed_embeddings: list[list[float]] | None = None
+    ) -> list[DocumentChunk]:
         """Chunk *document* by splitting on Markdown headers."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._sync_chunk, document)
+
+    def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
         sections = self._split_into_sections(document.text)
         if not sections:
             return []

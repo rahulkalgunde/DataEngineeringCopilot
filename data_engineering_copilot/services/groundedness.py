@@ -76,6 +76,13 @@ class GroundednessVerifier:
         self._enabled = enabled
         self._min_support_score = min_support_score
 
+    @staticmethod
+    def _build_context_excerpt(answer_text: str, context_docs: list[DocumentChunk]) -> str:
+        answer_chars = len(answer_text)
+        context_budget = min(3000, max(500, answer_chars * 6))
+        per_chunk_limit = max(100, context_budget // max(len(context_docs), 1))
+        return "\n".join(f"[{c.source_name}] {c.text[:per_chunk_limit]}" for c in context_docs)
+
     def extract_claims(self, answer_text: str) -> list[str]:
         """Extract individual claims from the answer text."""
         if not self._enabled or not answer_text.strip():
@@ -104,11 +111,8 @@ class GroundednessVerifier:
             return self._fallback_tuple(answer_text, context_docs)
 
         try:
-            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_docs)
-            prompt = _NLI_PROMPT.format(
-                answer=answer_text[:2000],
-                context=context_excerpt[:3000],
-            )
+            context_excerpt = self._build_context_excerpt(answer_text, context_docs)
+            prompt = _NLI_PROMPT.format(answer=answer_text[:2000], context=context_excerpt)
             raw = await self._llm_client.generate(prompt)
 
             cleaned = raw.strip()
@@ -172,11 +176,8 @@ class GroundednessVerifier:
             )
 
         try:
-            context_excerpt = "\n".join(f"[{c.source_name}] {c.text[:500]}" for c in context_docs)
-            prompt = _NLI_PROMPT.format(
-                answer=answer_text[:2000],
-                context=context_excerpt[:3000],
-            )
+            context_excerpt = self._build_context_excerpt(answer_text, context_docs)
+            prompt = _NLI_PROMPT.format(answer=answer_text[:2000], context=context_excerpt)
             raw = await self._llm_client.generate(prompt)
 
             cleaned = raw.strip()

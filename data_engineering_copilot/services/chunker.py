@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 
@@ -22,34 +23,34 @@ class DocumentChunker:
 
     def __init__(
         self,
-        chunk_size: int = 1000,
-        chunk_overlap: int = 100,
+        chunk_size_chars: int = 1000,
+        chunk_overlap_chars: int = 100,
     ) -> None:
-        if chunk_size <= 0:
-            raise ValueError("chunk_size must be positive")
-        if chunk_overlap < 0 or chunk_overlap >= chunk_size:
-            raise ValueError("chunk_overlap must be >= 0 and less than chunk_size")
+        if chunk_size_chars <= 0:
+            raise ValueError("chunk_size_chars must be positive")
+        if chunk_overlap_chars < 0 or chunk_overlap_chars >= chunk_size_chars:
+            raise ValueError("chunk_overlap_chars must be >= 0 and less than chunk_size_chars")
 
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        self.chunk_size_chars = chunk_size_chars
+        self.chunk_overlap_chars = chunk_overlap_chars
 
         self._default_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=chunk_size_chars,
+            chunk_overlap=chunk_overlap_chars,
             separators=["\n\n", "\n", " ", ""],
         )
         self._language_splitters = {
             Language.PYTHON: RecursiveCharacterTextSplitter.from_language(
-                Language.PYTHON, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                Language.PYTHON, chunk_size=chunk_size_chars, chunk_overlap=chunk_overlap_chars
             ),
             Language.SCALA: RecursiveCharacterTextSplitter.from_language(
-                Language.SCALA, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                Language.SCALA, chunk_size=chunk_size_chars, chunk_overlap=chunk_overlap_chars
             ),
             Language.JAVA: RecursiveCharacterTextSplitter.from_language(
-                Language.JAVA, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                Language.JAVA, chunk_size=chunk_size_chars, chunk_overlap=chunk_overlap_chars
             ),
             Language.R: RecursiveCharacterTextSplitter.from_language(
-                Language.R, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                Language.R, chunk_size=chunk_size_chars, chunk_overlap=chunk_overlap_chars
             ),
         }
 
@@ -65,7 +66,13 @@ class DocumentChunker:
             return Language.R
         return None
 
-    def chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
+    async def chunk(
+        self, document: ParsedDocument, precomputed_embeddings: list[list[float]] | None = None
+    ) -> list[DocumentChunk]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._sync_chunk, document)
+
+    def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
         lang = self._detect_language(document.url)
         splitter = self._language_splitters.get(lang, self._default_splitter)
 

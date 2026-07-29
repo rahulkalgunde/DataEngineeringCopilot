@@ -218,6 +218,16 @@ class AppSettings(BaseSettings):
     api_extraction_enabled: bool = True
     code_block_parsing_enabled: bool = True
     chunk_filtering_enabled: bool = True
+    # PII redaction
+    pii_redaction_enabled: bool = True
+    pii_redaction_mode: str = "full"  # full | masked | none
+    # RBAC (document-level access control)
+    rbac_enabled: bool = False
+    rbac_users_json: str = ""  # inline JSON string: {"key_prefix": {"allowed_sources": [...], "role": "reader"}}
+    # Drift detection
+    drift_detection_enabled: bool = True
+    drift_eval_history_path: str = "data/eval_history.jsonl"
+    drift_window_days: int = 7
     sources: tuple[DocumentationSource, ...] = ()
 
     @model_validator(mode="after")
@@ -229,7 +239,8 @@ class AppSettings(BaseSettings):
     @model_validator(mode="after")
     def _validate_provider_api_keys(self) -> AppSettings:
         all_llm_providers = {
-            p for p in [
+            p
+            for p in [
                 self.llm_provider,
                 self.answer_llm_provider,
                 self.rewrite_llm_provider,
@@ -238,7 +249,8 @@ class AppSettings(BaseSettings):
                 self.enrichment_llm_provider,
                 self.evaluation_llm_provider,
                 self.code_llm_provider,
-            ] if p
+            ]
+            if p
         }
         if "openrouter" in all_llm_providers and not self.openrouter_api_key.get_secret_value():
             raise ValueError("OPENROUTER_API_KEY is required when any LLM provider is 'openrouter'")

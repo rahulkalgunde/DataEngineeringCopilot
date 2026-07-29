@@ -1,15 +1,19 @@
 services:
+  # All secrets are defined as environment variable substitutions.
+  # For local dev, set the required variables in .env (already in .gitignore).
+  # For production, use Docker secrets or a secrets manager instead.
+
   redis:
     image: redis:7-alpine
     container_name: de_copilot_broker
-    command: ["redis-server", "--requirepass", "local_secure_password_123"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local_secure_password_123}"]
     ports:
       - "6379:6379"
     networks:
       - de_copilot_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "local_secure_password_123", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-local_secure_password_123}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -38,8 +42,8 @@ services:
     container_name: de_copilot_minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio_data:/data
     ports:
@@ -56,7 +60,7 @@ services:
       - minio
     entrypoint: >
       /bin/sh -c "
-      until (/usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin) do echo 'Waiting for MinIO...' && sleep 1; done;
+      until (/usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}) do echo 'Waiting for MinIO...' && sleep 1; done;
       /usr/bin/mc mb --ignore-existing myminio/local-dev;
       exit 0;
       "
@@ -88,7 +92,7 @@ services:
     environment:
       CLICKHOUSE_DB: langfuse
       CLICKHOUSE_USER: langfuse
-      CLICKHOUSE_PASSWORD: local_secure_password_123
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-local_secure_password_123}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse_data:/var/lib/clickhouse
@@ -111,7 +115,7 @@ services:
     container_name: de_copilot_langfuse_db
     environment:
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: local_secure_password_123
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:-local_secure_password_123}
       POSTGRES_DB: langfuse
     volumes:
       - langfuse_pg_data:/var/lib/postgresql/data
@@ -134,27 +138,27 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - DATABASE_URL=postgresql://langfuse:local_secure_password_123@langfuse-postgres:5432/langfuse
-      - NEXTAUTH_SECRET=secret_string_minimum_32_characters_long
+      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_PG_PASSWORD:-local_secure_password_123}@langfuse-postgres:5432/langfuse
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-secret_string_minimum_32_characters_long}
       - NEXTAUTH_URL=http://localhost:3000
-      - SALT=salt_string
-      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
+      - SALT=${LANGFUSE_SALT:-salt_string}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       - LANGFUSE_HOST=http://langfuse:3000
       - CLICKHOUSE_URL=http://clickhouse:8123
       - CLICKHOUSE_USER=langfuse
-      - CLICKHOUSE_PASSWORD=local_secure_password_123
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-local_secure_password_123}
       - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
       - CLICKHOUSE_CLUSTER_ENABLED=false
       - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=local-dev
       - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
       - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
-      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
-      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_AUTH=local_secure_password_123
+      - REDIS_AUTH=${REDIS_PASSWORD:-local_secure_password_123}
       - REDIS_TLS_ENABLED=false
       - HOSTNAME=0.0.0.0
     healthcheck:
@@ -172,7 +176,7 @@ services:
     container_name: de_copilot_postgres
     environment:
       POSTGRES_USER: copilot
-      POSTGRES_PASSWORD: local_secure_password_123
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_secure_password_123}
       POSTGRES_DB: crawl_frontier
     volumes:
       - crawl_frontier_pg_data:/var/lib/postgresql/data
@@ -200,27 +204,27 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - DATABASE_URL=postgresql://langfuse:local_secure_password_123@langfuse-postgres:5432/langfuse
-      - NEXTAUTH_SECRET=secret_string_minimum_32_characters_long
+      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_PG_PASSWORD:-local_secure_password_123}@langfuse-postgres:5432/langfuse
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-secret_string_minimum_32_characters_long}
       - NEXTAUTH_URL=http://localhost:3000
-      - SALT=salt_string
-      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
+      - SALT=${LANGFUSE_SALT:-salt_string}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       - LANGFUSE_HOST=http://langfuse:3000
       - CLICKHOUSE_URL=http://clickhouse:8123
       - CLICKHOUSE_USER=langfuse
-      - CLICKHOUSE_PASSWORD=local_secure_password_123
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-local_secure_password_123}
       - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
       - CLICKHOUSE_CLUSTER_ENABLED=false
       - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=local-dev
       - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
       - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
-      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
-      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_AUTH=local_secure_password_123
+      - REDIS_AUTH=${REDIS_PASSWORD:-local_secure_password_123}
       - REDIS_TLS_ENABLED=false
       - HOSTNAME=0.0.0.0
     networks:
@@ -253,10 +257,10 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
-      - CRAWL_DB_URL=postgresql://copilot:local_secure_password_123@postgres:5432/crawl_frontier
+      - CRAWL_DB_URL=postgresql://copilot:${POSTGRES_PASSWORD:-local_secure_password_123}@postgres:5432/crawl_frontier
       - LOG_LEVEL=INFO
       - LANGFUSE_HOST=http://langfuse:3000
     networks:
@@ -267,7 +271,7 @@ services:
     image: de_copilot_base_image:latest  # Reuses backend-api build instantly
     command: celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import redis; r=redis.Redis.from_url('redis://:local_secure_password_123@redis:6379/0'); r.ping(); open('/proc/1/cmdline').read().find('celery') > -1 and exit(0) or exit(1)\""]
+      test: ["CMD-SHELL", "python -c \"import redis; r=redis.Redis.from_url('redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0'); r.ping(); open('/proc/1/cmdline').read().find('celery') > -1 and exit(0) or exit(1)\""]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -292,10 +296,10 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://:local_secure_password_123@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_BASE_URL=http://ollama:11434
-      - CRAWL_DB_URL=postgresql://copilot:local_secure_password_123@postgres:5432/crawl_frontier
+      - CRAWL_DB_URL=postgresql://copilot:${POSTGRES_PASSWORD:-local_secure_password_123}@postgres:5432/crawl_frontier
       - LOG_LEVEL=INFO
       - LANGFUSE_HOST=http://langfuse:3000
     networks:

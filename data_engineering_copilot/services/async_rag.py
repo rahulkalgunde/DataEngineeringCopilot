@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import json
 import logging
 import re
-from collections.abc import Callable
+import time
+from collections.abc import AsyncIterator, Callable
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
 from data_engineering_copilot.domain.models import Answer, RagConfig
@@ -15,6 +17,7 @@ from data_engineering_copilot.domain.protocols import (
     TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
+from data_engineering_copilot.infrastructure.pii_redactor import PiiRedactor
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
@@ -24,6 +27,11 @@ from data_engineering_copilot.services.query_rewriting import QueryRewriter
 from data_engineering_copilot.services.rag_evaluation import FaithfulnessEvaluator
 
 logger = logging.getLogger(__name__)
+
+
+def _sse(data: dict) -> str:
+    """Format a dict as an SSE data line."""
+    return f"data: {json.dumps(data)}\n\n"
 
 
 class AsyncRagService:
@@ -42,8 +50,8 @@ class AsyncRagService:
         token_tracker: object | None = None,
         retrieval_tracker: object | None = None,
         faithfulness_evaluator: FaithfulnessEvaluator | None = None,
-        ragas_evaluator: object | None = None,
         code_llm_client: LLMClientProtocol | None = None,
+        pii_redactor: PiiRedactor | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -59,7 +67,7 @@ class AsyncRagService:
         self.token_tracker = token_tracker
         self.retrieval_tracker = retrieval_tracker
         self.faithfulness_evaluator = faithfulness_evaluator
-        self.ragas_evaluator = ragas_evaluator
+        self._pii_redactor = pii_redactor
         self._prompt_builder = PromptBuilder()
 
     async def answer(
@@ -68,17 +76,25 @@ class AsyncRagService:
         on_step: Callable[[str], None] | None = None,
         source_filter: list[str] | None = None,
     ) -> Answer:
+        _t0 = time.monotonic()
+        _stage_times: dict[str, float] = {}
+
+        def _record_stage(name: str) -> None:
+            _stage_times[name] = round((time.monotonic() - _t0) * 1000, 1)
+
         if self.cache is not None:
             query_emb_for_cache = None
             with contextlib.suppress(Exception):
                 query_emb_for_cache = await self.embedder.embed_query(question)
-            cached = self.cache.get(question, query_embedding=query_emb_for_cache)
+            cached = await self.cache.aget(question, query_embedding=query_emb_for_cache)
             if cached is not None:
                 logger.info("cache_hit question=%r", question[:80])
+                _record_stage("cache_lookup")
                 return Answer(
                     text=cached,
                     sources=tuple(),
                     confidence=1.0,
+                    stage_times=_stage_times,
                 )
 
         trace = None
@@ -103,6 +119,7 @@ class AsyncRagService:
             for q in expanded:
                 if q not in all_queries:
                     all_queries.append(q)
+            _record_stage("rewrite")
             logger.info(
                 "query_rewritten intent=%s steps=%d expanded=%d hyde=%s original=%r",
                 rewritten.intent,
@@ -176,6 +193,7 @@ class AsyncRagService:
                     input=effective_query,
                 )
                 retrieval_span.end()
+            _record_stage("retrieval")
             logger.info("Multi-step retrieval: %d queries → %d unique chunks", len(all_queries), len(retrieved_chunks))
 
             # Track retrieval scores for observability
@@ -246,6 +264,7 @@ class AsyncRagService:
             if self.context_compressor is not None:
                 retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
                 logger.info("context_compressed chunks=%d", len(retrieved_chunks))
+            _record_stage("rerank")
 
             sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
@@ -254,13 +273,19 @@ class AsyncRagService:
             if on_step:
                 on_step("Generating answer")
             intent = rewritten.intent if rewritten else "factual"
-            prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=question, intent=intent)
+            safe_question = PromptBuilder.sanitize_query(question)
+            if self._pii_redactor is not None:
+                safe_question, _pii_types = self._pii_redactor.redact(safe_question)
+                if _pii_types:
+                    logger.info("pii_redacted types=%s", _pii_types)
+            prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
 
             if generation_span:
                 generation_span.update(input=prompt)
 
             llm_client = self._select_llm_client(intent)
             answer_text = await llm_client.generate(prompt)
+            _record_stage("generation")
 
             # Post-generation syntax check for code intents
             answer_text = await self._validate_and_fix_code_syntax(answer_text, intent, llm_client)
@@ -293,6 +318,12 @@ class AsyncRagService:
             else:
                 logger.info("output_guardrails rejected answer, using raw output")
 
+            # Post-LLM PII redaction: strip PII from answer before returning
+            if self._pii_redactor is not None:
+                answer_text, pii_types_answer = self._pii_redactor.redact(answer_text)
+                if pii_types_answer:
+                    logger.info("pii_redacted_in_answer types=%s", pii_types_answer)
+
             if generation_span:
                 generation_span.update(output=answer_text)
                 generation_span.end()
@@ -303,10 +334,12 @@ class AsyncRagService:
             if self.telemetry:
                 self.telemetry.flush()
 
+            _record_stage("total")
             result = Answer(
                 text=answer_text,
                 sources=tuple(c.chunk for c in retrieved_chunks),
                 confidence=retrieved_chunks[0].confidence,
+                stage_times=_stage_times,
             )
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
@@ -360,9 +393,9 @@ class AsyncRagService:
 
             # Phase 2C: Cache the result (exact + semantic tiers)
             if self.cache is not None:
-                self.cache.set_exact(question, result.text)
+                await self.cache.aset_exact(question, result.text)
                 if query_emb_for_cache is not None:
-                    self.cache.set_semantic(question, query_emb_for_cache, result.text)
+                    await self.cache.aset_semantic(question, query_emb_for_cache, result.text)
 
             return result
         except LLMGenerationError:
@@ -379,6 +412,91 @@ class AsyncRagService:
                 trace.update(output=str(exc))
                 trace.end()
             raise LLMGenerationError(f"LLM generation failed: {exc}") from exc
+
+    async def answer_stream(
+        self,
+        question: str,
+        source_filter: list[str] | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream answer tokens via SSE while performing retrieval.
+
+        Yields JSON-encoded SSE events:
+        - ``{"type": "status", "message": "..."}`` for pipeline progress
+        - ``{"type": "token", "content": "..."}`` for answer tokens
+        - ``{"type": "done", "text": "...", "confidence": 0.0}`` at completion
+        """
+        yield _sse({"type": "status", "message": "Sanitizing query"})
+
+        # PII redaction
+        safe_question = PromptBuilder.sanitize_query(question)
+        if self._pii_redactor is not None:
+            safe_question, _pii_types = self._pii_redactor.redact(safe_question)
+            if _pii_types:
+                yield _sse({"type": "status", "message": f"PII redacted: {', '.join(_pii_types)}"})
+
+        # Query rewriting
+        rewritten = None
+        if self.query_rewriter is not None:
+            yield _sse({"type": "status", "message": "Rewriting query"})
+            rewritten = await self.query_rewriter.rewrite(safe_question)
+            yield _sse({"type": "status", "message": f"Intent: {rewritten.intent}"})
+
+        effective_query = rewritten.rewritten_query if rewritten else safe_question
+        intent = rewritten.intent if rewritten else "factual"
+
+        # Retrieval
+        yield _sse({"type": "status", "message": "Retrieving documents"})
+        try:
+            query_emb = await self.embedder.embed_query(effective_query)
+        except Exception as exc:
+            raise RetrievalError(f"Embedding failed: {exc}") from exc
+
+        top_k = self.config.reranker_top_k if self.config.reranker_enabled else self.config.retrieval_top_k
+        retrieved_chunks = await self.vector_store.query(
+            query_embedding=query_emb,
+            top_k=top_k,
+            query_text=effective_query,
+            source_filter=source_filter,
+        )
+        yield _sse({"type": "status", "message": f"Retrieved {len(retrieved_chunks)} chunks"})
+
+        if not retrieved_chunks:
+            yield _sse({"type": "done", "text": "No relevant documents found.", "confidence": 0.0})
+            return
+
+        # Reranking
+        if self.reranker is not None and self.reranker.is_available() and len(retrieved_chunks) > 1:
+            yield _sse({"type": "status", "message": "Reranking"})
+            retrieved_chunks = self.reranker.rerank(
+                query=effective_query,
+                chunks=retrieved_chunks,
+                top_k=self.config.reranker_top_k,
+            )
+
+        # Context assembly
+        sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
+        assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
+        context_str, _source_names = assembler.assemble(sorted_chunks)
+
+        # Build prompt
+        prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
+        yield _sse({"type": "status", "message": "Generating answer"})
+
+        # Stream LLM tokens
+        llm_client = self._select_llm_client(intent)
+        full_text = ""
+        try:
+            async for token in llm_client.generate_stream(prompt):
+                full_text += token
+                yield _sse({"type": "token", "content": token})
+        except Exception as exc:
+            logger.exception("Streaming generation failed: %s", exc)
+            yield _sse({"type": "error", "message": str(exc)})
+            return
+
+        # Done event with metadata
+        confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
+        yield _sse({"type": "done", "text": full_text, "confidence": confidence})
 
     def _select_llm_client(self, intent: str) -> LLMClientProtocol:
         """Route code intents to the code-specific LLM if configured."""
@@ -424,7 +542,7 @@ class AsyncRagService:
 
     async def close(self) -> None:
         """Close underlying clients."""
-        for component in (self.vector_store, self.llm_client, self.embedder, self.code_llm_client):
+        for component in (self.vector_store, self.llm_client, self.embedder, self.code_llm_client, self.cache):
             if component is None or not hasattr(component, "close"):
                 continue
             with contextlib.suppress(TypeError, AttributeError):

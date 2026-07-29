@@ -9,7 +9,7 @@ import uuid
 
 import structlog
 from celery.result import AsyncResult
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from data_engineering_copilot.workers.celery_app import celery_app
@@ -22,6 +22,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 REDIS_KEY_PREFIX = "ingestion:status"
+
+
+def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str] | None:
+    """Apply RBAC source filtering if permissions are present.
+
+    Admin roles bypass the filter. Reader roles intersect the client filter
+    (if any) with the user's allowed sources.
+    """
+    perms = getattr(getattr(request, "state", None), "user_permissions", None)
+    if perms is None:
+        return client_filter
+    if perms.role == "admin":
+        return client_filter  # admin sees everything
+    if not perms.allowed_sources:
+        return client_filter  # empty = all sources
+    if client_filter:
+        # Intersect: user can only see sources they're allowed AND the client requested
+        return [s for s in client_filter if s in perms.allowed_sources]
+    return list(perms.allowed_sources)
 
 
 class IngestRequest(BaseModel):
@@ -209,17 +228,18 @@ class AskResponse(BaseModel):
 
 
 @router.post("/api/v1/ask", response_model=AskResponse)
-async def ask(request: AskRequest):
+async def ask(request: AskRequest, fastapi_request: Request):
     """Answer a question using the RAG pipeline."""
     from data_engineering_copilot.services.rag_service_singleton import get_rag_service
     from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
     try:
-        service = get_rag_service()
+        service = await get_rag_service()
+        effective_source_filter = _resolve_source_filter(fastapi_request, request.source_filter)
         answer_obj = await asyncio.wait_for(
             service.answer(
                 request.question,
-                source_filter=request.source_filter,
+                source_filter=effective_source_filter,
             ),
             timeout=120.0,
         )
@@ -245,7 +265,11 @@ async def ask(request: AskRequest):
             confidence=answer_obj.confidence,
             groundedness_score=answer_obj.groundedness_score,
             citations=parsed.citations,
-            metrics={"chunks_retrieved": len(answer_obj.sources), "confidence": answer_obj.confidence},
+            metrics={
+                "chunks_retrieved": len(answer_obj.sources),
+                "confidence": answer_obj.confidence,
+                **{f"time_{k}": v for k, v in answer_obj.stage_times.items()},
+            },
         )
     except TimeoutError:
         logger.warning("RAG ask timed out after 120s question=%r", request.question[:100])
@@ -256,32 +280,22 @@ async def ask(request: AskRequest):
 
 
 @router.post("/api/v1/ask/stream")
-async def ask_stream(request: AskRequest):
+async def ask_stream(request: AskRequest, fastapi_request: Request):
     """Streaming RAG answer with Server-Sent Events."""
     from fastapi.responses import StreamingResponse
 
     from data_engineering_copilot.services.rag_service_singleton import get_rag_service
 
+    effective_source_filter = _resolve_source_filter(fastapi_request, request.source_filter)
+
     async def event_stream():
-        yield f"data: {json.dumps({'type': 'start'})}\n\n"
         try:
-            service = get_rag_service()
-            answer_obj = await asyncio.wait_for(
-                service.answer(
-                    request.question,
-                    source_filter=request.source_filter,
-                ),
-                timeout=120.0,
-            )
-            sources = [{"source": s.source_name, "title": s.title, "url": s.url} for s in answer_obj.sources]
-            payload = {
-                "type": "answer",
-                "text": answer_obj.text,
-                "confidence": answer_obj.confidence,
-                "groundedness_score": answer_obj.groundedness_score,
-                "sources": sources,
-            }
-            yield f"data: {json.dumps(payload)}\n\n"
+            service = await get_rag_service()
+            async for event in service.answer_stream(
+                request.question,
+                source_filter=effective_source_filter,
+            ):
+                yield event
         except TimeoutError:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Request timed out'})}\n\n"
         except Exception as exc:

@@ -15,6 +15,15 @@ After writing, modifying, or refactoring code, you **must** execute the followin
 2. **Run Ruff Linter:** Execute auto-fixes and inspect non-fixable warnings.
    ```bash
    ruff check . --fix
+   ```
+3. **Run Ruff Formatter:**
+   ```bash
+   ruff format .
+   ```
+4. **Run Relevant Tests:** Start with the specific test file before broader suites.
+   ```bash
+   dec_venv/bin/python -m pytest tests/<path> -v
+   ```
 
 ## CRITICAL: DO NOT REMOVE GUARDRAILS
 AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this section or any guardrail within it. If a guardrail feels outdated, flag it to the user instead of removing it.
@@ -55,7 +64,8 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 | `dec health` / `dec config` | Service connectivity / validate config |
 | `dec evaluate` | Runs RAG eval on `tests/evaluation/eval_dataset.jsonl` |
 | `dec profile --sources "X" --load-sweep "10,20,50,100"` | Ingestion profiling |
-| `dec status [task-id]` | Poll ingestion progress from Redis |
+| `dec status [task-id]` | Poll ingestion progress from Redis, or show Qdrant/Redis/Celery status |
+| `dec monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
 
 ## API Routes (`routes.py`)
 - `POST /api/v1/ingest` — dispatches Celery task. Uses atomic SETNX lock to prevent concurrent runs.
@@ -99,6 +109,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()`, etc. in `factory.py`. Never instantiate manually.
 - **Async Only**: `SafeAsyncClientMixin` in `infrastructure/async_client.py`. Uses `httpx.AsyncClient` / `aiohttp`.
 - **Providers**: LLM → ollama, openrouter, nvidia. Embeddings → ollama, openrouter, nvidia, openai. Switching providers requires `dec reset-index` (dimensions change).
+- **Observability**: `observability/` package — langfuse tracing, OpenTelemetry, structlog, token tracking.
 - **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use a different provider+model via `{purpose}_llm_provider` / `{purpose}_llm_model` settings. Empty = fall back to global `llm_provider` / `llm_model`. See `factory.py:69-96` (`_build_purpose_llm_client`).
 - **Embedding dimension is model-dependent**: Looked up in `embedding_model_dimensions: dict[str, int]` (settings.py:117). Not provider-dependent.
 - **Chunking** (`settings.chunking_strategy`): `"sentence_preserving"` (default, 1875-char chunks), `"semantic"`, `"header_aware"`, `"fixed_size"`.

@@ -51,7 +51,13 @@ async def test_generate_success(ollama_client):
             return_value=httpx.Response(
                 200,
                 json={
-                    "choices": [{"message": {"content": "<think>I should reason.</think>\nDelta Lake supports ACID transactions."}}],
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "<think>I should reason.</think>\nDelta Lake supports ACID transactions."
+                            }
+                        }
+                    ],
                     "usage": {"prompt_tokens": 50, "completion_tokens": 10},
                     "model": "llama3.2:3b",
                 },
@@ -100,7 +106,9 @@ async def test_generate_reasoning_only_returns_empty(ollama_client):
 @pytest.mark.asyncio
 async def test_generate_http_error(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/v1/chat/completions").mock(side_effect=httpx.ConnectError("Connection refused"))
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
+            side_effect=httpx.ConnectError("Connection refused")
+        )
         with pytest.raises(LLMClientError, match="Could not reach LLM provider"):
             await ollama_client.generate("test")
 
@@ -109,7 +117,9 @@ async def test_generate_http_error(ollama_client):
 @pytest.mark.asyncio
 async def test_generate_timeout_error(ollama_client):
     with respx.mock:
-        respx.post("http://localhost:11434/v1/chat/completions").mock(side_effect=httpx.TimeoutException("Request timed out"))
+        respx.post("http://localhost:11434/v1/chat/completions").mock(
+            side_effect=httpx.TimeoutException("Request timed out")
+        )
         with pytest.raises(LLMClientError, match="timed out"):
             await ollama_client.generate("test")
 

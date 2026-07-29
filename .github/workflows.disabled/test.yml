@@ -70,10 +70,33 @@ jobs:
           fail_ci_if_error: false
           # token: ${{ secrets.CODECOV_TOKEN }}
 
+  test-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, test-unit]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: RAG Evaluation
+        run: uv run make test-eval
+
   test-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [lint, test-unit]
+    needs: [lint, test-unit, test-eval]
 
     steps:
       - uses: actions/checkout@v4

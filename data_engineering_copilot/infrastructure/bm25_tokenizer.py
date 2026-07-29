@@ -8,10 +8,12 @@ weighting with BM25 k1/b normalization.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 
 from nltk.stem import PorterStemmer
 from qdrant_client.http.models import SparseVector
@@ -184,6 +186,38 @@ class BM25Tokenizer:
     @property
     def vocab_size(self) -> int:
         return len(self._vocab)
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: Path) -> None:
+        data = {
+            "vocab": self._vocab,
+            "doc_freq": dict(self._doc_freq),
+            "corpus_size": self._corpus_size,
+            "avg_doc_len": self._avg_doc_len,
+            "k1": self._k1,
+            "b": self._b,
+            "frozen": self._frozen,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+
+    @classmethod
+    def load(cls, path: Path) -> BM25Tokenizer:
+        data = json.loads(path.read_text())
+        tok = cls(k1=data["k1"], b=data["b"])
+        tok._vocab = data["vocab"]
+        tok._doc_freq = Counter(data["doc_freq"])
+        tok._corpus_size = data["corpus_size"]
+        tok._avg_doc_len = data["avg_doc_len"]
+        tok._frozen = data["frozen"]
+        return tok
 
     # ------------------------------------------------------------------
     # Internals

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -96,3 +96,13 @@ class Answer:
     sources: tuple[DocumentChunk, ...]
     confidence: float
     groundedness_score: float = 1.0
+    stage_times: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class UserPermissions:
+    """RBAC permissions associated with an API key."""
+
+    api_key_prefix: str
+    allowed_sources: tuple[str, ...] = ()
+    role: str = "reader"  # reader | admin

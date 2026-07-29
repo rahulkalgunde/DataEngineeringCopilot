@@ -28,11 +28,14 @@ class ContextAssembler:
         """
         self.max_context_chars = max_context_chars
 
-    def assemble(self, chunks: list[RetrievedChunk]) -> tuple[str, list[str]]:
+    def assemble(self, chunks: list[RetrievedChunk], mitigate_lost_in_middle: bool = True) -> tuple[str, list[str]]:
         """Assemble context from chunks with deduplication and truncation.
 
         Args:
             chunks: List of retrieved chunks, already sorted by confidence
+            mitigate_lost_in_middle: When True, reorders chunks so the most
+                relevant ones appear at the beginning AND end of the context,
+                reducing the "lost in the middle" effect.
 
         Returns:
             Tuple of (context_string, list_of_source_names)
@@ -44,7 +47,26 @@ class ContextAssembler:
         deduped = self._deduplicate_chunks(chunks)
         logger.info("Deduplication: %d chunks → %d chunks", len(chunks), len(deduped))
 
-        # Step 2: Build context with truncation
+        # Step 2: Lost-in-the-middle mitigation — reorder so top chunks
+        # appear at both ends of the context window.
+        if mitigate_lost_in_middle and len(deduped) > 3:
+            rearranged: list[RetrievedChunk] = []
+            left, right = 0, len(deduped) - 1
+            turn_left = True
+            while left <= right:
+                if left == right:
+                    rearranged.append(deduped[left])
+                    break
+                if turn_left:
+                    rearranged.append(deduped[left])
+                    left += 1
+                else:
+                    rearranged.append(deduped[right])
+                    right -= 1
+                turn_left = not turn_left
+            deduped = rearranged
+
+        # Step 3: Build context with truncation
         context_lines = []
         source_names = []
         current_length = 0

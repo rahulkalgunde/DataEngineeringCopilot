@@ -500,8 +500,10 @@ class TestSseStreaming:
         mock_service = MagicMock(spec=AsyncRagService)
         mock_service.answer = AsyncMock(return_value=mock_answer)
 
-        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client), \
-             patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service):
+        with (
+            patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client),
+            patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service),
+        ):
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 async with client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response:
                     assert response.status_code == 200
