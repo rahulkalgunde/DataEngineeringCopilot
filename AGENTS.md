@@ -11,6 +11,8 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Never run `git commit`, `git push`, `git add`, or any git command that changes history.** Only remind the user with the exact commands to run.
 - **Never run commands that may take longer than 15 minutes** (e.g., pulling large Docker images, running full integration suites). Print the command and ask the user to run it.
 - After each milestone, print the exact `git add`/`git commit`/`git push` commands and ask the user to run them.
+- **Fast failure isolation**: Validate a fix with `pytest <specific_test_file>` before running full suites (`make test-integration` takes ~3min).
+- **Git file verification**: Before suggesting `git add <filelist>`, verify file existence with `git status` — deleted/renamed files need different handling (`git rm` vs `git add`).
 
 ## Python & Environment
 - **Virtual Env**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
@@ -76,12 +78,12 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **No LangChain/LlamaIndex** (except `langchain-text-splitters`).
 - **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()`, etc. in `factory.py`. Never instantiate manually.
 - **Async Only**: `SafeAsyncClientMixin` in `infrastructure/async_client.py`. Uses `httpx.AsyncClient` / `aiohttp`.
-- **Providers**: LLM → ollama, openrouter. Embeddings → ollama, openrouter, openai. Switching providers requires `dec reset-index` (dimensions change).
+- **Providers**: LLM → ollama, openrouter, nvidia. Embeddings → ollama, openrouter, nvidia, openai. Switching providers requires `dec reset-index` (dimensions change).
 - **Chunking** (`settings.chunking_strategy`): `"sentence_preserving"` (default, 1875-char chunks), `"semantic"`, `"header_aware"`, `"fixed_size"`.
 - **Hybrid Search**: Enabled by default (dense + sparse). Configured via `hybrid_search_enabled`, `hybrid_rrf_k=60`.
 - **RAG Pipeline**: Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic) with NumPy SIMD scoring.
 - **Crawl Database**: PostgreSQL via `PostgresCrawlFrontierDB` (set `CRAWL_DB_URL`).
-- **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` via `sentence-transformers`. Downloaded at runtime (~450MB). Singleton-cached in `reranker.py`.
+- **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` via `sentence-transformers`. Downloaded at runtime (~450MB). Singleton-cached in `services/reranker.py`.
 - **Output parsing**: `parse_rag_response()` + `verify_citations()` in `services/structured_output.py`.
 
 ## Key Dependencies (heavy)
@@ -99,6 +101,7 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 - **Ingestion Lock**: Atomic SETNX on `ingestion:dispatch_lock` (60s TTL). Released before flush to prevent unbounded chunk accumulation.
 - **Streamlit**: UI uses SSE to poll `/api/v1/ingest/status/{task_id}`.
 - **reset-index behavior**: Deletes Qdrant collection, recreates it with correct dim (provider-dependent), deletes all Redis `crawl:*` keys, and drops crawl frontier tables (PostgreSQL).
+- **respx + Ollama embedding**: `respx` passthrough (`assert_all_mocked=False`) returns empty bodies for Ollama `/api/embed` calls. If you need to mock the LLM while using real Ollama for embeddings, implement `LLMClientProtocol` with a simple class instead of wire-mocking with `respx`.
 
 ## Plan Mode Discipline
 - **No edits in plan mode**: When the system says "Plan mode ACTIVE — READ-ONLY", do not modify files. Only present the plan. Wait for explicit transition to build mode.
