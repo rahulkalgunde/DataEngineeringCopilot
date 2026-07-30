@@ -161,6 +161,70 @@ async def test_get_content_hash_not_found(mock_async_qdrant):
     assert result is None
 
 
+async def test_query_404_raises_vector_store_error(mock_async_qdrant):
+    from data_engineering_copilot.domain.exceptions import VectorStoreError
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    exc = Exception("HTTP 404: collection 'test' not found")
+    mock_async_qdrant.query_points = AsyncMock(side_effect=exc)
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    with pytest.raises(VectorStoreError, match="not found"):
+        await store.query([0.1] * 768, top_k=5)
+
+
+async def test_query_non_404_exception_reraised(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_async_qdrant.query_points = AsyncMock(side_effect=RuntimeError("connection lost"))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    with pytest.raises(RuntimeError, match="connection lost"):
+        await store.query([0.1] * 768, top_k=5)
+
+
+async def test_scroll_urls_returns_distinct_urls(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+
+    mock_point_1 = MagicMock()
+    mock_point_1.payload = {"url": "http://example.com/1"}
+    mock_point_2 = MagicMock()
+    mock_point_2.payload = {"url": "http://example.com/2"}
+
+    mock_async_qdrant.scroll = AsyncMock()
+    mock_async_qdrant.scroll.side_effect = [
+        ([mock_point_1, mock_point_2], None),
+    ]
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    urls = await store.scroll_urls("test_source")
+    assert sorted(urls) == ["http://example.com/1", "http://example.com/2"]
+
+
+async def test_scroll_urls_empty_returns_empty_list(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_async_qdrant.scroll = AsyncMock(return_value=([], None))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    urls = await store.scroll_urls("missing_source")
+    assert urls == []
+
+
+async def test_scroll_urls_client_none_returns_empty():
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    store._client = None
+    urls = await store.scroll_urls("test_source")
+    assert urls == []
+
+
 async def test_client_not_initialized_returns_safe_defaults():
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
