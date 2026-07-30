@@ -409,10 +409,12 @@ class AsyncIngestionService:
             ),
         )
 
+        crawl_succeeded = False
         try:
             async for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 await queue.put(raw_document)
             log.info("async_ingestion._ingest_source.crawl_done source=%s", source.name)
+            crawl_succeeded = True
         except Exception:
             # Crawler failed mid-stream: drain unconsumed items so sentinel puts
             # cannot block, then surface the failure to the caller.
@@ -443,9 +445,12 @@ class AsyncIngestionService:
                     log.error("async_ingestion.worker_failed", worker=i, error=str(result))
 
             # Prune stale chunks: delete chunks for URLs that were NOT seen in this crawl
-            stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
-            if stale_count > 0:
-                log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
+            # Only run when the crawl completed fully; on early failure, deleting chunks
+            # for pages not reached in this run would remove valid data from previous crawls.
+            if crawl_succeeded:
+                stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
+                if stale_count > 0:
+                    log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
 
         self._emit(
             on_event,

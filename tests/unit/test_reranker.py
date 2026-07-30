@@ -48,6 +48,7 @@ class TestCrossEncoderReranker:
             mock_cross_encoder.return_value = mock_model
 
             reranker = CrossEncoderReranker(model_name="test_model")
+            reranker._init_sync()
 
             assert reranker.model is mock_model
             assert reranker.model_name == "test_model"

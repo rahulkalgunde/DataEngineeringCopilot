@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 import structlog
@@ -81,10 +82,23 @@ async def ingest_documents(request: IngestRequest):
                 raw = client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
                 if raw:
                     raw = raw.decode() if isinstance(raw, bytes) else raw
-                    existing_status = json.loads(raw).get("status")
+                    existing_data = json.loads(raw)
+                    existing_status = existing_data.get("status")
                     if existing_status in ("PROCESSING", "DISPATCHED"):
                         task_res = AsyncResult(latest_task_id)
                         if task_res.state in ("FAILURE", "REVOKED"):
+                            existing_status = "FAILED"
+                    if existing_status == "DISPATCHED":
+                        # Check if the task is orphaned (stuck for > 5 minutes)
+                        dispatched_at = existing_data.get("dispatched_at", 0)
+                        if dispatched_at and time.time() - dispatched_at > 300:
+                            existing_data["status"] = "FAILED"
+                            existing_data["error"] = "Task orphaned (dispatched but not running for > 5 min)"
+                            client.set(
+                                f"{REDIS_KEY_PREFIX}:{latest_task_id}",
+                                json.dumps(existing_data),
+                                ex=86400,
+                            )
                             existing_status = "FAILED"
                     if existing_status in ("PROCESSING", "DISPATCHED"):
                         raise HTTPException(
@@ -102,6 +116,7 @@ async def ingest_documents(request: IngestRequest):
             {
                 "task_id": task.id,
                 "status": "DISPATCHED",
+                "dispatched_at": time.time(),
                 "source_names": request.source_names or [],
                 "pages_fetched": 0,
                 "chunks_indexed": 0,

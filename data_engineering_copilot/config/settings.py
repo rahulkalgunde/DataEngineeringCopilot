@@ -164,7 +164,7 @@ class AppSettings(BaseSettings):
 
     # Cerebras settings (LLM only)
     cerebras_api_key: SecretStr = SecretStr("")
-    cerebras_model: str = "llama-3.1-8b"
+    cerebras_model: str = "gpt-oss-120b"
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
     cerebras_rpm_limit: int = 30
     cerebras_rpd_limit: int = 1000
@@ -179,9 +179,9 @@ class AppSettings(BaseSettings):
 
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(
-        default_factory=lambda: ["openrouter", "groq", "cerebras", "gemini", "ollama"]
+        default_factory=lambda: ["openrouter", "groq", "gemini", "cerebras", "ollama"]
     )
-    llm_fallback_call_timeout: int = 60  # shorter circuit-breaker timeout for fallback providers
+    llm_fallback_call_timeout: int = 120  # shorter circuit-breaker timeout for fallback providers (must exceed max rate-limit retry wait)
 
     # Adaptive router settings
     retry_max_attempts: int = 3
@@ -252,7 +252,8 @@ class AppSettings(BaseSettings):
     gemini_intent_llm_model: str = "gemini-2.0-flash-lite"
     gemini_enrichment_llm_model: str = "gemini-2.0-flash-lite"
     gemini_evaluation_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_code_llm_model: str = ""
+    gemini_code_llm_model: str = "gemini-2.0-flash-lite"
+    ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
