@@ -18,6 +18,9 @@ def parse_rag_response(raw: str) -> StructuredAnswer:
 
     Attempts JSON parsing first. Falls back to raw text if parsing fails.
     Handles ```json fenced code blocks.
+
+    Returns an empty ``answer`` when JSON is parseable but lacks a
+    recognized answer field, enabling JSON retry in the RAG service.
     """
     if not raw or not raw.strip():
         return StructuredAnswer(answer="", citations=[])
@@ -41,6 +44,7 @@ def parse_rag_response(raw: str) -> StructuredAnswer:
                     answer=str(answer),
                     citations=citations,
                 )
+            return StructuredAnswer(answer="", citations=[])
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 

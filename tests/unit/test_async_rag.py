@@ -454,6 +454,84 @@ class TestAsyncRagService:
         assert service._select_llm_client("unknown") is llm
 
     @pytest.mark.asyncio
+    async def test_json_retry_on_malformed_structured_output(self, mock_embedder, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(
+            side_effect=[
+                '{"citations": [], "confidence": 0.9}',
+                '{"answer": "This is a retried answer about Apache Spark architecture.", "citations": []}',
+            ]
+        )
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert mock_llm.generate.await_count == 2
+        assert "retried" in result.text
+
+    @pytest.mark.asyncio
+    async def test_skips_json_retry_when_answer_is_present(self, mock_embedder, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(
+            return_value='{"answer": "This is a valid answer about Apache Spark.", "citations": [{"source": "test"}]}'
+        )
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert mock_llm.generate.await_count == 1
+        assert "valid" in result.text
+
+    @pytest.mark.asyncio
+    async def test_skips_json_retry_when_short_response(self, mock_embedder, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(return_value="short")
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        await service.answer("what is spark")
+        assert mock_llm.generate.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_answer_routes_code_intent_to_code_llm(self, mock_embedder, mock_llm, config):
         from data_engineering_copilot.services.query_rewriting import QueryRewriter
 
