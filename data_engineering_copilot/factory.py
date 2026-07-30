@@ -12,7 +12,7 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
-from data_engineering_copilot.infrastructure.llm_client import LLMClient
+from data_engineering_copilot.infrastructure.llm_client import FallbackLLMClient, LLMClient
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
@@ -50,6 +50,8 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
         if p:
             providers.add(p.lower())
     providers.add(app_settings.embedding_provider.lower())
+    for p in app_settings.llm_fallback_order:
+        providers.add(p.lower())
 
     rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
     for p in providers:
@@ -71,6 +73,7 @@ def _build_purpose_llm_client(
     model: str,
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+    timeout_seconds: int | None = None,
 ) -> LLMClient | None:
     """Build an LLM client for a specific purpose.
 
@@ -108,7 +111,7 @@ def _build_purpose_llm_client(
             base_url=f"{llm_base}/v1",
             model=eff_model,
             api_key="",
-            timeout_seconds=app_settings.ollama_timeout_seconds,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
             extra_body={
                 "options": {
                     "num_ctx": app_settings.ollama_num_ctx,
@@ -125,7 +128,7 @@ def _build_purpose_llm_client(
             base_url="https://openrouter.ai/api/v1",
             model=eff_model,
             api_key=api_key,
-            timeout_seconds=app_settings.ollama_timeout_seconds,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
             max_retries=5,
             extra_headers={"HTTP-Referer": "https://data-engineering-copilot.local"},
             rate_limiter=rate_limiter,
@@ -139,7 +142,7 @@ def _build_purpose_llm_client(
             base_url=app_settings.nvidia_nim_base_url,
             model=eff_model,
             api_key=api_key,
-            timeout_seconds=app_settings.ollama_timeout_seconds,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
             max_retries=5,
             rate_limiter=rate_limiter,
         )
@@ -147,14 +150,78 @@ def _build_purpose_llm_client(
     raise ValueError(f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia'.")
 
 
+def _build_fallback_chain(
+    purpose_provider: str,
+    purpose_model: str,
+    app_settings: AppSettings = settings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+) -> FallbackLLMClient | LLMClient | None:
+    """Build an ordered fallback chain of LLM providers.
+
+    The *purpose_provider* (or the global ``llm_provider`` if empty) is
+    tried first.  If it fails, remaining providers from
+    ``llm_fallback_order`` are tried in sequence, with Ollama as the last
+    resort.
+
+    Returns ``None`` when *purpose_provider* is empty (caller intends to
+    reuse the global chain).  Returns a bare ``LLMClient`` when only one
+    provider is available.  Returns ``FallbackLLMClient`` when ≥2 providers
+    are configured.
+    """
+    eff_provider = (purpose_provider or "").strip().lower()
+    if not eff_provider:
+        return None
+
+    fallback_order = [p.lower() for p in app_settings.llm_fallback_order]
+
+    # Deduplicated ordered list: primary first, then remaining from fallback order
+    ordered: list[str] = [eff_provider]
+    for p in fallback_order:
+        if p not in ordered:
+            ordered.append(p)
+
+    clients: list[tuple[str, LLMClient]] = []
+    client_timeout = app_settings.llm_fallback_call_timeout
+
+    for idx, provider in enumerate(ordered):
+        try:
+            # Primary provider gets the purpose-specific model override (if any)
+            # and the normal timeout.  Fallback providers use the shorter timeout.
+            model_arg = purpose_model if idx == 0 else ""
+            timeout = None if idx == 0 else client_timeout
+            client = _build_purpose_llm_client(
+                provider=provider,
+                model=model_arg,
+                app_settings=app_settings,
+                provider_rate_limiters=provider_rate_limiters,
+                timeout_seconds=timeout,
+            )
+            if client is not None:
+                clients.append((provider, client))
+        except Exception as exc:
+            logger.warning(
+                "Skipping provider in fallback chain",
+                provider=provider,
+                error=str(exc),
+            )
+
+    if not clients:
+        raise ValueError(
+            f"No LLM client could be built for provider {eff_provider!r}. Check API keys and provider configuration."
+        )
+    if len(clients) == 1:
+        return clients[0][1]
+    return FallbackLLMClient(clients)
+
+
 def build_global_llm_client(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
-) -> LLMClient:
-    """Build the primary (global) LLM client used for answer generation."""
-    client = _build_purpose_llm_client(
-        provider=app_settings.llm_provider,
-        model=app_settings.llm_model,
+) -> LLMClient | FallbackLLMClient:
+    """Build the global LLM client with provider fallback chain."""
+    client = _build_fallback_chain(
+        purpose_provider=app_settings.llm_provider,
+        purpose_model=app_settings.llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
@@ -363,9 +430,9 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
 
-    enrichment_client = _build_purpose_llm_client(
-        provider=app_settings.enrichment_llm_provider or "ollama",
-        model=app_settings.enrichment_llm_model or "llama3.2:3b",
+    enrichment_client = _build_fallback_chain(
+        purpose_provider=app_settings.enrichment_llm_provider or "ollama",
+        purpose_model=app_settings.enrichment_llm_model or "llama3.2:3b",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
@@ -430,28 +497,28 @@ def build_rag_service(
 
     llm_client = build_global_llm_client(app_settings, provider_rate_limiters)
 
-    code_llm_client = _build_purpose_llm_client(
-        provider=app_settings.code_llm_provider,
-        model=app_settings.code_llm_model,
+    code_llm_client = _build_fallback_chain(
+        purpose_provider=app_settings.code_llm_provider,
+        purpose_model=app_settings.code_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
 
-    rewrite_client = _build_purpose_llm_client(
-        provider=app_settings.rewrite_llm_provider,
-        model=app_settings.rewrite_llm_model,
+    rewrite_client = _build_fallback_chain(
+        purpose_provider=app_settings.rewrite_llm_provider,
+        purpose_model=app_settings.rewrite_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
-    groundedness_client = _build_purpose_llm_client(
-        provider=app_settings.groundedness_llm_provider,
-        model=app_settings.groundedness_llm_model,
+    groundedness_client = _build_fallback_chain(
+        purpose_provider=app_settings.groundedness_llm_provider,
+        purpose_model=app_settings.groundedness_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )
-    intent_client = _build_purpose_llm_client(
-        provider=app_settings.intent_llm_provider,
-        model=app_settings.intent_llm_model,
+    intent_client = _build_fallback_chain(
+        purpose_provider=app_settings.intent_llm_provider,
+        purpose_model=app_settings.intent_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
     )

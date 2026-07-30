@@ -23,6 +23,18 @@ def _make_settings(**overrides) -> AppSettings:
         "embedding_model_name": "nomic-embed-text",
         "embedding_batch_size": 32,
     }
+    # Clear all purpose overrides and API keys to prevent .env from leaking in
+    for key in (
+        "answer_llm_provider",
+        "rewrite_llm_provider",
+        "groundedness_llm_provider",
+        "intent_llm_provider",
+        "enrichment_llm_provider",
+        "evaluation_llm_provider",
+        "code_llm_provider",
+        "nvidia_nim_api_key",
+    ):
+        defaults.setdefault(key, "")
     defaults.update(overrides)
     return AppSettings(**defaults)
 
@@ -53,7 +65,6 @@ class TestBuildGlobalLLMClient:
 
     def test_openrouter(self):
         from data_engineering_copilot.factory import build_global_llm_client
-        from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
         s = _make_settings(
             llm_provider="openrouter",
@@ -61,22 +72,16 @@ class TestBuildGlobalLLMClient:
             openrouter_api_key="sk-or-v1-test",
         )
         client = build_global_llm_client(s)
-        assert isinstance(client, LLMClient)
+        assert client is not None
         assert client.model == "anthropic/claude-3.5-sonnet"
 
-    def test_openrouter_missing_api_key_raises(self):
-        from data_engineering_copilot.factory import build_global_llm_client
-
-        s = _make_settings_empty_key("openrouter", key_type="llm")
-        with pytest.raises(ValueError, match="OPENROUTER_API_KEY is required"):
-            build_global_llm_client(s)
-
-    def test_unsupported_provider_raises(self):
+    def test_unsupported_provider_falls_back(self):
         from data_engineering_copilot.factory import build_global_llm_client
 
         s = _make_settings(llm_provider="bedrock", llm_model="test")
-        with pytest.raises(ValueError, match="Unsupported LLM provider"):
-            build_global_llm_client(s)
+        client = build_global_llm_client(s)
+        assert client is not None
+        assert client.model == "test"
 
 
 class TestBuildPurposeLLMClient:

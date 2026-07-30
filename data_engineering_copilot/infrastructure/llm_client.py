@@ -355,3 +355,69 @@ class LLMClient(SafeAsyncClientMixin):
             logger.warning("Streaming failed, falling back to non-streaming generate()")
             result = await self.generate(prompt, temperature=temperature)
             yield result
+
+
+class FallbackLLMClient:
+    """Wrapper that tries multiple LLM providers in sequence on failure.
+
+    Each provider is a separate ``LLMClient`` instance with its own circuit
+    breaker and rate limiter.  On ``LLMClientError`` the next provider in the
+    chain is tried.  If all fail the last error is re-raised.
+
+    Shares the same public interface as ``LLMClient`` so consumers do not
+    need to distinguish between them.
+    """
+
+    def __init__(self, clients: list[tuple[str, LLMClient]]) -> None:
+        self._clients = clients
+        self._last_usage = LLMUsage()
+
+    @property
+    def model(self) -> str:
+        return self._clients[0][1].model if self._clients else ""
+
+    @property
+    def last_usage(self) -> LLMUsage:
+        return self._last_usage
+
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float | None = None,
+        num_predict: int | None = None,
+        num_ctx: int | None = None,
+    ) -> str:
+        last_error: Exception | None = None
+        for name, client in self._clients:
+            try:
+                text = await client.generate(
+                    prompt=prompt,
+                    temperature=temperature,
+                    num_predict=num_predict,
+                    num_ctx=num_ctx,
+                )
+                self._last_usage = client.last_usage
+                return text
+            except LLMClientError as e:
+                logger.warning("Fallback: %s failed (%s), trying next provider", name, e)
+                last_error = e
+        raise LLMClientError(f"All LLM providers in fallback chain failed. Last error: {last_error}") from last_error
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        for name, client in self._clients:
+            try:
+                async for token in client.generate_stream(prompt=prompt, temperature=temperature):
+                    yield token
+                return
+            except (LLMClientError, Exception) as e:
+                logger.warning("Fallback stream: %s failed (%s), trying next provider", name, e)
+        result = await self._clients[-1][1].generate(prompt=prompt, temperature=temperature)
+        yield result
+
+    async def close(self) -> None:
+        for _, client in self._clients:
+            await client.close()

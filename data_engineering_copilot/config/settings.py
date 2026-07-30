@@ -146,6 +146,10 @@ class AppSettings(BaseSettings):
     nvidia_nim_rpm_limit: int = 40
     nvidia_nim_rpd_limit: int = 1000
 
+    # LLM fallback chain: ordered list of providers to try on failure
+    llm_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "ollama"])
+    llm_fallback_call_timeout: int = 60  # shorter circuit-breaker timeout for fallback providers
+
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = ""
     answer_llm_model: str = ""
