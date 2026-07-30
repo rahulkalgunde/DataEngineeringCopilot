@@ -67,6 +67,59 @@ class AsyncUrlRegistry:
                 error=str(exc),
             )
 
+    async def mget_html_hashes(self, urls: list[str]) -> dict[str, str | None]:
+        """Return a dict mapping each URL to its stored hash (or None).
+
+        Uses a Redis pipeline to fetch all URLs in a single round trip.
+        """
+        if self._redis is None or not urls:
+            return {u: None for u in urls}
+        try:
+            pipe = self._redis.pipeline(transaction=False)
+            for url in urls:
+                pipe.hget(self._key, url)
+            raw_results = await pipe.execute()
+            result: dict[str, str | None] = {}
+            for url, raw in zip(urls, raw_results, strict=False):
+                if raw is None:
+                    result[url] = None
+                else:
+                    raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    try:
+                        record = json.loads(raw_str)
+                        result[url] = record.get("html_hash")
+                    except (json.JSONDecodeError, AttributeError):
+                        result[url] = None
+            return result
+        except redis.exceptions.RedisError as exc:
+            log.warning(
+                "async_url_registry.mget_html_hashes failed",
+                url_count=len(urls),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return {u: None for u in urls}
+
+    async def mset_html_hashes(self, url_hash_pairs: list[tuple[str, str]]) -> None:
+        """Batch set HTML hashes for multiple URLs using a Redis pipeline."""
+        if self._redis is None or not url_hash_pairs:
+            return
+        records = []
+        for url, html_hash in url_hash_pairs:
+            records.append((url, json.dumps({"html_hash": html_hash, "discovered_at": time.time()})))
+        try:
+            pipe = self._redis.pipeline(transaction=False)
+            for url, record in records:
+                pipe.hset(self._key, url, record)
+            await pipe.execute()
+        except redis.exceptions.RedisError as exc:
+            log.warning(
+                "async_url_registry.mset_html_hashes failed",
+                url_count=len(url_hash_pairs),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
     async def clear(self) -> None:
         if self._redis is None:
             return

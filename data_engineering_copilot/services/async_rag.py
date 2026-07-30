@@ -356,7 +356,14 @@ class AsyncRagService:
                 generation_span.update(output=answer_text)
                 generation_span.end()
             if trace:
-                trace.update(output=answer_text)
+                trace.update(
+                    output=answer_text,
+                    metadata={
+                        "stage_times_ms": _stage_times,
+                        "num_sources": len(retrieved_chunks),
+                        "intent": intent,
+                    },
+                )
                 trace.end()
 
             if self.telemetry:
