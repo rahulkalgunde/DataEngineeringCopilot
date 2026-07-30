@@ -103,8 +103,9 @@ def _build_purpose_llm_client(
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
     if eff_provider == "ollama":
+        llm_base = app_settings.llm_ollama_base_url or app_settings.ollama_base_url
         return LLMClient(
-            base_url=f"{app_settings.ollama_base_url}/v1",
+            base_url=f"{llm_base}/v1",
             model=eff_model,
             api_key="",
             timeout_seconds=app_settings.ollama_timeout_seconds,
@@ -197,7 +198,11 @@ def build_embedder(
             include_provider_param=False,
         )
     elif provider in ("ollama", "local"):
-        return AsyncOllamaEmbeddings(model_name=app_settings.embedding_model_name)
+        embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
+        return AsyncOllamaEmbeddings(
+            model_name=app_settings.embedding_model_name,
+            base_url=embed_base,
+        )
     else:
         raise ValueError(f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openrouter', 'nvidia'.")
 
@@ -359,11 +364,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
 
     enrichment_client = _build_purpose_llm_client(
-        provider=app_settings.enrichment_llm_provider,
-        model=app_settings.enrichment_llm_model,
+        provider=app_settings.enrichment_llm_provider or "ollama",
+        model=app_settings.enrichment_llm_model or "llama3.2:3b",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
-    ) or build_global_llm_client(app_settings, provider_rate_limiters)
+    )
 
     contextual_enricher = ContextualChunkEnricher(
         summarizer=LLMContextSummarizer(llm_client=enrichment_client),

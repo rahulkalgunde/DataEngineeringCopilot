@@ -7,9 +7,11 @@ endpoint; differences are captured in constructor parameters.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 
 import httpx
@@ -22,6 +24,60 @@ from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRa
 logger = logging.getLogger(__name__)
 
 
+class CircuitBreakerError(RuntimeError):
+    """Raised when the circuit breaker is open and the request is rejected."""
+
+
+class CircuitBreaker:
+    """Fail-fast circuit breaker for LLM provider calls.
+
+    After ``failure_threshold`` consecutive failures the circuit opens
+    and all subsequent calls are rejected immediately (without waiting
+    for a timeout) for ``recovery_timeout`` seconds. After that period,
+    a single test request is allowed (half-open). If it succeeds the
+    circuit closes; if it fails the circuit re-opens.
+    """
+
+    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 30.0) -> None:
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._failures = 0
+        self._last_failure_time = 0.0
+        self._lock = asyncio.Lock()
+        self._state = "closed"  # closed | open | half-open
+
+    async def call(self, coro_factory):
+        async with self._lock:
+            if self._state == "open":
+                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+                    self._state = "half-open"
+                else:
+                    raise CircuitBreakerError(
+                        f"Circuit breaker open for {self._recovery_timeout:.0f}s "
+                        f"after {self._failure_threshold} failures"
+                    )
+        try:
+            result = await asyncio.wait_for(coro_factory(), timeout=10.0)
+        except TimeoutError as exc:
+            async with self._lock:
+                self._failures += 1
+                self._last_failure_time = time.monotonic()
+                if self._failures >= self._failure_threshold:
+                    self._state = "open"
+            raise exc
+        except Exception as exc:
+            async with self._lock:
+                self._failures += 1
+                self._last_failure_time = time.monotonic()
+                if self._failures >= self._failure_threshold:
+                    self._state = "open"
+            raise exc
+        async with self._lock:
+            self._failures = 0
+            self._state = "closed"
+        return result
+
+
 class LLMClientError(RuntimeError):
     """Raised when the LLM provider cannot return an answer."""
 
@@ -31,6 +87,11 @@ class LLMClient(SafeAsyncClientMixin):
 
     Differences between providers are handled purely through constructor
     parameters — no subclassing required.
+
+    Includes a fail-fast circuit breaker: after ``circuit_breaker_threshold``
+    consecutive failures, subsequent requests are immediately rejected for
+    ``circuit_breaker_timeout`` seconds instead of waiting for the provider
+    timeout.
 
     Parameters
     ----------
@@ -60,6 +121,10 @@ class LLMClient(SafeAsyncClientMixin):
     rate_limiter:
         Optional shared rate limiter for providers that enforce RPM/RPD
         limits (OpenRouter, NVIDIA NIM, etc.).
+    circuit_breaker_threshold:
+        Consecutive failures before circuit opens (default 3).
+    circuit_breaker_timeout:
+        Seconds to keep circuit open (default 30).
     """
 
     def __init__(
@@ -74,6 +139,8 @@ class LLMClient(SafeAsyncClientMixin):
         extra_body: dict | None = None,
         extra_headers: dict | None = None,
         rate_limiter: SlidingWindowRateLimiter | None = None,
+        circuit_breaker_threshold: int = 3,
+        circuit_breaker_timeout: float = 30.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -86,6 +153,10 @@ class LLMClient(SafeAsyncClientMixin):
         self._extra_headers = extra_headers or {}
         self._usage = LLMUsage()
         self._rate_limiter = rate_limiter
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=circuit_breaker_threshold,
+            recovery_timeout=circuit_breaker_timeout,
+        )
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -133,8 +204,18 @@ class LLMClient(SafeAsyncClientMixin):
         if options:
             payload.setdefault("options", {}).update(options)
 
+        # Fast-fail circuit breaker: fail immediately if provider is unhealthy
         try:
-            body = await self._http_post(payload)
+            body = await self._circuit_breaker.call(lambda: self._http_post(payload))
+        except CircuitBreakerError:
+            logger.warning(
+                "Circuit breaker open for model=%s, failing fast instead of waiting %ss",
+                self.model,
+                self.timeout_seconds,
+            )
+            raise LLMClientError(
+                f"LLM provider {self.model} is temporarily unavailable (circuit breaker open after repeated failures)."
+            ) from None
         except httpx.TimeoutException as exc:
             logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
             raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc

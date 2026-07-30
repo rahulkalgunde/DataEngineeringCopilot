@@ -18,6 +18,7 @@ from qdrant_client.http import models
 from qdrant_client.http.models import SparseIndexParams, SparseVectorParams
 
 from data_engineering_copilot.config.settings import PROJECT_ROOT, settings
+from data_engineering_copilot.domain.exceptions import VectorStoreError
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
 
@@ -323,8 +324,10 @@ class AsyncQdrantVectorStore:
         except Exception as exc:
             error_str = str(exc)
             if "404" in error_str or "Not Found" in error_str or "collection" in error_str.lower():
-                logger.warning("Qdrant collection '%s' not found. Returning empty results.", self._collection_name)
-                return []
+                raise VectorStoreError(
+                    f"Qdrant collection '{self._collection_name}' not found at {self._url}. "
+                    "Run 'dec reset-index' then re-ingest data."
+                ) from exc
             logger.exception("Failed to async query Qdrant: %s", exc)
             raise
 
@@ -398,6 +401,35 @@ class AsyncQdrantVectorStore:
             logger.info("Deleted all points for url=%s", url)
         except Exception as exc:
             logger.warning("Failed to delete points for url=%s: %s", url, exc)
+
+    async def scroll_urls(self, source_name: str) -> list[str]:
+        """Return all distinct URLs stored for a given source."""
+        if self._client is None:
+            return []
+        try:
+            all_urls: set[str] = set()
+            next_offset = None
+            while True:
+                points, next_offset = await self._client.scroll(
+                    collection_name=self._collection_name,
+                    scroll_filter=models.Filter(
+                        must=[models.FieldCondition(key="source_name", match=models.MatchValue(value=source_name))]
+                    ),
+                    limit=100,
+                    offset=next_offset,
+                    with_payload=["url"],
+                    with_vectors=False,
+                )
+                for p in points:
+                    url = (p.payload or {}).get("url")
+                    if url:
+                        all_urls.add(url)
+                if next_offset is None or next_offset == "":
+                    break
+            return list(all_urls)
+        except Exception as exc:
+            logger.warning("Failed to scroll URLs for source=%s: %s", source_name, exc)
+            return []
 
     async def count(self) -> int:
         """Return the number of points stored in the collection asynchronously."""

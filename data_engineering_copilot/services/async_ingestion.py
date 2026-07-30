@@ -318,6 +318,7 @@ class AsyncIngestionService:
             "total_chunks": 0,
             "global_pages_fetched": 0,
             "batch_chunks": [],
+            "seen_urls": set(),
         }
         source_pages = 0
         source_chunks = 0
@@ -368,6 +369,7 @@ class AsyncIngestionService:
                         _shared["total_chunks"] += n_chunks
                         _shared["global_pages_fetched"] += 1
                         _shared["batch_chunks"].extend(chunks)
+                        _shared["seen_urls"].add(raw_doc.url)
                         source_pages += 1
                         source_chunks += n_chunks
 
@@ -435,7 +437,15 @@ class AsyncIngestionService:
 
             for w in w_tasks:
                 w.cancel()
-            await asyncio.gather(*w_tasks, return_exceptions=True)
+            worker_results = await asyncio.gather(*w_tasks, return_exceptions=True)
+            for i, result in enumerate(worker_results):
+                if isinstance(result, Exception):
+                    log.error("async_ingestion.worker_failed", worker=i, error=str(result))
+
+            # Prune stale chunks: delete chunks for URLs that were NOT seen in this crawl
+            stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
+            if stale_count > 0:
+                log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
 
         self._emit(
             on_event,
@@ -509,6 +519,36 @@ class AsyncIngestionService:
             await deleter(url)
         else:
             log.debug("vector_store.no_delete_by_url", url=url)
+
+    async def _prune_stale_chunks(self, source_name: str, seen_urls: set[str]) -> int:
+        """Delete chunks whose URLs were not seen in the current crawl."""
+        from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+        if not isinstance(self.vector_store, AsyncQdrantVectorStore):
+            return 0
+        try:
+            stored_urls = await self.vector_store.scroll_urls(source_name)
+        except Exception as exc:
+            log.warning("async_ingestion.stale_prune_scroll_failed", source=source_name, error=str(exc))
+            return 0
+        stale = [u for u in stored_urls if u not in seen_urls]
+        if not stale:
+            return 0
+        deleted = 0
+        for url in stale:
+            try:
+                await self._delete_chunks_for_url(url)
+                deleted += 1
+            except Exception as exc:
+                log.warning("async_ingestion.stale_delete_failed", url=url, error=str(exc))
+        log.info(
+            "async_ingestion.stale_prune_complete",
+            source=source_name,
+            stored=len(stored_urls),
+            seen=len(seen_urls),
+            deleted=deleted,
+        )
+        return deleted
 
     def _emit(self, on_event: Callable[[IngestionEvent], None] | None, event: IngestionEvent) -> None:
         if on_event is not None:
