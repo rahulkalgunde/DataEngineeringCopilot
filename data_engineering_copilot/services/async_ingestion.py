@@ -445,9 +445,10 @@ class AsyncIngestionService:
                     log.error("async_ingestion.worker_failed", worker=i, error=str(result))
 
             # Prune stale chunks: delete chunks for URLs that were NOT seen in this crawl
-            # Only run when the crawl completed fully; on early failure, deleting chunks
-            # for pages not reached in this run would remove valid data from previous crawls.
-            if crawl_succeeded:
+            # Only run when the crawl completed fully and at least one URL was
+            # actually processed.  When `seen_urls` is empty (all pages skipped
+            # as duplicates), pruning would delete ALL stored chunks.
+            if crawl_succeeded and shared["seen_urls"]:
                 stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
                 if stale_count > 0:
                     log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
