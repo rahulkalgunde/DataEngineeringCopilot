@@ -60,22 +60,23 @@ def test_code_llm_defaults_empty() -> None:
     settings = AppSettings(code_llm_provider="", code_llm_model="")
     assert settings.code_llm_provider == ""
     assert settings.code_llm_model == ""
-    assert settings.nvidia_nim_rpm_limit == 40
-    assert settings.nvidia_nim_base_url == "https://integrate.api.nvidia.com/v1"
+    assert settings.nvidia_rpm_limit == 40
+    assert settings.nvidia_base_url == "https://integrate.api.nvidia.com/v1"
 
 
 def test_code_llm_overridable() -> None:
     settings = AppSettings(
         code_llm_provider="nvidia",
         code_llm_model="qwen/qwen2.5-coder-32b-instruct",
-        nvidia_nim_api_key="nvapi-test",
-        nvidia_nim_rpm_limit=80,
-        nvidia_nim_base_url="https://custom.nvidia.com/v1",
+        nvidia_api_key="nvapi-test",
+        nvidia_rpm_limit=80,
+        nvidia_base_url="https://custom.nvidia.com/v1",
+        _skip_provider_check=True,
     )
     assert settings.code_llm_provider == "nvidia"
     assert settings.code_llm_model == "qwen/qwen2.5-coder-32b-instruct"
-    assert settings.nvidia_nim_rpm_limit == 80
-    assert settings.nvidia_nim_base_url == "https://custom.nvidia.com/v1"
+    assert settings.nvidia_rpm_limit == 80
+    assert settings.nvidia_base_url == "https://custom.nvidia.com/v1"
 
 
 def test_embedding_model_dimensions_lookup() -> None:
@@ -84,7 +85,9 @@ def test_embedding_model_dimensions_lookup() -> None:
 
 
 def test_get_embedding_dimension_nvidia() -> None:
-    s = AppSettings(embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b")
+    s = AppSettings(
+        embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b", _skip_provider_check=True
+    )
     assert s.get_embedding_dimension() == 2048
 
 
@@ -95,14 +98,16 @@ def test_get_embedding_dimension_unknown_model() -> None:
 
 def test_nvidia_nim_rpd_limit_default() -> None:
     settings = AppSettings()
-    assert settings.nvidia_nim_rpd_limit == 1000
+    assert settings.nvidia_rpd_limit == 1000
 
 
 def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
     import pytest
 
-    with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
+    with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
         AppSettings(
             embedding_provider="nvidia",
-            nvidia_nim_api_key="",
+            nvidia_api_key="",
+            _env_file=None,
+            _skip_provider_check=True,
         )

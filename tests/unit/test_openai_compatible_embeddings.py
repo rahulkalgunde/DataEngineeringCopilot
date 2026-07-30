@@ -176,7 +176,7 @@ async def test_embed_handles_error_in_response(embeddings):
         )
         from data_engineering_copilot.domain.exceptions import EmbeddingError
 
-        with pytest.raises(EmbeddingError, match="OpenRouter API returned error"):
+        with pytest.raises(EmbeddingError, match="Embedding API returned error"):
             await embeddings.embed_texts(["test"])
 
 

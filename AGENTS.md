@@ -1,79 +1,40 @@
 # DataEngineeringCopilot — Agent Guide
 
-## Tech Stack & Tooling
-- **Language:** Python 3.12+ (per `pyproject.toml` requires-python)
-- **Type Checker:** Pyright (via LSP & CLI)
-- **Linter & Formatter:** Ruff (`ruff`)
-- **Test Runner:** Pytest (`pytest`)
+## Tech Stack
+Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `uv` only.
 
----
+## Verification Loop (run in order after any code change)
+1. `dec_venv/bin/python -m ruff check data_engineering_copilot/ tests/ --fix`
+2. `dec_venv/bin/python -m ruff format data_engineering_copilot/ tests/`
+3. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v` (fast isolation first)
 
-## 1. Quality Verification Workflow
-After writing, modifying, or refactoring code, you **must** execute the following verification loop in order before declaring a task complete:
-
-1. **Check LSP Diagnostics:** Monitor active Pyright LSP alerts in your context. Resolve all reported type errors and unresolved imports immediately.
-2. **Run Ruff Linter:** Execute auto-fixes and inspect non-fixable warnings.
-   ```bash
-   ruff check . --fix
-   ```
-3. **Run Ruff Formatter:**
-   ```bash
-   ruff format .
-   ```
-4. **Run Relevant Tests:** Start with the specific test file before broader suites.
-   ```bash
-   dec_venv/bin/python -m pytest tests/<path> -v
-   ```
-
-## CRITICAL: DO NOT REMOVE GUARDRAILS
-AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this section or any guardrail within it. If a guardrail feels outdated, flag it to the user instead of removing it.
-
-## Session & Plan Guardrails
-- Run `git status` at start. Alert user if uncommitted changes exist.
-- Check `plans/` and `sessions/` for stale files — resume if applicable.
-- Save plans to `plans/PLAN_<desc>_<YYYY-MM-DD_HHmm>.md` before presenting.
-- Save session details to `sessions/SESSION_<desc>_<YYYY-MM-DD_HHmm>.md` after context loss.
-- **Never run `git commit`, `git push`, `git add`, or any git command that changes history.** Only remind the user with the exact commands to run.
-- **Never run commands that may take longer than 15 minutes** (e.g., pulling large Docker images, running full integration suites). Print the command and ask the user to run it.
-- After each milestone, print the exact `git add`/`git commit`/`git push` commands and ask the user to run them.
-- **Fast failure isolation**: Validate a fix with `pytest <specific_test_file>` before running full suites (`make test-integration` takes ~3min).
-- **Git file verification**: Before suggesting `git add <filelist>`, verify file existence with `git status` — deleted/renamed files need different handling (`git rm` vs `git add`).
-
-## Python & Environment
-- **Virtual Env**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
-- **Package Management**: `uv pip install -e ".[dev]"`. CI uses `uv sync --frozen --extra dev`. `uv.lock` pins exact deps.
-- **Config Load Chain**: `.env` → `.env.secrets` → `.env.local` (later overrides earlier). See `.env.example` for all names.
-- **`AppSettings(_env_file=None)` caveat**: Creating `AppSettings(_env_file=None, ...)` does not reliably prevent `.env` from being read when other modules are collected in the same pytest session. Explicitly pass all relevant kwargs (e.g., `code_llm_provider=""`, `embedding_provider="ollama"`) to override env file values.
-- **Default Redis URL** (`settings.py:94`): `redis://:local_secure_password_123@localhost:6379/0`. Docker compose overrides to `redis://:local_secure_password_123@redis:6379/0`.
-- **Logging**: structlog, JSON (prod) or console (DEBUG). Toggle via `LOG_LEVEL`.
+## Environment
+- **VENV**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
+- **Package mgmt**: `uv pip install -e ".[dev]"`. CI uses `uv sync --frozen --extra dev`.
+- **Config load**: `.env` → `.env.secrets` → `.env.local`. Set `_env_file=None` does NOT reliably block env files — explicitly pass all relevant kwargs to override.
+- **Default Redis**: `redis://:local_secure_password_123@localhost:6379/0`; Docker overrides host to `redis`.
 
 ## Entry Points
-| Command | What it runs |
+| Command | Runs |
 |---|---|
-| `dec <command>` | `main:main` → `cli.py` |
+| `dec <command>` | `main.py:main` → `cli.py` |
 | API | `uvicorn data_engineering_copilot.api.app:app --reload --port 8000` |
-| Streamlit | `streamlit run data_engineering_copilot/ui/streamlit_app.py` |
-| Celery worker | `celery -A data_engineering_copilot.workers.tasks worker --concurrency=4 -Q ingestion -E` |
+| Streamlit | `dec_venv/bin/python -m streamlit run data_engineering_copilot/ui/streamlit_app.py` |
+| Celery worker | `celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info` |
 
-## CLI Commands
-| Command | Notes |
-|---|---|
-| `dec ask <question>` | Calls `build_rag_service()` directly — no API needed |
-| `dec ingest --source "X"` | **Dispatches through FastAPI** (`POST /api/v1/ingest`) — API + Celery must be running |
-| `dec reset-index` | Deletes Qdrant collection (then recreates with correct dim), clears Redis crawl keys, drops crawl frontier tables |
-| `dec health` / `dec config` | Service connectivity / validate config |
-| `dec evaluate` | Runs RAG eval on `tests/evaluation/eval_dataset.jsonl` |
-| `dec profile --sources "X" --load-sweep "10,20,50,100"` | Ingestion profiling |
-| `dec status [task-id]` | Poll ingestion progress from Redis, or show Qdrant/Redis/Celery status |
-| `dec monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
+## CLI
+- `dec ask <question>` — calls `build_rag_service()` directly (no API needed)
+- `dec ingest --source "X"` — POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery running)
+- `dec reset-index` — deletes Qdrant collection, recreates w/ correct dim, clears Redis `crawl:*` keys, drops crawl frontier PG tables
+- `dec evaluate` — runs RAG eval on `tests/evaluation/eval_dataset.jsonl`
+- `dec status` / `dec health` / `dec config` / `dec monitor --task-id <id>` / `dec profile`
 
-## API Routes (`routes.py`)
-- `POST /api/v1/ingest` — dispatches Celery task. Uses atomic SETNX lock to prevent concurrent runs.
-- `GET /api/v1/ingest/status/{task_id}` — polls Redis for progress.
-- `POST /api/v1/ask` — singleton `get_rag_service()`. 120s timeout.
-- `POST /api/v1/ask/stream` — SSE streaming variant.
-- Middleware: `RateLimitMiddleware` (60/min ask, 10/min ingest), optional `ApiKeyAuthMiddleware`.
-- **Always use `get_rag_service()` (singleton) in API code** — not `build_rag_service()`.
+## API Routes (`api/routes.py`)
+- `POST /api/v1/ingest` — Celery task dispatch via `SETNX` lock (60s TTL). Checks existing running task.
+- `GET /api/v1/ingest/status/{task_id}` — polls Redis progress.
+- `POST /api/v1/ask` — uses `get_rag_service()` (singleton from `services/rag_service_singleton.py`, not `factory.py`). 120s timeout.
+- `POST /api/v1/ask/stream` — SSE streaming.
+- Middleware: `RateLimitMiddleware`, optional `ApiKeyAuthMiddleware`, CORS for `localhost:8501`.
 
 ## Testing
 | Command | What |
@@ -81,68 +42,61 @@ AGENTS SHOULD NOT REMOVE GUARDRAILS. Do not modify, delete, or reorder this sect
 | `make test-quick` | Unit, no `@slow`, parallel (~15s) |
 | `make test-unit` | All unit tests |
 | `make test-unit-serial` | Sequential (`-n 0`) |
-| `make test-smoke` | Unit, no slow, no header, quiet |
 | `make test-integration` | Sequential + 2 reruns; needs Docker (testcontainers) |
-| `make test-integration-parallel` | `-n 2 --dist=loadgroup` |
 | `make test-e2e` | Full pipeline; needs Docker (testcontainers) |
 | `make test-eval` | Mocked embedder, no infra |
-| `make test-ci-unit` | With coverage (XML + term-missing) |
 | `make lint` / `make format` | Ruff only |
 
-- **Pytest quirks** (`pyproject.toml`): `asyncio_mode = auto` — never `@pytest.mark.asyncio`. Default `addopts = "-n auto --dist worksteal --strict-markers"`. Coverage omits `ui/`.
-- **Shared fixtures** (`tests/conftest.py`): `integration_settings`, `embeddings_provider`, `qdrant_store`, `ollama_client`, `populated_store`, `rag_service`, `api_client`.
-- **Integration/e2e conftests** (`tests/integration/conftest.py`, `tests/e2e/conftest.py`): Use testcontainers for Qdrant (`qdrant/qdrant:v1.18.3`), Redis (`redis:7-alpine`), and Ollama (`ollama/ollama:0.32.4`). No external Docker Compose services needed for tests.
-- **Test isolation**: `unique_collection_name()` creates per-test Qdrant collections; teardown deletes them.
-- **Auto-skip mechanism**: `pytest_collection_modifyitems` in shared conftest checks service availability at collection time. Integration conftest's `pytest_configure` eagerly starts the Ollama container and monkey-patches the shared conftest so tests aren't skipped when host Ollama is absent.
+- `asyncio_mode = auto` — never `@pytest.mark.asyncio`. Default `addopts = "-n auto --dist worksteal --strict-markers"`.
+- Shared fixtures in `tests/conftest.py`: `integration_settings`, `embeddings_provider`, `qdrant_store`, `ollama_client`, `populated_store`, `rag_service`, `api_client`.
+- Integration/e2e conftests use testcontainers (Qdrant `v1.18.3`, Redis `7-alpine`, Ollama `0.32.4`) — no Docker Compose needed for tests.
+- `unique_collection_name()` for per-test Qdrant isolation; auto-teardown.
+- Auto-skip: `pytest_collection_modifyitems` checks service availability at collection time.
 
 ## Docker Services (full app stack)
-`redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `postgres` (app crawl frontier), `backend-api`, `celery_worker`
-- Commands: `make docker-up/down/status/rebuild/logs/health/setup/cleanup/stop-all`
-- `make docker-setup` = `docker-up` + pulls `nomic-embed-text` + `llama3.2:3b` into Ollama.
-- CI stack: `make docker-ci-up` (uses `docker-compose.ci.yml`, prefix `dec_ci_*`).
-- Worker volume mount `.:/app` — code changes need worker restart, not rebuild.
-- `backend-api` and `celery_worker` share the same Docker image (`de_copilot_base_image`).
-- Integration and e2e tests do NOT require Docker Compose — they use testcontainers (Qdrant, Redis, Ollama). Only full manual testing or `dec ingest` needs the full stack.
+`redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `postgres` (crawl frontier), `backend-api`, `celery_worker`
+- `make docker-setup` = `docker compose up -d` + pulls `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b` into Ollama.
+- CI: `make docker-ci-up` (uses `docker-compose.ci.yml`, prefix `dec_ci_*`).
+- Both `backend-api` and `celery_worker` share image `de_copilot_base_image`; worker volume-mounts `.:/app` — restart, don't rebuild.
+- Only `dec ingest` or manual testing needs full Docker Compose — tests use testcontainers only.
 
-## Architecture & Constraints
+## Architecture
 - **No LangChain/LlamaIndex** (except `langchain-text-splitters`).
-- **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()`, etc. in `factory.py`. Never instantiate manually.
-- **Async Only**: `SafeAsyncClientMixin` in `infrastructure/async_client.py`. Uses `httpx.AsyncClient` / `aiohttp`.
-- **Providers**: LLM → ollama, openrouter, nvidia. Embeddings → ollama, openrouter, nvidia, openai. Switching providers requires `dec reset-index` (dimensions change).
-- **Observability**: `observability/` package — langfuse tracing, OpenTelemetry, structlog, token tracking.
-- **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use a different provider+model via `{purpose}_llm_provider` / `{purpose}_llm_model` settings. Empty = fall back to global `llm_provider` / `llm_model`. See `factory.py:69-96` (`_build_purpose_llm_client`).
-- **Embedding dimension is model-dependent**: Looked up in `embedding_model_dimensions: dict[str, int]` (settings.py:117). Not provider-dependent.
-- **Chunking** (`settings.chunking_strategy`): `"sentence_preserving"` (default, 1875-char chunks), `"semantic"`, `"header_aware"`, `"fixed_size"`.
-- **Hybrid Search**: Enabled by default (dense + sparse). Configured via `hybrid_search_enabled`, `hybrid_rrf_k=60`.
-- **RAG Pipeline**: Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic) with NumPy SIMD scoring.
-- **Crawl Database**: PostgreSQL via `PostgresCrawlFrontierDB` (set `CRAWL_DB_URL`).
+- **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()` in `factory.py`. Never instantiate manually.
+- **Async only**: `SafeAsyncClientMixin` (uses `httpx.AsyncClient`; `aiohttp` is crawler-only).
+- **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-index` (dimension change).
+- **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global.
+- **Embedding dimension**: Model-dependent lookup in `embedding_model_dimensions` dict (`settings.py:121`).
+- **Chunking** (`chunking_strategy`): `"sentence_preserving"` (default, 375 words/~1875 chars), `"semantic"`, `"header_aware"`, `"fixed_size"`.
+- **Hybrid search**: Enabled by default (dense + sparse, `hybrid_rrf_k=60`).
+- **RAG pipeline** (`services/async_rag.py`): Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic).
 - **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` via `sentence-transformers`. Downloaded at runtime (~450MB). Singleton-cached in `services/reranker.py`.
 - **Output parsing**: `parse_rag_response()` + `verify_citations()` in `services/structured_output.py`.
-
-## Key Dependencies (heavy)
-- `crawl4ai` → requires Playwright/Chromium (installed in Docker, not in dev venv).
-- `sentence-transformers` → downloads cross-encoder model on first rerank.
-- `qdrant-client`, `redis`, `celery`, `langfuse`, `structlog`.
-
-## CI & Workflows
-- CI workflows are in `.github/workflows.disabled/test.yml` — disabled (not in `.github/workflows/`).
-- CI runs three jobs: `lint`, `test-unit` (with coverage), `test-integration`, `test-e2e`.
-- CI uses `uv sync --frozen --extra dev` and `docker compose -f docker-compose.ci.yml`.
-- Integration CI starts full Docker Compose stack (Ollama, Qdrant, Redis, etc.) via `docker-compose.ci.yml`.
-- Unit CI has no Docker dependency — runs with `make test-ci-unit`.
+- **Crawl DB**: PostgreSQL via `PostgresCrawlFrontierDB` (set `CRAWL_DB_URL`).
 
 ## Operational Gotchas
-- **Qdrant Health**: Use `GET /` (port 6333). `/health` returns 404.
-- **Ollama `raw: True`**: Strips `<think>` tags from responses. Empty response = output budget exhausted (increase `ollama_num_predict` in settings).
-- **OpenRouter Rate Limiter**: Shared singleton coordinates 20 RPM / 1000 RPD across LLM + embeddings. Retries 429s up to 5x with exp backoff + `Retry-After`.
-- **Worker Time Limits**: Soft 36000s (10h), Hard 43200s (12h). Zombie recovery via `task_failure` signal handler marks FAILED in Redis.
-- **Qdrant Batch Splitting**: `upsert_chunks` splits into 256-chunk sub-batches (avoids 32MB payload limit).
-- **URL Dedup**: SHA-256 via `AsyncUrlRegistry` in Redis.
-- **Ingestion Lock**: Atomic SETNX on `ingestion:dispatch_lock` (60s TTL). Released before flush to prevent unbounded chunk accumulation.
-- **Streamlit**: UI uses SSE to poll `/api/v1/ingest/status/{task_id}`.
-- **reset-index behavior**: Deletes Qdrant collection, recreates it with correct dim (provider-dependent), deletes all Redis `crawl:*` keys, and drops crawl frontier tables (PostgreSQL).
-- **Ollama testcontainer model caching**: Integration/e2e conftests mount `~/.ollama` into the `OllamaContainer` via `ollama_home`. Models are shared with the host Ollama (if any). First test run pulls missing models; subsequent runs use the cache.
-- **respx + Ollama embedding**: `respx` passthrough (`assert_all_mocked=False`) returns empty bodies for Ollama `/api/embed` calls. If you need to mock the LLM while using real Ollama for embeddings, implement `LLMClientProtocol` with a simple class instead of wire-mocking with `respx`.
+- **Qdrant health**: Use `GET /` (port 6333). `/health` returns 404.
+- **Ollama `raw: True`**: Strips `<think>` tags. Empty response = output budget exhausted (increase `ollama_num_predict`).
+- **OpenRouter rate limiter**: Per-provider `SlidingWindowRateLimiter` (20 RPM / 1000 RPD). Retries 429s up to 5x with exp backoff + `Retry-After`.
+- **Worker time limits**: Soft 36000s (10h), Hard 43200s (12h). Zombie recovery via `task_failure` signal handler.
+- **Qdrant batch splitting**: `upsert_chunks` splits into 256-chunk sub-batches (avoids 32MB payload limit).
+- **URL dedup**: SHA-256 via `AsyncUrlRegistry` in Redis.
+- **Ollama testcontainer caching**: Integration/e2e conftests mount `~/.ollama`; models cached across runs.
+- **respx + Ollama embeddings**: `respx` passthrough returns empty bodies for `/api/embed`. To mock LLM with real embeddings, implement `LLMClientProtocol` instead of wire-mocking.
 
-## Plan Mode Discipline
-- **No edits in plan mode**: When the system says "Plan mode ACTIVE — READ-ONLY", do not modify files. Only present the plan. Wait for explicit transition to build mode.
+## CI Workflows
+- In `.github/workflows.disabled/test.yml` (disabled). Jobs: `lint`, `test-unit` (+coverage), `test-eval`, `test-integration`, `test-e2e`.
+- CI pulls 3 Ollama models: `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b`.
+
+## Session Guardrails
+- Run `git status` at start; alert on uncommitted changes.
+- Check `plans/` and `sessions/` for stale files.
+- Save plans to `plans/PLAN_<desc>_<YYYY-MM-DD_HHmm>.md` before presenting.
+- **Always list file names explicitly** in `git add` and `git commit` commands. Never use `-A`, `--all`, or `-a`.
+- **Never commit, push, or `git add`**. Print exact commands for user to run.
+- **Never run commands taking >15 min** (large Docker pulls, full integration suites). Print command, ask user.
+- Validate fixes with `pytest <specific_test>` before broader suites.
+- Verify file existence with `git status` before suggesting `git add`.
+
+## Additional Instruction Sources
+See `.clinerules/` for environment-specific rules (python env, guardrails, behavioral constraints).

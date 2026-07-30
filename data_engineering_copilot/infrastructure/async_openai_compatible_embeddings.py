@@ -1,7 +1,7 @@
 """Async OpenAI-compatible embedding provider using httpx.AsyncClient.
 
 Provides an EmbedderProtocol-compatible interface for any OpenAI-compatible
-/v1/embeddings endpoint. Used by both OpenRouter and NVIDIA NIM.
+/v1/embeddings endpoint. Used by OpenRouter, NVIDIA NIM, Gemini, and others.
 """
 
 from __future__ import annotations
@@ -21,17 +21,17 @@ logger = logging.getLogger(__name__)
 # Retryable network errors — these should propagate to the @retry decorator
 _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
 
-# Fallback token encoder (matches OpenAI/OpenRouter common tokenizer tokenization ratio)
+# Fallback token encoder (matches common OpenAI-compatible tokenizer ratio)
 _TOKENIZER = tiktoken.get_encoding("cl100k_base")
 MAX_SAFE_TOKENS = 3800  # Safe buffer below OpenRouter's 4096 model limit
 
 
 def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> str:
-    """Truncates text to stay safely under OpenRouter's token limit."""
+    """Truncates text to stay safely under the provider's token limit."""
     tokens = _TOKENIZER.encode(text)
     if len(tokens) > max_tokens:
         logger.warning(
-            "Text length (%d tokens) exceeds max limit (%d). Truncating before sending to OpenRouter.",
+            "Text length (%d tokens) exceeds max limit (%d). Truncating.",
             len(tokens),
             max_tokens,
         )
@@ -42,7 +42,7 @@ def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> st
 class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
     """Async embedding provider for any OpenAI-compatible /v1/embeddings endpoint.
 
-    Works with OpenRouter, NVIDIA NIM, and other OpenAI-compatible APIs.
+    Works with OpenRouter, NVIDIA NIM, Gemini, and other OpenAI-compatible APIs.
     """
 
     def __init__(
@@ -64,16 +64,12 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self.timeout_seconds = timeout_seconds
         self._rate_limiter = rate_limiter
         self._include_provider_param = include_provider_param
-        if include_provider_param:
-            logger.info("Using OpenRouter embedding model %s at %s", model_name, self.base_url)
-        else:
-            logger.info("Using NVIDIA NIM embedding model %s at %s", model_name, self.base_url)
+        logger.info("Using embedding model %s at %s", model_name, self.base_url)
 
     def _make_client_kwargs(self) -> dict:
         return {
             "headers": {
                 "Authorization": f"Bearer {self.api_key}",
-                "HTTP-Referer": "https://data-engineering-copilot.local",
             }
         }
 
@@ -116,37 +112,39 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             if self._rate_limiter is not None:
                 await self._rate_limiter.handle_429(dict(response.headers))
             raise httpx.HTTPStatusError(  # tenacity will retry this
-                "Rate limited by OpenRouter", request=response.request, response=response
+                "Rate limited by embedding provider", request=response.request, response=response
             )
 
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise EmbeddingError(f"Failed to get embeddings from OpenRouter: {exc}") from exc
+            raise EmbeddingError(f"Failed to get embeddings: {exc}") from exc
         resp_data = response.json()
 
-        # FIX: Check for OpenRouter 200 OK Embedded Error Body
+        # Check for provider error body (200 OK with embedded error)
         if isinstance(resp_data, dict) and "error" in resp_data:
             err_details = resp_data["error"]
             err_msg = err_details.get("message", str(resp_data)) if isinstance(err_details, dict) else str(err_details)
             err_code = err_details.get("code", "UNKNOWN") if isinstance(err_details, dict) else "UNKNOWN"
-            raise EmbeddingError(f"OpenRouter API returned error [Code {err_code}]: {err_msg}")
+            raise EmbeddingError(f"Embedding API returned error [Code {err_code}]: {err_msg}")
 
         if "data" not in resp_data:
             raise EmbeddingError(
-                f"OpenRouter embeddings response missing 'data' key. "
+                f"Embeddings response missing 'data' key. "
                 f"Response keys: {sorted(resp_data.keys()) if isinstance(resp_data, dict) else 'invalid'}. "
                 f"Response: {str(resp_data)[:500]}"
             )
 
         data_list = resp_data["data"]
         if not isinstance(data_list, list):
-            raise EmbeddingError(f"OpenRouter 'data' value is not a list. Got type {type(data_list).__name__}.")
+            raise EmbeddingError(
+                f"Embeddings response 'data' value is not a list. Got type {type(data_list).__name__}."
+            )
 
         embeddings = [item["embedding"] for item in sorted(data_list, key=lambda x: x.get("index", 0))]
 
         if len(embeddings) != len(safe_texts):
-            raise EmbeddingError(f"OpenRouter returned {len(embeddings)} embeddings for {len(safe_texts)} input texts.")
+            raise EmbeddingError(f"Provider returned {len(embeddings)} embeddings for {len(safe_texts)} input texts.")
 
         self._validate_embedding_dimensions(embeddings, safe_texts)
         return embeddings

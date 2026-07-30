@@ -221,12 +221,12 @@ def health() -> None:
     # Check embedding provider
     print("\nEmbedding Provider:")
     provider = settings.embedding_provider
-    if provider == "openai":
-        print(f"  ℹ️  Configured: OpenAI ({settings.openai_embedding_model})")
-    elif provider == "openrouter":
+    if provider == "openrouter":
         print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_embedding_model})")
     elif provider == "nvidia":
-        print(f"  ℹ️  Configured: NVIDIA NIM ({settings.nvidia_embedding_model})")
+        print(f"  ℹ️  Configured: NVIDIA ({settings.nvidia_embedding_model})")
+    elif provider == "gemini":
+        print(f"  ℹ️  Configured: Gemini ({settings.gemini_embedding_model})")
     else:
         print(f"  ⚠️  Unknown provider: {provider}")
         all_healthy = False
@@ -236,9 +236,16 @@ def health() -> None:
     llm_provider = settings.llm_provider
     if llm_provider == "openrouter":
         print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_model})")
-        # Check code model if configured
         if settings.code_llm_provider:
             print(f"  ℹ️  Code Model: {settings.code_llm_provider} ({settings.code_llm_model})")
+    elif llm_provider == "nvidia":
+        print(f"  ℹ️  Configured: NVIDIA ({settings.nvidia_model})")
+    elif llm_provider == "groq":
+        print(f"  ℹ️  Configured: Groq ({settings.groq_model})")
+    elif llm_provider == "cerebras":
+        print(f"  ℹ️  Configured: Cerebras ({settings.cerebras_model})")
+    elif llm_provider == "gemini":
+        print(f"  ℹ️  Configured: Gemini ({settings.gemini_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health
@@ -495,8 +502,8 @@ def config() -> None:
         model = settings.openrouter_embedding_model
     elif provider == "nvidia":
         model = settings.nvidia_embedding_model
-    elif provider == "openai":
-        model = getattr(settings, "openai_embedding_model", "unknown")
+    elif provider == "gemini":
+        model = settings.gemini_embedding_model
     else:
         model = settings.embedding_model_name
     print(f"  Provider: {provider}")
