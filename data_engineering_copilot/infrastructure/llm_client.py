@@ -38,9 +38,10 @@ class CircuitBreaker:
     circuit closes; if it fails the circuit re-opens.
     """
 
-    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 30.0) -> None:
+    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 30.0, call_timeout: float = 60.0) -> None:
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
+        self._call_timeout = call_timeout
         self._failures = 0
         self._last_failure_time = 0.0
         self._lock = asyncio.Lock()
@@ -57,19 +58,19 @@ class CircuitBreaker:
                         f"after {self._failure_threshold} failures"
                     )
         try:
-            result = await asyncio.wait_for(coro_factory(), timeout=10.0)
+            result = await asyncio.wait_for(coro_factory(), timeout=self._call_timeout)
         except TimeoutError as exc:
             async with self._lock:
                 self._failures += 1
                 self._last_failure_time = time.monotonic()
-                if self._failures >= self._failure_threshold:
+                if self._state == "half-open" or self._failures >= self._failure_threshold:
                     self._state = "open"
             raise exc
         except Exception as exc:
             async with self._lock:
                 self._failures += 1
                 self._last_failure_time = time.monotonic()
-                if self._failures >= self._failure_threshold:
+                if self._state == "half-open" or self._failures >= self._failure_threshold:
                     self._state = "open"
             raise exc
         async with self._lock:
@@ -156,6 +157,7 @@ class LLMClient(SafeAsyncClientMixin):
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=circuit_breaker_threshold,
             recovery_timeout=circuit_breaker_timeout,
+            call_timeout=timeout_seconds,
         )
 
     @property
@@ -216,6 +218,15 @@ class LLMClient(SafeAsyncClientMixin):
             raise LLMClientError(
                 f"LLM provider {self.model} is temporarily unavailable (circuit breaker open after repeated failures)."
             ) from None
+        except TimeoutError as exc:
+            logger.warning(
+                "LLM generation timed out (circuit breaker call timeout) model=%s timeout=%ss",
+                self.model,
+                self._circuit_breaker._call_timeout,
+            )
+            raise LLMClientError(
+                f"LLM provider timed out after {self._circuit_breaker._call_timeout} seconds."
+            ) from exc
         except httpx.TimeoutException as exc:
             logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
             raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
