@@ -12,7 +12,7 @@ import json
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from celery.signals import task_failure
+from celery.signals import task_failure, task_revoked
 from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
@@ -156,3 +156,31 @@ def _on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
         log.info("task_failure.updated_redis", extra={"task_id": task_id, "error": state["error"]})
     except Exception as exc:
         log.warning("task_failure.update_failed", extra={"task_id": task_id, "error": str(exc)})
+
+
+@task_revoked.connect
+def _on_task_revoked(sender=None, request=None, terminated=None, signum=None, expired=None, **kwargs):
+    """Update the Redis progress tracker when a task is revoked.
+
+    This serves as a backup for the cancel route: if the SIGTERM kills the
+    worker process before the API route finishes writing ``CANCELLED`` to
+    Redis, this handler ensures the status is still set.
+    """
+    task_id = getattr(request, "id", None) if request else None
+    if not task_id:
+        return
+    try:
+        client = get_redis_client()
+        redis_key = f"ingestion:status:{task_id}"
+        raw = client.get(redis_key)
+        if raw is None:
+            return
+        state = json.loads(raw) if isinstance(raw, bytes) else json.loads(raw.decode("utf-8"))
+        if state.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
+            return
+        state["status"] = "CANCELLED"
+        state["error"] = "Task revoked by user"
+        client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
+        log.info("task_revoked.updated_redis", extra={"task_id": task_id})
+    except Exception as exc:
+        log.warning("task_revoked.update_failed", extra={"task_id": task_id, "error": str(exc)})

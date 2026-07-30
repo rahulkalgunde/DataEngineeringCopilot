@@ -25,7 +25,8 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 ## CLI
 - `dec ask <question>` — calls `build_rag_service()` directly (no API needed)
 - `dec ingest --source "X"` — POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery running)
-- `dec reset-index` — deletes Qdrant collection, recreates w/ correct dim, clears Redis `crawl:*` keys, drops crawl frontier PG tables
+- `dec reset-index` — clears Redis `crawl:*` keys, drops crawl frontier PG tables (does NOT touch Qdrant)
+- `dec reset-qdrant` — deletes Qdrant collection, recreates w/ correct dimension + hybrid config
 - `dec evaluate` — runs RAG eval on `tests/evaluation/eval_dataset.jsonl`
 - `dec status` / `dec health` / `dec config` / `dec monitor --task-id <id>` / `dec profile`
 
@@ -64,7 +65,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - **No LangChain/LlamaIndex** (except `langchain-text-splitters`).
 - **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()` in `factory.py`. Never instantiate manually.
 - **Async only**: `SafeAsyncClientMixin` (uses `httpx.AsyncClient`; `aiohttp` is crawler-only).
-- **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-index` (dimension change).
+- **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-qdrant` (dimension change).
 - **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global.
 - **Embedding dimension**: Model-dependent lookup in `embedding_model_dimensions` dict (`settings.py:121`).
 - **Chunking** (`chunking_strategy`): `"sentence_preserving"` (default, 375 words/~1875 chars), `"semantic"`, `"header_aware"`, `"fixed_size"`.

@@ -24,11 +24,16 @@ def _mock_answer():
 
 class TestAskEndpoint:
     def test_ask_returns_200(self):
-        with patch("data_engineering_copilot.factory.build_rag_service") as mock_build:
-            mock_service = MagicMock()
-            mock_service.answer = AsyncMock(return_value=_mock_answer())
-            mock_build.return_value = mock_service
+        mock_service = MagicMock()
+        mock_service.answer = AsyncMock(return_value=_mock_answer())
 
+        async def _fake_get_rag_service():
+            return mock_service
+
+        with patch(
+            "data_engineering_copilot.services.rag_service_singleton.get_rag_service",
+            side_effect=_fake_get_rag_service,
+        ):
             client = TestClient(app)
             resp = client.post("/api/v1/ask", json={"question": "What is Spark SQL?"})
             assert resp.status_code == 200

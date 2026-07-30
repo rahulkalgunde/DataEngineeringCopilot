@@ -121,7 +121,24 @@ class TestEnsureTracer:
 
     def test_opentelemetry_import_success(self):
         otel_telemetry._tracer = None
-        with patch.object(otel_telemetry, "_endpoint_reachable", return_value=True):
+        mock_tracer = MagicMock()
+        mock_trace = MagicMock()
+        mock_trace.get_tracer.return_value = mock_tracer
+        mock_modules = {
+            "opentelemetry": MagicMock(trace=mock_trace),
+            "opentelemetry.trace": mock_trace,
+            "opentelemetry.sdk": MagicMock(),
+            "opentelemetry.sdk.trace": MagicMock(TracerProvider=MagicMock()),
+            "opentelemetry.sdk.trace.export": MagicMock(BatchSpanProcessor=MagicMock()),
+            "opentelemetry.exporter": MagicMock(),
+            "opentelemetry.exporter.otlp": MagicMock(),
+            "opentelemetry.exporter.otlp.proto": MagicMock(),
+            "opentelemetry.exporter.otlp.proto.grpc": MagicMock(),
+            "opentelemetry.exporter.otlp.proto.grpc.trace_exporter": MagicMock(
+                OTLPSpanExporter=MagicMock()
+            ),
+        }
+        with patch.dict("sys.modules", mock_modules):
             result = otel_telemetry._ensure_tracer()
         assert result is not None
 

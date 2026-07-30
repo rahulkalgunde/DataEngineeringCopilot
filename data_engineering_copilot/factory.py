@@ -129,6 +129,13 @@ def _build_purpose_llm_client(
     if not eff_provider or not eff_model:
         return None
 
+    logger.info(
+        "resolved_llm_client",
+        purpose=purpose or "global",
+        provider=eff_provider,
+        model=eff_model,
+    )
+
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
     if eff_provider == "ollama":
@@ -285,6 +292,14 @@ def _build_fallback_chain(
         raise ValueError(
             f"No LLM client could be built for provider {eff_provider!r}. Check API keys and provider configuration."
         )
+
+    chain_info = [(p, c.model) for p, c in clients]
+    logger.info(
+        "fallback_chain_built",
+        purpose=purpose or "global",
+        primary=eff_provider,
+        chain=str(chain_info),
+    )
     if len(clients) == 1:
         return clients[0][1]
     return AdaptiveLLMRouter(
@@ -305,10 +320,18 @@ def build_global_llm_client(
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     health_registry: ProviderHealthRegistry | None = None,
 ) -> LLMClient | AdaptiveLLMRouter:
-    """Build the global LLM client with adaptive fallback chain."""
+    """Build the global LLM client with adaptive fallback chain.
+
+    The global ``llm_model`` is NOT passed as ``purpose_model`` here — doing so
+    would short-circuit model resolution at priority 1 (explicit override) and
+    force that model onto whatever provider is primary, even if the provider
+    has its own default model (e.g. ``openrouter_model = "openrouter/free"``).
+    Instead, ``llm_model`` stays as the fallback at priority 4 in
+    ``_build_purpose_llm_client``.
+    """
     client = _build_fallback_chain(
         purpose_provider=app_settings.llm_provider,
-        purpose_model=app_settings.llm_model,
+        purpose_model="",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         health_registry=health_registry,
@@ -642,6 +665,20 @@ def build_rag_service(
         provider_rate_limiters=provider_rate_limiters,
         purpose="intent",
         health_registry=health_registry,
+    )
+
+    logger.info(
+        "llm_assignments",
+        answer_provider=app_settings.llm_provider,
+        answer_model=app_settings.llm_model,
+        code_provider=app_settings.code_llm_provider or app_settings.llm_provider,
+        code_model=app_settings.code_llm_model or "(from provider default)",
+        rewrite_provider=app_settings.rewrite_llm_provider or app_settings.llm_provider,
+        rewrite_model=app_settings.rewrite_llm_model or "(from provider default)",
+        groundedness_provider=app_settings.groundedness_llm_provider or app_settings.llm_provider,
+        groundedness_model=app_settings.groundedness_llm_model or "(from provider default)",
+        intent_provider=app_settings.intent_llm_provider or app_settings.llm_provider,
+        intent_model=app_settings.intent_llm_model or "(from provider default)",
     )
 
     vector_store = AsyncQdrantVectorStore(

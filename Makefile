@@ -80,9 +80,9 @@ docker-status:
 	docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.RunningFor}}"
 	@echo ""
 	@echo "=== Health Checks ==="
-	@for svc in redis qdrant ollama; do \
+	@for svc in de_copilot_broker de_copilot_vectorstore de_copilot_ollama; do \
 		echo -n "$$svc: "; \
-		docker inspect --format='{{.State.Health.Status}}' "$(PROJECT_NAME)_$$svc-1" 2>/dev/null || echo "no health check"; \
+		docker inspect --format='{{.State.Health.Status}}' "$$svc" 2>/dev/null || echo "no health check"; \
 	done
 
 docker-rebuild:
@@ -112,9 +112,9 @@ docker-setup: docker-up
 	@echo "Waiting for services to be ready..."
 	@sleep 5
 	@echo "Pulling Ollama models..."
-	docker exec $(PROJECT_NAME)_ollama-1 ollama pull nomic-embed-text 2>/dev/null || echo "Ollama not ready, pull manually"
-	docker exec $(PROJECT_NAME)_ollama-1 ollama pull llama3.2:3b 2>/dev/null || echo "Ollama not ready, pull manually"
-	docker exec $(PROJECT_NAME)_ollama-1 ollama pull qwen2.5-coder:7b 2>/dev/null || echo "Ollama not ready, pull manually"
+	docker exec de_copilot_ollama ollama pull nomic-embed-text || echo "Ollama not ready, pull manually"
+	docker exec de_copilot_ollama ollama pull llama3.2:3b || echo "Ollama not ready, pull manually"
+	docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b || echo "Ollama not ready, pull manually"
 	@echo "Setup complete. Run 'make docker-status' to verify."
 
 docker-ci-up:
