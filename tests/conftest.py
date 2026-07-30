@@ -160,6 +160,55 @@ def unique_collection_name(prefix: str = "test") -> str:
 # ---------------------------------------------------------------------------
 
 
+def pytest_configure(config):
+    """Guard: reject any ``AppSettings`` that uses a non-Ollama provider.
+
+    Monkey-patches ``AppSettings.__init__`` so that *every* construction
+    (fixtures, defaults, env-var overrides, new tests) is validated at
+    instantiation time. Only ``"ollama"`` and ``""`` are permitted for all
+    LLM / embedding provider fields.
+    """
+    from data_engineering_copilot.config.settings import AppSettings
+
+    _original_init = AppSettings.__init__
+
+    _ALLOWED = frozenset({"ollama", ""})
+
+    _PROVIDER_FIELDS = [
+        "llm_provider",
+        "embedding_provider",
+        "code_llm_provider",
+        "answer_llm_provider",
+        "rewrite_llm_provider",
+        "groundedness_llm_provider",
+        "intent_llm_provider",
+        "enrichment_llm_provider",
+        "evaluation_llm_provider",
+    ]
+
+    def _patched_init(self, *args, **kwargs):
+        # Check explicit kwargs first — catches test code that deliberately
+        # passes a non-Ollama provider.  Env-file pollution (e.g.
+        # EMBEDDING_PROVIDER=nvidia in .env) is NOT checked here because it
+        # is outside the test's control and would break innocent tests.
+        skip = kwargs.pop("_skip_provider_check", False)
+        if not skip:
+            bad: list[str] = []
+            for field in _PROVIDER_FIELDS:
+                val = kwargs.get(field, "")
+                if val and val.lower() not in _ALLOWED:
+                    bad.append(f"{field}={val!r}")
+            if bad:
+                raise RuntimeError(
+                    "Test configuration uses non-Ollama LLM provider(s) in explicit kwargs:\n  "
+                    + "\n  ".join(bad)
+                    + "\nOnly 'ollama' is allowed in tests to avoid costly external API calls."
+                )
+        _original_init(self, *args, **kwargs)
+
+    AppSettings.__init__ = _patched_init
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-skip integration-marked tests when required services are unreachable."""
     for item in items:

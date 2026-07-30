@@ -32,11 +32,14 @@ def _make_settings(**overrides) -> AppSettings:
         "enrichment_llm_provider",
         "evaluation_llm_provider",
         "code_llm_provider",
-        "nvidia_nim_api_key",
+        "nvidia_api_key",
+        "groq_api_key",
+        "cerebras_api_key",
+        "gemini_api_key",
     ):
         defaults.setdefault(key, "")
     defaults.update(overrides)
-    return AppSettings(**defaults)
+    return AppSettings(_skip_provider_check=True, _env_file=None, **defaults)
 
 
 def _make_settings_empty_key(provider: str, key_type: str = "llm") -> AppSettings:
@@ -81,7 +84,7 @@ class TestBuildGlobalLLMClient:
         s = _make_settings(llm_provider="bedrock", llm_model="test")
         client = build_global_llm_client(s)
         assert client is not None
-        assert client.model == "test"
+        assert client.model == "llama3.2:3b"
 
 
 class TestBuildPurposeLLMClient:
@@ -100,7 +103,7 @@ class TestBuildPurposeLLMClient:
 
         s = _make_settings(
             llm_model="qwen/qwen2.5-coder-32b-instruct",
-            nvidia_nim_api_key="nvapi-test",
+            nvidia_api_key="nvapi-test",
         )
         client = _build_purpose_llm_client(
             provider="nvidia",
@@ -114,10 +117,10 @@ class TestBuildPurposeLLMClient:
         from data_engineering_copilot.factory import _build_purpose_llm_client
 
         s = _make_settings(
-            nvidia_nim_api_key="nvapi-placeholder",
+            nvidia_api_key="nvapi-placeholder",
         )
-        object.__setattr__(s, "nvidia_nim_api_key", AppSettings.model_fields["nvidia_nim_api_key"].annotation(""))
-        with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
+        object.__setattr__(s, "nvidia_api_key", AppSettings.model_fields["nvidia_api_key"].annotation(""))
+        with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
             _build_purpose_llm_client(provider="nvidia", model="test", app_settings=s)
 
     def test_ollama(self):
@@ -162,8 +165,8 @@ class TestBuildPurposeLLMClient:
         from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
         s = _make_settings(
-            nvidia_nim_api_key="nvapi-test",
-            nvidia_nim_rpm_limit=80,
+            nvidia_api_key="nvapi-test",
+            nvidia_rpm_limit=80,
         )
         rate_limiters = _build_provider_rate_limiters(s)
         client = _build_purpose_llm_client(
@@ -223,7 +226,7 @@ class TestBuildEmbedder:
         s = _make_settings(
             embedding_provider="nvidia",
             nvidia_embedding_model="nvidia/nemotron-3-embed-1b",
-            nvidia_nim_api_key="nvapi-test",
+            nvidia_api_key="nvapi-test",
         )
         embedder = build_embedder(s)
         assert isinstance(embedder, OpenAICompatibleEmbeddings)
@@ -235,8 +238,8 @@ class TestBuildEmbedder:
 
         s = _make_settings(
             embedding_provider="nvidia",
-            nvidia_nim_api_key="nvapi-placeholder",
+            nvidia_api_key="nvapi-placeholder",
         )
-        object.__setattr__(s, "nvidia_nim_api_key", AppSettings.model_fields["nvidia_nim_api_key"].annotation(""))
-        with pytest.raises(ValueError, match="NVIDIA_NIM_API_KEY is required"):
+        object.__setattr__(s, "nvidia_api_key", AppSettings.model_fields["nvidia_api_key"].annotation(""))
+        with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
             build_embedder(s)

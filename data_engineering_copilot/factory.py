@@ -62,8 +62,23 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
             )
         elif p == "nvidia":
             rate_limiters[p] = SlidingWindowRateLimiter(
-                rpm_limit=app_settings.nvidia_nim_rpm_limit,
-                rpd_limit=app_settings.nvidia_nim_rpd_limit,
+                rpm_limit=app_settings.nvidia_rpm_limit,
+                rpd_limit=app_settings.nvidia_rpd_limit,
+            )
+        elif p == "groq":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.groq_rpm_limit,
+                rpd_limit=app_settings.groq_rpd_limit,
+            )
+        elif p == "cerebras":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.cerebras_rpm_limit,
+                rpd_limit=app_settings.cerebras_rpd_limit,
+            )
+        elif p == "gemini":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.gemini_rpm_limit,
+                rpd_limit=app_settings.gemini_rpd_limit,
             )
     return rate_limiters
 
@@ -74,6 +89,7 @@ def _build_purpose_llm_client(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     timeout_seconds: int | None = None,
+    purpose: str | None = None,
 ) -> LLMClient | None:
     """Build an LLM client for a specific purpose.
 
@@ -81,27 +97,25 @@ def _build_purpose_llm_client(
     fall back to the global ``llm_provider`` / ``llm_model``.  Returns
     ``None`` in that case so the factory can reuse a shared global client.
 
-    Parameters
-    ----------
-    provider:
-        Purpose-level provider override (empty → global).
-    model:
-        Purpose-level model override (empty → global).
-    app_settings:
-        Application settings.
-    provider_rate_limiters:
-        Dict of per-provider shared rate limiters built by
-        ``_build_provider_rate_limiters()``.
+    Model resolution priority:
+        1. *model* — explicit purpose-level override
+        2. ``{provider}_{purpose}_llm_model`` — per-provider purpose override
+        3. ``{provider}_model`` — provider default model
+        4. ``llm_model`` — global default model
     """
     eff_provider = (provider or app_settings.llm_provider).lower()
-    eff_model = model or app_settings.llm_model
+
+    # Model resolution: explicit > per-provider purpose > provider default > global
+    eff_model = model or ""
+    if not eff_model and purpose:
+        purpose_override = getattr(app_settings, f"{eff_provider}_{purpose}_llm_model", "")
+        if purpose_override:
+            eff_model = purpose_override
+    if not eff_model:
+        provider_model = getattr(app_settings, f"{eff_provider}_model", "")
+        eff_model = provider_model or app_settings.llm_model
     if not eff_provider or not eff_model:
         return None
-
-    # When the purpose-specific model is empty (falling back to global), use the
-    # provider-specific default model to avoid model-provider mismatch.
-    if not model and eff_provider == "openrouter":
-        eff_model = app_settings.openrouter_model
 
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
@@ -125,7 +139,7 @@ def _build_purpose_llm_client(
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required when provider='openrouter'")
         return LLMClient(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=app_settings.openrouter_base_url,
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
@@ -135,11 +149,11 @@ def _build_purpose_llm_client(
         )
 
     if eff_provider == "nvidia":
-        api_key = app_settings.nvidia_nim_api_key.get_secret_value()
+        api_key = app_settings.nvidia_api_key.get_secret_value()
         if not api_key:
-            raise ValueError("NVIDIA_NIM_API_KEY is required when provider='nvidia'")
+            raise ValueError("NVIDIA_API_KEY is required when provider='nvidia'")
         return LLMClient(
-            base_url=app_settings.nvidia_nim_base_url,
+            base_url=app_settings.nvidia_base_url,
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
@@ -147,7 +161,48 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
-    raise ValueError(f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia'.")
+    if eff_provider == "groq":
+        api_key = app_settings.groq_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is required when provider='groq'")
+        return LLMClient(
+            base_url=app_settings.groq_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_retries=5,
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "cerebras":
+        api_key = app_settings.cerebras_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("CEREBRAS_API_KEY is required when provider='cerebras'")
+        return LLMClient(
+            base_url=app_settings.cerebras_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_retries=5,
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "gemini":
+        api_key = app_settings.gemini_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is required when provider='gemini'")
+        return LLMClient(
+            base_url=app_settings.gemini_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_retries=5,
+            rate_limiter=rate_limiter,
+        )
+
+    raise ValueError(
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini'."
+    )
 
 
 def _build_fallback_chain(
@@ -155,6 +210,7 @@ def _build_fallback_chain(
     purpose_model: str,
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+    purpose: str | None = None,
 ) -> FallbackLLMClient | LLMClient | None:
     """Build an ordered fallback chain of LLM providers.
 
@@ -195,6 +251,7 @@ def _build_fallback_chain(
                 app_settings=app_settings,
                 provider_rate_limiters=provider_rate_limiters,
                 timeout_seconds=timeout,
+                purpose=purpose,
             )
             if client is not None:
                 clients.append((provider, client))
@@ -243,25 +300,36 @@ def build_embedder(
         return OpenAICompatibleEmbeddings(
             api_key=api_key,
             model_name=app_settings.openrouter_embedding_model,
+            base_url=app_settings.openrouter_base_url,
             embedding_dimension=app_settings.get_embedding_dimension(),
             batch_size=app_settings.embedding_batch_size,
             rate_limiter=rate_limiter,
+            include_provider_param=True,
         )
     elif provider == "nvidia":
-        api_key = app_settings.nvidia_nim_api_key.get_secret_value()
+        api_key = app_settings.nvidia_api_key.get_secret_value()
         if not api_key:
-            raise ValueError("NVIDIA_NIM_API_KEY is required when embedding_provider='nvidia'")
-        nvidia_embedding_limiter = SlidingWindowRateLimiter(
-            rpm_limit=app_settings.nvidia_nim_rpm_limit,
-            rpd_limit=app_settings.nvidia_nim_rpd_limit,
-        )
+            raise ValueError("NVIDIA_API_KEY is required when embedding_provider='nvidia'")
         return OpenAICompatibleEmbeddings(
             api_key=api_key,
             model_name=app_settings.nvidia_embedding_model,
-            base_url=app_settings.nvidia_nim_base_url,
+            base_url=app_settings.nvidia_base_url,
             embedding_dimension=app_settings.get_embedding_dimension(),
             batch_size=app_settings.embedding_batch_size,
-            rate_limiter=nvidia_embedding_limiter,
+            rate_limiter=rate_limiter,
+            include_provider_param=False,
+        )
+    elif provider == "gemini":
+        api_key = app_settings.gemini_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY is required when embedding_provider='gemini'")
+        return OpenAICompatibleEmbeddings(
+            api_key=api_key,
+            model_name=app_settings.gemini_embedding_model,
+            base_url=app_settings.gemini_base_url,
+            embedding_dimension=app_settings.get_embedding_dimension(),
+            batch_size=app_settings.embedding_batch_size,
+            rate_limiter=rate_limiter,
             include_provider_param=False,
         )
     elif provider in ("ollama", "local"):
@@ -270,8 +338,18 @@ def build_embedder(
             model_name=app_settings.embedding_model_name,
             base_url=embed_base,
         )
+    elif provider == "groq":
+        raise ValueError(
+            "Groq does not support embeddings. Set embedding_provider to 'ollama', 'openrouter', 'nvidia', or 'gemini'."
+        )
+    elif provider == "cerebras":
+        raise ValueError(
+            "Cerebras does not support embeddings. Set embedding_provider to 'ollama', 'openrouter', 'nvidia', or 'gemini'."
+        )
     else:
-        raise ValueError(f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openrouter', 'nvidia'.")
+        raise ValueError(
+            f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openrouter', 'nvidia', 'gemini'."
+        )
 
 
 def build_chunker(app_settings: AppSettings = settings):
@@ -435,6 +513,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         purpose_model=app_settings.enrichment_llm_model or "llama3.2:3b",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        purpose="enrichment",
     )
 
     contextual_enricher = ContextualChunkEnricher(
@@ -502,6 +581,7 @@ def build_rag_service(
         purpose_model=app_settings.code_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        purpose="code",
     )
 
     rewrite_client = _build_fallback_chain(
@@ -509,18 +589,21 @@ def build_rag_service(
         purpose_model=app_settings.rewrite_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        purpose="rewrite",
     )
     groundedness_client = _build_fallback_chain(
         purpose_provider=app_settings.groundedness_llm_provider,
         purpose_model=app_settings.groundedness_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        purpose="groundedness",
     )
     intent_client = _build_fallback_chain(
         purpose_provider=app_settings.intent_llm_provider,
         purpose_model=app_settings.intent_llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        purpose="intent",
     )
 
     vector_store = AsyncQdrantVectorStore(

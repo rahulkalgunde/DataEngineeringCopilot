@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +74,7 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         frozen=True,
+        populate_by_name=True,
         env_file=(".env", ".env.secrets", ".env.local"),
         env_file_encoding="utf-8",
         env_ignore_empty=True,
@@ -125,6 +126,7 @@ class AppSettings(BaseSettings):
         "llama3.2:3b": 3072,
         "nvidia/nemotron-3-embed-1b": 2048,
         "nvidia/nemotron-3-embed-1b:free": 2048,
+        "text-embedding-004": 768,
     }
     default_embedding_dimension: int = 768
     llm_provider: str = "ollama"
@@ -136,15 +138,42 @@ class AppSettings(BaseSettings):
     openrouter_api_key: SecretStr = SecretStr("")
     openrouter_model: str = "openrouter/free"
     openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_rpm_limit: int = 20
     openrouter_rpd_limit: int = 1000
 
-    # NVIDIA NIM settings (embeddings + LLM)
+    # NVIDIA settings (LLM + Embeddings)
+    nvidia_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"),
+    )
+    nvidia_model: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_embedding_model: str = "nvidia/nemotron-3-embed-1b"
-    nvidia_nim_api_key: SecretStr = SecretStr("")
-    nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_nim_rpm_limit: int = 40
-    nvidia_nim_rpd_limit: int = 1000
+    nvidia_rpm_limit: int = 40
+    nvidia_rpd_limit: int = 1000
+
+    # Groq settings (LLM only)
+    groq_api_key: SecretStr = SecretStr("")
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_rpm_limit: int = 30
+    groq_rpd_limit: int = 1000
+
+    # Cerebras settings (LLM only)
+    cerebras_api_key: SecretStr = SecretStr("")
+    cerebras_model: str = "gpt-oss-120b"
+    cerebras_base_url: str = "https://api.cerebras.ai/v1"
+    cerebras_rpm_limit: int = 30
+    cerebras_rpd_limit: int = 1000
+
+    # Gemini settings (LLM + Embeddings)
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    gemini_embedding_model: str = "text-embedding-004"
+    gemini_rpm_limit: int = 30
+    gemini_rpd_limit: int = 1000
 
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "ollama"])
@@ -166,6 +195,45 @@ class AppSettings(BaseSettings):
     # Code-specific LLM override (optional, for code_example/api_lookup intents)
     code_llm_provider: str = ""
     code_llm_model: str = ""
+
+    # Per-provider purpose model overrides (override model per-provider per-purpose)
+    # When set, these take priority over the generic {purpose}_llm_model above when
+    # the effective provider matches. Format: {provider}_{purpose}_llm_model.
+    openrouter_answer_llm_model: str = ""
+    openrouter_rewrite_llm_model: str = ""
+    openrouter_groundedness_llm_model: str = ""
+    openrouter_intent_llm_model: str = ""
+    openrouter_enrichment_llm_model: str = ""
+    openrouter_evaluation_llm_model: str = ""
+    openrouter_code_llm_model: str = ""
+    nvidia_answer_llm_model: str = ""
+    nvidia_rewrite_llm_model: str = ""
+    nvidia_groundedness_llm_model: str = ""
+    nvidia_intent_llm_model: str = ""
+    nvidia_enrichment_llm_model: str = ""
+    nvidia_evaluation_llm_model: str = ""
+    nvidia_code_llm_model: str = ""
+    groq_answer_llm_model: str = ""
+    groq_rewrite_llm_model: str = ""
+    groq_groundedness_llm_model: str = ""
+    groq_intent_llm_model: str = ""
+    groq_enrichment_llm_model: str = ""
+    groq_evaluation_llm_model: str = ""
+    groq_code_llm_model: str = ""
+    cerebras_answer_llm_model: str = ""
+    cerebras_rewrite_llm_model: str = ""
+    cerebras_groundedness_llm_model: str = ""
+    cerebras_intent_llm_model: str = ""
+    cerebras_enrichment_llm_model: str = ""
+    cerebras_evaluation_llm_model: str = ""
+    cerebras_code_llm_model: str = ""
+    gemini_answer_llm_model: str = ""
+    gemini_rewrite_llm_model: str = ""
+    gemini_groundedness_llm_model: str = ""
+    gemini_intent_llm_model: str = ""
+    gemini_enrichment_llm_model: str = ""
+    gemini_evaluation_llm_model: str = ""
+    gemini_code_llm_model: str = ""
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
@@ -260,14 +328,21 @@ class AppSettings(BaseSettings):
             ]
             if p
         }
-        if "openrouter" in all_llm_providers and not self.openrouter_api_key.get_secret_value():
-            raise ValueError("OPENROUTER_API_KEY is required when any LLM provider is 'openrouter'")
-        if self.embedding_provider == "openrouter" and not self.openrouter_api_key.get_secret_value():
-            raise ValueError("OPENROUTER_API_KEY is required when EMBEDDING_PROVIDER='openrouter'")
-        if "nvidia" in all_llm_providers and not self.nvidia_nim_api_key.get_secret_value():
-            raise ValueError("NVIDIA_NIM_API_KEY is required when any LLM provider is 'nvidia'")
-        if self.embedding_provider == "nvidia" and not self.nvidia_nim_api_key.get_secret_value():
-            raise ValueError("NVIDIA_NIM_API_KEY is required when EMBEDDING_PROVIDER='nvidia'")
+        # Each API-key-gated provider is checked: if referenced by any LLM purpose
+        # or as the embedding provider, its API key must be set.
+        provider_api_key_map: dict[str, tuple[str, str]] = {
+            "openrouter": ("openrouter_api_key", "OPENROUTER_API_KEY"),
+            "nvidia": ("nvidia_api_key", "NVIDIA_API_KEY"),
+            "groq": ("groq_api_key", "GROQ_API_KEY"),
+            "cerebras": ("cerebras_api_key", "CEREBRAS_API_KEY"),
+            "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
+        }
+        for provider, (field_name, env_var) in provider_api_key_map.items():
+            key_value = getattr(self, field_name).get_secret_value()
+            if provider in all_llm_providers and not key_value:
+                raise ValueError(f"{env_var} is required when any LLM provider is '{provider}'")
+            if self.embedding_provider == provider and not key_value:
+                raise ValueError(f"{env_var} is required when EMBEDDING_PROVIDER='{provider}'")
         return self
 
     def get_embedding_dimension(self) -> int:
@@ -282,6 +357,8 @@ class AppSettings(BaseSettings):
             model_name = self.openrouter_embedding_model
         elif provider == "nvidia":
             model_name = self.nvidia_embedding_model
+        elif provider == "gemini":
+            model_name = self.gemini_embedding_model
         else:
             model_name = self.embedding_model_name
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
