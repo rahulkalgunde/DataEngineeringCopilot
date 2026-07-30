@@ -81,6 +81,8 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    skip_provider_check: bool = Field(default=False, exclude=True)
+
     project_root: Path = PROJECT_ROOT
     documentation_sources_path: Path = (
         PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
@@ -162,7 +164,7 @@ class AppSettings(BaseSettings):
 
     # Cerebras settings (LLM only)
     cerebras_api_key: SecretStr = SecretStr("")
-    cerebras_model: str = "gpt-oss-120b"
+    cerebras_model: str = "llama-3.1-8b"
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
     cerebras_rpm_limit: int = 30
     cerebras_rpd_limit: int = 1000
@@ -176,21 +178,38 @@ class AppSettings(BaseSettings):
     gemini_rpd_limit: int = 1000
 
     # LLM fallback chain: ordered list of providers to try on failure
-    llm_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "ollama"])
+    llm_fallback_order: list[str] = Field(
+        default_factory=lambda: ["openrouter", "groq", "cerebras", "gemini", "ollama"]
+    )
     llm_fallback_call_timeout: int = 60  # shorter circuit-breaker timeout for fallback providers
+
+    # Adaptive router settings
+    retry_max_attempts: int = 3
+    retry_backoff_min: float = 1.0
+    retry_backoff_max: float = 30.0
+    retry_backoff_multiplier: float = 2.0
+    retry_jitter_factor: float = 0.1
+    circuit_breaker_failure_threshold: int = 3
+    circuit_breaker_recovery_timeout: int = 30
+    provider_cooldown_seconds: int = 60
+    load_balance_strategy: str = "least_used"
+    health_success_rate_weight: float = 0.6
+    health_latency_weight: float = 0.2
+    health_recency_weight: float = 0.2
+    health_consecutive_failure_penalty: float = 0.3
 
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = ""
     answer_llm_model: str = ""
-    rewrite_llm_provider: str = ""
+    rewrite_llm_provider: str = "groq"
     rewrite_llm_model: str = ""
-    groundedness_llm_provider: str = ""
+    groundedness_llm_provider: str = "groq"
     groundedness_llm_model: str = ""
-    intent_llm_provider: str = ""
+    intent_llm_provider: str = "groq"
     intent_llm_model: str = ""
     enrichment_llm_provider: str = ""
     enrichment_llm_model: str = ""
-    evaluation_llm_provider: str = ""
+    evaluation_llm_provider: str = "groq"
     evaluation_llm_model: str = ""
     # Code-specific LLM override (optional, for code_example/api_lookup intents)
     code_llm_provider: str = ""
@@ -228,11 +247,11 @@ class AppSettings(BaseSettings):
     cerebras_evaluation_llm_model: str = ""
     cerebras_code_llm_model: str = ""
     gemini_answer_llm_model: str = ""
-    gemini_rewrite_llm_model: str = ""
-    gemini_groundedness_llm_model: str = ""
-    gemini_intent_llm_model: str = ""
-    gemini_enrichment_llm_model: str = ""
-    gemini_evaluation_llm_model: str = ""
+    gemini_rewrite_llm_model: str = "gemini-2.0-flash-lite"
+    gemini_groundedness_llm_model: str = "gemini-2.0-flash-lite"
+    gemini_intent_llm_model: str = "gemini-2.0-flash-lite"
+    gemini_enrichment_llm_model: str = "gemini-2.0-flash-lite"
+    gemini_evaluation_llm_model: str = "gemini-2.0-flash-lite"
     gemini_code_llm_model: str = ""
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
@@ -314,6 +333,8 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_provider_api_keys(self) -> AppSettings:
+        if self.skip_provider_check:
+            return self
         all_llm_providers = {
             p
             for p in [

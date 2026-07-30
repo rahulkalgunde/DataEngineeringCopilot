@@ -28,13 +28,13 @@ def test_load_documentation_sources_from_json(tmp_path):
 
 
 def test_app_settings_default_logging_enabled() -> None:
-    settings = AppSettings()
+    settings = AppSettings(groq_api_key="placeholder", _env_file=None)
 
     assert settings.logging_enabled is True
 
 
 def test_app_settings_hybrid_search_defaults() -> None:
-    settings = AppSettings()
+    settings = AppSettings(groq_api_key="placeholder", _env_file=None)
     assert settings.hybrid_search_enabled is True
     assert settings.hybrid_rrf_k == 60
     assert settings.context_compression_enabled is False
@@ -45,6 +45,8 @@ def test_app_settings_hybrid_search_defaults() -> None:
 
 def test_app_settings_hybrid_search_overridable() -> None:
     settings = AppSettings(
+        groq_api_key="placeholder",
+        _env_file=None,
         hybrid_search_enabled=False,
         hybrid_rrf_k=100,
         context_compression_enabled=True,
@@ -57,7 +59,7 @@ def test_app_settings_hybrid_search_overridable() -> None:
 
 
 def test_code_llm_defaults_empty() -> None:
-    settings = AppSettings(code_llm_provider="", code_llm_model="")
+    settings = AppSettings(code_llm_provider="", code_llm_model="", groq_api_key="placeholder", _env_file=None)
     assert settings.code_llm_provider == ""
     assert settings.code_llm_model == ""
     assert settings.nvidia_rpm_limit == 40
@@ -71,7 +73,7 @@ def test_code_llm_overridable() -> None:
         nvidia_api_key="nvapi-test",
         nvidia_rpm_limit=80,
         nvidia_base_url="https://custom.nvidia.com/v1",
-        _skip_provider_check=True,
+        skip_provider_check=True,
     )
     assert settings.code_llm_provider == "nvidia"
     assert settings.code_llm_model == "qwen/qwen2.5-coder-32b-instruct"
@@ -80,24 +82,28 @@ def test_code_llm_overridable() -> None:
 
 
 def test_embedding_model_dimensions_lookup() -> None:
-    settings = AppSettings(embedding_provider="ollama", embedding_model_name="nomic-embed-text")
+    settings = AppSettings(
+        embedding_provider="ollama", embedding_model_name="nomic-embed-text", groq_api_key="placeholder", _env_file=None
+    )
     assert settings.get_embedding_dimension() == 768
 
 
 def test_get_embedding_dimension_nvidia() -> None:
     s = AppSettings(
-        embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b", _skip_provider_check=True
+        embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b", skip_provider_check=True
     )
     assert s.get_embedding_dimension() == 2048
 
 
 def test_get_embedding_dimension_unknown_model() -> None:
-    s = AppSettings(embedding_provider="ollama", embedding_model_name="unknown-model")
+    s = AppSettings(
+        embedding_provider="ollama", embedding_model_name="unknown-model", groq_api_key="placeholder", _env_file=None
+    )
     assert s.get_embedding_dimension() == s.default_embedding_dimension
 
 
 def test_nvidia_nim_rpd_limit_default() -> None:
-    settings = AppSettings()
+    settings = AppSettings(groq_api_key="placeholder", _env_file=None)
     assert settings.nvidia_rpd_limit == 1000
 
 
@@ -109,5 +115,5 @@ def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
             embedding_provider="nvidia",
             nvidia_api_key="",
             _env_file=None,
-            _skip_provider_check=True,
+            skip_provider_check=True,
         )

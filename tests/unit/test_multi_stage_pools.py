@@ -26,7 +26,7 @@ def _parse_fn(raw_doc):
     )
 
 
-def _chunk_fn(parsed):
+async def _chunk_fn(parsed):
     """Module-level picklable chunk function for ProcessPoolExecutor tests."""
     return [
         DocumentChunk(

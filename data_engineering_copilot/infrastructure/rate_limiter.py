@@ -119,6 +119,19 @@ class SlidingWindowRateLimiter:
         """Approximate remaining requests available today."""
         return max(0, self._rpd_limit - self._daily_count)
 
+    def is_quota_near_limit(self, threshold: float = 0.1) -> bool:
+        rpd_limit = self._rpd_limit
+        if rpd_limit > 0:
+            rpd_remaining = self.remaining_rpd
+            if rpd_remaining / rpd_limit < threshold:
+                return True
+        rpm_limit = self._rpm_limit
+        if rpm_limit > 0:
+            rpm_remaining = self.remaining_rpm
+            if rpm_remaining / rpm_limit < threshold:
+                return True
+        return False
+
     @property
     def stats(self) -> dict:
         return {
