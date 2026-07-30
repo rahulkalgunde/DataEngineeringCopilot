@@ -11,10 +11,13 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import pathlib
 
 import pytest
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # xdist worker_id isolation
@@ -162,6 +165,30 @@ _ollama_container = None
 _ollama_url: str | None = None
 
 
+def _pull_model_with_retry(container, model: str, retries: int = 3) -> None:
+    """Pull an Ollama model with retry and diagnostic logging."""
+    import time
+
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info("Pulling Ollama model %s (attempt %d/%d)", model, attempt, retries)
+            container.pull_model(model)
+            logger.info("Successfully pulled Ollama model %s", model)
+            return
+        except Exception as exc:
+            logger.warning(
+                "Failed to pull Ollama model %s (attempt %d/%d): %s",
+                model,
+                attempt,
+                retries,
+                exc,
+            )
+            if attempt < retries:
+                time.sleep(2**attempt)
+    logger.error("Exhausted retries pulling Ollama model %s", model)
+    raise RuntimeError(f"Failed to pull Ollama model {model} after {retries} attempts")
+
+
 def _get_or_start_ollama_container() -> str | None:
     """Start an Ollama testcontainer. Returns the URL."""
     global _ollama_container, _ollama_url
@@ -178,19 +205,25 @@ def _get_or_start_ollama_container() -> str | None:
         )
         _ollama_container.start()
         _ollama_url = _ollama_container.get_endpoint()
+        logger.info("Ollama container started at %s", _ollama_url)
 
         # Pull models needed by tests
         existing = set()
-        for m in _ollama_container.list_models():
-            name = m["name"]
-            existing.add(name)
-            existing.add(name.split(":")[0])
+        try:
+            for m in _ollama_container.list_models():
+                name = m["name"]
+                existing.add(name)
+                existing.add(name.split(":")[0])
+        except Exception as exc:
+            logger.warning("Failed to list existing Ollama models: %s", exc)
+
         for model in _OLLAMA_MODELS:
             if model not in existing:
-                _ollama_container.pull_model(model)
+                _pull_model_with_retry(_ollama_container, model)
 
         return _ollama_url
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to start Ollama container: %s", exc, exc_info=True)
         pass
 
     return None

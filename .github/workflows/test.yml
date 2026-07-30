@@ -1,0 +1,258 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.4"
+  COMPOSE_PROJECT_NAME: dec_ci
+  UV_PROJECT_ENVIRONMENT: dec_venv
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Lint
+        run: uv run make lint
+
+  test-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Unit Tests
+        run: uv run make test-ci-unit
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: coverage.xml
+          flags: unit
+          fail_ci_if_error: false
+          # token: ${{ secrets.CODECOV_TOKEN }}
+
+  test-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, test-unit]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: RAG Evaluation
+        run: uv run make test-eval
+
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint, test-unit, test-eval]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: docker-ci-int-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            docker-ci-int-${{ runner.os }}-
+
+      - name: Load cached Docker images
+        run: |
+          shopt -s nullglob
+          for f in /tmp/docker-cache/*.tar; do
+            echo "Loading $f..."
+            docker load -i "$f"
+          done
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: .ollama_cache
+          key: ollama-models-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            ollama-models-${{ runner.os }}-
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}
+
+      - name: Fix Ollama cache permissions
+        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
+
+      - name: Start all service dependencies
+        run: |
+          docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 300
+
+      - name: Pull Ollama models
+        run: |
+          docker exec de_copilot_ollama ollama pull nomic-embed-text
+          docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Integration Tests
+        run: uv run make test-integration
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker-cache
+
+          docker save qdrant/qdrant:v1.18.3 redis:7-alpine \
+            -o /tmp/docker-cache/core.tar 2>/dev/null || true
+
+          docker save ollama/ollama:0.32.4 \
+            -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
+
+          docker save clickhouse/clickhouse-server:24-alpine minio/minio:RELEASE.2025-09-07T16-13-09Z postgres:16-alpine \
+            -o /tmp/docker-cache/langfuse1.tar 2>/dev/null || true
+
+          docker save langfuse/langfuse:3 langfuse/langfuse-worker:3 minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            -o /tmp/docker-cache/langfuse2.tar 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test-integration
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: docker-ci-e2e-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            docker-ci-e2e-${{ runner.os }}-
+
+      - name: Load cached Docker images
+        run: |
+          shopt -s nullglob
+          for f in /tmp/docker-cache/*.tar; do
+            echo "Loading $f..."
+            docker load -i "$f"
+          done
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: .ollama_cache
+          key: ollama-models-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          restore-keys: |
+            ollama-models-${{ runner.os }}-
+
+      - name: Fix Ollama cache permissions
+        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
+
+      - name: Start service dependencies
+        run: |
+          docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 180 qdrant redis ollama
+
+      - name: Pull Ollama models
+        run: |
+          docker exec de_copilot_ollama ollama pull nomic-embed-text
+          docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: E2E Tests
+        run: uv run make test-e2e
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker-cache
+
+          docker save qdrant/qdrant:v1.18.3 redis:7-alpine \
+            -o /tmp/docker-cache/core.tar 2>/dev/null || true
+
+          docker save ollama/ollama:0.32.4 \
+            -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v
