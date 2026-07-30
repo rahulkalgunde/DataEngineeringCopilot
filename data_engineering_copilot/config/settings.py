@@ -89,6 +89,10 @@ class AppSettings(BaseSettings):
     # URLs accessed from localhost
     qdrant_url: str = "http://localhost:6333"
     ollama_base_url: str = "http://localhost:11434"
+    # Separate Ollama instances for embedding vs LLM to prevent resource contention.
+    # Default to the same value; set to different ports for dedicated instances.
+    embedding_ollama_base_url: str = ""
+    llm_ollama_base_url: str = ""
 
     # URLs accessed within docker
     redis_url: str = "redis://:local_secure_password_123@localhost:6379/0"

@@ -6,6 +6,7 @@ eliminating the need for ThreadPoolExecutor offloading for embedding API calls.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -75,7 +76,12 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         return embeddings
 
     async def _aollama_embed(self, texts: list[str]) -> list[list[float]]:
-        """Embed texts with automatic batch slicing, fully async."""
+        """Embed texts with automatic batch slicing, fully async.
+
+        Batches are submitted concurrently (up to 2 at a time) to reduce
+        wall-clock time when Ollama processes texts sequentially within a
+        single /api/embed request.
+        """
         batch_size = settings.embedding_batch_size
         batches = self._slice_texts_into_batches(texts, batch_size)
 
@@ -83,11 +89,21 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
             return await self._aollama_embed_single_batch(texts)
 
         logger.info("Processing %d texts in %d async batches (batch_size=%d)", len(texts), len(batches), batch_size)
+
+        sem = asyncio.Semaphore(2)
+
+        async def _process_batch(batch_texts: list[str]) -> list[list[float]]:
+            async with sem:
+                return await self._aollama_embed_single_batch(batch_texts)
+
+        tasks = [_process_batch(b) for b in batches]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
         all_embeddings: list[list[float]] = []
-        for batch_idx, batch_texts in enumerate(batches, start=1):
-            logger.debug("Processing async batch %d/%d with %d texts", batch_idx, len(batches), len(batch_texts))
-            batch_embeddings = await self._aollama_embed_single_batch(batch_texts)
-            all_embeddings.extend(batch_embeddings)
+        for batch_idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                raise EmbeddingError(f"Batch {batch_idx + 1}/{len(batches)} failed: {result}") from result
+            all_embeddings.extend(result)
 
         logger.info("Successfully async embedded all %d texts in %d batches", len(texts), len(batches))
         return all_embeddings

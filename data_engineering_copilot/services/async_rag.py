@@ -290,6 +290,19 @@ class AsyncRagService:
 
             llm_client = self._select_llm_client(intent)
             answer_text = await llm_client.generate(prompt)
+
+            # JSON retry: if the intent expects JSON output but parsing fails,
+            # retry once with a stricter instruction.
+            if intent not in CODE_INTENTS and isinstance(answer_text, str):
+                parsed_attempt = parse_rag_response(answer_text)
+                if not parsed_attempt.answer and len(answer_text.strip()) > 20:
+                    logger.info("json_parse_retry intent=%s response_len=%d", intent, len(answer_text))
+                    retry_prompt = prompt + (
+                        "\n\nIMPORTANT: Your previous response was not valid JSON. "
+                        "Return ONLY raw JSON with no markdown, no code fences, no preamble."
+                    )
+                    answer_text = await llm_client.generate(retry_prompt)
+
             _record_stage("generation")
 
             # Post-generation syntax check for code intents
@@ -330,6 +343,8 @@ class AsyncRagService:
                     logger.info("pii_redacted_in_answer types=%s", pii_types_answer)
 
             # Citation verification: keep only citations matching retrieved sources
+            if not isinstance(answer_text, str):
+                answer_text = str(answer_text) if answer_text else ""
             parsed = parse_rag_response(answer_text)
             source_names = [c.chunk.source_name for c in retrieved_chunks]
             verified_citations = verify_citations(parsed.citations, source_names)
