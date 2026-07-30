@@ -5,6 +5,7 @@ import redis.exceptions
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
+from data_engineering_copilot.infrastructure.adaptive_llm_router import AdaptiveLLMRouter
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
@@ -12,7 +13,8 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
-from data_engineering_copilot.infrastructure.llm_client import FallbackLLMClient, LLMClient
+from data_engineering_copilot.infrastructure.llm_client import LLMClient
+from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
@@ -81,6 +83,16 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpd_limit=app_settings.gemini_rpd_limit,
             )
     return rate_limiters
+
+
+def _build_provider_health_registry(app_settings: AppSettings = settings) -> ProviderHealthRegistry:
+    return ProviderHealthRegistry(
+        success_rate_weight=app_settings.health_success_rate_weight,
+        latency_weight=app_settings.health_latency_weight,
+        recency_weight=app_settings.health_recency_weight,
+        consecutive_failure_penalty=app_settings.health_consecutive_failure_penalty,
+        default_cooldown_seconds=app_settings.provider_cooldown_seconds,
+    )
 
 
 def _build_purpose_llm_client(
@@ -211,8 +223,9 @@ def _build_fallback_chain(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     purpose: str | None = None,
-) -> FallbackLLMClient | LLMClient | None:
-    """Build an ordered fallback chain of LLM providers.
+    health_registry: ProviderHealthRegistry | None = None,
+) -> AdaptiveLLMRouter | LLMClient | None:
+    """Build a health-aware adaptive fallback chain of LLM providers.
 
     The *purpose_provider* (or the global ``llm_provider`` if empty) is
     tried first.  If it fails, remaining providers from
@@ -221,7 +234,7 @@ def _build_fallback_chain(
 
     Returns ``None`` when *purpose_provider* is empty (caller intends to
     reuse the global chain).  Returns a bare ``LLMClient`` when only one
-    provider is available.  Returns ``FallbackLLMClient`` when ≥2 providers
+    provider is available.  Returns ``AdaptiveLLMRouter`` when ≥2 providers
     are configured.
     """
     eff_provider = (purpose_provider or "").strip().lower()
@@ -238,11 +251,16 @@ def _build_fallback_chain(
 
     clients: list[tuple[str, LLMClient]] = []
     client_timeout = app_settings.llm_fallback_call_timeout
+    health = health_registry or _build_provider_health_registry(app_settings)
 
     for idx, provider in enumerate(ordered):
+        if provider == "nvidia":
+            logger.warning(
+                "Skipping nvidia in LLM fallback chain — reserved for embeddings only. "
+                "Set code_llm_provider / enrichment_llm_provider to another provider.",
+            )
+            continue
         try:
-            # Primary provider gets the purpose-specific model override (if any)
-            # and the normal timeout.  Fallback providers use the shorter timeout.
             model_arg = purpose_model if idx == 0 else ""
             timeout = None if idx == 0 else client_timeout
             client = _build_purpose_llm_client(
@@ -255,6 +273,7 @@ def _build_fallback_chain(
             )
             if client is not None:
                 clients.append((provider, client))
+                health.register_provider(provider, [client.model])
         except Exception as exc:
             logger.warning(
                 "Skipping provider in fallback chain",
@@ -268,19 +287,31 @@ def _build_fallback_chain(
         )
     if len(clients) == 1:
         return clients[0][1]
-    return FallbackLLMClient(clients)
+    return AdaptiveLLMRouter(
+        clients=clients,
+        health=health,
+        rate_limiters=provider_rate_limiters,
+        max_retries=app_settings.retry_max_attempts,
+        backoff_min=app_settings.retry_backoff_min,
+        backoff_max=app_settings.retry_backoff_max,
+        backoff_multiplier=app_settings.retry_backoff_multiplier,
+        jitter_factor=app_settings.retry_jitter_factor,
+        load_balance_strategy=app_settings.load_balance_strategy,
+    )
 
 
 def build_global_llm_client(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
-) -> LLMClient | FallbackLLMClient:
-    """Build the global LLM client with provider fallback chain."""
+    health_registry: ProviderHealthRegistry | None = None,
+) -> LLMClient | AdaptiveLLMRouter:
+    """Build the global LLM client with adaptive fallback chain."""
     client = _build_fallback_chain(
         purpose_provider=app_settings.llm_provider,
         purpose_model=app_settings.llm_model,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
     )
     if client is None:
         raise ValueError("Global llm_provider and llm_model must be set")
@@ -507,11 +538,13 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     )
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
+    health_registry = _build_provider_health_registry(app_settings)
 
     enrichment_client = _build_fallback_chain(
         purpose_provider=app_settings.enrichment_llm_provider or "ollama",
         purpose_model=app_settings.enrichment_llm_model or "llama3.2:3b",
         app_settings=app_settings,
+        health_registry=health_registry,
         provider_rate_limiters=provider_rate_limiters,
         purpose="enrichment",
     )
@@ -573,8 +606,9 @@ def build_rag_service(
     )
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
+    health_registry = _build_provider_health_registry(app_settings)
 
-    llm_client = build_global_llm_client(app_settings, provider_rate_limiters)
+    llm_client = build_global_llm_client(app_settings, provider_rate_limiters, health_registry)
 
     code_llm_client = _build_fallback_chain(
         purpose_provider=app_settings.code_llm_provider,
@@ -582,6 +616,7 @@ def build_rag_service(
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         purpose="code",
+        health_registry=health_registry,
     )
 
     rewrite_client = _build_fallback_chain(
@@ -590,6 +625,7 @@ def build_rag_service(
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         purpose="rewrite",
+        health_registry=health_registry,
     )
     groundedness_client = _build_fallback_chain(
         purpose_provider=app_settings.groundedness_llm_provider,
@@ -597,6 +633,7 @@ def build_rag_service(
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         purpose="groundedness",
+        health_registry=health_registry,
     )
     intent_client = _build_fallback_chain(
         purpose_provider=app_settings.intent_llm_provider,
@@ -604,6 +641,7 @@ def build_rag_service(
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         purpose="intent",
+        health_registry=health_registry,
     )
 
     vector_store = AsyncQdrantVectorStore(

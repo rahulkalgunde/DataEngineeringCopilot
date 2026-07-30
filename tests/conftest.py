@@ -191,7 +191,7 @@ def pytest_configure(config):
         # passes a non-Ollama provider.  Env-file pollution (e.g.
         # EMBEDDING_PROVIDER=nvidia in .env) is NOT checked here because it
         # is outside the test's control and would break innocent tests.
-        skip = kwargs.pop("_skip_provider_check", False)
+        skip = kwargs.pop("skip_provider_check", False)
         if not skip:
             bad: list[str] = []
             for field in _PROVIDER_FIELDS:

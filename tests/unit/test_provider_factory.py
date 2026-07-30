@@ -39,7 +39,7 @@ def _make_settings(**overrides) -> AppSettings:
     ):
         defaults.setdefault(key, "")
     defaults.update(overrides)
-    return AppSettings(_skip_provider_check=True, _env_file=None, **defaults)
+    return AppSettings(skip_provider_check=True, _env_file=None, **defaults)
 
 
 def _make_settings_empty_key(provider: str, key_type: str = "llm") -> AppSettings:

@@ -73,8 +73,8 @@ class TestFactoryFunctionBehavior:
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size == 300 * 5
-        assert chunker.chunk_overlap == 60 * 5
+        assert chunker.chunk_size_chars == 300 * 5
+        assert chunker.chunk_overlap_chars == 60 * 5
 
     def test_build_chunker_respects_similarity_threshold(self):
         settings = AppSettings(
@@ -187,15 +187,15 @@ class TestDocumentChunkerConfiguration:
         settings = AppSettings(chunking_strategy="fixed_size", chunk_size_words=200, chunk_overlap_words=40)
         chunker = build_chunker(settings)
         assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size == 200 * 5
-        assert chunker.chunk_overlap == 40 * 5
+        assert chunker.chunk_size_chars == 200 * 5
+        assert chunker.chunk_overlap_chars == 40 * 5
 
     def test_document_chunker_with_sentence_preserving(self):
         settings = AppSettings(chunking_strategy="sentence_preserving", chunk_size_words=300, chunk_overlap_words=60)
         chunker = build_chunker(settings)
         assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size == 300 * 5
-        assert chunker.chunk_overlap == 60 * 5
+        assert chunker.chunk_size_chars == 300 * 5
+        assert chunker.chunk_overlap_chars == 60 * 5
 
 
 class TestBackwardCompatibility:
@@ -244,5 +244,5 @@ class TestIntegration:
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size == 250 * 5
-        assert chunker.chunk_overlap == 50 * 5
+        assert chunker.chunk_size_chars == 250 * 5
+        assert chunker.chunk_overlap_chars == 50 * 5

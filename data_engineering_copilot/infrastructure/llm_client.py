@@ -15,7 +15,13 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
@@ -279,6 +285,7 @@ class LLMClient(SafeAsyncClientMixin):
         wait=wait_exponential(multiplier=1, min=1, max=10),
         retry=retry_if_exception(_is_retryable_llm_error),  # type: ignore[arg-type]
         reraise=True,
+        before_sleep=before_sleep_log(logger, logging.DEBUG),
     )
     async def _http_post(self, payload: dict) -> dict:
         if self._rate_limiter is not None:
