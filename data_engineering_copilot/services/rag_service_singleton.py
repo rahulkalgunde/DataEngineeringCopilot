@@ -49,6 +49,15 @@ async def get_rag_service() -> AsyncRagService:
     return _instance
 
 
+def get_rag_service_if_initialized() -> AsyncRagService | None:
+    """Return the singleton instance if it was already created, else None.
+
+    Unlike ``get_rag_service()`` this never constructs the service — safe to
+    call during application shutdown when no request may have arrived yet.
+    """
+    return _instance
+
+
 def reset_rag_service() -> None:
     """Reset the singleton (for testing or config changes)."""
     global _instance

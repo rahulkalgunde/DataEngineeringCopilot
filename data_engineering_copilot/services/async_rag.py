@@ -52,6 +52,7 @@ class AsyncRagService:
         code_llm_client: LLMClientProtocol | None = None,
         evaluation_llm_client: LLMClientProtocol | None = None,
         pii_redactor: PiiRedactor | None = None,
+        input_guardrails: object | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -68,6 +69,7 @@ class AsyncRagService:
         self.token_tracker = token_tracker
         self.retrieval_tracker = retrieval_tracker
         self._pii_redactor = pii_redactor
+        self.input_guardrails = input_guardrails
         self._prompt_builder = PromptBuilder()
 
     async def answer(
@@ -237,6 +239,22 @@ class AsyncRagService:
                 confidence=0.0,
             )
 
+        # Indirect prompt injection guard: drop retrieved chunks that look like
+        # embedded instructions before they reach the prompt.
+        if self.input_guardrails is not None:
+            scan_result = self.input_guardrails.scan_chunks(retrieved_chunks)
+            retrieved_chunks = scan_result.kept
+            if not retrieved_chunks:
+                logger.warning("All retrieved chunks rejected by input guardrails")
+                if trace:
+                    trace.update(output="All chunks rejected by input guardrails")
+                    trace.end()
+                return Answer(
+                    text="I cannot answer this question because it is outside my knowledge repository.",
+                    sources=tuple(),
+                    confidence=0.0,
+                )
+
         generation_span = None
         if trace:
             generation_span = trace.start_observation(
@@ -253,7 +271,7 @@ class AsyncRagService:
                 and self.reranker.is_available()
                 and len(retrieved_chunks) > 1
             ):
-                retrieved_chunks = self.reranker.rerank(
+                retrieved_chunks = await self.reranker.rerank(
                     effective_query, retrieved_chunks, top_k=self.config.reranker_top_k
                 )
 
@@ -484,7 +502,7 @@ class AsyncRagService:
         # Reranking
         if self.reranker is not None and self.reranker.is_available() and len(retrieved_chunks) > 1:
             yield _sse({"type": "status", "message": "Reranking"})
-            retrieved_chunks = self.reranker.rerank(
+            retrieved_chunks = await self.reranker.rerank(
                 query=effective_query,
                 chunks=retrieved_chunks,
                 top_k=self.config.reranker_top_k,
@@ -578,9 +596,21 @@ class AsyncRagService:
             return answer_text
 
     async def close(self) -> None:
-        """Close underlying clients."""
-        for component in (self.vector_store, self.llm_client, self.embedder, self.code_llm_client, self.cache):
+        """Close all underlying clients and connection pools."""
+        components = [
+            self.vector_store,
+            self.llm_client,
+            self.embedder,
+            self.code_llm_client,
+            self.evaluation_llm_client,
+            self.cache,
+            self.reranker,
+            self.groundedness_verifier,
+            self.query_rewriter,
+            self.context_compressor,
+        ]
+        for component in components:
             if component is None or not hasattr(component, "close"):
                 continue
-            with contextlib.suppress(TypeError, AttributeError):
+            with contextlib.suppress(TypeError, AttributeError, Exception):
                 await component.close()

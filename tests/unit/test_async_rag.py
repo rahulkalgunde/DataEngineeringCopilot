@@ -119,7 +119,7 @@ class TestAsyncRagService:
     @pytest.fixture
     def mock_reranker(self):
         m = MagicMock()
-        m.rerank = MagicMock(return_value=[])
+        m.rerank = AsyncMock(return_value=[])
         m.is_available = MagicMock(return_value=False)
         return m
 
@@ -363,7 +363,7 @@ class TestAsyncRagService:
 
         mock_reranker = MagicMock()
         mock_reranker.is_available = MagicMock(return_value=True)
-        mock_reranker.rerank = MagicMock(side_effect=lambda query, chunks, top_k: chunks)
+        mock_reranker.rerank = AsyncMock(side_effect=lambda query, chunks, top_k: chunks)
 
         config = RagConfig(reranker_enabled=True, reranker_top_k=3)
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
@@ -387,7 +387,7 @@ class TestAsyncRagService:
 
         mock_reranker = MagicMock()
         mock_reranker.is_available = MagicMock(return_value=True)
-        mock_reranker.rerank = MagicMock(return_value=[])
+        mock_reranker.rerank = AsyncMock(return_value=[])
 
         config = RagConfig(reranker_enabled=False)
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])

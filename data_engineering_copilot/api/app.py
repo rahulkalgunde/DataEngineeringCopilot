@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 import os
 import platform
 from contextlib import asynccontextmanager
@@ -11,11 +12,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from data_engineering_copilot.api.auth import ApiKeyAuthMiddleware
-from data_engineering_copilot.api.middleware import RateLimitMiddleware
+from data_engineering_copilot.api.middleware import (
+    CorrelationIdMiddleware,
+    RateLimitMiddleware,
+    RequestBodySizeLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.infrastructure.dep_check import check_deps
 
 from .routes import router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -23,6 +31,28 @@ async def _lifespan(app: FastAPI):
     global _deps_fingerprint_ok
     _deps_fingerprint_ok = check_deps(fail_fast=False)
     yield
+    # Graceful shutdown: close the RAG service singleton so all connection
+    # pools (Qdrant, Redis, PostgreSQL, httpx, thread executors) are released.
+    try:
+        from data_engineering_copilot.services.rag_service_singleton import (
+            get_rag_service_if_initialized,
+        )
+
+        rag_service = get_rag_service_if_initialized()
+        if rag_service is not None:
+            await rag_service.close()
+    except Exception:
+        logger.warning("Failed to close RAG service during shutdown", exc_info=True)
+
+    # Close the process-wide shared Redis client if it was created.
+    try:
+        from data_engineering_copilot.factory import get_shared_redis_client
+
+        shared_redis = get_shared_redis_client()
+        if shared_redis is not None:
+            await shared_redis.aclose()
+    except Exception:
+        logger.warning("Failed to close shared Redis client during shutdown", exc_info=True)
 
 
 app = FastAPI(
@@ -51,6 +81,15 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Security response headers (outermost so every response carries them)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Request body size limit (outermost so oversized bodies are rejected early)
+app.add_middleware(RequestBodySizeLimitMiddleware)
+
+# Correlation IDs + W3C trace context (outermost so every response carries them)
+app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(router)
 
