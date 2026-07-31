@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Iterable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -78,7 +78,7 @@ class TestProtocolStructure:
         assert "source" in hints
         assert "max_pages" in hints
         assert "on_event" in hints
-        assert hints["return"] == Iterable[RawDocument]
+        assert hints["return"] == AsyncIterator[RawDocument]
 
     def test_parser_protocol_has_parse_method(self):
         assert hasattr(ParserProtocol, "parse")
@@ -159,13 +159,13 @@ class TestDomainIsolation:
 class TestProtocolConformance:
     """Test that mock objects can conform to protocols."""
 
-    def test_mock_crawler_can_conform(self):
-        from unittest.mock import MagicMock
+    async def test_mock_crawler_can_conform(self):
+        from unittest.mock import AsyncMock
 
-        mock = MagicMock(spec=CrawlerProtocol)
+        mock = AsyncMock(spec=CrawlerProtocol)
         mock.crawl.return_value = [create_sample_document()]
         assert hasattr(mock, "crawl")
-        result = list(mock.crawl("source", 10))
+        result = await mock.crawl("source", 10)
         assert len(result) == 1
 
     def test_mock_parser_can_conform(self):
@@ -177,13 +177,13 @@ class TestProtocolConformance:
         result = mock.parse(create_sample_document())
         assert result.title == "Test"
 
-    def test_mock_chunker_can_conform(self):
+    async def test_mock_chunker_can_conform(self):
         from unittest.mock import MagicMock
 
         mock = MagicMock(spec=ChunkerProtocol)
         mock.chunk.return_value = [create_chunk()]
         assert hasattr(mock, "chunk")
-        result = mock.chunk(create_parsed_document())
+        result = await mock.chunk(create_parsed_document())
         assert result[0].chunk_id == "test_chunk"
 
     def test_mock_embedder_can_conform(self):

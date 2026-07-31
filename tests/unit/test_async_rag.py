@@ -363,10 +363,10 @@ class TestAsyncRagService:
 
         mock_reranker = MagicMock()
         mock_reranker.is_available = MagicMock(return_value=True)
-        mock_reranker.rerank = MagicMock(return_value=[self._make_chunk()])
+        mock_reranker.rerank = MagicMock(side_effect=lambda query, chunks, top_k: chunks)
 
         config = RagConfig(reranker_enabled=True, reranker_top_k=3)
-        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
 
         service = AsyncRagService(
             config=config,

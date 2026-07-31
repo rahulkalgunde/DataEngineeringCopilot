@@ -54,5 +54,5 @@ class TestParseRagResponse:
     def test_json_missing_answer_key(self):
         raw = json.dumps({"citations": []})
         result = parse_rag_response(raw)
-        assert result.answer == raw
+        assert result.answer == ""
         assert result.citations == []

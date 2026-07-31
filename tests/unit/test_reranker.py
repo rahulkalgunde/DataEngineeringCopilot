@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from unittest.mock import MagicMock, patch
 
@@ -68,6 +69,10 @@ class TestCrossEncoderReranker:
             reranker = CrossEncoderReranker()
 
             assert reranker.model_name == "cross-encoder/qnli-distilroberta-base"
+            assert reranker.model is None
+
+            asyncio.run(reranker.initialize())
+
             assert reranker.model is mock_model
 
     def test_rerank_happy_path(self):
@@ -95,12 +100,11 @@ class TestCrossEncoderReranker:
 
     def test_rerank_model_not_available(self):
         test_chunks, query = create_test_chunks(num_chunks=3)
-        with patch("sentence_transformers.CrossEncoder") as mock_ce:
-            mock_ce.return_value = MagicMock()
-            reranker = CrossEncoderReranker(model_name="test_model")
+        reranker = CrossEncoderReranker(model_name="test_model")
         reranker.model = None
 
-        result = reranker.rerank(query, test_chunks, top_k=2)
+        with patch.object(CrossEncoderReranker, "_init_sync", return_value=None):
+            result = reranker.rerank(query, test_chunks, top_k=2)
 
         assert len(result) == 2
         assert result[0].chunk.text == test_chunks[0].chunk.text
