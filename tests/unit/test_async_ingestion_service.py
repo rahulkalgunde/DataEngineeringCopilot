@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from data_engineering_copilot.config.settings import AppSettings, DocumentationSource
+from data_engineering_copilot.domain.exceptions import IngestionError
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument
 from data_engineering_copilot.services.chunker import DocumentChunker
 
@@ -116,7 +118,7 @@ def _picklable_parse(raw_doc):
     )
 
 
-def _picklable_chunk(parsed):
+async def _picklable_chunk(parsed):
     return [
         DocumentChunk(
             chunk_id=f"c_{parsed.url}",
@@ -225,6 +227,33 @@ class TestAsyncIngestionServiceIngest:
 
         assert total == 1
         mock_crawler.crawl.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_worker_error_does_not_deadlock(self, mock_settings, mock_crawler):
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = MagicMock(side_effect=RuntimeError("boom"))
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        with pytest.raises(IngestionError, match="boom"):
+            await asyncio.wait_for(service.ingest(), timeout=10)
 
     @pytest.mark.asyncio
     async def test_on_event_callback(self, mock_settings, mock_crawler):
