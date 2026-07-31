@@ -343,6 +343,7 @@ class AsyncIngestionService:
             )
 
         loop = asyncio.get_running_loop()
+        first_error: BaseException | None = None
 
         async def worker(
             _queue=queue,
@@ -350,7 +351,7 @@ class AsyncIngestionService:
             _shared=shared,
             _mk_event=_make_event,
         ) -> None:
-            nonlocal source_pages, source_chunks
+            nonlocal source_pages, source_chunks, first_error
             wloop = asyncio.get_running_loop()
             while True:
                 raw_doc = await _queue.get()
@@ -358,6 +359,8 @@ class AsyncIngestionService:
                     _queue.task_done()
                     break
                 try:
+                    if first_error is not None:
+                        continue
                     result = await self._process_raw(wloop, raw_doc, on_event, _mk_event)
                     if result is None:
                         continue
@@ -394,6 +397,10 @@ class AsyncIngestionService:
                     if pending_batch is not None:
                         async with embed_semaphore:
                             await self._flush_batch(wloop, pending_batch, on_event, _mk_event)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    log.error("async_ingestion.worker_failed", error=str(exc))
                 finally:
                     _queue.task_done()
 
@@ -452,6 +459,9 @@ class AsyncIngestionService:
                 stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
                 if stale_count > 0:
                     log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
+
+        if first_error is not None:
+            raise first_error
 
         self._emit(
             on_event,
