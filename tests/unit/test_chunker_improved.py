@@ -8,26 +8,26 @@ from data_engineering_copilot.services.chunker import DocumentChunker
 
 class TestDocumentChunkerInitialization:
     def test_init_with_valid_parameters(self):
-        chunker = DocumentChunker(chunk_size=1000, chunk_overlap=100)
-        assert chunker.chunk_size == 1000
-        assert chunker.chunk_overlap == 100
+        chunker = DocumentChunker(chunk_size_chars=1000, chunk_overlap_chars=100)
+        assert chunker.chunk_size_chars == 1000
+        assert chunker.chunk_overlap_chars == 100
 
     def test_init_defaults(self):
         chunker = DocumentChunker()
-        assert chunker.chunk_size == 1000
-        assert chunker.chunk_overlap == 100
+        assert chunker.chunk_size_chars == 1000
+        assert chunker.chunk_overlap_chars == 100
 
     def test_init_chunk_size_must_be_positive(self):
-        with pytest.raises(ValueError, match="chunk_size must be positive"):
-            DocumentChunker(chunk_size=0, chunk_overlap=10)
-        with pytest.raises(ValueError, match="chunk_size must be positive"):
-            DocumentChunker(chunk_size=-100, chunk_overlap=10)
+        with pytest.raises(ValueError, match="chunk_size_chars must be positive"):
+            DocumentChunker(chunk_size_chars=0, chunk_overlap_chars=10)
+        with pytest.raises(ValueError, match="chunk_size_chars must be positive"):
+            DocumentChunker(chunk_size_chars=-100, chunk_overlap_chars=10)
 
     def test_init_overlap_must_be_valid(self):
-        with pytest.raises(ValueError, match="chunk_overlap must be >= 0"):
-            DocumentChunker(chunk_size=100, chunk_overlap=-1)
-        with pytest.raises(ValueError, match="chunk_overlap must be >= 0"):
-            DocumentChunker(chunk_size=100, chunk_overlap=100)
+        with pytest.raises(ValueError, match="chunk_overlap_chars must be >= 0"):
+            DocumentChunker(chunk_size_chars=100, chunk_overlap_chars=-1)
+        with pytest.raises(ValueError, match="chunk_overlap_chars must be >= 0"):
+            DocumentChunker(chunk_size_chars=100, chunk_overlap_chars=100)
 
 
 class TestLanguageDetection:
@@ -82,7 +82,7 @@ class TestLanguageDetection:
 
 
 class TestLangchainChunker:
-    def test_splits_text_into_chunks(self):
+    async def test_splits_text_into_chunks(self):
         text = "word " * 5000
         document = ParsedDocument(
             source_name="Test Source",
@@ -90,14 +90,14 @@ class TestLangchainChunker:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 1
         assert all(c.source_name == "Test Source" for c in chunks)
         assert all(c.title == "Test Document" for c in chunks)
         assert all(c.url == document.url for c in chunks)
 
-    def test_small_document_produces_single_chunk(self):
+    async def test_small_document_produces_single_chunk(self):
         text = "Short document with minimal content."
         document = ParsedDocument(
             source_name="Test",
@@ -105,11 +105,11 @@ class TestLangchainChunker:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks = await chunker.chunk(document)
         assert len(chunks) == 1
 
-    def test_python_splitter_splits_on_class_boundaries(self):
+    async def test_python_splitter_splits_on_class_boundaries(self):
         code = """
 class SparkSession:
     def __init__(self, spark_context):
@@ -131,11 +131,11 @@ class DataFrame:
             url="https://spark.apache.org/docs/latest/api/python/",
             text=code,
         )
-        chunker = DocumentChunker(chunk_size=200, chunk_overlap=20)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=200, chunk_overlap_chars=20)
+        chunks = await chunker.chunk(document)
         assert len(chunks) >= 2
 
-    def test_empty_text_returns_empty_list(self):
+    async def test_empty_text_returns_empty_list(self):
         document = ParsedDocument(
             source_name="Test",
             title="Test",
@@ -143,10 +143,10 @@ class DataFrame:
             text="",
         )
         chunker = DocumentChunker()
-        chunks = chunker.chunk(document)
+        chunks = await chunker.chunk(document)
         assert chunks == []
 
-    def test_preserves_metadata_across_chunks(self):
+    async def test_preserves_metadata_across_chunks(self):
         text = "word " * 5000
         document = ParsedDocument(
             source_name="Apache Spark Documentation",
@@ -154,8 +154,8 @@ class DataFrame:
             url="https://spark.apache.org/docs/latest/sql-programming-guide.html",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks = await chunker.chunk(document)
         for chunk in chunks:
             assert chunk.source_name == "Apache Spark Documentation"
             assert chunk.title == "Spark SQL Guide"
@@ -183,7 +183,7 @@ class TestChunkQualityValidation:
 
 
 class TestChunkIDGeneration:
-    def test_chunk_id_format(self):
+    async def test_chunk_id_format(self):
         text = "word " * 500
         document = ParsedDocument(
             source_name="Apache Spark",
@@ -191,8 +191,8 @@ class TestChunkIDGeneration:
             url="https://spark.apache.org/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks = await chunker.chunk(document)
         for i, chunk in enumerate(chunks):
             parts = chunk.chunk_id.split(":")
             assert len(parts) == 3
@@ -200,7 +200,7 @@ class TestChunkIDGeneration:
             assert len(parts[1]) == 10
             assert parts[2] == f"{i:04d}"
 
-    def test_chunk_id_deterministic(self):
+    async def test_chunk_id_deterministic(self):
         text = "word " * 500
         document = ParsedDocument(
             source_name="Test Source",
@@ -208,14 +208,14 @@ class TestChunkIDGeneration:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks1 = chunker.chunk(document)
-        chunks2 = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks1 = await chunker.chunk(document)
+        chunks2 = await chunker.chunk(document)
         assert len(chunks1) == len(chunks2)
         for c1, c2 in zip(chunks1, chunks2, strict=False):
             assert c1.chunk_id == c2.chunk_id
 
-    def test_chunk_id_different_for_different_urls(self):
+    async def test_chunk_id_different_for_different_urls(self):
         text = "word " * 500
         doc1 = ParsedDocument(
             source_name="Test",
@@ -229,14 +229,14 @@ class TestChunkIDGeneration:
             url="https://example.com/page2",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks1 = chunker.chunk(doc1)
-        chunks2 = chunker.chunk(doc2)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks1 = await chunker.chunk(doc1)
+        chunks2 = await chunker.chunk(doc2)
         assert chunks1[0].chunk_id != chunks2[0].chunk_id
 
 
 class TestEdgeCases:
-    def test_zero_overlap(self):
+    async def test_zero_overlap(self):
         text = "word " * 500
         document = ParsedDocument(
             source_name="Test",
@@ -244,11 +244,11 @@ class TestEdgeCases:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=0)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=0)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
 
-    def test_max_overlap(self):
+    async def test_max_overlap(self):
         text = "word " * 500
         document = ParsedDocument(
             source_name="Test",
@@ -256,11 +256,11 @@ class TestEdgeCases:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=499)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=499)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
 
-    def test_very_small_chunk_size(self):
+    async def test_very_small_chunk_size(self):
         text = "word " * 100
         document = ParsedDocument(
             source_name="Test",
@@ -268,11 +268,11 @@ class TestEdgeCases:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=50, chunk_overlap=5)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=50, chunk_overlap_chars=5)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
 
-    def test_tiny_chunk_size_with_large_overlap(self):
+    async def test_tiny_chunk_size_with_large_overlap(self):
         text = "word " * 100
         document = ParsedDocument(
             source_name="Test",
@@ -280,11 +280,11 @@ class TestEdgeCases:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=10, chunk_overlap=9)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=10, chunk_overlap_chars=9)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
 
-    def test_special_characters_in_text(self):
+    async def test_special_characters_in_text(self):
         text = "Hello! @world# $test% ^code& *examples. (More) [content] {here}."
         document = ParsedDocument(
             source_name="Test",
@@ -292,13 +292,13 @@ class TestEdgeCases:
             url="https://example.com/test",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=100, chunk_overlap=10)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=100, chunk_overlap_chars=10)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
 
 
 class TestIntegration:
-    def test_complex_document_chunking(self):
+    async def test_complex_document_chunking(self):
         text = (
             "Apache Spark is a unified computing engine for big data processing. "
             "It provides high-level APIs in Scala, Java, Python, and R. "
@@ -318,14 +318,14 @@ class TestIntegration:
             url="https://spark.apache.org/docs/latest/",
             text=text,
         )
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
-        chunks = chunker.chunk(document)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
+        chunks = await chunker.chunk(document)
         assert len(chunks) > 0
         assert all(isinstance(c.chunk_id, str) for c in chunks)
         assert all(len(c.text) > 0 for c in chunks)
         assert all(c.source_name == "Apache Spark Documentation" for c in chunks)
 
-    def test_multiple_documents_independent_ids(self):
+    async def test_multiple_documents_independent_ids(self):
         docs = [
             ParsedDocument(
                 source_name="Source 1",
@@ -340,15 +340,15 @@ class TestIntegration:
                 text="word " * 1000,
             ),
         ]
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
         all_chunks = []
         for doc in docs:
-            all_chunks.extend(chunker.chunk(doc))
+            all_chunks.extend(await chunker.chunk(doc))
         chunk_ids = [c.chunk_id for c in all_chunks]
         assert len(chunk_ids) == len(set(chunk_ids))
 
-    def test_chunker_reusability(self):
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=50)
+    async def test_chunker_reusability(self):
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
         for i in range(5):
             document = ParsedDocument(
                 source_name=f"Source {i}",
@@ -356,5 +356,5 @@ class TestIntegration:
                 url=f"https://example.com/doc{i}",
                 text="word " * 1000,
             )
-            chunks = chunker.chunk(document)
+            chunks = await chunker.chunk(document)
             assert len(chunks) > 0
