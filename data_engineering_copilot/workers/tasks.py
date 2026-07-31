@@ -13,7 +13,6 @@ import json
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.signals import task_failure, task_revoked
-from crawl4ai import AsyncWebCrawler
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.factory import build_embedder
@@ -34,6 +33,11 @@ app = celery_app
 
 async def _run_async_crawl(urls: list[str]):
     """Crawl a list of URLs concurrently and return the raw Crawl4AI results."""
+    # Lazy import: crawl4ai calls load_dotenv() at import time, polluting
+    # os.environ for the whole process. Importing this module (e.g. for Celery
+    # task registration or FastAPI route wiring) must stay side-effect free.
+    from crawl4ai import AsyncWebCrawler
+
     async with AsyncWebCrawler(verbose=True) as crawler:
         tasks = [crawler.arun(url=url) for url in urls]
         results = await asyncio.gather(*tasks)

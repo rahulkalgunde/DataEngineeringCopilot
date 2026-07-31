@@ -17,7 +17,7 @@ def test_celery_app():
 
 
 @pytest.mark.asyncio
-@patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
+@patch("crawl4ai.AsyncWebCrawler")
 async def test_run_async_crawl(mock_crawler_class):
     mock_crawler = AsyncMock()
     mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
@@ -28,7 +28,7 @@ async def test_run_async_crawl(mock_crawler_class):
     mock_crawler.arun.assert_called_once_with(url="http://test.com")
 
 
-@patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
+@patch("crawl4ai.AsyncWebCrawler")
 @patch("data_engineering_copilot.workers.tasks.build_embedder")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
@@ -67,7 +67,7 @@ def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embe
     mock_vector_store.upsert_chunks.assert_called_once()
 
 
-@patch("data_engineering_copilot.workers.tasks.AsyncWebCrawler")
+@patch("crawl4ai.AsyncWebCrawler")
 @patch("data_engineering_copilot.workers.tasks.build_embedder")
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")

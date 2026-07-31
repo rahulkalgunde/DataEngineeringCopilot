@@ -36,6 +36,7 @@ class TestResetIndexClearsRegistry:
         return _urlopen
 
     def test_reset_index_clears_registry_keys(self) -> None:
+        import data_engineering_copilot.cli as cli_mod
         from data_engineering_copilot.cli import reset_index
 
         mock_redis = MagicMock()
@@ -46,12 +47,16 @@ class TestResetIndexClearsRegistry:
             ],
             [b"crawl:header:abc", b"crawl:header:def"],
         ]
+        no_pg_settings = cli_mod.settings.model_copy(update={"crawl_db_url": ""})
 
         with patch("data_engineering_copilot.cli.urllib.request") as mock_req:
             mock_req.Request.return_value = MagicMock()
             mock_req.urlopen.side_effect = self._make_urlopen_side_effect()
 
-            with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
+            with (
+                patch.object(cli_mod, "settings", no_pg_settings),
+                patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis),
+            ):
                 reset_index()
 
         assert mock_redis.scan_iter.call_count == 2
@@ -59,16 +64,21 @@ class TestResetIndexClearsRegistry:
         mock_redis.scan_iter.assert_any_call("crawl:*")
 
     def test_reset_index_handles_no_registry_keys(self) -> None:
+        import data_engineering_copilot.cli as cli_mod
         from data_engineering_copilot.cli import reset_index
 
         mock_redis = MagicMock()
         mock_redis.scan_iter.return_value = []
+        no_pg_settings = cli_mod.settings.model_copy(update={"crawl_db_url": ""})
 
         with patch("data_engineering_copilot.cli.urllib.request") as mock_req:
             mock_req.Request.return_value = MagicMock()
             mock_req.urlopen.side_effect = self._make_urlopen_side_effect()
 
-            with patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis):
+            with (
+                patch.object(cli_mod, "settings", no_pg_settings),
+                patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis),
+            ):
                 reset_index()
 
         assert mock_redis.scan_iter.call_count == 2

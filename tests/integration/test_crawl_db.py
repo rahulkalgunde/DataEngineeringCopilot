@@ -1,13 +1,11 @@
 """Tests for PostgresCrawlFrontierDB.
 
-These tests require a running PostgreSQL instance (Docker).
-They are marked as integration tests and will be skipped in unit test runs
-when the database is unreachable.
+These tests require a running PostgreSQL instance, provided by a session-scoped
+Postgres testcontainer. Marked ``serial`` because every test drops and recreates
+the same ``crawl_frontier`` schema.
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 import pytest_asyncio
@@ -16,14 +14,7 @@ from data_engineering_copilot.infrastructure.crawl_db import (
     PostgresCrawlFrontierDB,
 )
 
-
-@pytest.fixture
-def pg_dsn():
-    dsn = os.environ.get(
-        "CRAWL_DB_URL",
-        "postgresql://copilot:local_secure_password_123@localhost:5433/crawl_frontier",
-    )
-    return dsn
+pytestmark = [pytest.mark.integration, pytest.mark.serial]
 
 
 @pytest_asyncio.fixture
