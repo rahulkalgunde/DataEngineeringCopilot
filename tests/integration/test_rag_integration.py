@@ -29,7 +29,7 @@ def _settings(ollama_url):
         embedding_model_name="nomic-embed-text",
         llm_provider="ollama",
         code_llm_provider="ollama",
-        code_llm_model="qwen2.5-coder:7b",
+        code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
         retrieval_top_k=10,
         max_context_chars=2000,
