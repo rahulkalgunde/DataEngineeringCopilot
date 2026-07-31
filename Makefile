@@ -25,19 +25,24 @@ test-unit:
 test-unit-serial:
 	$(PYTEST) tests/unit/ -v -n 0
 
-# Integration tests — sequential by default (testcontainers + shared Docker services)
+# Integration tests — split into 3 legs:
+#   1. serial (shared PG/Redis/env state) — single process
+#   2. light (no Ollama: qdrant/auth/progress/celery, fake embeddings) — 6-way parallel, no reruns
+#   3. Ollama-heavy (rag/ollama/ingestion) — low concurrency to avoid Ollama contention timeouts
 test-integration:
 	$(PYTEST) tests/integration/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
-	$(PYTEST) tests/integration/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
+	$(PYTEST) tests/integration/ -m "not serial and not rag and not ollama and not ingestion" -v -n 6 --dist worksteal --durations=20 --durations-min=0.3
+	$(PYTEST) tests/integration/ -m "not serial and (rag or ollama or ingestion)" -v -n 2 --dist loadgroup --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
 
 # Integration tests with controlled parallelism (xdist loadgroup for shared containers)
 test-integration-parallel:
 	$(PYTEST) tests/integration/ -m "not serial" -v -n 2 --dist=loadgroup --reruns 2 --reruns-delay 1
 
-# E2E tests — full pipeline
+# E2E tests — full pipeline (all hit the real stack incl. Ollama, so the
+# parallel leg runs at low concurrency)
 test-e2e:
 	$(PYTEST) tests/e2e/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
-	$(PYTEST) tests/e2e/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
+	$(PYTEST) tests/e2e/ -m "not serial" -v -n 2 --dist loadgroup --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
 
 # CI: unit tests with coverage (parallel)
 test-ci-unit:
