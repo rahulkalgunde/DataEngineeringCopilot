@@ -8,15 +8,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from data_engineering_copilot.api.app import app
 
-client = TestClient(app)
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    from data_engineering_copilot.api.app import app
+
+    return TestClient(app)
 
 
 @pytest.mark.integration
 @pytest.mark.api
 class TestLatestEndpoint:
-    def test_returns_task_status(self):
+    def test_returns_task_status(self, client):
         task_id = "test-latest-123"
         status_data = {
             "task_id": task_id,
@@ -42,7 +45,7 @@ class TestLatestEndpoint:
         assert data["task_id"] == task_id
         assert data["status"] == "PROCESSING"
 
-    def test_returns_404_when_no_task(self):
+    def test_returns_404_when_no_task(self, client):
         with patch("data_engineering_copilot.api.routes.get_redis_client") as mock_redis_factory:
             mock_client = MagicMock()
             mock_redis_factory.return_value = mock_client
@@ -52,7 +55,7 @@ class TestLatestEndpoint:
 
         assert response.status_code == 404
 
-    def test_dispatch_writes_latest_task_key(self):
+    def test_dispatch_writes_latest_task_key(self, client):
         with (
             patch("data_engineering_copilot.api.routes.get_redis_client") as mock_redis_factory,
             patch("data_engineering_copilot.api.routes.async_ingest_task") as mock_task,

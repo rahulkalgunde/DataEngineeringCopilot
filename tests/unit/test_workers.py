@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from data_engineering_copilot.workers.tasks import _run_async_crawl, execute_background_ingestion
-
 
 def test_celery_app():
     from data_engineering_copilot.workers.celery_app import celery_app
@@ -19,6 +17,8 @@ def test_celery_app():
 @pytest.mark.asyncio
 @patch("crawl4ai.AsyncWebCrawler")
 async def test_run_async_crawl(mock_crawler_class):
+    from data_engineering_copilot.workers.tasks import _run_async_crawl
+
     mock_crawler = AsyncMock()
     mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
     mock_crawler.arun.return_value = "result1"
@@ -33,6 +33,8 @@ async def test_run_async_crawl(mock_crawler_class):
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
 def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):
+    from data_engineering_copilot.workers.tasks import execute_background_ingestion
+
     mock_crawler = AsyncMock()
     mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
     mock_doc_magic = MagicMock()
@@ -72,6 +74,8 @@ def test_execute_background_ingestion(mock_qdrant, mock_chunker_class, mock_embe
 @patch("data_engineering_copilot.workers.tasks.DocumentChunker")
 @patch("data_engineering_copilot.workers.tasks.AsyncQdrantVectorStore")
 def test_execute_background_ingestion_failure(mock_qdrant, mock_chunker_class, mock_embedder, mock_crawler_class):
+    from data_engineering_copilot.workers.tasks import execute_background_ingestion
+
     mock_crawler = AsyncMock()
     mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
     mock_doc_magic = MagicMock()

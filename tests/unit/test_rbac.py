@@ -5,9 +5,17 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from data_engineering_copilot.api.auth import ApiKeyAuthMiddleware, _build_rbac_map
-from data_engineering_copilot.api.routes import _resolve_source_filter
 from data_engineering_copilot.domain.models import UserPermissions
+
+
+@pytest.fixture(scope="module")
+def resolve_source_filter():
+    from data_engineering_copilot.api.routes import _resolve_source_filter
+
+    return _resolve_source_filter
 
 
 class TestBuildRbacMap:
@@ -42,33 +50,33 @@ class TestResolveSourceFilter:
         request.state.user_permissions = user_permissions
         return request
 
-    def test_no_permissions_passthrough(self) -> None:
+    def test_no_permissions_passthrough(self, resolve_source_filter) -> None:
         request = self._make_request(None)
-        assert _resolve_source_filter(request, ["A"]) == ["A"]
-        assert _resolve_source_filter(request, None) is None
+        assert resolve_source_filter(request, ["A"]) == ["A"]
+        assert resolve_source_filter(request, None) is None
 
-    def test_admin_bypasses_filter(self) -> None:
+    def test_admin_bypasses_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-admin", role="admin", allowed_sources=("A",))
         request = self._make_request(perms)
-        assert _resolve_source_filter(request, ["B"]) == ["B"]
-        assert _resolve_source_filter(request, None) is None
+        assert resolve_source_filter(request, ["B"]) == ["B"]
+        assert resolve_source_filter(request, None) is None
 
-    def test_reader_with_no_client_filter(self) -> None:
+    def test_reader_with_no_client_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=("Spark", "Delta"))
         request = self._make_request(perms)
-        result = _resolve_source_filter(request, None)
+        result = resolve_source_filter(request, None)
         assert result == ["Spark", "Delta"]
 
-    def test_reader_intersects_with_client_filter(self) -> None:
+    def test_reader_intersects_with_client_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=("Spark", "Delta"))
         request = self._make_request(perms)
-        result = _resolve_source_filter(request, ["Spark", "Airflow"])
+        result = resolve_source_filter(request, ["Spark", "Airflow"])
         assert result == ["Spark"]
 
-    def test_reader_empty_allowed_sources_passthrough(self) -> None:
+    def test_reader_empty_allowed_sources_passthrough(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=())
         request = self._make_request(perms)
-        assert _resolve_source_filter(request, ["A"]) == ["A"]
+        assert resolve_source_filter(request, ["A"]) == ["A"]
 
 
 class TestRbacMiddlewareResolvePermissions:

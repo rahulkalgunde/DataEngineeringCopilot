@@ -11,8 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from data_engineering_copilot.api.app import app
-
 
 @pytest.mark.integration
 @pytest.mark.celery
@@ -22,6 +20,7 @@ class TestIngestionStatusRedis:
     def test_initial_status_document_structure(self, fresh_redis_client):
         """Verify the structure of a DISPATCHED status document written to Redis."""
         import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
 
         original_fn = routes_mod.get_redis_client
         routes_mod.get_redis_client = lambda: fresh_redis_client
@@ -51,6 +50,7 @@ class TestIngestionStatusRedis:
     def test_multiple_ingest_dispatch_statuses(self, fresh_redis_client):
         """Two sequential dispatches produce independent status documents."""
         import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
 
         original_fn = routes_mod.get_redis_client
         routes_mod.get_redis_client = lambda: fresh_redis_client
@@ -91,6 +91,7 @@ class TestTaskCancellation:
     def test_cancel_updates_redis_status(self, fresh_redis_client):
         """POST /api/v1/ingest/{task_id}/cancel should set status to CANCELLED."""
         import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
 
         task_id = "test-cancel-001"
         initial_status = json.dumps({"task_id": task_id, "status": "PROCESSING"})

@@ -2,26 +2,30 @@
 
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
-from data_engineering_copilot.api.app import app
 
-client = TestClient(app)
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    from data_engineering_copilot.api.app import app
+
+    return TestClient(app)
 
 
 class TestRootEndpoint:
-    def test_root_returns_200(self):
+    def test_root_returns_200(self, client):
         response = client.get("/")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
-    def test_head_root_returns_200(self):
+    def test_head_root_returns_200(self, client):
         response = client.head("/")
         assert response.status_code == 200
 
 
 class TestVersionEndpoint:
-    def test_version_reports_identity_fields(self):
+    def test_version_reports_identity_fields(self, client):
         with (
             patch("data_engineering_copilot.api.app._deps_fingerprint_ok", True),
             patch("data_engineering_copilot.api.app._image_built_at", return_value="2026-07-31T10:00:00+00:00"),
@@ -35,7 +39,7 @@ class TestVersionEndpoint:
             assert body["deps_fingerprint_ok"] is True
             assert body["python_version"]
 
-    def test_version_defaults_when_not_in_container(self):
+    def test_version_defaults_when_not_in_container(self, client):
         with (
             patch("data_engineering_copilot.api.app._deps_fingerprint_ok", None),
             patch("data_engineering_copilot.api.app._image_built_at", return_value=None),
@@ -48,19 +52,19 @@ class TestVersionEndpoint:
 
 
 class TestHealthEndpoint:
-    def test_health_returns_200(self):
+    def test_health_returns_200(self, client):
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
-    def test_health_always_succeeds(self):
+    def test_health_always_succeeds(self, client):
         with patch("data_engineering_copilot.api.app._check_tcp", return_value=False):
             response = client.get("/health")
             assert response.status_code == 200
 
 
 class TestReadyEndpoint:
-    def test_ready_all_healthy(self):
+    def test_ready_all_healthy(self, client):
         with patch("data_engineering_copilot.api.app._check_tcp", return_value=True):
             response = client.get("/ready")
             assert response.status_code == 200
@@ -70,7 +74,7 @@ class TestReadyEndpoint:
             assert body["checks"]["ollama"] is True
             assert body["checks"]["redis"] is True
 
-    def test_ready_qdrant_down_returns_503(self):
+    def test_ready_qdrant_down_returns_503(self, client):
         def side_effect(host, port, timeout=3.0):
             return host != "localhost" or port != 6333
 
@@ -81,7 +85,7 @@ class TestReadyEndpoint:
             assert body["status"] == "degraded"
             assert body["checks"]["qdrant"] is False
 
-    def test_ready_all_down_returns_503(self):
+    def test_ready_all_down_returns_503(self, client):
         with patch("data_engineering_copilot.api.app._check_tcp", return_value=False):
             response = client.get("/ready")
             assert response.status_code == 503
@@ -89,7 +93,7 @@ class TestReadyEndpoint:
             assert body["status"] == "unhealthy"
             assert all(v is False for v in body["checks"].values())
 
-    def test_ready_includes_all_three_services(self):
+    def test_ready_includes_all_three_services(self, client):
         with patch("data_engineering_copilot.api.app._check_tcp", return_value=True):
             response = client.get("/ready")
             checks = response.json()["checks"]
