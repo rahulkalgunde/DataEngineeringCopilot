@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from tenacity import wait_fixed
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
@@ -18,6 +19,7 @@ def client():
         timeout_seconds=120,
         base_url="https://openrouter.ai/api/v1",
         extra_headers={"HTTP-Referer": "https://data-engineering-copilot.local"},
+        retry_wait=wait_fixed(0),
     )
 
 

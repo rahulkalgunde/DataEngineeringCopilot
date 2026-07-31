@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from tenacity import wait_fixed
 
 from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
 
@@ -21,6 +22,7 @@ def ollama_client():
                 "num_predict": 512,
             }
         },
+        retry_wait=wait_fixed(0),
     )
 
 

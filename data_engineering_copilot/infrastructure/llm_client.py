@@ -22,12 +22,28 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+def _make_http_post_retry(wait: wait_base | None = None):
+    """Build the tenacity retry decorator for LLM HTTP posts.
+
+    ``wait`` defaults to the production exponential backoff; tests pass a zero
+    wait so retry assertions don't sleep for real backoff durations.
+    """
+    return retry(
+        stop=stop_after_attempt(5),
+        wait=wait or wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception(LLMClient._is_retryable_llm_error),  # type: ignore[arg-type]
+        reraise=True,
+        before_sleep=before_sleep_log(logger, logging.DEBUG),
+    )
 
 
 class CircuitBreakerError(RuntimeError):
@@ -132,6 +148,9 @@ class LLMClient(SafeAsyncClientMixin):
         Consecutive failures before circuit opens (default 3).
     circuit_breaker_timeout:
         Seconds to keep circuit open (default 30).
+    retry_wait:
+        Override for the tenacity retry wait strategy (defaults to exponential
+        backoff of 1-10s). Used by tests to eliminate real backoff sleeps.
     """
 
     def __init__(
@@ -148,6 +167,7 @@ class LLMClient(SafeAsyncClientMixin):
         rate_limiter: SlidingWindowRateLimiter | None = None,
         circuit_breaker_threshold: int = 3,
         circuit_breaker_timeout: float = 30.0,
+        retry_wait: wait_base | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -165,6 +185,7 @@ class LLMClient(SafeAsyncClientMixin):
             recovery_timeout=circuit_breaker_timeout,
             call_timeout=timeout_seconds,
         )
+        self._http_post = _make_http_post_retry(retry_wait)(self._http_post)
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -280,13 +301,6 @@ class LLMClient(SafeAsyncClientMixin):
             return exc.response.status_code >= 500
         return False
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception(_is_retryable_llm_error),  # type: ignore[arg-type]
-        reraise=True,
-        before_sleep=before_sleep_log(logger, logging.DEBUG),
-    )
     async def _http_post(self, payload: dict) -> dict:
         if self._rate_limiter is not None:
             await self._rate_limiter.acquire()

@@ -11,6 +11,7 @@ import logging
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
@@ -32,6 +33,7 @@ class OpenAIEmbeddings(SafeAsyncClientMixin):
         embedding_dimension: int = 1536,
         batch_size: int = 32,
         timeout_seconds: int = 120,
+        retry_wait: wait_base | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -40,6 +42,12 @@ class OpenAIEmbeddings(SafeAsyncClientMixin):
         self._batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         logger.info("Using OpenAI embedding model %s at %s", model_name, self.base_url)
+        self._request_embeddings = retry(
+            stop=stop_after_attempt(3),
+            wait=retry_wait or wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_exception_type(_RETRYABLE_ERRORS),
+            reraise=True,
+        )(self._request_embeddings)
 
     def _make_client_kwargs(self) -> dict:
         return {"headers": {"Authorization": f"Bearer {self.api_key}"}}
@@ -52,12 +60,6 @@ class OpenAIEmbeddings(SafeAsyncClientMixin):
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         return [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(_RETRYABLE_ERRORS),
-        reraise=True,
-    )
     async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
         try:
             response = await (await self._get_client()).post(
