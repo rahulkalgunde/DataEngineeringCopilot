@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from typing import cast
+
 import redis.asyncio as aioredis
 import redis.exceptions
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
+from data_engineering_copilot.domain.protocols import LLMClientProtocol
 from data_engineering_copilot.infrastructure.adaptive_llm_router import AdaptiveLLMRouter
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
@@ -587,7 +590,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
     enrichment_client = _build_fallback_chain(
         purpose_provider=app_settings.enrichment_llm_provider or "ollama",
-        purpose_model=app_settings.enrichment_llm_model or "llama3.2:3b",
+        purpose_model=app_settings.enrichment_llm_model,
         app_settings=app_settings,
         health_registry=health_registry,
         provider_rate_limiters=provider_rate_limiters,
@@ -657,6 +660,15 @@ def build_rag_service(
 
     llm_client = build_global_llm_client(app_settings, provider_rate_limiters, health_registry)
 
+    answer_client = _build_fallback_chain(
+        purpose_provider=app_settings.answer_llm_provider,
+        purpose_model=app_settings.answer_llm_model,
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        purpose="answer",
+        health_registry=health_registry,
+    )
+
     code_llm_client = _build_fallback_chain(
         purpose_provider=app_settings.code_llm_provider,
         purpose_model=app_settings.code_llm_model,
@@ -690,11 +702,19 @@ def build_rag_service(
         purpose="intent",
         health_registry=health_registry,
     )
+    evaluation_client = _build_fallback_chain(
+        purpose_provider=app_settings.evaluation_llm_provider,
+        purpose_model=app_settings.evaluation_llm_model,
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        purpose="evaluation",
+        health_registry=health_registry,
+    )
 
     logger.info(
         "llm_assignments",
-        answer_provider=app_settings.llm_provider,
-        answer_model=app_settings.llm_model,
+        answer_provider=app_settings.answer_llm_provider or app_settings.llm_provider,
+        answer_model=app_settings.answer_llm_model or "(from provider default)",
         code_provider=app_settings.code_llm_provider or app_settings.llm_provider,
         code_model=app_settings.code_llm_model or "(from provider default)",
         rewrite_provider=app_settings.rewrite_llm_provider or app_settings.llm_provider,
@@ -703,6 +723,8 @@ def build_rag_service(
         groundedness_model=app_settings.groundedness_llm_model or "(from provider default)",
         intent_provider=app_settings.intent_llm_provider or app_settings.llm_provider,
         intent_model=app_settings.intent_llm_model or "(from provider default)",
+        evaluation_provider=app_settings.evaluation_llm_provider or app_settings.llm_provider,
+        evaluation_model=app_settings.evaluation_llm_model or "(from provider default)",
     )
 
     vector_store = AsyncQdrantVectorStore(
@@ -752,8 +774,9 @@ def build_rag_service(
     return AsyncRagService(
         config=rag_config,
         vector_store=vector_store,
-        llm_client=llm_client,
+        llm_client=answer_client or llm_client,
         code_llm_client=code_llm_client,
+        evaluation_llm_client=cast("LLMClientProtocol | None", evaluation_client),
         embedder=embedder,
         reranker=reranker,
         telemetry=telemetry,

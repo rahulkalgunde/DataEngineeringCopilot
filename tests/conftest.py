@@ -16,6 +16,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+from unittest.mock import patch
 
 import pytest
 
@@ -45,6 +46,28 @@ def _restore_environ():
     os.environ.update(_ORIGINAL_ENVIRON)
     if current_test is not None:
         os.environ["PYTEST_CURRENT_TEST"] = current_test
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rate_limiter():
+    """Isolate the rate limiter between tests.
+
+    ``RateLimiter`` falls back to a module-global in-memory store when Redis
+    is unavailable (rate_limiter.py ``_IN_MEMORY_STORE``), and would share a
+    live Redis otherwise.  Without isolation the per-path bucket (60 req/60 s
+    for ``/api/v1/ask``) is exhausted by earlier tests in the suite, causing
+    later requests to spuriously return HTTP 429.
+
+    Force the in-memory fallback and clear it before/after every test so the
+    outcome is deterministic and independent of test order.  Tests that need
+    the Redis path opt in by patching ``_redis_client`` themselves.
+    """
+    import data_engineering_copilot.services.rate_limiter as rate_limiter_mod
+
+    rate_limiter_mod._IN_MEMORY_STORE.clear()
+    with patch.object(rate_limiter_mod, "_redis_client", return_value=None):
+        yield
+    rate_limiter_mod._IN_MEMORY_STORE.clear()
 
 
 # ---------------------------------------------------------------------------
