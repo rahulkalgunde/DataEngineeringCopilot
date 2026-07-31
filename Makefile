@@ -27,8 +27,8 @@ test-unit-serial:
 
 # Integration tests — sequential by default (testcontainers + shared Docker services)
 test-integration:
-	$(PYTEST) tests/integration/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1
-	$(PYTEST) tests/integration/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/integration/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
+	$(PYTEST) tests/integration/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
 
 # Integration tests with controlled parallelism (xdist loadgroup for shared containers)
 test-integration-parallel:
@@ -36,12 +36,12 @@ test-integration-parallel:
 
 # E2E tests — full pipeline
 test-e2e:
-	$(PYTEST) tests/e2e/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1
-	$(PYTEST) tests/e2e/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1
+	$(PYTEST) tests/e2e/ -m "serial" -v -n 0 --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
+	$(PYTEST) tests/e2e/ -m "not serial" -v -n 6 --dist worksteal --reruns 2 --reruns-delay 1 --durations=20 --durations-min=0.3
 
 # CI: unit tests with coverage (parallel)
 test-ci-unit:
-	$(PYTEST) tests/unit/ -v --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
+	$(PYTEST) tests/unit/ -v --durations=20 --durations-min=0.3 --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
 
 # CI gate: unit + integration + e2e with coverage
 test-ci:
