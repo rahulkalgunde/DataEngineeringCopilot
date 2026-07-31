@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-
-from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+from typing import TYPE_CHECKING
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.utils.text import slugify
+
+if TYPE_CHECKING:
+    from langchain_text_splitters import Language
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,8 @@ class DocumentChunker:
         self.chunk_size_chars = chunk_size_chars
         self.chunk_overlap_chars = chunk_overlap_chars
 
+        from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
         self._default_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size_chars,
             chunk_overlap=chunk_overlap_chars,
@@ -55,6 +59,8 @@ class DocumentChunker:
         }
 
     def _detect_language(self, url: str) -> Language | None:
+        from langchain_text_splitters import Language
+
         url_lower = url.lower()
         if "/api/python/" in url_lower or "/pyspark" in url_lower:
             return Language.PYTHON
@@ -74,7 +80,7 @@ class DocumentChunker:
 
     def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
         lang = self._detect_language(document.url)
-        splitter = self._language_splitters.get(lang, self._default_splitter)
+        splitter = self._language_splitters[lang] if lang is not None else self._default_splitter
 
         texts = splitter.split_text(document.text)
 
