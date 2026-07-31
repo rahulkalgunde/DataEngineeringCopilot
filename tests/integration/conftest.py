@@ -203,7 +203,7 @@ def pg_dsn():
 
 _OLLAMA_IMAGE = "ollama/ollama:0.32.4"
 _OLLAMA_HOME = pathlib.Path.home() / ".ollama"
-_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b", "qwen2.5-coder:7b"]
+_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b"]
 
 _ollama_container = None
 _ollama_url: str | None = None
@@ -312,7 +312,7 @@ def integration_settings(ollama_url):
         embedding_model_name="nomic-embed-text",
         llm_provider="ollama",
         code_llm_provider="ollama",
-        code_llm_model="qwen2.5-coder:7b",
+        code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
         retrieval_top_k=5,
         max_context_chars=2000,
