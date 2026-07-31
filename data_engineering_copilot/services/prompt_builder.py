@@ -78,7 +78,14 @@ class PromptBuilder:
 
     @staticmethod
     def sanitize_query(question: str) -> str:
-        cleaned = question.replace("```", "").replace("## ", "# ")
+        # Strip triple backticks (prevent markdown code-fence injection)
+        cleaned = question.replace("```", "")
+        # Neutralize markdown headers that could mimic the prompt's section structure
+        cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
+        # Strip control characters except newline/tab (e.g. null bytes, escape)
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", cleaned)
+        # Collapse excessive newlines so injected sections cannot be visually isolated
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned[:2000].strip()
 
     def build_rag_prompt(self, context: str, question: str, intent: str = "factual") -> str:

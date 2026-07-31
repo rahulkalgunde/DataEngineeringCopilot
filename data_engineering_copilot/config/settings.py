@@ -319,6 +319,8 @@ class AppSettings(BaseSettings):
     # PII redaction
     pii_redaction_enabled: bool = True
     pii_redaction_mode: str = "full"  # full | masked | none
+    # Indirect prompt injection guard for retrieved documents
+    input_guardrails_enabled: bool = True
     # RBAC (document-level access control)
     rbac_enabled: bool = False
     rbac_users_json: str = ""  # inline JSON string: {"key_prefix": {"allowed_sources": [...], "role": "reader"}}
