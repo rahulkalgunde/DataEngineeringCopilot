@@ -44,6 +44,15 @@ class FakeAnswer:
 def fake_rag_service():
     service = AsyncMock()
     service.answer.return_value = FakeAnswer()
+
+    async def _answer_stream(question, source_filter=None):
+        yield 'data: {"type": "start", "message": "started"}\n\n'
+        yield (
+            'data: {"type": "answer", "text": "The answer is **42**.", '
+            '"confidence": 0.85, "groundedness_score": 0.92, "sources": []}\n\n'
+        )
+
+    service.answer_stream = _answer_stream
     return service
 
 
@@ -113,23 +122,34 @@ class TestStreamingEndpoint:
     @patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service")
     def test_streaming_error_emits_error_event(self, mock_get_service, client):
         mock_service = AsyncMock()
-        mock_service.answer.side_effect = RuntimeError("LLM crashed")
+
+        async def _boom(question, source_filter=None):
+            raise RuntimeError("LLM crashed")
+            yield  # pragma: no cover
+
+        mock_service.answer_stream = _boom
         mock_get_service.return_value = mock_service
         resp = client.post("/api/v1/ask/stream", json={"question": "fail?"})
         assert resp.status_code == 200
         events = _parse_sse_events(resp.text)
         assert any(e["type"] == "error" for e in events)
-        assert any("LLM crashed" in e.get("message", "") for e in events)
+        assert all(e["type"] != "answer" for e in events), "No partial answer on failure"
 
     @patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service")
     def test_streaming_timeout_emits_timeout_error(self, mock_get_service, client):
         mock_service = AsyncMock()
-        mock_service.answer.side_effect = TimeoutError("timed out")
+
+        async def _timeout(question, source_filter=None):
+            raise TimeoutError("timed out")
+            yield  # pragma: no cover
+
+        mock_service.answer_stream = _timeout
         mock_get_service.return_value = mock_service
         resp = client.post("/api/v1/ask/stream", json={"question": "timeout?"})
         assert resp.status_code == 200
         events = _parse_sse_events(resp.text)
         assert any(e["type"] == "error" for e in events)
+        assert any("Request timed out" in e.get("message", "") for e in events)
 
     def test_invalid_request_returns_422(self, client):
         resp = client.post("/api/v1/ask/stream", json={"question": ""})
