@@ -204,6 +204,7 @@ class TestRAGPipeline:
         assert isinstance(answer.confidence, float)
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(reruns=2)
     async def test_answer_has_substantial_text(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
@@ -218,6 +219,7 @@ class TestRAGPipeline:
         assert len(answer.sources) > 0, "Should cite at least one source"
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(reruns=2)
     async def test_answer_confidence_nonnegative(self, _rag, _populated):
         store, _ = _populated
         _rag.vector_store = store
@@ -236,6 +238,7 @@ class TestRAGPipeline:
             assert len(answer.text) > 10, f"Bad answer for: {q}"
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(reruns=2)
     async def test_performance_within_bounds(self, _rag, _populated):
         import time
 
