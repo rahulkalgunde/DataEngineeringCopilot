@@ -221,28 +221,48 @@ class TestCeleryAppWiring:
 class TestAsyncFactoryWiring:
     """Verify async factory functions return correctly typed objects."""
 
+    @staticmethod
+    def _make_settings():
+        """Hermetic settings: no env files, no real API keys, no infra required."""
+        from data_engineering_copilot.config.settings import AppSettings
+
+        return AppSettings(
+            skip_provider_check=True,
+            llm_provider="ollama",
+            llm_model="llama3.2:3b",
+            embedding_provider="ollama",
+            embedding_model_name="nomic-embed-text",
+            crawl_db_url="postgresql://test:test@localhost:5432/test",
+        )
+
     def test_build_async_crawler_returns_crawler(self):
         from data_engineering_copilot.factory import build_async_crawler
         from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 
-        crawler = build_async_crawler()
+        with patch("data_engineering_copilot.factory._validate_redis"):
+            crawler = build_async_crawler(self._make_settings())
         assert isinstance(crawler, AsyncDocumentationCrawler)
 
     @patch("data_engineering_copilot.factory.AsyncQdrantVectorStore")
     @patch("data_engineering_copilot.factory.build_embedder")
     @patch("data_engineering_copilot.factory.build_global_llm_client")
-    def test_build_async_ingestion_service_returns_service(self, mock_llm, mock_embedder, mock_qdrant):
+    @patch("data_engineering_copilot.factory._validate_qdrant")
+    @patch("data_engineering_copilot.factory._validate_redis")
+    def test_build_async_ingestion_service_returns_service(
+        self, mock_redis, mock_qdrant, mock_llm, mock_embedder, mock_qdrant_store
+    ):
         from data_engineering_copilot.factory import build_async_ingestion_service
         from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 
         mock_llm.return_value = MagicMock()
-        service = build_async_ingestion_service()
+        service = build_async_ingestion_service(self._make_settings())
         assert isinstance(service, AsyncIngestionService)
 
     def test_async_crawler_has_crawl_method(self):
         from data_engineering_copilot.factory import build_async_crawler
 
-        crawler = build_async_crawler()
+        with patch("data_engineering_copilot.factory._validate_redis"):
+            crawler = build_async_crawler(self._make_settings())
         assert hasattr(crawler, "crawl")
         import inspect
 
@@ -251,6 +271,7 @@ class TestAsyncFactoryWiring:
     def test_async_crawler_has_shutdown_method(self):
         from data_engineering_copilot.factory import build_async_crawler
 
-        crawler = build_async_crawler()
+        with patch("data_engineering_copilot.factory._validate_redis"):
+            crawler = build_async_crawler(self._make_settings())
         assert hasattr(crawler, "shutdown")
         assert callable(crawler.shutdown)

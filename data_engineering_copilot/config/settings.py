@@ -388,4 +388,8 @@ class AppSettings(BaseSettings):
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
 
 
-settings = AppSettings()
+# Module-level default settings. skip_provider_check=True so that importing this
+# module never hard-fails on missing provider API keys (e.g. in CI or a fresh
+# clone where .env.secrets is absent) — provider builders in factory.py still
+# validate API keys and raise clear errors when a non-Ollama provider is built.
+settings = AppSettings(skip_provider_check=True)
