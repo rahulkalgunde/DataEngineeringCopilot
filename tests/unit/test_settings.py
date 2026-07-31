@@ -1,5 +1,7 @@
 import json
 
+from pydantic import SecretStr
+
 from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
 
 
@@ -90,7 +92,10 @@ def test_embedding_model_dimensions_lookup() -> None:
 
 def test_get_embedding_dimension_nvidia() -> None:
     s = AppSettings(
-        embedding_provider="nvidia", nvidia_embedding_model="nvidia/nemotron-3-embed-1b", skip_provider_check=True
+        embedding_provider="nvidia",
+        nvidia_embedding_model="nvidia/nemotron-3-embed-1b",
+        nvidia_api_key=SecretStr("nvapi-test"),
+        skip_provider_check=True,
     )
     assert s.get_embedding_dimension() == 2048
 
