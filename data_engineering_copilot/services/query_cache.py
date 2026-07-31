@@ -42,6 +42,7 @@ class QueryCache:
         semantic_max_size: int = 512,
         ttl_seconds: int = 3600,
         redis_url: str | None = None,
+        redis_client=None,
     ) -> None:
         self._exact_enabled = exact_enabled
         self._semantic_enabled = semantic_enabled
@@ -51,8 +52,9 @@ class QueryCache:
         self._exact_max_size = exact_max_size
         self._semantic_max_size = semantic_max_size
         self._ttl_seconds = ttl_seconds
-        self._redis = None
-        if redis_url:
+        self._redis = redis_client
+        self._owns_redis = redis_client is None
+        if self._redis is None and redis_url:
             import redis.asyncio as aioredis
 
             self._redis = aioredis.from_url(redis_url, decode_responses=True)
@@ -206,7 +208,9 @@ class QueryCache:
                 logger.warning("Redis L2 set_semantic failed", exc_info=True)
 
     async def aclose(self) -> None:
-        if self._redis is not None:
+        # Only close the client if this instance owns it. A shared client is
+        # closed once at process shutdown.
+        if self._redis is not None and self._owns_redis:
             await self._redis.close()
 
     # --- combined ---

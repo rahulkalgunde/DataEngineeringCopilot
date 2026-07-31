@@ -16,14 +16,19 @@ class CrawlCache:
     Each URL is keyed by its SHA-256 hash. Fields stored: status, etag, last_modified.
     """
 
-    def __init__(self, redis_url: str, prefix: str = "crawl:") -> None:
+    def __init__(self, redis_url: str, prefix: str = "crawl:", redis_client=None) -> None:
         self.prefix = prefix
         self.redis_url = redis_url
-        self._redis = aioredis.from_url(
-            redis_url,
-            decode_responses=True,
-            max_connections=20,
-        )
+        if redis_client is not None:
+            self._redis = redis_client
+            self._owns_client = False
+        else:
+            self._redis = aioredis.from_url(
+                redis_url,
+                decode_responses=True,
+                max_connections=20,
+            )
+            self._owns_client = True
 
     async def __aenter__(self) -> Self:
         return self
@@ -79,6 +84,10 @@ class CrawlCache:
             )
 
     async def close(self) -> None:
+        # Only close the client if this instance owns it. Shared clients are
+        # closed once at process shutdown, not per-component.
+        if not self._owns_client or self._redis is None:
+            return
         with contextlib.suppress(redis.exceptions.RedisError):
             await self._redis.close()
             self._redis = None

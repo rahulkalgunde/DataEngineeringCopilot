@@ -89,6 +89,26 @@ def execute_background_ingestion(urls: list[str]):
     return {"status": "INGESTION_COMPLETED", "processed_count": processed_count}
 
 
+def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int) -> None:
+    """Validate task inputs that arrive from the Celery broker.
+
+    The API route validates requests via Pydantic, but the broker is a separate
+    trust boundary — a compromised broker could inject arbitrary arguments that
+    bypass API validation. This guard rejects malformed inputs up-front with a
+    clear error instead of failing deep inside the pipeline.
+    """
+    from pydantic import BaseModel, Field, ValidationError
+
+    class _IngestTaskInput(BaseModel):
+        source_names: list[str] = Field(min_length=1, max_length=20)
+        max_pages: int = Field(default=0, ge=0, le=20000)
+
+    try:
+        _IngestTaskInput(source_names=source_names or [], max_pages=max_pages)
+    except ValidationError as exc:
+        raise ValueError(f"Invalid ingestion task inputs: {exc}") from exc
+
+
 @celery_app.task(
     bind=True,
     queue="ingestion",
@@ -103,6 +123,7 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
     the Streamlit UI and API endpoints can poll for real-time updates.
     """
     task_id = self.request.id
+    _validate_ingest_inputs(source_names, max_pages)
     log.info(
         "async_ingest_task.started",
         task_id=task_id,

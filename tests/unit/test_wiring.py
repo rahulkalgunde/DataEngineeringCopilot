@@ -8,7 +8,7 @@ that pure unit tests with heavy mocking would miss.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from data_engineering_copilot.domain.models import IngestionEvent
 
@@ -152,16 +152,16 @@ class TestApiRoutesWiring:
     def test_routes_module_imports(self):
         """All route dependencies can be imported."""
         from data_engineering_copilot.api.routes import (
+            _get_async_redis,
             async_ingest_task,
             celery_app,
-            get_redis_client,
             router,
         )
 
         assert router is not None
         assert callable(async_ingest_task.delay)
         assert celery_app is not None
-        assert callable(get_redis_client)
+        assert callable(_get_async_redis)
 
     def test_dispatch_endpoint_writes_redis(self):
         """POST /api/v1/ingest writes initial status to Redis."""
@@ -174,10 +174,11 @@ class TestApiRoutesWiring:
         app.include_router(router)
 
         with (
-            patch("data_engineering_copilot.api.routes.get_redis_client") as mock_get_client,
+            patch("data_engineering_copilot.api.routes._get_async_redis") as mock_get_client,
             patch("data_engineering_copilot.api.routes.async_ingest_task") as mock_task,
         ):
-            mock_client = MagicMock()
+            mock_client = AsyncMock()
+            mock_client.get.return_value = None
             mock_get_client.return_value = mock_client
             mock_task.delay.return_value = MagicMock(id="new-task-id", state="PENDING")
 

@@ -102,3 +102,40 @@ class TestAsyncIngestTaskBehavior:
 
         mock_tracker.mark_completed.assert_not_called()
         mock_tracker.mark_failed.assert_called_once()
+
+
+class TestIngestInputValidation:
+    @pytest.mark.parametrize(
+        ("source_names", "max_pages"),
+        [
+            (["source-a", "source-b"], 10),
+            (["source"], 1),
+            (["source"], 0),
+            (["source"], 20000),
+        ],
+    )
+    def test_valid_inputs_pass(self, source_names, max_pages):
+        from data_engineering_copilot.workers.tasks import _validate_ingest_inputs
+
+        _validate_ingest_inputs(source_names, max_pages)
+
+    @pytest.mark.parametrize(
+        ("source_names", "max_pages"),
+        [
+            ([], 10),
+            ([s for s in range(21)], 10),
+            (["source"], -1),
+            (["source"], 20001),
+        ],
+    )
+    def test_invalid_inputs_raise(self, source_names, max_pages):
+        from data_engineering_copilot.workers.tasks import _validate_ingest_inputs
+
+        with pytest.raises(ValueError, match="Invalid ingestion task inputs"):
+            _validate_ingest_inputs(source_names, max_pages)
+
+    def test_none_source_names_rejected(self):
+        from data_engineering_copilot.workers.tasks import _validate_ingest_inputs
+
+        with pytest.raises(ValueError, match="Invalid ingestion task inputs"):
+            _validate_ingest_inputs(None, 10)
