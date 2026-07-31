@@ -154,6 +154,50 @@ def fresh_redis_client(redis_url):
 
 
 # ---------------------------------------------------------------------------
+# PostgreSQL testcontainer (session-scoped, shared across workers)
+# ---------------------------------------------------------------------------
+
+_pg_container = None
+_pg_dsn = None
+
+
+def _get_or_start_pg_container():
+    """Start a PostgreSQL testcontainer. Returns the DSN."""
+    global _pg_container, _pg_dsn
+
+    if _pg_dsn is not None:
+        return _pg_dsn
+
+    try:
+        from testcontainers.postgres import PostgresContainer
+
+        _pg_container = PostgresContainer(
+            "postgres:16-alpine",
+            username="copilot",
+            password="local_secure_password_123",
+            dbname="crawl_frontier",
+        )
+        _pg_container.start()
+        host = _pg_container.get_container_host_ip()
+        port = _pg_container.get_exposed_port(5432)
+        _pg_dsn = f"postgresql://copilot:local_secure_password_123@{host}:{port}/crawl_frontier"
+        return _pg_dsn
+    except Exception:
+        pass
+
+    return None
+
+
+@pytest.fixture(scope="session")
+def pg_dsn():
+    """Session-scoped PostgreSQL DSN (from testcontainer)."""
+    dsn = _get_or_start_pg_container()
+    if dsn is None:
+        pytest.skip("PostgreSQL testcontainer could not be started")
+    return dsn
+
+
+# ---------------------------------------------------------------------------
 # Ollama testcontainer (session-scoped, shared across workers)
 # ---------------------------------------------------------------------------
 

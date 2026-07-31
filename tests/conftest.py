@@ -30,11 +30,13 @@ if str(project_root) not in sys.path:
 # ---------------------------------------------------------------------------
 # Environment isolation
 # ---------------------------------------------------------------------------
-# Some third-party imports (e.g. ``crawl4ai`` via ``workers.tasks``) call
-# ``load_dotenv()`` at import time, permanently injecting ``.env`` values into
-# ``os.environ`` for the whole worker process.  Capture a clean baseline now
-# (before any test module import can pollute) and restore it after every test
-# so ``AppSettings(..., _env_file=None)`` isolation keeps working.
+# ``crawl4ai`` calls ``load_dotenv()`` at import time, permanently injecting
+# ``.env`` values into ``os.environ`` for the whole worker process.  It is
+# now lazy-imported in ``workers.tasks._run_async_crawl``, but keep this
+# restore-on-teardown as defense-in-depth (any stray third-party import could
+# still pollute).  Capture a clean baseline now (before any test module import
+# can pollute) and restore it after every test so ``AppSettings(..., _env_file=None)``
+# isolation keeps working.
 _ORIGINAL_ENVIRON = os.environ.copy()
 
 

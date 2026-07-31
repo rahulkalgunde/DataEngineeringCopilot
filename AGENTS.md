@@ -7,7 +7,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 1. `dec_venv/bin/python -m ruff check data_engineering_copilot/ tests/ --fix`
 2. `dec_venv/bin/python -m ruff format data_engineering_copilot/ tests/`
 3. `dec_venv/bin/python -m pyright data_engineering_copilot/ tests/`
-4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v` (fast isolation first)
+4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v` (fast isolation first) — parallel by default via `-n auto`; use `-n 0` ONLY to debug xdist-order issues
 
 ## Environment
 - **VENV**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
