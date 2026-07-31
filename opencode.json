@@ -64,7 +64,20 @@
       "docker system prune *": "deny",
       "docker rm *": "deny",
       "docker rmi *": "deny",
-      "rm -rf *": "deny"
+      "rm -rf *": "deny",
+      "ls*": "allow",
+      "cd*": "allow",
+      "cat*": "allow",
+      "head*": "allow",
+      "tail*": "allow",
+      "grep*": "allow",
+      "find*": "allow",
+      "wc*": "allow",
+      "git status*": "allow",
+      "git log*": "allow",
+      "git diff*": "allow",
+      "git branch*": "allow",
+      "git show*": "allow"
 
     }
   }
