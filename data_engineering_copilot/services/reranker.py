@@ -12,6 +12,7 @@ import logging
 import math
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from data_engineering_copilot.domain.models import RetrievedChunk
@@ -59,6 +60,7 @@ class CrossEncoderReranker:
         """
         self.model_name = model_name
         self.model: CrossEncoder | None = None
+        self._executor: ThreadPoolExecutor | None = None
 
     async def initialize(self) -> None:
         """Load the cross-encoder model off the event loop.
@@ -71,7 +73,8 @@ class CrossEncoderReranker:
             from sentence_transformers import CrossEncoder
 
             loop = asyncio.get_running_loop()
-            self.model = await loop.run_in_executor(None, lambda: CrossEncoder(self.model_name))
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
+            self.model = await loop.run_in_executor(self._executor, lambda: CrossEncoder(self.model_name))
             logger.info("Initialized CrossEncoder reranker: %s", self.model_name)
         except ImportError:
             logger.warning(
@@ -81,8 +84,11 @@ class CrossEncoderReranker:
         except Exception as exc:
             logger.warning("Failed to initialize CrossEncoder reranker: %s", exc)
 
-    def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
+    async def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
         """Rerank chunks based on query relevance using cross-encoder.
+
+        PyTorch inference is CPU-bound, so ``model.predict()`` runs in a
+        dedicated thread pool to avoid blocking the asyncio event loop.
 
         Args:
             query: The user question
@@ -97,7 +103,7 @@ class CrossEncoderReranker:
 
         if not self.model:
             logger.info("Reranker model not loaded; attempting synchronous init")
-            self._init_sync()
+            await asyncio.to_thread(self._init_sync)
         if not self.model:
             logger.warning("Reranker model not available; returning chunks unchanged")
             return chunks[:top_k]
@@ -111,8 +117,17 @@ class CrossEncoderReranker:
             chunk_texts = [chunk.chunk.text for chunk in chunks]
             pairs = [[query, text] for text in chunk_texts]
 
-            # Score each (query, chunk) pair — raw logits from cross-encoder
-            raw_scores = self.model.predict(pairs)
+            # Score each (query, chunk) pair — raw logits from cross-encoder.
+            # Run CPU-bound PyTorch inference OFF the event loop.
+            executor = self._executor
+            if executor is None:
+                executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
+                self._executor = executor
+            loop = asyncio.get_running_loop()
+            raw_scores = await loop.run_in_executor(
+                executor,
+                lambda: self.model.predict(pairs),  # type: ignore[union-attr]
+            )
 
             # Normalize logits to [0, 1] via sigmoid
             scores = [1.0 / (1.0 + math.exp(-float(s))) for s in raw_scores]
@@ -167,6 +182,12 @@ class CrossEncoderReranker:
             True if model is loaded and ready, False otherwise
         """
         return self.model is not None
+
+    async def close(self) -> None:
+        """Shut down the inference thread pool, releasing its worker threads."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def max_marginal_relevance(
         self,

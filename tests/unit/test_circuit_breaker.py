@@ -91,6 +91,46 @@ class TestCircuitBreaker:
         await asyncio.gather(concurrent_fail(), concurrent_fail(), concurrent_fail())
         assert cb._state == "open"
 
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_are_not_serialized(self):
+        cb = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
+        gate = asyncio.Event()
+        started = 0
+
+        async def slow_ok():
+            nonlocal started
+            started += 1
+            await gate.wait()
+            return "ok"
+
+        # Fire 5 calls concurrently. If calls were serialized by a lock held
+        # across the coroutine execution, only one would start before the gate
+        # is released.
+        tasks = [asyncio.create_task(cb.call(slow_ok)) for _ in range(5)]
+        await asyncio.sleep(0.05)
+        assert started == 5
+        gate.set()
+        results = await asyncio.gather(*tasks)
+        assert results == ["ok"] * 5
+
+    @pytest.mark.asyncio
+    async def test_half_open_allows_single_probe_only(self):
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.01)
+        cb._state = "half-open"
+
+        async def slow_probe():
+            await asyncio.sleep(0.02)
+            return "ok"
+
+        # First caller claims the probe slot.
+        probe_task = asyncio.create_task(cb.call(slow_probe))
+        await asyncio.sleep(0.01)
+        # Concurrent caller while probing must be rejected, not fire a second probe.
+        with pytest.raises(CircuitBreakerError):
+            await cb.call(slow_probe)
+        assert await probe_task == "ok"
+        assert cb._state == "closed"
+
 
 async def _async_ok(value: str = "ok") -> str:
     return value

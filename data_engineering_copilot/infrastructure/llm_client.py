@@ -70,6 +70,9 @@ class CircuitBreaker:
         self._state = "closed"  # closed | open | half-open
 
     async def call(self, coro_factory):
+        # State check + probe-slot claim happen under the lock (fast, non-blocking).
+        # The actual coroutine execution happens OUTSIDE the lock so concurrent
+        # callers are not serialized through the provider.
         async with self._lock:
             if self._state == "open":
                 if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
@@ -79,26 +82,33 @@ class CircuitBreaker:
                         f"Circuit breaker open for {self._recovery_timeout:.0f}s "
                         f"after {self._failure_threshold} failures"
                     )
+            if self._state == "half-open":
+                # Claim the single probe slot. Any concurrent caller that arrives
+                # while a probe is in flight fails fast instead of firing a second
+                # test request against a provider that was just failing.
+                self._state = "probing"
+            elif self._state == "probing":
+                raise CircuitBreakerError("Circuit breaker probing after recovery; concurrent request rejected")
         try:
             result = await asyncio.wait_for(coro_factory(), timeout=self._call_timeout)
         except TimeoutError as exc:
-            async with self._lock:
-                self._failures += 1
-                self._last_failure_time = time.monotonic()
-                if self._state == "half-open" or self._failures >= self._failure_threshold:
-                    self._state = "open"
+            await self._record_failure()
             raise exc
         except Exception as exc:
-            async with self._lock:
-                self._failures += 1
-                self._last_failure_time = time.monotonic()
-                if self._state == "half-open" or self._failures >= self._failure_threshold:
-                    self._state = "open"
+            await self._record_failure()
             raise exc
         async with self._lock:
             self._failures = 0
-            self._state = "closed"
+            if self._state == "probing":
+                self._state = "closed"
         return result
+
+    async def _record_failure(self) -> None:
+        async with self._lock:
+            self._failures += 1
+            self._last_failure_time = time.monotonic()
+            if self._state == "probing" or self._failures >= self._failure_threshold:
+                self._state = "open"
 
 
 class LLMClientError(RuntimeError):
