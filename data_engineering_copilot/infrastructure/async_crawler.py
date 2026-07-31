@@ -274,9 +274,11 @@ class AsyncDocumentationCrawler:
                         )
                         return None
 
-            html = await self._phase2_get(session, record)
-            if html is None:
+            result = await self._phase2_get(session, record)
+            if result is None:
                 return None
+
+            html, content_type = result
 
             await self._extract_and_discover(record, html, source)
             await self.frontier.mark_processed(record.url_hash)
@@ -297,6 +299,7 @@ class AsyncDocumentationCrawler:
                 source_name=record.source_name,
                 url=record.url,
                 html=html,
+                content_type=content_type,
             )
 
     async def _phase1_head(self, session: aiohttp.ClientSession, record: CrawlRecord, cached: dict[str, str]) -> bool:
@@ -319,7 +322,7 @@ class AsyncDocumentationCrawler:
         except Exception:
             return False
 
-    async def _phase2_get(self, session: aiohttp.ClientSession, record: CrawlRecord) -> str | None:
+    async def _phase2_get(self, session: aiohttp.ClientSession, record: CrawlRecord) -> tuple[str, str] | None:
         for attempt in range(self.max_retries):
             try:
                 async with session.get(record.url, headers={"User-Agent": self.user_agent}) as resp:
@@ -327,8 +330,8 @@ class AsyncDocumentationCrawler:
                         await self.frontier.mark_failed(record.url_hash, f"HTTP {resp.status}")
                         self._metrics.pages_failed += 1
                         return None
-                    content_type = resp.headers.get("Content-Type", "")
-                    if "text/html" not in content_type:
+                    content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
+                    if "text/html" not in content_type and "text/plain" not in content_type:
                         await self.frontier.mark_failed(record.url_hash, f"Not HTML: {content_type}")
                         self._metrics.pages_failed += 1
                         return None
@@ -339,7 +342,7 @@ class AsyncDocumentationCrawler:
                         etag=resp.headers.get("ETag"),
                         last_modified=resp.headers.get("Last-Modified"),
                     )
-                    return html
+                    return (html, content_type)
             except Exception as exc:
                 if attempt < self.max_retries - 1:
                     backoff = self.retry_backoff_base * (2**attempt)

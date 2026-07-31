@@ -623,7 +623,6 @@ def inspect_db() -> None:
     indexed = result.get("indexed_vectors_count", 0)
     segments = result.get("segments_count", 0)
 
-
     print(f"  Collection:     {collection_name}")
     print(f"  Status:         {status}")
     print(f"  Points:         {points_count:,}")
@@ -666,12 +665,14 @@ def inspect_db() -> None:
     next_offset: object = None
 
     while seen < points_count:
-        body = json.dumps({
-            "limit": 1000,
-            "with_payload": True,
-            "with_vectors": False,
-            "offset": next_offset,
-        }).encode()
+        body = json.dumps(
+            {
+                "limit": 1000,
+                "with_payload": True,
+                "with_vectors": False,
+                "offset": next_offset,
+            }
+        ).encode()
         scroll_req = urllib.request.Request(
             f"{qdrant_url}/collections/{collection_name}/points/scroll",
             data=body,
@@ -720,7 +721,16 @@ def inspect_db() -> None:
     # ── Sample payload ───────────────────────────────────────────────────
     _section("Sample Payload (first point)")
     if sample_point:
-        for key in ("chunk_id", "source_name", "title", "url", "chunk_type", "word_count", "content_hash", "section_header"):
+        for key in (
+            "chunk_id",
+            "source_name",
+            "title",
+            "url",
+            "chunk_type",
+            "word_count",
+            "content_hash",
+            "section_header",
+        ):
             val = sample_point.get(key, "")
             print(f"  {key:<20} {val}")
         heading_path = sample_point.get("heading_path", [])
@@ -750,10 +760,7 @@ def cancel(task_id: str) -> None:
         print(f"Failed to cancel task: HTTP {exc.code}: {body}")
         sys.exit(1)
     except (ConnectionRefusedError, TimeoutError, OSError) as exc:
-        print(
-            f"Cannot reach API server: {exc}\n"
-            "Start it with: docker compose up -d backend-api celery_worker"
-        )
+        print(f"Cannot reach API server: {exc}\nStart it with: docker compose up -d backend-api celery_worker")
         sys.exit(1)
 
 
@@ -773,8 +780,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the local repository.")
     ask_parser.add_argument("question", help="Question to answer.")
 
-    subparsers.add_parser("reset-index", help="Reset the crawl frontier: clear Redis crawl keys and drop PostgreSQL frontier tables.")
-    subparsers.add_parser("reset-qdrant", help="Delete and recreate the Qdrant collection with the correct dimension/hybrid config.")
+    subparsers.add_parser(
+        "reset-index", help="Reset the crawl frontier: clear Redis crawl keys and drop PostgreSQL frontier tables."
+    )
+    subparsers.add_parser(
+        "reset-qdrant", help="Delete and recreate the Qdrant collection with the correct dimension/hybrid config."
+    )
     subparsers.add_parser("ui", help="Print the Streamlit command.")
 
     profile_parser = subparsers.add_parser("profile", help="Profile ingestion pipeline with concurrency sweep.")
@@ -874,8 +885,17 @@ def main() -> None:
             )
     except SystemExit:
         raise
-    except Exception:
-        logger.exception("CLI command failed command=%s", args.command)
+    except Exception as exc:
+        logger.exception("CLI command failed command=%s reason=%s", args.command, exc)
+        exc_str = str(exc)
+        if "redis" in exc_str and ("Name or service not known" in exc_str or "nodename nor servname" in exc_str):
+            print(
+                "\nERROR: Cannot resolve the 'redis' hostname. This happens when .env sets REDIS_URL to a Docker "
+                "hostname.\n"
+                "Fix: Run with REDIS_URL=redis://:local_secure_password_123@localhost:6379/0 "
+                "or start Docker services first.\n",
+                file=sys.stderr,
+            )
         raise
 
 
