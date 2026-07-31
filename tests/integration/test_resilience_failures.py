@@ -11,7 +11,6 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from data_engineering_copilot.api.app import app
 from data_engineering_copilot.services.rate_limiter import (
     _IN_MEMORY_STORE,
     RateLimiter,
@@ -100,6 +99,7 @@ class TestApiTimeouts:
         from unittest.mock import AsyncMock
 
         import data_engineering_copilot.api.routes as routes_mod
+        from data_engineering_copilot.api.app import app
         from data_engineering_copilot.services.async_rag import LLMGenerationError
 
         # Create a mock RAG service that simulates LLM timeout
