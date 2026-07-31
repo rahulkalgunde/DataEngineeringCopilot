@@ -94,11 +94,10 @@ class TestApiTimeouts:
     """API timeout scenarios with wire-mocked external calls."""
 
     @pytest.mark.asyncio
-    async def test_ask_stream_timeout_emits_error(self, fresh_redis_client):
+    async def test_ask_stream_timeout_emits_error(self, routes_async_redis):
         """Wire-mock LLM to hang, verify SSE emits timeout error and [DONE]."""
         from unittest.mock import AsyncMock
 
-        import data_engineering_copilot.api.routes as routes_mod
         from data_engineering_copilot.api.app import app
         from data_engineering_copilot.services.async_rag import LLMGenerationError
 
@@ -106,9 +105,8 @@ class TestApiTimeouts:
         mock_service = AsyncMock()
         mock_service.answer.side_effect = LLMGenerationError("LLM timed out")
 
-        with (
-            patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client),
-            patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service),
+        with patch(
+            "data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service
         ):
             async with (
                 httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,

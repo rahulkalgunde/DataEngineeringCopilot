@@ -153,6 +153,28 @@ def fresh_redis_client(redis_url):
         pass
 
 
+@pytest.fixture
+def routes_async_redis(redis_url):
+    """Patch ``routes._get_async_redis`` to return an async Redis client.
+
+    Routes now use the async redis API; the sync ``fresh_redis_client`` is
+    only used to seed/assert state. Both point at the same Redis instance.
+    """
+    import redis.asyncio as aioredis
+
+    import data_engineering_copilot.api.routes as routes_mod
+
+    async_client = aioredis.from_url(redis_url, decode_responses=True)
+    original_fn = routes_mod._get_async_redis
+
+    async def _fake_get_async_redis():
+        return async_client
+
+    routes_mod._get_async_redis = _fake_get_async_redis
+    yield async_client
+    routes_mod._get_async_redis = original_fn
+
+
 # ---------------------------------------------------------------------------
 # PostgreSQL testcontainer (session-scoped, shared across workers)
 # ---------------------------------------------------------------------------
