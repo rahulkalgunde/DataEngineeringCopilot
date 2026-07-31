@@ -235,8 +235,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: de_copilot_base_image:latest  # Tags the image to reuse it
+    image: de_copilot_base_image:${IMAGE_TAG:-latest}  # Git-SHA tagged via `make docker-dev`
     container_name: de_copilot_api
+    # Profile-gated: start with `--profile app`, or by name (`docker compose up backend-api`).
+    # CI (`-f docker-compose.yml -f docker-compose.ci.yml`) omits the profile and skips this.
+    profiles: ["app"]
     command: uvicorn data_engineering_copilot.api.app:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -268,7 +271,8 @@ services:
     restart: unless-stopped
 
   celery_worker:
-    image: de_copilot_base_image:latest  # Reuses backend-api build instantly
+    image: de_copilot_base_image:${IMAGE_TAG:-latest}  # Reuses backend-api build instantly
+    profiles: ["app"]  # See backend-api comment
     command: celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import redis; r=redis.Redis.from_url('redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0'); r.ping(); open('/proc/1/cmdline').read().find('celery') > -1 and exit(0) or exit(1)\""]

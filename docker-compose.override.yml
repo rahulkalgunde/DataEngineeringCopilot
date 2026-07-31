@@ -1,0 +1,24 @@
+# Dev-only Compose overrides — auto-loaded by `docker compose` when no `-f` is passed.
+# CI and any explicit `-f` invocation skip this file automatically.
+services:
+  celery_worker:
+    # Auto-restart the worker on code changes (equivalent of the API's uvicorn --reload).
+    # watchfiles is installed in the base image (see Dockerfile).
+    command: >
+      watchfiles "celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info"
+      /app/data_engineering_copilot
+
+  # Floating-tag images: deliberately re-pull on every dev `up` so we never run
+  # month-old cached copies. Pinned images (qdrant, ollama, minio) are untouched.
+  redis:
+    pull_policy: always
+  clickhouse:
+    pull_policy: always
+  langfuse:
+    pull_policy: always
+  langfuse-worker:
+    pull_policy: always
+  postgres:
+    pull_policy: always
+  langfuse-postgres:
+    pull_policy: always

@@ -1,8 +1,10 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
 PROJECT_NAME := dataengineeringcopilot
+GIT_SHA := $(shell git rev-parse --short HEAD)
+IMAGE_TAG := dev-$(GIT_SHA)
 
-.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-cleanup docker-setup docker-ci-up
+.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-cleanup docker-prune docker-setup docker-dev docker-ci-up
 
 install:
 	uv pip install -e ".[dev]"
@@ -70,14 +72,14 @@ clean:
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 
 docker-up:
-	docker compose up -d
+	docker compose --profile app up -d
 
 docker-down:
-	docker compose down
+	docker compose --profile app down
 
 docker-status:
 	@echo "=== Project Containers ==="
-	docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.RunningFor}}"
+	docker compose --profile app ps --format "table {{.Name}}\t{{.Status}}\t{{.RunningFor}}"
 	@echo ""
 	@echo "=== Health Checks ==="
 	@for svc in de_copilot_broker de_copilot_vectorstore de_copilot_ollama; do \
@@ -86,27 +88,33 @@ docker-status:
 	done
 
 docker-rebuild:
-	docker compose build --no-cache
-	docker compose up -d
+	docker compose --profile app build --no-cache
+	docker compose --profile app up -d
 
 docker-logs:
-	docker compose logs --tail=100 -f
+	docker compose --profile app logs --tail=100 -f
 
 docker-logs-worker:
-	docker compose logs --tail=50 -f celery_worker
+	docker compose --profile app logs --tail=50 -f celery_worker
 
 docker-health:
 	@echo "=== Component Health ==="
 	@dec_venv/bin/dec health
 
 docker-stop-all:
-	docker compose stop
+	docker compose --profile app stop
 	@echo "All services stopped"
 
 docker-cleanup:
-	docker system prune -f --volumes
-	docker images prune -f
+	# NOTE: intentionally NOT --volumes — prunes images/cache/containers but keeps your data.
+	docker system prune -f
+	docker image prune -f
 	@echo "Docker cleanup complete"
+
+docker-prune:
+	docker builder prune -f
+	docker system prune -f
+	@echo "Docker prune complete"
 
 docker-setup: docker-up
 	@echo "Waiting for services to be ready..."
@@ -117,5 +125,13 @@ docker-setup: docker-up
 	docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b || echo "Ollama not ready, pull manually"
 	@echo "Setup complete. Run 'make docker-status' to verify."
 
+# One-command dev ritual: rebuild base image with git-SHA tag, recreate app
+# services. The celery worker auto-reloads via watchfiles (override file), so
+# no manual restart is needed after code edits.
+docker-dev:
+	IMAGE_TAG=$(IMAGE_TAG) docker compose --profile app build --build-arg GIT_SHA=$(GIT_SHA) backend-api
+	IMAGE_TAG=$(IMAGE_TAG) docker compose --profile app up -d backend-api celery_worker
+	@echo "Dev stack ready (image tag: $(IMAGE_TAG)). Check /api/v1/version for deps_fingerprint_ok."
+
 docker-ci-up:
-	docker compose -f docker-compose.ci.yml up -d --wait
+	docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait

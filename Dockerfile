@@ -36,9 +36,21 @@ USER appuser
 RUN playwright install chromium
 
 # Install project dependencies
+# The BuildKit cache mount persists uv's wheel cache across builds, so
+# dependency changes (pyproject.toml) rebuild in seconds instead of re-downloading.
 USER root
-COPY pyproject.toml .
-RUN uv pip install --system .
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system . watchfiles
+
+# Dependency fingerprint: compared at runtime against the live uv.lock/pyproject.toml
+# (bind-mounted). A mismatch means the image is stale and needs `make docker-dev`.
+RUN uv pip freeze > /image_deps.txt \
+    && cat pyproject.toml uv.lock | sha256sum | cut -d' ' -f1 > /image_deps_sha256.txt
+
+# Bake the git revision into the image for /api/v1/version.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision="$GIT_SHA"
+ENV IMAGE_GIT_SHA=$GIT_SHA
 
 # Copy remaining code files and secure ownership in one shot
 COPY . .
