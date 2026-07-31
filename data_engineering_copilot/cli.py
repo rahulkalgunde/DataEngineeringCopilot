@@ -408,19 +408,27 @@ def evaluate() -> None:
     async def run_eval():
         results = []
         for i, item in enumerate(queries, 1):
-            query = item.get("query", "")
+            query = item.get("question") or item.get("query", "")
 
             print(f"[{i}/{len(queries)}] Query: {query[:60]}...")
 
             answer = await service.answer(query)
 
-            # TODO: Get retrieved chunk IDs from answer for proper evaluation
-            # For now, just show the answer
+            # RAGAS metrics need the retrieved contexts and ground truth.
+            contexts = [c.text for c in answer.sources]
             print(f"  Answer: {answer.text[:100]}...")
-            print(f"  Confidence: {answer.confidence:.2f}")
+            print(f"  Confidence: {answer.confidence:.2f} ({len(contexts)} contexts retrieved)")
             print()
 
-            results.append({"query": query, "answer": answer.text, "confidence": answer.confidence})
+            results.append(
+                {
+                    "query": query,
+                    "answer": answer.text,
+                    "confidence": answer.confidence,
+                    "contexts": contexts,
+                    "ground_truth": item.get("ground_truth", ""),
+                }
+            )
 
         return results
 
@@ -432,6 +440,31 @@ def evaluate() -> None:
     print(f"Total queries: {len(results)}")
     avg_confidence = sum(r["confidence"] for r in results) / len(results) if results else 0
     print(f"Average confidence: {avg_confidence:.2f}")
+
+    # RAGAS metrics (context_recall, context_precision, faithfulness, answer_relevancy)
+    ragas_report = None
+    try:
+        from data_engineering_copilot.services.ragas_evaluation import RagasEvaluator
+
+        evaluator = RagasEvaluator()
+        ragas_report = evaluator.evaluate(
+            questions=[r["query"] for r in results],
+            answers=[r["answer"] for r in results],
+            contexts=[r["contexts"] for r in results],
+            ground_truth=[r["ground_truth"] for r in results] if any(r["ground_truth"] for r in results) else None,
+        )
+    except Exception:
+        ragas_report = None
+
+    if ragas_report is not None:
+        print("\nRAGAS Metrics:")
+        print(f"  context_recall:    {ragas_report.context_recall:.3f}")
+        print(f"  context_precision: {ragas_report.context_precision:.3f}")
+        print(f"  faithfulness:      {ragas_report.faithfulness:.3f}")
+        print(f"  answer_relevancy:  {ragas_report.answer_relevancy:.3f}")
+        print(f"  overall:           {ragas_report.overall:.3f}")
+    else:
+        print("\nRAGAS evaluation skipped: 'ragas' package not installed.")
 
     # Drift detection
     if settings.drift_detection_enabled and results:

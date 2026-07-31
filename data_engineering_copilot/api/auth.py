@@ -67,12 +67,40 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         self._api_key = api_key or os.environ.get("API_KEY", "")
         self._rbac_enabled = rbac_enabled
         self._rbac_map = _build_rbac_map(rbac_users_json) if rbac_enabled else {}
+        if not self._api_key:
+            logger.warning(
+                "SECURITY: API_KEY not set — authentication is DISABLED. "
+                "All requests pass through unauthenticated. Set the API_KEY "
+                "environment variable to enable authentication."
+            )
 
     def _resolve_permissions(self, provided_key: str | None) -> UserPermissions | None:
         """Look up API key in the RBAC map by exact match."""
         if not provided_key or not self._rbac_map:
             return None
         return self._rbac_map.get(provided_key)
+
+    def _audit(
+        self,
+        event: str,
+        request: Request,
+        provided_key: str | None,
+        extra: dict | None = None,
+    ) -> None:
+        """Emit a structured audit event for authentication outcomes.
+
+        ``key_prefix`` is truncated to the first 8 characters so the full key
+        is never logged while still allowing cross-referencing in log analysis.
+        """
+        fields = {
+            "event": event,
+            "path": request.url.path,
+            "ip": request.client.host if request.client else "unknown",
+            "key_prefix": (provided_key or "")[:8],
+        }
+        if extra:
+            fields.update(extra)
+        logger.info("%s path=%s ip=%s key_prefix=%s", event, fields["path"], fields["ip"], fields["key_prefix"])
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in self.EXEMPT_PATHS:
@@ -88,11 +116,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
                 provided_key = auth_header[7:]
 
         if not provided_key or not hmac.compare_digest(provided_key, self._api_key):
-            logger.warning(
-                "Auth failed path=%s ip=%s",
-                request.url.path,
-                request.client.host if request.client else "unknown",
-            )
+            self._audit("auth_failed", request, provided_key)
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
@@ -104,4 +128,5 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             if perms is not None:
                 request.state.user_permissions = perms
 
+        self._audit("auth_success", request, provided_key)
         return await call_next(request)
