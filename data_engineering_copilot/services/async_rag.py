@@ -50,12 +50,14 @@ class AsyncRagService:
         token_tracker: object | None = None,
         retrieval_tracker: object | None = None,
         code_llm_client: LLMClientProtocol | None = None,
+        evaluation_llm_client: LLMClientProtocol | None = None,
         pii_redactor: PiiRedactor | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
         self.llm_client = llm_client
         self.code_llm_client = code_llm_client
+        self.evaluation_llm_client = evaluation_llm_client
         self.embedder = embedder
         self.reranker = reranker
         self.telemetry = telemetry
