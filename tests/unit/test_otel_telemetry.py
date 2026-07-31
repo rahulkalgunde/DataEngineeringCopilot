@@ -148,3 +148,42 @@ class TestEnsureTracer:
         ):
             result = otel_telemetry._ensure_tracer()
         assert result is None
+
+
+class TestExtractW3CContext:
+    def test_returns_none_when_telemetry_unavailable(self):
+        otel_telemetry._tracer = None
+        assert otel_telemetry.extract_w3c_context({"traceparent": "00-abc-def-01"}) is None
+
+    def test_returns_current_context_when_no_trace_headers(self):
+        mock_extract = MagicMock(return_value="mock-context")
+        mock_get_current = MagicMock(return_value="mock-current")
+        with (
+            patch.object(otel_telemetry, "_tracer", MagicMock()),
+            patch("opentelemetry.propagate.extract", mock_extract),
+            patch("opentelemetry.context.get_current", mock_get_current),
+        ):
+            result = otel_telemetry.extract_w3c_context({"X-API-Key": "secret"})
+        assert result == "mock-current"
+        mock_extract.assert_not_called()
+
+    def test_extracts_traceparent_headers(self):
+        mock_extract = MagicMock(return_value="mock-context")
+        with (
+            patch.object(otel_telemetry, "_tracer", MagicMock()),
+            patch("opentelemetry.propagate.extract", mock_extract),
+        ):
+            result = otel_telemetry.extract_w3c_context(
+                {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+            )
+        assert result == "mock-context"
+        mock_extract.assert_called_once()
+        carrier = mock_extract.call_args[0][0]
+        assert "traceparent" in carrier
+
+    def test_exception_returns_none(self):
+        with (
+            patch.object(otel_telemetry, "_tracer", MagicMock()),
+            patch("opentelemetry.propagate.extract", side_effect=RuntimeError("boom")),
+        ):
+            assert otel_telemetry.extract_w3c_context({"traceparent": "00-abc-def-01"}) is None
