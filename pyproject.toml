@@ -31,6 +31,7 @@ dependencies = [
     "celery>=5.3",
     "redis>=5.0",
     "crawl4ai>=0.2",
+    "docutils>=0.21",
     "sentence-transformers>=3.0",
     "streamlit>=1.31",
 ]
@@ -48,6 +49,7 @@ dev = [
     "testcontainers[qdrant,redis,ollama]>=3.7",
     "ruff>=0.4",
     "pre-commit>=3.5",
+    "watchfiles>=0.21",
 ]
 
 [project.scripts]

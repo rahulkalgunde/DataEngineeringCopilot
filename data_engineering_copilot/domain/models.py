@@ -8,6 +8,7 @@ class RawDocument:
     source_name: str
     url: str
     html: str
+    content_type: str = "text/html"
 
 
 @dataclass(frozen=True)

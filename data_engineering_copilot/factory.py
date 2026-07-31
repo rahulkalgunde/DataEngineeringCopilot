@@ -16,6 +16,7 @@ from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownPar
 from data_engineering_copilot.infrastructure.llm_client import LLMClient
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
+from data_engineering_copilot.infrastructure.rst_parser import RstParser
 from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
@@ -540,6 +541,27 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
     )
 
 
+_RST_URL_SUFFIXES = (".rst", ".rst.txt")
+
+
+def _build_content_aware_parser() -> MarkdownParser:
+    _rst_parser = RstParser()
+    _html_parser = MarkdownParser()
+
+    class _ContentAwareParser(MarkdownParser):
+        def parse(self, raw):
+            if raw.content_type != "text/html" or any(raw.url.lower().endswith(s) for s in _RST_URL_SUFFIXES):
+                try:
+                    result = _rst_parser.parse(raw)
+                    if result is not None:
+                        return result
+                except ValueError:
+                    pass
+            return _html_parser.parse(raw)
+
+    return _ContentAwareParser()
+
+
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
     from data_engineering_copilot.services.contextual_chunk_enricher import (
         ContextualChunkEnricher,
@@ -578,10 +600,12 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         batch_size=app_settings.enrichment_batch_size,
     )
 
+    parser = _build_content_aware_parser()
+
     return AsyncIngestionService(
         settings=app_settings,
         crawler=build_async_crawler(app_settings),
-        parser=MarkdownParser(),
+        parser=parser,
         chunker=build_chunker(app_settings),
         embeddings=build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower())),
         vector_store=AsyncQdrantVectorStore(

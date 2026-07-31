@@ -181,7 +181,9 @@ class AppSettings(BaseSettings):
     llm_fallback_order: list[str] = Field(
         default_factory=lambda: ["openrouter", "groq", "gemini", "cerebras", "ollama"]
     )
-    llm_fallback_call_timeout: int = 120  # shorter circuit-breaker timeout for fallback providers (must exceed max rate-limit retry wait)
+    llm_fallback_call_timeout: int = (
+        120  # shorter circuit-breaker timeout for fallback providers (must exceed max rate-limit retry wait)
+    )
 
     # Adaptive router settings
     retry_max_attempts: int = 3

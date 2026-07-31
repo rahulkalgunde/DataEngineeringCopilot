@@ -46,7 +46,7 @@ def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str
 
 class IngestRequest(BaseModel):
     source_names: list[str] | None = Field(default=None, max_length=20)
-    max_pages: int | None = Field(default=None, ge=1, le=10000)
+    max_pages: int | None = Field(default=None, ge=1, le=20000)
 
 
 class TaskStatus(BaseModel):

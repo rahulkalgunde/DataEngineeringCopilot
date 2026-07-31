@@ -140,9 +140,11 @@ class TestPhase2Get:
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_resp)
 
-        html = await crawler._phase2_get(mock_session, record)
-        assert html is not None
+        result = await crawler._phase2_get(mock_session, record)
+        assert result is not None
+        html, content_type = result
         assert "Hello world" in html
+        assert content_type == "text/html"
 
     @pytest.mark.asyncio
     async def test_get_non_html_skips(self, crawler, mock_frontier, mock_cache):
@@ -155,8 +157,26 @@ class TestPhase2Get:
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_resp)
 
-        html = await crawler._phase2_get(mock_session, record)
-        assert html is None
+        result = await crawler._phase2_get(mock_session, record)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_text_plain_accepted(self, crawler, mock_frontier, mock_cache):
+        record = _make_record()
+        mock_cache.set_headers = AsyncMock()
+
+        mock_resp = _make_context_response(
+            status=200,
+            headers={"Content-Type": "text/plain"},
+        )
+        mock_resp.text = AsyncMock(return_value="Some plain text content here for RST document processing pipeline.")
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_resp)
+
+        result = await crawler._phase2_get(mock_session, record)
+        assert result is not None
+        html, content_type = result
+        assert content_type == "text/plain"
 
     @pytest.mark.asyncio
     async def test_get_http_error_returns_none(self, crawler, mock_frontier, mock_cache):
@@ -187,9 +207,11 @@ class TestPhase2Get:
         mock_session = MagicMock()
         mock_session.get = MagicMock(side_effect=[Exception("timeout"), mock_resp])
 
-        html = await crawler._phase2_get(mock_session, record)
-        assert html is not None
+        result = await crawler._phase2_get(mock_session, record)
+        assert result is not None
+        html, content_type = result
         assert "Success after retry" in html
+        assert content_type == "text/html"
         assert mock_session.get.call_count == 2
 
 
