@@ -10,6 +10,7 @@ Provides:
 
 import asyncio
 import json
+import os
 import pathlib
 import sys
 import urllib.error
@@ -24,6 +25,27 @@ import pytest
 project_root = pathlib.Path(__file__).resolve().parents[1]
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
+
+# ---------------------------------------------------------------------------
+# Environment isolation
+# ---------------------------------------------------------------------------
+# Some third-party imports (e.g. ``crawl4ai`` via ``workers.tasks``) call
+# ``load_dotenv()`` at import time, permanently injecting ``.env`` values into
+# ``os.environ`` for the whole worker process.  Capture a clean baseline now
+# (before any test module import can pollute) and restore it after every test
+# so ``AppSettings(..., _env_file=None)`` isolation keeps working.
+_ORIGINAL_ENVIRON = os.environ.copy()
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    yield
+    current_test = os.environ.get("PYTEST_CURRENT_TEST")
+    os.environ.clear()
+    os.environ.update(_ORIGINAL_ENVIRON)
+    if current_test is not None:
+        os.environ["PYTEST_CURRENT_TEST"] = current_test
+
 
 # ---------------------------------------------------------------------------
 # Health-check helpers

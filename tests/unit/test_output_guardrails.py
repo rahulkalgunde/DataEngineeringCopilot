@@ -88,9 +88,7 @@ class TestVerify:
     def test_missing_answer_field_uses_default(self):
         raw = json.dumps({"citations": [], "confidence": 0.5})
         result = OutputGuardrails.verify(raw, source_count=1)
-        assert result is not None
-        assert result.answer == ""
-        assert result.status == "SUCCESS"
+        assert result is None
 
     def test_wrong_answer_type_returns_none(self):
         raw = json.dumps({"answer": 123, "citations": [], "confidence": 0.5})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -56,7 +57,12 @@ class TestRerankerLazyLoad:
         mock_module.CrossEncoder.return_value = mock_model
         with patch.dict("sys.modules", {"sentence_transformers": mock_module}):
             r = CrossEncoderReranker(model_name="test-model")
-            assert r.model is not None
+            assert r.model is None
+            assert r.is_available() is False
+
+            asyncio.run(r.initialize())
+
+            assert r.model is mock_model
             assert r.is_available() is True
 
     def test_singleton_clear_resets(self):

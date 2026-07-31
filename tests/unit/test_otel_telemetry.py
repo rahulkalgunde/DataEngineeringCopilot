@@ -134,9 +134,7 @@ class TestEnsureTracer:
             "opentelemetry.exporter.otlp": MagicMock(),
             "opentelemetry.exporter.otlp.proto": MagicMock(),
             "opentelemetry.exporter.otlp.proto.grpc": MagicMock(),
-            "opentelemetry.exporter.otlp.proto.grpc.trace_exporter": MagicMock(
-                OTLPSpanExporter=MagicMock()
-            ),
+            "opentelemetry.exporter.otlp.proto.grpc.trace_exporter": MagicMock(OTLPSpanExporter=MagicMock()),
         }
         with patch.dict("sys.modules", mock_modules):
             result = otel_telemetry._ensure_tracer()
