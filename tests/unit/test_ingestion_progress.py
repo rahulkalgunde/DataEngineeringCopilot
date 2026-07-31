@@ -9,7 +9,7 @@ Tests cover:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -201,7 +201,7 @@ class TestGetRedisClient:
         from data_engineering_copilot.workers.progress import get_redis_client
 
         mock_pool = MagicMock()
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_redis_module.ConnectionPool.from_url.return_value = mock_pool
         mock_redis_module.Redis.return_value = mock_client
 
@@ -217,7 +217,7 @@ class TestGetRedisClient:
         from data_engineering_copilot.workers.progress import get_redis_client
 
         mock_pool = MagicMock()
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_redis_module.ConnectionPool.from_url.return_value = mock_pool
         mock_redis_module.Redis.return_value = mock_client
 
@@ -235,7 +235,7 @@ class TestGetRedisClient:
 class TestIngestionStatusEndpoint:
     """Tests for the /api/v1/ingest/status/{task_id} FastAPI endpoint."""
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     def test_returns_200_with_valid_task(self, mock_get_client: MagicMock):
         """Endpoint returns 200 with progress JSON for an existing task."""
         from fastapi import FastAPI
@@ -246,7 +246,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         expected = {
             "task_id": "task-abc",
@@ -267,7 +267,7 @@ class TestIngestionStatusEndpoint:
         assert data["status"] == "PROCESSING"
         assert data["pages_fetched"] == 5
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     def test_returns_404_for_missing_task(self, mock_get_client: MagicMock):
         """Endpoint returns 404 when task_id has no Redis record."""
         from fastapi import FastAPI
@@ -278,7 +278,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         mock_client.get.return_value = None
 
@@ -288,7 +288,7 @@ class TestIngestionStatusEndpoint:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     def test_returns_completed_status(self, mock_get_client: MagicMock):
         """Endpoint returns COMPLETED status with final metrics."""
         from fastapi import FastAPI
@@ -299,7 +299,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         expected = {
             "task_id": "task-xyz",
@@ -317,7 +317,7 @@ class TestIngestionStatusEndpoint:
         assert response.status_code == 200
         assert response.json()["status"] == "COMPLETED"
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     def test_returns_failed_status_with_error(self, mock_get_client: MagicMock):
         """Endpoint returns FAILED status with error message."""
         from fastapi import FastAPI
@@ -328,7 +328,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         expected = {
             "task_id": "task-fail",
@@ -347,7 +347,7 @@ class TestIngestionStatusEndpoint:
         assert response.json()["status"] == "FAILED"
         assert "VectorStoreError" in response.json()["error"]
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     @patch("data_engineering_copilot.api.routes.celery_app")
     def test_cancel_endpoint_returns_cancelled_status(self, mock_celery: MagicMock, mock_get_client: MagicMock):
         """POST cancel returns 200 and updates Redis status to CANCELLED."""
@@ -359,7 +359,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         existing = {
             "task_id": "task-cancel",
@@ -378,7 +378,7 @@ class TestIngestionStatusEndpoint:
         assert response.json()["status"] == "CANCELLED"
         mock_celery.control.revoke.assert_called_once()
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     @patch("data_engineering_copilot.api.routes.celery_app")
     def test_cancel_endpoint_handles_missing_task(self, mock_celery: MagicMock, mock_get_client: MagicMock):
         """POST cancel returns 200 even if task not found in Redis."""
@@ -390,7 +390,7 @@ class TestIngestionStatusEndpoint:
         app = FastAPI()
         app.include_router(router)
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         mock_client.get.return_value = None
 

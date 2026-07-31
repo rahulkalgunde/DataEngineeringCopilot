@@ -10,7 +10,7 @@ import importlib
 import logging
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -139,12 +139,12 @@ class TestApiRoutesLogging:
 
         assert hasattr(routes, "log"), "routes.py must define a 'log' attribute (structlog)"
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     @patch("data_engineering_copilot.api.routes.async_ingest_task")
     def test_ingest_dispatch_logged(self, mock_task, mock_redis, caplog):
         """POST /api/v1/ingest should log the dispatch event."""
         mock_task.delay.return_value = MagicMock(id="task-123", state="PENDING")
-        mock_redis.return_value = MagicMock()
+        mock_redis.return_value = AsyncMock()
 
         from fastapi.testclient import TestClient
 
@@ -162,11 +162,11 @@ class TestApiRoutesLogging:
             for record in caplog.records
         ), "Ingest dispatch should be logged"
 
-    @patch("data_engineering_copilot.api.routes.get_redis_client")
+    @patch("data_engineering_copilot.api.routes._get_async_redis")
     @patch("data_engineering_copilot.api.routes.celery_app")
     def test_cancel_logged(self, mock_celery, mock_redis, caplog):
         """POST /cancel should log the cancellation."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.get.return_value = None
         mock_redis.return_value = mock_client
 

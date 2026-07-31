@@ -33,6 +33,27 @@ from data_engineering_copilot.services.text_filter import ChunkFilter
 
 logger = StructuredLogger(__name__)
 
+# Shared async Redis client so all components (ingestion URL registry, crawl
+# cache, query cache) reuse one connection pool instead of each opening its own.
+_shared_redis: aioredis.Redis | None = None
+
+
+def get_shared_redis_client(redis_url: str | None = None) -> aioredis.Redis:
+    """Return a process-wide shared async Redis client.
+
+    All components that need Redis (ingestion URL registry, crawl cache, query
+    cache) should call this instead of creating their own ``aioredis.from_url``
+    so connection usage is bounded and pool sizing stays predictable.
+    """
+    global _shared_redis
+    if _shared_redis is None:
+        _shared_redis = aioredis.from_url(
+            redis_url or settings.redis_url,
+            decode_responses=True,
+            max_connections=20,
+        )
+    return _shared_redis
+
 
 def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[str, SlidingWindowRateLimiter]:
     """Create one shared rate limiter per unique API-key-gated provider.
@@ -528,7 +549,7 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
     )
     frontier = PostgresCrawlFrontierDB(db_url)
     cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
-    cache = CrawlCache(cache_url)
+    cache = CrawlCache(cache_url, redis_client=get_shared_redis_client(app_settings.redis_url))
     _validate_redis(app_settings.redis_url, "CrawlCache")
     return AsyncDocumentationCrawler(
         frontier=frontier,
@@ -579,11 +600,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     )
     _validate_redis(app_settings.redis_url, "IngestionService")
     _validate_qdrant(app_settings.qdrant_url)
-    redis_client = aioredis.from_url(
-        app_settings.redis_url,
-        decode_responses=True,
-        max_connections=20,
-    )
+    redis_client = get_shared_redis_client(app_settings.redis_url)
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
     health_registry = _build_provider_health_registry(app_settings)
@@ -771,6 +788,11 @@ def build_rag_service(
 
         pii_redactor = PiiRedactor(mode=RedactionMode(app_settings.pii_redaction_mode))
 
+    # Indirect prompt injection guard for retrieved documents
+    from data_engineering_copilot.services.input_guardrails import InputGuardrails
+
+    input_guardrails = InputGuardrails(enabled=app_settings.input_guardrails_enabled)
+
     return AsyncRagService(
         config=rag_config,
         vector_store=vector_store,
@@ -786,6 +808,7 @@ def build_rag_service(
             similarity_threshold=app_settings.semantic_cache_threshold,
             ttl_seconds=app_settings.semantic_cache_ttl,
             redis_url=app_settings.redis_url,
+            redis_client=get_shared_redis_client(app_settings.redis_url),
         ),
         query_rewriter=query_rewriter,
         groundedness_verifier=groundedness,
@@ -793,4 +816,5 @@ def build_rag_service(
         token_tracker=token_tracker,
         retrieval_tracker=retrieval_tracker,
         pii_redactor=pii_redactor,
+        input_guardrails=input_guardrails,
     )

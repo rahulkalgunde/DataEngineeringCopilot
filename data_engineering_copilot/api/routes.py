@@ -8,13 +8,14 @@ import logging
 import time
 import uuid
 
+import redis.asyncio as aioredis
 import structlog
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.workers.celery_app import celery_app
-from data_engineering_copilot.workers.progress import get_redis_client
 from data_engineering_copilot.workers.tasks import async_ingest_task
 
 log = structlog.get_logger(__name__)
@@ -23,6 +24,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 REDIS_KEY_PREFIX = "ingestion:status"
+
+_async_redis: aioredis.Redis | None = None
+
+
+async def _get_async_redis() -> aioredis.Redis:
+    """Return a lazily-created async Redis client (decode_responses=True).
+
+    Shared across route handlers so connection pooling is centralized.
+    """
+    global _async_redis
+    if _async_redis is None:
+        _async_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _async_redis
 
 
 def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str] | None:
@@ -56,18 +70,20 @@ class TaskStatus(BaseModel):
 
 
 @router.post("/api/v1/ingest", response_model=TaskStatus)
-async def ingest_documents(request: IngestRequest):
+async def ingest_documents(request: IngestRequest, fastapi_request: Request):
+    # RBAC: restrict ingest sources to the caller's allowed_sources
+    effective_sources = _resolve_source_filter(fastapi_request, request.source_names)
     log.info(
         "ingest.dispatch",
-        source_names=request.source_names,
+        source_names=effective_sources,
         max_pages=request.max_pages,
     )
 
-    client = get_redis_client()
+    client = await _get_async_redis()
 
     # Atomic SETNX lock to prevent concurrent dispatch (TOCTOU race).
     dispatch_id = str(uuid.uuid4())
-    acquired = client.set("ingestion:dispatch_lock", dispatch_id, nx=True, ex=60)
+    acquired = await client.set("ingestion:dispatch_lock", dispatch_id, nx=True, ex=60)
     if not acquired:
         raise HTTPException(
             status_code=409,
@@ -75,13 +91,12 @@ async def ingest_documents(request: IngestRequest):
         )
 
     try:
-        raw_task_id = client.get("ingestion:latest_task_id")
+        raw_task_id = await client.get("ingestion:latest_task_id")
         if raw_task_id:
             try:
-                latest_task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else str(raw_task_id)
-                raw = client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
+                latest_task_id = str(raw_task_id)
+                raw = await client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
                 if raw:
-                    raw = raw.decode() if isinstance(raw, bytes) else raw
                     existing_data = json.loads(raw)
                     existing_status = existing_data.get("status")
                     if existing_status in ("PROCESSING", "DISPATCHED"):
@@ -94,7 +109,7 @@ async def ingest_documents(request: IngestRequest):
                         if dispatched_at and time.time() - dispatched_at > 300:
                             existing_data["status"] = "FAILED"
                             existing_data["error"] = "Task orphaned (dispatched but not running for > 5 min)"
-                            client.set(
+                            await client.set(
                                 f"{REDIS_KEY_PREFIX}:{latest_task_id}",
                                 json.dumps(existing_data),
                                 ex=86400,
@@ -108,7 +123,7 @@ async def ingest_documents(request: IngestRequest):
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
-        task = async_ingest_task.delay(request.source_names, request.max_pages or 0)
+        task = async_ingest_task.delay(effective_sources, request.max_pages or 0)
 
         # Write an initial status so the polling endpoint has something to
         # return immediately, before the worker picks up the task.
@@ -117,19 +132,19 @@ async def ingest_documents(request: IngestRequest):
                 "task_id": task.id,
                 "status": "DISPATCHED",
                 "dispatched_at": time.time(),
-                "source_names": request.source_names or [],
+                "source_names": effective_sources or [],
                 "pages_fetched": 0,
                 "chunks_indexed": 0,
                 "current_url": "",
                 "error": None,
             }
         )
-        client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
-        client.set("ingestion:latest_task_id", task.id, ex=86400)
+        await client.set(f"{REDIS_KEY_PREFIX}:{task.id}", initial_status, ex=86400)
+        await client.set("ingestion:latest_task_id", task.id, ex=86400)
 
         return TaskStatus(task_id=task.id, state=task.state)
     finally:
-        client.delete("ingestion:dispatch_lock")
+        await client.delete("ingestion:dispatch_lock")
 
 
 @router.get("/api/v1/task/{task_id}")
@@ -145,17 +160,14 @@ async def get_task_status(task_id: str):
 @router.get("/api/v1/ingest/status/{task_id}")
 async def get_ingestion_status(task_id: str) -> dict:
     """Return the latest progress snapshot for a background ingestion task."""
-    client = get_redis_client()
-    raw = client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
+    client = await _get_async_redis()
+    raw = await client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
 
     if not raw:
         raise HTTPException(
             status_code=404,
             detail="Ingestion task status tracking record not found.",
         )
-
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
 
     try:
         return json.loads(raw)
@@ -169,15 +181,14 @@ async def get_ingestion_status(task_id: str) -> dict:
 @router.get("/api/v1/ingest/latest")
 async def get_latest_ingestion() -> dict:
     """Return the status of the most recently dispatched ingestion task."""
-    client = get_redis_client()
-    raw_task_id = client.get("ingestion:latest_task_id")
+    client = await _get_async_redis()
+    raw_task_id = await client.get("ingestion:latest_task_id")
     if not raw_task_id:
         raise HTTPException(status_code=404, detail="No ingestion task found.")
-    task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else raw_task_id
-    raw = client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
+    task_id = str(raw_task_id)
+    raw = await client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
     if not raw:
         raise HTTPException(status_code=404, detail="Task status expired.")
-    raw = raw.decode() if isinstance(raw, bytes) else raw
     return json.loads(raw)
 
 
@@ -187,18 +198,16 @@ async def cancel_ingestion(task_id: str) -> dict:
     log.info("ingest.cancel", task_id=task_id)
     celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
 
-    client = get_redis_client()
+    client = await _get_async_redis()
     redis_key = f"{REDIS_KEY_PREFIX}:{task_id}"
-    raw = client.get(redis_key)
+    raw = await client.get(redis_key)
 
     if raw:
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
         data = json.loads(raw)
         data["status"] = "CANCELLED"
-        client.set(redis_key, json.dumps(data))
+        await client.set(redis_key, json.dumps(data))
     else:
-        client.set(
+        await client.set(
             redis_key,
             json.dumps(
                 {
