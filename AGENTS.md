@@ -7,7 +7,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 1. `dec_venv/bin/python -m ruff check data_engineering_copilot/ tests/ --fix`
 2. `dec_venv/bin/python -m ruff format data_engineering_copilot/ tests/`
 3. `dec_venv/bin/python -m pyright data_engineering_copilot/ tests/`
-4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v` (fast isolation first) — parallel by default via `-n auto`; use `-n 0` ONLY to debug xdist-order issues
+4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v` (fast isolation first) — parallel by default via `-n 6` (capped; `-n auto` uses all cores and can destabilize the system); use `-n 0` ONLY to debug xdist-order issues
 
 ## Environment
 - **VENV**: Always `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`/`pip`.
@@ -51,12 +51,12 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `make test-quick` | Unit, no `@slow`, parallel (~15s) |
 | `make test-unit` | All unit tests |
 | `make test-unit-serial` | Sequential (`-n 0`) |
-| `make test-integration` | Splits into serial (`-m serial`, `-n 0`, 2 reruns) + parallel (`-m "not serial"`, `-n auto`, 2 reruns); needs Docker services |
+| `make test-integration` | Splits into serial (`-m serial`, `-n 0`, 2 reruns) + parallel (`-m "not serial"`, `-n 6`, 2 reruns); needs Docker services |
 | `make test-e2e` | Same split as integration; needs Docker stack |
 | `make test-eval` | Mocked embedder, no infra |
 | `make lint` / `make format` | Ruff only |
 
-- `asyncio_mode = auto` — never `@pytest.mark.asyncio`. Default `addopts = "-n auto --dist worksteal --strict-markers"`.
+- `asyncio_mode = auto` — never `@pytest.mark.asyncio`. Default `addopts = "-n 6 --dist worksteal --strict-markers"` (6 capped; `-n auto` uses all 8 cores and can destabilize the system).
 - Shared fixtures: `integration_settings`, `embeddings_provider`, `qdrant_store`, `ollama_client`, `populated_store`, `rag_service`, `api_client`.
 - Integration/e2e conftests use testcontainers (Qdrant `v1.18.3`, Redis `7-alpine`, Ollama `0.32.4`) — no Docker Compose needed for tests.
 - `unique_collection_name()` for per-test Qdrant isolation; auto-teardown.

@@ -62,13 +62,13 @@ packages = ["data_engineering_copilot"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-n auto --dist worksteal --strict-markers"
+addopts = "-n 6 --dist worksteal --strict-markers"
 filterwarnings = [
     'ignore:Using `httpx` with `starlette.testclient` is deprecated',
     'ignore:coroutine .* was never awaited',
 ]
 markers = [
-    "unit: fast, isolated tests with mocked dependencies (safe to run with -n auto)",
+    "unit: fast, isolated tests with mocked dependencies (safe to run with -n 6)",
     "integration: marks tests that require live external services (Qdrant, Ollama, Langfuse)",
     "slow: marks tests that take a long time to run",
     "qdrant: marks tests that require a running Qdrant instance",
