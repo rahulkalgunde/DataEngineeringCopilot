@@ -500,6 +500,15 @@ class TestSseStreaming:
         mock_service = MagicMock(spec=AsyncRagService)
         mock_service.answer = AsyncMock(return_value=mock_answer)
 
+        async def _answer_stream(question, source_filter=None):
+            yield 'data: {"type": "start", "message": "started"}\n\n'
+            yield (
+                'data: {"type": "answer", "text": "This is a wire-mocked answer about Spark.", '
+                '"confidence": 0.95, "groundedness_score": 0.9, "sources": []}\n\n'
+            )
+
+        mock_service.answer_stream = _answer_stream
+
         with (
             patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client),
             patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service),
