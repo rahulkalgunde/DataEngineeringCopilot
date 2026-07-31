@@ -9,6 +9,44 @@ from data_engineering_copilot.api.app import app
 client = TestClient(app)
 
 
+class TestRootEndpoint:
+    def test_root_returns_200(self):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_head_root_returns_200(self):
+        response = client.head("/")
+        assert response.status_code == 200
+
+
+class TestVersionEndpoint:
+    def test_version_reports_identity_fields(self):
+        with (
+            patch("data_engineering_copilot.api.app._deps_fingerprint_ok", True),
+            patch("data_engineering_copilot.api.app._image_built_at", return_value="2026-07-31T10:00:00+00:00"),
+            patch.dict("os.environ", {"IMAGE_GIT_SHA": "abc123"}, clear=False),
+        ):
+            response = client.get("/api/v1/version")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["git_sha"] == "abc123"
+            assert body["image_built_at"] == "2026-07-31T10:00:00+00:00"
+            assert body["deps_fingerprint_ok"] is True
+            assert body["python_version"]
+
+    def test_version_defaults_when_not_in_container(self):
+        with (
+            patch("data_engineering_copilot.api.app._deps_fingerprint_ok", None),
+            patch("data_engineering_copilot.api.app._image_built_at", return_value=None),
+        ):
+            response = client.get("/api/v1/version")
+            body = response.json()
+            assert body["git_sha"] == "unknown"
+            assert body["image_built_at"] is None
+            assert body["deps_fingerprint_ok"] is None
+
+
 class TestHealthEndpoint:
     def test_health_returns_200(self):
         response = client.get("/health")
