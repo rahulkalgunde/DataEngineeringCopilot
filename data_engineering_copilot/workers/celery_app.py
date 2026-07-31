@@ -1,6 +1,9 @@
-from celery import Celery
+import sys
+
+from celery import Celery, signals
 
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.dep_check import check_deps
 
 # Celery configuration – broker and backend both use Redis from settings
 celery_app = Celery(
@@ -8,6 +11,15 @@ celery_app = Celery(
     broker=settings.redis_url,
     backend=settings.redis_url,
 )
+
+
+def _enforce_fresh_deps(sender, **kwargs) -> None:
+    """Refuse to run the worker on a stale image (deps changed since build)."""
+    if not check_deps(fail_fast=False):
+        sys.exit(1)
+
+
+signals.worker_ready.connect(_enforce_fresh_deps)
 
 # Production tuning: fair task distribution, late ack, time limits
 celery_app.conf.update(

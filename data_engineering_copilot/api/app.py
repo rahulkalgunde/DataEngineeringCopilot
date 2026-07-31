@@ -1,5 +1,8 @@
 import asyncio
+import datetime
 import os
+import platform
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 import httpx
@@ -10,13 +13,23 @@ from fastapi.responses import JSONResponse
 from data_engineering_copilot.api.auth import ApiKeyAuthMiddleware
 from data_engineering_copilot.api.middleware import RateLimitMiddleware
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.dep_check import check_deps
 
 from .routes import router
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _deps_fingerprint_ok
+    _deps_fingerprint_ok = check_deps(fail_fast=False)
+    yield
+
 
 app = FastAPI(
     title="DataEngineeringCopilot API",
     description="Async ingestion and RAG service endpoints",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # Rate limiting middleware: per-route (60/min for /ask, 10/min for /ingest)
@@ -44,6 +57,7 @@ app.include_router(router)
 # Module-level tracker singletons (shared with factory)
 _retrieval_tracker = None
 _token_tracker = None
+_deps_fingerprint_ok: bool | None = None
 
 
 def set_trackers(retrieval_tracker=None, token_tracker=None):
@@ -70,9 +84,41 @@ async def _check_tcp(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+
+@app.head("/")
+async def root_head():
+    return Response(status_code=200)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/version")
+async def version():
+    """Report what image/code revision is actually running."""
+    return {
+        "service": "data-engineering-copilot",
+        "git_sha": os.environ.get("IMAGE_GIT_SHA", "unknown"),
+        "image_built_at": _image_built_at(),
+        "deps_fingerprint_ok": _deps_fingerprint_ok,
+        "python_version": platform.python_version(),
+    }
+
+
+def _image_built_at() -> str | None:
+    try:
+        return datetime.datetime.fromtimestamp(
+            os.path.getmtime("/image_deps.txt"),
+            tz=datetime.UTC,
+        ).isoformat()
+    except OSError:
+        return None
 
 
 @app.get("/ready")
