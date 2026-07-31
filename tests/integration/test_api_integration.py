@@ -21,18 +21,11 @@ from httpx import ASGITransport
 
 
 @pytest.fixture
-def redis_test_client(fresh_redis_client):
-    """Real Redis client + monkeypatch routes.get_redis_client to use it."""
-    import data_engineering_copilot.api.routes as routes_mod
-
+def redis_test_client(routes_async_redis, fresh_redis_client):
+    """Real Redis client + monkeypatch routes to use it (async)."""
     for key in fresh_redis_client.scan_iter("ratelimit:*"):
         fresh_redis_client.delete(key)
-
-    real_client = fresh_redis_client
-    original_fn = routes_mod.get_redis_client
-    routes_mod.get_redis_client = lambda: real_client
-    yield real_client
-    routes_mod.get_redis_client = original_fn
+    return fresh_redis_client
 
 
 @pytest.fixture(autouse=True)
@@ -389,16 +382,11 @@ class TestDispatchLock:
     """Concurrent dispatch protection via Redis SETNX."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, fresh_redis_client):
-        import data_engineering_copilot.api.routes as routes_mod
-
+    def _setup(self, routes_async_redis, fresh_redis_client):
         for key in fresh_redis_client.scan_iter("ratelimit:*"):
             fresh_redis_client.delete(key)
-        self._orig_routes = routes_mod.get_redis_client
-        routes_mod.get_redis_client = lambda: fresh_redis_client
         with patch("data_engineering_copilot.services.rate_limiter._redis_client", return_value=fresh_redis_client):
             yield
-        routes_mod.get_redis_client = self._orig_routes
 
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
     def test_concurrent_dispatches_second_gets_409(self, mock_delay, fresh_redis_client, client):
@@ -482,11 +470,10 @@ class TestSseStreaming:
     """SSE streaming endpoint with wire-mocked RAG pipeline."""
 
     @pytest.mark.asyncio
-    async def test_stream_returns_start_answer_done(self, fresh_redis_client):
+    async def test_stream_returns_start_answer_done(self, routes_async_redis):
         """Wire-mock RAG to produce a static answer, verify SSE event flow."""
         import httpx
 
-        import data_engineering_copilot.api.routes as routes_mod
         from data_engineering_copilot.api.app import app
         from data_engineering_copilot.domain.models import Answer
         from data_engineering_copilot.services.async_rag import AsyncRagService
@@ -509,9 +496,8 @@ class TestSseStreaming:
 
         mock_service.answer_stream = _answer_stream
 
-        with (
-            patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client),
-            patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service),
+        with patch(
+            "data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service
         ):
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 async with client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response:
@@ -528,14 +514,12 @@ class TestSseStreaming:
                     assert any("[DONE]" in c for c in chunks), "Should end with [DONE]"
 
     @pytest.mark.asyncio
-    async def test_stream_invalid_request_returns_422(self, fresh_redis_client):
+    async def test_stream_invalid_request_returns_422(self, routes_async_redis):
         """Empty question should return 422."""
         import httpx
 
-        import data_engineering_copilot.api.routes as routes_mod
         from data_engineering_copilot.api.app import app
 
-        with patch.object(routes_mod, "get_redis_client", return_value=fresh_redis_client):
-            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/ask/stream", json={"question": ""})
-                assert resp.status_code == 422
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/ask/stream", json={"question": ""})
+            assert resp.status_code == 422
