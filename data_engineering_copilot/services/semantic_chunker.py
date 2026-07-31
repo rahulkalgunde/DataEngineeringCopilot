@@ -11,9 +11,12 @@ Strategy:
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
+import pathlib
 
+import nltk
 import numpy as np
 from nltk.tokenize import sent_tokenize
 
@@ -21,6 +24,30 @@ from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.utils.text import slugify
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def _ensure_punkt_tab() -> None:
+    """Ensure NLTK's ``punkt_tab`` tokenizer data is available (idempotent).
+
+    ``sent_tokenize`` needs the ``punkt_tab`` resource, which the ``nltk`` pip
+    package does not bundle. Without it, sentence tokenization raises
+    ``LookupError`` and semantic chunking silently produces no chunks. Download
+    it once on first use when missing, into the first search path that accepts it.
+    """
+    try:
+        sent_tokenize("A short test sentence.")
+    except LookupError:
+        for candidate in nltk.data.path:
+            candidate = pathlib.Path(candidate)
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                nltk.download("punkt_tab", quiet=True, download_dir=str(candidate))
+            except Exception:
+                continue
+            if (candidate / "tokenizers" / "punkt_tab").is_dir():
+                break
+        sent_tokenize("A short test sentence.")
 
 
 class SemanticChunker:
@@ -80,6 +107,7 @@ class SemanticChunker:
     @staticmethod
     def extract_sentences(text: str) -> list[str] | None:
         try:
+            _ensure_punkt_tab()
             sentences = sent_tokenize(text)
         except Exception as e:
             logger.warning("Sentence tokenization failed: %s", str(e))
