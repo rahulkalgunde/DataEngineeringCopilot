@@ -11,6 +11,7 @@ import logging
 import httpx
 import tiktoken
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
@@ -55,6 +56,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         timeout_seconds: int = 120,
         rate_limiter: SlidingWindowRateLimiter | None = None,
         include_provider_param: bool = True,
+        retry_wait: wait_base | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -65,6 +67,12 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self._rate_limiter = rate_limiter
         self._include_provider_param = include_provider_param
         logger.info("Using embedding model %s at %s", model_name, self.base_url)
+        self._request_embeddings = retry(
+            stop=stop_after_attempt(5),
+            wait=retry_wait or wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
+            reraise=True,
+        )(self._request_embeddings)
 
     def _make_client_kwargs(self) -> dict:
         return {
@@ -81,12 +89,6 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         return [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
-        reraise=True,
-    )
     async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
         # Acquire rate limiter slot before making the request
         if self._rate_limiter is not None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from tenacity import wait_fixed
 
 from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
 
@@ -23,6 +24,7 @@ def client():
                 "num_predict": 512,
             }
         },
+        retry_wait=wait_fixed(0),
     )
 
 
@@ -99,7 +101,7 @@ class TestEmbeddingRetry:
     def embeddings(self):
         from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
-        return AsyncOllamaEmbeddings(model_name="nomic-embed-text")
+        return AsyncOllamaEmbeddings(model_name="nomic-embed-text", retry_wait=wait_fixed(0))
 
     @pytest.mark.asyncio
     async def test_network_error_retries_then_raises(self, embeddings):

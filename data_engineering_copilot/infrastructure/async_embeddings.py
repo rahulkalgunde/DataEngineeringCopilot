@@ -11,6 +11,7 @@ import logging
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity.wait import wait_base
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import EmbeddingError
@@ -25,12 +26,23 @@ _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
 class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
     """Async Ollama embedding provider using the /api/embed endpoint with httpx."""
 
-    def __init__(self, model_name: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str | None = None,
+        retry_wait: wait_base | None = None,
+    ) -> None:
         self.model_name = model_name
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.timeout_seconds = settings.ollama_timeout_seconds
         self.ollama_base_url = self.base_url  # backward compat
         logger.info("Using async Ollama embedding model %s at %s", model_name, self.base_url)
+        self._aollama_embed_single_batch = retry(
+            stop=stop_after_attempt(3),
+            wait=retry_wait or wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_exception_type(_RETRYABLE_ERRORS),
+            reraise=True,
+        )(self._aollama_embed_single_batch)
 
     async def _get_client(self) -> httpx.AsyncClient:
         return await self._get_safe_client()
@@ -40,12 +52,6 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         return [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(_RETRYABLE_ERRORS),
-        reraise=True,
-    )
     async def _aollama_embed_single_batch(self, texts: list[str]) -> list[list[float]]:
         """Call Ollama /api/embed for a single batch asynchronously."""
         try:
