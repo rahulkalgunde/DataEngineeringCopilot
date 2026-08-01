@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from collections.abc import Coroutine
+from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
@@ -29,6 +32,41 @@ log = structlog.get_logger(__name__)
 
 # Alias for ``celery -A data_engineering_copilot.workers.tasks worker``
 app = celery_app
+
+_worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_loop_lock = threading.Lock()
+
+
+def _get_worker_loop() -> asyncio.AbstractEventLoop:
+    """Return the single process-wide event loop used by all Celery tasks.
+
+    ``asyncio.run()`` creates and then closes a fresh event loop per call.
+    Loop-bound clients (async Redis, httpx/AsyncQdrantClient keep-alive
+    connections) that outlive a task then get reused against a closed loop,
+    surfacing as ``RuntimeError: Event loop is closed`` in later tasks.  A
+    single long-lived loop keeps every lazy client bound to one loop that is
+    never closed.
+    """
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        with _worker_loop_lock:
+            if _worker_loop is None or _worker_loop.is_closed():
+                loop = asyncio.new_event_loop()
+
+                def _run() -> None:
+                    asyncio.set_event_loop(loop)
+                    loop.run_forever()
+
+                thread = threading.Thread(target=_run, name="dec-worker-loop", daemon=True)
+                thread.start()
+                _worker_loop = loop
+    return _worker_loop
+
+
+def run_async[T](coro: Coroutine[Any, Any, T]) -> T:
+    """Run *coro* on the process-wide worker event loop and block for the result."""
+    loop = _get_worker_loop()
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
 async def _run_async_crawl(urls: list[str]):
@@ -85,7 +123,7 @@ def execute_background_ingestion(urls: list[str]):
             processed += 1
         return processed
 
-    processed_count = asyncio.run(_pipeline())
+    processed_count = run_async(_pipeline())
     return {"status": "INGESTION_COMPLETED", "processed_count": processed_count}
 
 
@@ -135,14 +173,15 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
     try:
         from data_engineering_copilot.factory import build_async_ingestion_service
 
-        service = build_async_ingestion_service()
-        asyncio.run(
-            service.ingest(
+        async def _run_ingest() -> None:
+            service = build_async_ingestion_service()
+            await service.ingest(
                 source_names=source_names,
                 max_pages_per_source=max_pages,
                 on_event=tracker.on_event,
             )
-        )
+
+        run_async(_run_ingest())
         tracker.mark_completed()
         log.info("async_ingest_task.completed", task_id=task_id)
     except SoftTimeLimitExceeded:

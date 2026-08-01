@@ -198,6 +198,25 @@ def _build_rag_service():
     return build_rag_service()
 
 
+@st.cache_resource
+def _get_service_loop():
+    """Return a single long-lived event loop running on a daemon thread.
+
+    All async components of the RAG service (httpx clients, the redis-asyncio
+    pool, the Qdrant client) bind to whichever loop first awaits them. Running
+    the pipeline on one persistent loop prevents the cross-loop failures that
+    otherwise occur when a cached service is reused across Streamlit reruns.
+    """
+    loop = asyncio.new_event_loop()
+
+    def _run() -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    threading.Thread(target=_run, name="rag-service-loop", daemon=True).start()
+    return loop
+
+
 def rag_service():
     """Return cached RAG service, or None if Qdrant/Ollama are unavailable."""
     try:
@@ -686,19 +705,19 @@ def render_qa_tab() -> None:
             error_box: list = []
 
             def _run_in_background() -> None:
-                """Run the async pipeline in a background thread with its own event loop."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                """Run the async pipeline on the shared service event loop."""
+
+                def on_step(step_name: str) -> None:
+                    completed_steps.append(step_name)
+
+                future = asyncio.run_coroutine_threadsafe(
+                    service.answer(question.strip(), on_step=on_step),
+                    _get_service_loop(),
+                )
                 try:
-
-                    def on_step(step_name: str) -> None:
-                        completed_steps.append(step_name)
-
-                    result_box.append(loop.run_until_complete(service.answer(question.strip(), on_step=on_step)))
+                    result_box.append(future.result())
                 except Exception as e:
                     error_box.append(e)
-                finally:
-                    loop.close()
 
             worker = threading.Thread(target=_run_in_background, daemon=True)
             worker.start()
