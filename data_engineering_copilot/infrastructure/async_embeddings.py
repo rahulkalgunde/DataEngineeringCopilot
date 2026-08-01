@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+import uuid
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -31,10 +33,21 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         model_name: str,
         base_url: str | None = None,
         retry_wait: wait_base | None = None,
+        batch_size: int = 128,
+        timeout_seconds: int = 180,
+        max_concurrency: int = 1,
+        keep_alive: str | int | None = "10m",
+        connect_timeout_seconds: int | float | None = 5,
+        pool_timeout_seconds: int | float | None = 5,
     ) -> None:
         self.model_name = model_name
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
-        self.timeout_seconds = settings.ollama_timeout_seconds
+        self.timeout_seconds = timeout_seconds
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.pool_timeout_seconds = pool_timeout_seconds
+        self._batch_size = batch_size
+        self._keep_alive = keep_alive
+        self._request_semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self.ollama_base_url = self.base_url  # backward compat
         logger.info("Using async Ollama embedding model %s at %s", model_name, self.base_url)
         self._aollama_embed_single_batch = retry(
@@ -54,12 +67,36 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
 
     async def _aollama_embed_single_batch(self, texts: list[str]) -> list[list[float]]:
         """Call Ollama /api/embed for a single batch asynchronously."""
+        request_id = uuid.uuid4().hex[:12]
+        started = time.perf_counter()
+        logger.info(
+            "Ollama embedding started request_id=%s model=%s batch_size=%d",
+            request_id,
+            self.model_name,
+            len(texts),
+        )
         try:
             response = await (await self._get_client()).post(
                 "/api/embed",
-                json={"model": self.model_name, "input": texts},
+                json={"model": self.model_name, "input": texts, "keep_alive": self._keep_alive},
             )
             response.raise_for_status()
+            logger.info(
+                "Ollama embedding completed request_id=%s model=%s batch_size=%d duration_ms=%.0f",
+                request_id,
+                self.model_name,
+                len(texts),
+                (time.perf_counter() - started) * 1000,
+            )
+        except (httpx.TimeoutException, httpx.ConnectError, OSError):
+            logger.exception(
+                "Ollama embedding failed request_id=%s model=%s batch_size=%d duration_ms=%.0f",
+                request_id,
+                self.model_name,
+                len(texts),
+                (time.perf_counter() - started) * 1000,
+            )
+            raise
         except httpx.HTTPStatusError as exc:
             raise EmbeddingError(f"Failed to get embeddings from Ollama: {exc}") from exc
         resp_data = response.json()
@@ -88,7 +125,7 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         wall-clock time when Ollama processes texts sequentially within a
         single /api/embed request.
         """
-        batch_size = settings.embedding_batch_size
+        batch_size = self._batch_size
         batches = self._slice_texts_into_batches(texts, batch_size)
 
         if len(batches) == 1:
@@ -96,10 +133,8 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
 
         logger.info("Processing %d texts in %d async batches (batch_size=%d)", len(texts), len(batches), batch_size)
 
-        sem = asyncio.Semaphore(2)
-
         async def _process_batch(batch_texts: list[str]) -> list[list[float]]:
-            async with sem:
+            async with self._request_semaphore:
                 return await self._aollama_embed_single_batch(batch_texts)
 
         tasks = [_process_batch(b) for b in batches]
@@ -107,7 +142,7 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
 
         all_embeddings: list[list[float]] = []
         for batch_idx, result in enumerate(results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 raise EmbeddingError(f"Batch {batch_idx + 1}/{len(batches)} failed: {result}") from result
             all_embeddings.extend(result)
 

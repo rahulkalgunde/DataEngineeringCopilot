@@ -17,6 +17,8 @@ def async_embeddings():
 def test_init(async_embeddings):
     assert async_embeddings.model_name == "nomic-embed-text"
     assert async_embeddings.ollama_base_url
+    assert async_embeddings._batch_size == 128
+    assert async_embeddings._request_semaphore._value == 1
 
 
 @pytest.mark.asyncio
@@ -65,6 +67,13 @@ async def test_embed_request_payload(async_embeddings):
         body = json.loads(request.content)
         assert body["model"] == "nomic-embed-text"
         assert body["input"] == ["test text"]
+        assert body["keep_alive"] == "10m"
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_concurrency_is_configurable():
+    embedder = AsyncOllamaEmbeddings(model_name="nomic-embed-text", max_concurrency=2)
+    assert embedder._request_semaphore._value == 2
 
 
 @pytest.mark.asyncio

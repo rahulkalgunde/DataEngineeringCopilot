@@ -242,7 +242,9 @@ class AsyncIngestionService:
         if not selected_sources:
             return 0
 
-        max_parallel = max(2, min(len(selected_sources) * 2, self._processing_concurrency))
+        max_parallel = max(
+            1, min(len(selected_sources) * self.settings.embed_concurrency, self._processing_concurrency)
+        )
         embed_semaphore = asyncio.Semaphore(max_parallel)
 
         total_chunks = 0
