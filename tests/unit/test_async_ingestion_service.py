@@ -6,14 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from data_engineering_copilot.config.settings import AppSettings, DocumentationSource
+from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument
 from data_engineering_copilot.services.chunker import DocumentChunker
 
 
 @pytest.fixture
 def mock_settings():
-    return AppSettings(
+    from tests.conftest import make_settings
+
+    return make_settings(
         max_pages_per_source=10,
         ingestion_batch_chunk_size=2,
         processing_concurrency=2,

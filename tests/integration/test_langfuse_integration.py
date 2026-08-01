@@ -141,21 +141,16 @@ class TestLangfuseConfiguration:
 
     def test_langfuse_host_env_override(self, monkeypatch):
         monkeypatch.setenv("LANGFUSE_HOST", "http://custom:9999")
-        from data_engineering_copilot.config.settings import AppSettings
+        from tests.conftest import make_settings
 
-        custom = AppSettings()
+        custom = make_settings()
         assert custom.langfuse_host == "http://custom:9999"
 
     @pytest.mark.serial
     def test_langfuse_defaults_when_no_env(self, monkeypatch):
         for var in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
             monkeypatch.delenv(var, raising=False)
-        from data_engineering_copilot.config.settings import AppSettings
+        from tests.conftest import make_settings
 
-        custom = AppSettings(
-            _env_file=None,
-            llm_provider="ollama",
-            code_llm_provider="",
-            embedding_provider="ollama",
-        )
+        custom = make_settings()
         assert custom.langfuse_host == "http://langfuse:3000"

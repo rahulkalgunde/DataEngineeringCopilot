@@ -16,9 +16,14 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import dotenv
 import pytest
+
+if TYPE_CHECKING:
+    from data_engineering_copilot.config.settings import AppSettings
 
 # ---------------------------------------------------------------------------
 # Path setup
@@ -27,27 +32,23 @@ project_root = pathlib.Path(__file__).resolve().parents[1]
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
+
 # ---------------------------------------------------------------------------
 # Environment isolation
 # ---------------------------------------------------------------------------
-# ``crawl4ai`` calls ``load_dotenv()`` at import time, permanently injecting
-# ``.env`` values into ``os.environ`` for the whole worker process.  It is
-# now lazy-imported in ``workers.tasks._run_async_crawl``, but keep this
-# restore-on-teardown as defense-in-depth (any stray third-party import could
-# still pollute).  Capture a clean baseline now (before any test module import
-# can pollute) and restore it after every test so ``AppSettings(..., _env_file=None)``
-# isolation keeps working.
-_ORIGINAL_ENVIRON = os.environ.copy()
+# Kill ambient environment pollution at the source instead of restoring
+# ``os.environ`` after every test.  Third-party libraries (notably
+# ``crawl4ai``) call ``load_dotenv()`` at import time, permanently injecting
+# the developer's ``.env`` (e.g. ``LLM_PROVIDER=openrouter``) into
+# ``os.environ``, which pydantic-settings reads *above* env files — this would
+# defeat ``AppSettings(_env_file=None)`` isolation.  Patch it once for the
+# whole test process so no import (ours or third-party) can pollute.
+def _noop_load_dotenv(*args: object, **kwargs: object) -> bool:
+    """No-op replacement for ``dotenv.load_dotenv`` during tests."""
+    return False
 
 
-@pytest.fixture(autouse=True)
-def _restore_environ():
-    yield
-    current_test = os.environ.get("PYTEST_CURRENT_TEST")
-    os.environ.clear()
-    os.environ.update(_ORIGINAL_ENVIRON)
-    if current_test is not None:
-        os.environ["PYTEST_CURRENT_TEST"] = current_test
+dotenv.load_dotenv = _noop_load_dotenv
 
 
 @pytest.fixture(autouse=True)
@@ -208,13 +209,22 @@ def unique_collection_name(prefix: str = "test") -> str:
 
 
 def pytest_configure(config):
-    """Guard: reject any ``AppSettings`` that uses a non-Ollama provider.
+    """Enforce hermetic ``AppSettings`` construction during tests.
 
-    Monkey-patches ``AppSettings.__init__`` so that *every* construction
-    (fixtures, defaults, env-var overrides, new tests) is validated at
-    instantiation time. Only ``"ollama"`` and ``""`` are permitted for all
-    LLM / embedding provider fields.
+    ``AppSettings`` must never observe the developer's ``.env`` / ``.env.secrets``
+    (real provider choices + API keys).  Three layers, in order of defense:
+      1. ``dotenv.load_dotenv`` is no-op'd process-wide (see module top), so no
+         third-party import can inject ``.env`` into ``os.environ``.
+      2. ``_env_file=None`` is forced, so env *files* are never read.
+      3. Ambient provider env vars in ``os.environ`` (shell exports) fail loudly
+         instead of silently overriding settings.
+
+    Provider choice defaults to Ollama: explicit non-Ollama providers raise
+    unless the test deliberately opts in with ``_test_allow_non_ollama=True``
+    and placeholder API keys (factory/wiring tests).  Use ``make_settings()``
+    to build settings explicitly.
     """
+
     from data_engineering_copilot.config.settings import AppSettings
 
     _original_init = AppSettings.__init__
@@ -233,38 +243,108 @@ def pytest_configure(config):
         "evaluation_llm_provider",
     ]
 
-    def _patched_init(self, *args, **kwargs):
-        # Tests must never read .env / .env.secrets / .env.local — those carry
-        # real API keys and provider overrides.  Force _env_file=None unless a
-        # test explicitly opts into a (test-only) env file.  os.environ vars
-        # (e.g. monkeypatch.setenv) still take precedence over defaults.
-        kwargs.setdefault("_env_file", None)
-        # Several per-purpose providers default to 'groq' / 'openrouter', so a
-        # hermetic settings object would otherwise fail validation for a
-        # missing key.  Use placeholders (never real keys) unless a test sets
-        # its own.
-        kwargs.setdefault("groq_api_key", "placeholder")
-        kwargs.setdefault("openrouter_api_key", "placeholder")
+    _AMBIENT_PROVIDER_VARS = [
+        "LLM_PROVIDER",
+        "EMBEDDING_PROVIDER",
+        "CODE_LLM_PROVIDER",
+        "ANSWER_LLM_PROVIDER",
+        "REWRITE_LLM_PROVIDER",
+        "GROUNDEDNESS_LLM_PROVIDER",
+        "INTENT_LLM_PROVIDER",
+        "ENRICHMENT_LLM_PROVIDER",
+        "EVALUATION_LLM_PROVIDER",
+        "OPENROUTER_API_KEY",
+        "NVIDIA_API_KEY",
+        "GROQ_API_KEY",
+        "CEREBRAS_API_KEY",
+        "GEMINI_API_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    ]
 
-        # Check explicit kwargs first — catches test code that deliberately
-        # passes a non-Ollama provider.  Env-file provider overrides can't
-        # leak in anymore because _env_file is forced to None above.
-        skip = kwargs.pop("skip_provider_check", False)
-        if not skip:
-            bad: list[str] = []
-            for field in _PROVIDER_FIELDS:
-                val = kwargs.get(field, "")
-                if val and val.lower() not in _ALLOWED:
-                    bad.append(f"{field}={val!r}")
+    def _patched_init(self, *args, **kwargs):
+        # Tests must never read .env / .env.secrets / .env.local.  os.environ
+        # vars (e.g. monkeypatch.setenv) still take precedence over defaults.
+        kwargs.setdefault("_env_file", None)
+
+        leak = sorted(v for v in _AMBIENT_PROVIDER_VARS if os.environ.get(v))
+        if leak:
+            raise RuntimeError(
+                "Ambient provider environment variable(s) present during tests:\n  "
+                + "\n  ".join(leak)
+                + "\nTests must be hermetic — do not export these from .env or your shell."
+            )
+
+        # Several per-purpose providers default to 'groq'/'openrouter', so a
+        # hermetic default construction needs placeholder keys (never real ones)
+        # to pass key validation.  make_settings() is the explicit alternative.
+        kwargs.setdefault("openrouter_api_key", "placeholder")
+        kwargs.setdefault("groq_api_key", "placeholder")
+
+        # Check explicit kwargs — catches test code that deliberately passes a
+        # non-Ollama provider.  Tests that intentionally exercise provider
+        # routing pass ``_test_allow_non_ollama=True`` (with placeholder keys).
+        allow_non_ollama = kwargs.pop("_test_allow_non_ollama", False)
+        if not allow_non_ollama:
+            bad = [f for f in _PROVIDER_FIELDS if (val := kwargs.get(f, "")) and val.lower() not in _ALLOWED]
             if bad:
                 raise RuntimeError(
                     "Test configuration uses non-Ollama LLM provider(s) in explicit kwargs:\n  "
-                    + "\n  ".join(bad)
-                    + "\nOnly 'ollama' is allowed in tests to avoid costly external API calls."
+                    + "\n  ".join(f"{f}={kwargs.get(f)!r}" for f in bad)
+                    + "\nOnly 'ollama' is allowed in tests by default to avoid costly external API "
+                    "calls. If you deliberately test provider routing, pass "
+                    "_test_allow_non_ollama=True with placeholder API keys."
                 )
         _original_init(self, *args, **kwargs)
 
     AppSettings.__init__ = _patched_init
+
+
+# ---------------------------------------------------------------------------
+# Settings factory — the single way to build AppSettings in tests
+# ---------------------------------------------------------------------------
+
+
+def make_settings(**overrides) -> "AppSettings":
+    """Build hermetic ``AppSettings`` for tests.
+
+    Never reads ``.env`` / ``.env.secrets`` / ``.env.local`` (forces
+    ``_env_file=None``), defaults every provider to Ollama, and clears
+    per-purpose overrides.  Provider API keys default to *empty* (providers
+    unconfigured), so the fallback chain terminates at Ollama unless a test
+    explicitly supplies a placeholder key for the provider it selects.
+
+    The rare tests that deliberately exercise non-Ollama provider routing
+    (factory/wiring tests) pass ``_test_allow_non_ollama=True`` alongside
+    placeholder API keys — never real ones.
+    """
+    defaults = {
+        "_env_file": None,
+        "llm_provider": "ollama",
+        "llm_model": "llama3.2:3b",
+        "embedding_provider": "ollama",
+        "embedding_model_name": "nomic-embed-text",
+        "ollama_base_url": "http://localhost:11434",
+        "ollama_model": "llama3.2:3b",
+        "answer_llm_provider": "",
+        "rewrite_llm_provider": "",
+        "groundedness_llm_provider": "",
+        "intent_llm_provider": "",
+        "enrichment_llm_provider": "",
+        "evaluation_llm_provider": "",
+        "code_llm_provider": "",
+        "code_llm_model": "",
+        "openrouter_api_key": "",
+        "nvidia_api_key": "",
+        "groq_api_key": "",
+        "cerebras_api_key": "",
+        "gemini_api_key": "",
+    }
+    defaults.update(overrides)
+
+    from data_engineering_copilot.config.settings import AppSettings
+
+    return AppSettings(**defaults)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -298,12 +378,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def integration_settings():
-    """AppSettings tuned for integration testing."""
-
-    from data_engineering_copilot.config.settings import AppSettings
-
-    return AppSettings(
-        embedding_provider="ollama",
+    """AppSettings tuned for integration testing (hermetic, Ollama-only)."""
+    return make_settings(
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,

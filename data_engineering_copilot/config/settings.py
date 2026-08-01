@@ -81,6 +81,7 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    # Module-load seam ONLY (see module-level `settings` below).  Never set by tests.
     skip_provider_check: bool = Field(default=False, exclude=True)
 
     project_root: Path = PROJECT_ROOT
@@ -390,8 +391,10 @@ class AppSettings(BaseSettings):
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
 
 
-# Module-level default settings. skip_provider_check=True so that importing this
-# module never hard-fails on missing provider API keys (e.g. in CI or a fresh
-# clone where .env.secrets is absent) — provider builders in factory.py still
-# validate API keys and raise clear errors when a non-Ollama provider is built.
+# Module-load seam ONLY: skip the API-key validator so importing this module
+# never hard-fails on missing provider API keys (e.g. in CI or a fresh clone
+# where .env.secrets is absent).  Provider builders in factory.py still
+# validate API keys and raise clear errors when a non-Ollama provider is
+# built.  NOT a test escape hatch — tests use tests.conftest.make_settings()
+# (which is hermetic and never reads .env) and must not set this flag.
 settings = AppSettings(skip_provider_check=True)

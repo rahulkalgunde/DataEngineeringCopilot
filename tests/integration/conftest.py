@@ -326,14 +326,11 @@ def pytest_configure(config):
 
 @pytest.fixture
 def integration_settings(ollama_url):
-    from data_engineering_copilot.config.settings import AppSettings
+    from tests.conftest import make_settings
 
-    return AppSettings(
+    return make_settings(
         ollama_base_url=ollama_url,
-        embedding_provider="ollama",
         embedding_model_name="nomic-embed-text",
-        llm_provider="ollama",
-        code_llm_provider="ollama",
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
         retrieval_top_k=5,

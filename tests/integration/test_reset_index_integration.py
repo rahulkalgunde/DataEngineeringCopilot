@@ -7,7 +7,6 @@ import asyncio
 import pytest
 
 from data_engineering_copilot import cli
-from data_engineering_copilot.config.settings import AppSettings
 
 pytestmark = [
     pytest.mark.integration,
@@ -24,21 +23,13 @@ def sync_redis_client(redis_url):
 
 
 def _patch_cli_settings(monkeypatch, redis_url, qdrant_url="http://localhost:6333", crawl_db_url=""):
-    test_settings = AppSettings(
+    from tests.conftest import make_settings
+
+    test_settings = make_settings(
         redis_url=redis_url,
         qdrant_url=qdrant_url,
         collection_name="test_collection",
-        embedding_provider="ollama",
-        llm_provider="ollama",
-        answer_llm_provider="ollama",
-        rewrite_llm_provider="ollama",
-        groundedness_llm_provider="ollama",
-        intent_llm_provider="ollama",
-        enrichment_llm_provider="",
-        evaluation_llm_provider="ollama",
-        code_llm_provider="",
         crawl_db_url=crawl_db_url,
-        skip_provider_check=True,
     )
     monkeypatch.setattr(cli, "settings", test_settings)
 
@@ -189,24 +180,15 @@ def test_reset_index_full_rebuild(qdrant_url, redis_url, pg_dsn, tmp_path, monke
 def test_reset_qdrant_recreates_collection_and_deletes_bm25(qdrant_url, tmp_path, monkeypatch):
     """reset-qdrant recreates the collection (empty) and removes the BM25 file."""
     from data_engineering_copilot.domain.models import DocumentChunk
+    from tests.conftest import make_settings
 
     monkeypatch.setattr(
         cli,
         "settings",
-        AppSettings(
+        make_settings(
             qdrant_url=qdrant_url,
             collection_name="test_collection",
-            embedding_provider="ollama",
-            llm_provider="ollama",
-            answer_llm_provider="ollama",
-            rewrite_llm_provider="ollama",
-            groundedness_llm_provider="ollama",
-            intent_llm_provider="ollama",
-            enrichment_llm_provider="",
-            evaluation_llm_provider="ollama",
-            code_llm_provider="",
             redis_url="redis://localhost:6379/0",
-            skip_provider_check=True,
         ),
     )
     bm25_path = tmp_path / ".bm25_cache" / "test_collection.json"

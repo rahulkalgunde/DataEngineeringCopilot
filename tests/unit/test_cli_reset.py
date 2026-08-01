@@ -18,26 +18,16 @@ def bm25_path(tmp_path, monkeypatch):
 
 
 def _patch_settings(monkeypatch, crawl_db_url: str = ""):
-    from data_engineering_copilot.config.settings import AppSettings
+    from tests.conftest import make_settings
 
     monkeypatch.setattr(
         cli,
         "settings",
-        AppSettings(
+        make_settings(
             redis_url="redis://localhost:6379/0",
             qdrant_url="http://localhost:6333",
             collection_name="test_collection",
-            embedding_provider="ollama",
-            llm_provider="ollama",
-            answer_llm_provider="ollama",
-            rewrite_llm_provider="ollama",
-            groundedness_llm_provider="ollama",
-            intent_llm_provider="ollama",
-            enrichment_llm_provider="",
-            evaluation_llm_provider="ollama",
-            code_llm_provider="",
             crawl_db_url=crawl_db_url,
-            skip_provider_check=True,
         ),
     )
 
