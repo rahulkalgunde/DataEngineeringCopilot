@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -10,8 +12,9 @@ from data_engineering_copilot.infrastructure.adaptive_llm_router import (
     AdaptiveLLMRouter,
     _categorize_llm_error,
 )
-from data_engineering_copilot.infrastructure.llm_client import CircuitBreakerError, LLMClientError
+from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
+from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 
 class TestErrorCategorization:
@@ -39,7 +42,7 @@ class TestErrorCategorization:
         err = _categorize_llm_error(exc, "openrouter", "model")
         assert err.category == ProviderErrorCategory.INVALID_REQUEST
 
-    def test_http_500_is_temporary_unavailable(self):
+    def test_http_503_is_temporary_unavailable(self):
         resp = httpx.Response(503, request=httpx.Request("POST", "http://example.com"))
         exc = httpx.HTTPStatusError("down", request=resp.request, response=resp)
         err = _categorize_llm_error(exc, "openrouter", "model")
@@ -55,13 +58,14 @@ class TestErrorCategorization:
         err = _categorize_llm_error(exc, "openrouter", "model")
         assert err.category == ProviderErrorCategory.RETRYABLE
 
-    def test_circuit_breaker_is_temporary_unavailable(self):
-        exc = CircuitBreakerError("circuit open")
+    def test_llm_client_error_uses_structured_status_code(self):
+        exc = LLMClientError("rate limit window exhausted", status_code=429, retry_after=5.0)
         err = _categorize_llm_error(exc, "openrouter", "model")
-        assert err.category == ProviderErrorCategory.TEMPORARY_UNAVAILABLE
+        assert err.category == ProviderErrorCategory.RATE_LIMITED
+        assert err.retry_after == 5.0
 
     def test_llm_client_error_rate_limit_text(self):
-        exc = LLMClientError("Rate limit exceeded after all retries")
+        exc = LLMClientError("Rate limit exceeded")
         err = _categorize_llm_error(exc, "openrouter", "model")
         assert err.category == ProviderErrorCategory.RATE_LIMITED
 
@@ -69,11 +73,6 @@ class TestErrorCategorization:
         exc = LLMClientError("timed out after 120 seconds")
         err = _categorize_llm_error(exc, "openrouter", "model")
         assert err.category == ProviderErrorCategory.RETRYABLE
-
-    def test_llm_client_error_circuit_breaker_text(self):
-        exc = LLMClientError("circuit breaker open after repeated failures")
-        err = _categorize_llm_error(exc, "openrouter", "model")
-        assert err.category == ProviderErrorCategory.TEMPORARY_UNAVAILABLE
 
     def test_llm_client_error_401_text(self):
         exc = LLMClientError("returned HTTP 401 Unauthorized")
@@ -114,11 +113,6 @@ class TestAdaptiveLLMRouter:
         router = AdaptiveLLMRouter(
             clients=[("openrouter", mock_client)],
             health=health,
-            max_retries=2,
-            backoff_min=0.1,
-            backoff_max=1.0,
-            backoff_multiplier=2.0,
-            jitter_factor=0.0,
         )
         health.register_provider("openrouter", ["test-model"])
         return router
@@ -139,41 +133,38 @@ class TestAdaptiveLLMRouter:
         )
 
     @pytest.mark.asyncio
-    async def test_retry_on_transient_error_then_succeed(self, health):
-        mock_client = AsyncMock()
-        mock_client.model = "test-model"
-        mock_client.last_usage = MagicMock()
-        mock_client.generate = AsyncMock(
-            side_effect=[
-                LLMClientError("timed out"),
-                "Hello world",
-            ]
-        )
-        router = AdaptiveLLMRouter(
-            clients=[("openrouter", mock_client)],
-            health=health,
-            max_retries=2,
-            backoff_min=0.01,
-            backoff_max=0.1,
-            backoff_multiplier=2.0,
-            jitter_factor=0.0,
-        )
-        health.register_provider("openrouter", ["test-model"])
-
-        result = await router.generate("test prompt")
-
-        assert result == "Hello world"
-        assert mock_client.generate.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_fail_after_max_retries(self, router, mock_client, health):
+    async def test_fails_after_single_attempt(self, router, mock_client, health):
         mock_client.generate = AsyncMock(side_effect=LLMClientError("timed out"))
         health.register_provider("openrouter", ["test-model"])
 
         with pytest.raises(LLMClientError, match="All LLM providers in adaptive fallback chain failed"):
             await router.generate("test prompt")
 
-        assert mock_client.generate.call_count == router._max_retries
+        assert mock_client.generate.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_failover_on_first_error_no_same_provider_retry(self, health):
+        client_a = AsyncMock()
+        client_a.model = "a-model"
+        client_a.generate = AsyncMock(side_effect=LLMClientError("timed out"))
+        client_a.last_usage = MagicMock()
+
+        client_b = AsyncMock()
+        client_b.model = "b-model"
+        client_b.generate = AsyncMock(return_value="From B")
+        client_b.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", client_a), ("groq", client_b)],
+            health=health,
+        )
+        health.register_provider("openrouter", ["a-model"])
+        health.register_provider("groq", ["b-model"])
+
+        result = await router.generate("test prompt")
+
+        assert result == "From B"
+        assert client_a.generate.call_count == 1
 
     @pytest.mark.asyncio
     async def test_failover_to_ollama_when_external_exhausted(self, health):
@@ -190,11 +181,6 @@ class TestAdaptiveLLMRouter:
         router = AdaptiveLLMRouter(
             clients=[("openrouter", ext_client), ("ollama", ollama_client)],
             health=health,
-            max_retries=1,
-            backoff_min=0.1,
-            backoff_max=0.5,
-            backoff_multiplier=1.5,
-            jitter_factor=0.0,
         )
         health.register_provider("openrouter", ["ext-model"])
         health.register_provider("ollama", ["ollama-model"])
@@ -220,11 +206,6 @@ class TestAdaptiveLLMRouter:
         router = AdaptiveLLMRouter(
             clients=[("openrouter", or_client), ("nvidia", nv_client)],
             health=health,
-            max_retries=1,
-            backoff_min=0.1,
-            backoff_max=0.5,
-            backoff_multiplier=1.5,
-            jitter_factor=0.0,
         )
         health.register_provider("openrouter", ["or-model"])
         health.register_provider("nvidia", ["nv-model"])
@@ -248,11 +229,6 @@ class TestAdaptiveLLMRouter:
         router = AdaptiveLLMRouter(
             clients=[("openrouter", client_a), ("nvidia", client_b)],
             health=health,
-            max_retries=1,
-            backoff_min=0.1,
-            backoff_max=0.5,
-            backoff_multiplier=1.5,
-            jitter_factor=0.0,
         )
         health.register_provider("openrouter", ["model-a"])
         health.register_provider("nvidia", ["model-b"])
@@ -262,6 +238,46 @@ class TestAdaptiveLLMRouter:
         result = await router.generate("test prompt")
 
         assert result == "From B"
+        assert client_a.generate.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_provider_over_rpm_window_without_call(self, health):
+        rl = SlidingWindowRateLimiter(rpm_limit=1, rpd_limit=1000)
+        assert await rl.try_acquire() is True
+
+        client = AsyncMock()
+        client.model = "or-model"
+        client.generate = AsyncMock(return_value="must not be called")
+        client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", client)],
+            health=health,
+            rate_limiters={"openrouter": rl},
+        )
+        health.register_provider("openrouter", ["or-model"])
+
+        with pytest.raises(LLMClientError, match="All LLM providers"):
+            await router.generate("test prompt")
+
+        client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retry_after_propagates_to_cooldown(self, health):
+        client = AsyncMock()
+        client.model = "or-model"
+        client.generate = AsyncMock(side_effect=LLMClientError("rate limited", status_code=429, retry_after=5.0))
+        client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(clients=[("openrouter", client)], health=health)
+        health.register_provider("openrouter", ["or-model"])
+
+        with pytest.raises(LLMClientError):
+            await router.generate("test prompt")
+
+        mh = health.get_model_health("openrouter", "or-model")
+        assert mh is not None
+        assert mh.cooldown_until > time.monotonic()
 
     @pytest.mark.asyncio
     async def test_authentication_error_fails_immediately(self, router, mock_client, health):
@@ -317,6 +333,29 @@ class TestAdaptiveLLMRouter:
             tokens.append(token)
 
         assert tokens == ["token1", "token2"]
+
+    @pytest.mark.asyncio
+    async def test_skipped_provider_decision_is_logged(self, health, caplog):
+        rl = SlidingWindowRateLimiter(rpm_limit=1, rpd_limit=1000)
+        assert await rl.try_acquire() is True
+
+        client = AsyncMock()
+        client.model = "or-model"
+        client.generate = AsyncMock(return_value="must not be called")
+        client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", client)],
+            health=health,
+            rate_limiters={"openrouter": rl},
+        )
+        health.register_provider("openrouter", ["or-model"])
+
+        with caplog.at_level(logging.INFO), pytest.raises(LLMClientError):
+            await router.generate("test prompt")
+
+        assert "llm_provider_skipped" in caplog.text
+        assert "rate_limit" in caplog.text
 
     def test_model_property(self, router):
         assert router.model == "test-model"

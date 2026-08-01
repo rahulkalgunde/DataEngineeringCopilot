@@ -1,4 +1,4 @@
-"""Tests for retry and resilience patterns (tenacity backoff)."""
+"""Tests for LLM single-attempt and embeddings retry resilience."""
 
 from __future__ import annotations
 
@@ -24,76 +24,52 @@ def client():
                 "num_predict": 512,
             }
         },
-        retry_wait=wait_fixed(0),
     )
 
 
-class TestLLMClientRetry:
+class TestLLMClientSingleAttempt:
     @pytest.mark.asyncio
-    async def test_retries_on_timeout_then_succeeds(self, client):
-        with respx.mock:
-            route = respx.post("http://localhost:11434/v1/chat/completions")
-            route.side_effect = [
-                httpx.TimeoutException("timeout 1"),
-                httpx.Response(
-                    200,
-                    json={
-                        "choices": [{"message": {"content": "success after retry"}}],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                        "model": "llama3.2:3b",
-                    },
-                ),
-            ]
-            result = await client.generate("test prompt")
-            assert result == "success after retry"
-            assert route.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_retries_on_connect_error_then_succeeds(self, client):
-        with respx.mock:
-            route = respx.post("http://localhost:11434/v1/chat/completions")
-            route.side_effect = [
-                httpx.ConnectError("connection refused"),
-                httpx.Response(
-                    200,
-                    json={
-                        "choices": [{"message": {"content": "connected"}}],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                        "model": "llama3.2:3b",
-                    },
-                ),
-            ]
-            result = await client.generate("test prompt")
-            assert result == "connected"
-            assert route.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_fails_after_max_retries(self, client):
+    async def test_timeout_fails_after_single_attempt(self, client):
         with respx.mock:
             route = respx.post("http://localhost:11434/v1/chat/completions")
             route.side_effect = httpx.TimeoutException("persistent timeout")
             with pytest.raises(LLMClientError, match="timed out"):
                 await client.generate("test prompt")
-            assert route.call_count == 5
+            assert route.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_retries_on_os_error(self, client):
+    async def test_connect_error_fails_after_single_attempt(self, client):
         with respx.mock:
             route = respx.post("http://localhost:11434/v1/chat/completions")
-            route.side_effect = [
-                OSError("connection reset"),
-                httpx.Response(
-                    200,
-                    json={
-                        "choices": [{"message": {"content": "recovered"}}],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
-                        "model": "llama3.2:3b",
-                    },
-                ),
-            ]
+            route.side_effect = httpx.ConnectError("connection refused")
+            with pytest.raises(LLMClientError, match="Could not reach LLM provider"):
+                await client.generate("test prompt")
+            assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_os_error_fails_after_single_attempt(self, client):
+        with respx.mock:
+            route = respx.post("http://localhost:11434/v1/chat/completions")
+            route.side_effect = OSError("connection reset")
+            with pytest.raises(LLMClientError, match="Could not reach LLM provider"):
+                await client.generate("test prompt")
+            assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_success_without_retries(self, client):
+        with respx.mock:
+            route = respx.post("http://localhost:11434/v1/chat/completions")
+            route.return_value = httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "answer"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    "model": "llama3.2:3b",
+                },
+            )
             result = await client.generate("test prompt")
-            assert result == "recovered"
-            assert route.call_count == 2
+            assert result == "answer"
+            assert route.call_count == 1
 
 
 class TestEmbeddingRetry:
