@@ -117,6 +117,71 @@ def ask(question: str) -> None:
     print(f"\nConfidence: {answer.confidence:.2f}")
 
 
+def reenrich(source: str, urls_file: str | None) -> None:
+    """Re-enrich pages whose contextual enrichment previously failed.
+
+    For each URL this clears the vector-store chunks, the Redis
+    ``crawl:url_registry:<source>`` entry, and resets the frontier row to
+    ``DISCOVERED`` (fresh attempts budget), then re-runs ingestion for the
+    source in-process so the pages are re-fetched, re-chunked and
+    re-enriched.  URLs come from ``--urls <file>`` or, when omitted, from the
+    Redis set ``ingest:enrichment_failed:<source>`` written by the ingestion
+    pipeline's enrichment failure recorder.
+    """
+    import redis as sync_redis
+
+    from data_engineering_copilot.factory import build_async_ingestion_service
+    from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
+    from data_engineering_copilot.workers.progress import get_redis_client
+
+    if not settings.crawl_db_url:
+        raise RuntimeError("CRAWL_DB_URL must be set to re-enrich (the crawler frontier is PostgreSQL-backed).")
+
+    if urls_file:
+        with open(urls_file, encoding="utf-8") as fh:
+            urls = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+    else:
+        r = get_redis_client()
+        member_bytes = r.smembers(f"ingest:enrichment_failed:{source}")
+        urls = [m.decode() if isinstance(m, bytes) else m for m in member_bytes]
+    if not urls:
+        print(f"No URLs to re-enrich for source '{source}' (empty --urls file or Redis set).")
+        return
+
+    url_set = sorted(set(urls))
+    print(f"Re-enriching {len(url_set)} URLs for source '{source}'")
+
+    service = build_async_ingestion_service()
+
+    async def _run() -> int:
+        if hasattr(service.vector_store, "initialize"):
+            await service.vector_store.initialize()
+        deleted = 0
+        for url in url_set:
+            try:
+                await service.vector_store.delete_by_url(url)
+                deleted += 1
+            except Exception as exc:
+                logger.warning("reenrich.delete_chunks_failed url=%s error=%s", url, exc)
+        print(f"Deleted existing chunks for {deleted}/{len(url_set)} URLs")
+
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        for url in url_set:
+            registry.hdel(f"crawl:url_registry:{source}", url)
+        print(f"Cleared URL-registry entries for {len(url_set)} URLs")
+
+        frontier = PostgresCrawlFrontierDB(settings.crawl_db_url)
+        await frontier.initialize()
+        requeued = await frontier.requeue_urls(url_set)
+        await frontier.close()
+        print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
+
+        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+
+    total = asyncio.run(_run())
+    print(f"Re-ingestion complete: {total} chunks indexed.")
+
+
 def _recreate_qdrant_collection() -> None:
     """Delete and recreate the Qdrant collection with the current dimension/hybrid config."""
     url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
@@ -846,6 +911,23 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the local repository.")
     ask_parser.add_argument("question", help="Question to answer.")
 
+    reenrich_parser = subparsers.add_parser(
+        "reenrich",
+        help="Re-enrich pages whose contextual enrichment failed: clear chunks/URL-registry, requeue frontier, re-ingest.",
+    )
+    reenrich_parser.add_argument(
+        "--source",
+        required=True,
+        help="Documentation source name to re-enrich.",
+    )
+    reenrich_parser.add_argument(
+        "--urls",
+        type=str,
+        default=None,
+        help="File with one URL per line ('#' comments allowed). Defaults to the Redis set "
+        "ingest:enrichment_failed:<source> populated by the pipeline.",
+    )
+
     subparsers.add_parser(
         "reset-index",
         help="Full clean rebuild: recreate Qdrant + BM25 cache, clear Redis crawl keys, drop PostgreSQL frontier tables.",
@@ -961,6 +1043,8 @@ def main() -> None:
             )
         elif args.command == "ask":
             ask(question=args.question)
+        elif args.command == "reenrich":
+            reenrich(source=args.source, urls_file=args.urls)
         elif args.command == "reset-index":
             reset_index()
         elif args.command == "reset-qdrant":

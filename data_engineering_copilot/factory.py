@@ -326,6 +326,7 @@ def _build_fallback_chain(
         clients=clients,
         health=health,
         rate_limiters=provider_rate_limiters,
+        ollama_max_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
     )
 
 
@@ -602,8 +603,20 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         purpose="enrichment",
     )
 
+    async def _record_enrichment_failure(document) -> None:
+        key = f"ingest:enrichment_failed:{document.source_name}"
+        try:
+            await redis_client.sadd(key, document.url)
+        except Exception as exc:
+            logger.warning(
+                "enrichment_failure_tracking_failed",
+                source=document.source_name,
+                url=document.url,
+                error_type=type(exc).__name__,
+            )
+
     contextual_enricher = ContextualChunkEnricher(
-        summarizer=LLMContextSummarizer(llm_client=enrichment_client),
+        summarizer=LLMContextSummarizer(llm_client=enrichment_client, failure_recorder=_record_enrichment_failure),
         enabled=app_settings.contextual_enrichment_enabled,
         batch_size=app_settings.enrichment_batch_size,
     )

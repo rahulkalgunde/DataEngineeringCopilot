@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
@@ -34,10 +35,12 @@ class LLMClientError(RuntimeError):
         *,
         status_code: int | None = None,
         retry_after: float | None = None,
+        category: ProviderErrorCategory | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
+        self.category = category
 
 
 class LLMClient(SafeAsyncClientMixin):
@@ -180,8 +183,11 @@ class LLMClient(SafeAsyncClientMixin):
             logger.exception("LLM provider connection failed")
             raise LLMClientError("Could not reach LLM provider. Check your network and API key.") from exc
 
-        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
-        usage_data = body.get("usage", {})
+        # Some providers return message.content: null (or omit usage) on an
+        # otherwise 200 response; treat that as empty so downstream parsing
+        # (e.g. _extract_final_response -> .strip()) never sees None.
+        content = (body.get("choices", [{}])[0].get("message", {}).get("content", "")) or ""
+        usage_data = body.get("usage") or {}
 
         prompt_tokens = usage_data.get("prompt_tokens", 0)
         completion_tokens = usage_data.get("completion_tokens", 0)
