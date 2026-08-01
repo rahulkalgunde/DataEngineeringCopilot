@@ -23,6 +23,7 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import (
+    _LEASE_KEY_PREFIX,
     _STATUS_KEY_TTL_SECONDS,
     IngestionProgressTracker,
     get_redis_client,
@@ -35,6 +36,7 @@ app = celery_app
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _worker_loop_lock = threading.Lock()
+_INGESTION_HEARTBEAT_INTERVAL_SECONDS = 30
 
 
 def _get_worker_loop() -> asyncio.AbstractEventLoop:
@@ -169,6 +171,21 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         max_pages=max_pages,
     )
     tracker = IngestionProgressTracker(task_id, redis_client=get_redis_client(), source_names=source_names)
+    heartbeat_stop = threading.Event()
+
+    def _heartbeat() -> None:
+        while not heartbeat_stop.wait(_INGESTION_HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                tracker.heartbeat()
+            except Exception as exc:
+                log.warning("async_ingest_task.heartbeat_failed", task_id=task_id, error=str(exc))
+
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat,
+        name=f"ingestion-heartbeat-{(task_id or 'unknown')[:8]}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
 
     try:
         from data_engineering_copilot.factory import build_async_ingestion_service
@@ -193,6 +210,10 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         log.exception("async_ingest_task.failed", task_id=task_id, error=str(e))
         tracker.mark_failed(str(e))
         raise
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=1)
+        tracker.clear_lease()
 
 
 @task_failure.connect
@@ -217,6 +238,7 @@ def _on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
         state["status"] = "FAILED"
         state["error"] = str(exception or "Task failed unexpectedly (hard time limit?).")
         client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
+        client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
         log.info("task_failure.updated_redis", extra={"task_id": task_id, "error": state["error"]})
     except Exception as exc:
         log.warning("task_failure.update_failed", extra={"task_id": task_id, "error": str(exc)})
@@ -245,6 +267,7 @@ def _on_task_revoked(sender=None, request=None, terminated=None, signum=None, ex
         state["status"] = "CANCELLED"
         state["error"] = "Task revoked by user"
         client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
+        client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
         log.info("task_revoked.updated_redis", extra={"task_id": task_id})
     except Exception as exc:
         log.warning("task_revoked.update_failed", extra={"task_id": task_id, "error": str(exc)})

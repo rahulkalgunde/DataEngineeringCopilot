@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.workers.celery_app import celery_app
+from data_engineering_copilot.workers.progress import (
+    _LEASE_KEY_PREFIX,
+    _STATUS_KEY_TTL_SECONDS,
+)
 from data_engineering_copilot.workers.tasks import async_ingest_task
 
 log = structlog.get_logger(__name__)
@@ -58,6 +62,54 @@ def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str
     return list(perms.allowed_sources)
 
 
+async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict:
+    """Repair progress state when Celery or the worker disappeared."""
+    if state.get("status") not in ("PROCESSING", "DISPATCHED"):
+        return state
+
+    celery_state = AsyncResult(task_id).state
+    terminal_state = {
+        "SUCCESS": ("COMPLETED", None),
+        "FAILURE": ("FAILED", "Celery reported task failure."),
+        "REVOKED": ("CANCELLED", "Task was revoked."),
+    }.get(celery_state)
+    if terminal_state is not None:
+        state["status"], default_error = terminal_state
+        if default_error and not state.get("error"):
+            state["error"] = default_error
+        await client.set(
+            f"{REDIS_KEY_PREFIX}:{task_id}",
+            json.dumps(state),
+            ex=_STATUS_KEY_TTL_SECONDS,
+        )
+        await client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
+        return state
+
+    if state.get("status") == "DISPATCHED":
+        dispatched_at = state.get("dispatched_at", 0)
+        if dispatched_at and time.time() - dispatched_at > 300:
+            state["status"] = "FAILED"
+            state["error"] = "Task orphaned (dispatched but not running for > 5 min)."
+            await client.set(
+                f"{REDIS_KEY_PREFIX}:{task_id}",
+                json.dumps(state),
+                ex=_STATUS_KEY_TTL_SECONDS,
+            )
+        return state
+
+    # PENDING is ambiguous while a task is queued, but a PROCESSING task must
+    # have a live worker lease. Its absence means the worker was lost.
+    if not await client.exists(f"{_LEASE_KEY_PREFIX}:{task_id}"):
+        state["status"] = "FAILED"
+        state["error"] = "Task heartbeat expired; worker likely lost."
+        await client.set(
+            f"{REDIS_KEY_PREFIX}:{task_id}",
+            json.dumps(state),
+            ex=_STATUS_KEY_TTL_SECONDS,
+        )
+    return state
+
+
 class IngestRequest(BaseModel):
     source_names: list[str] | None = Field(default=None, max_length=20)
     max_pages: int | None = Field(default=None, ge=1, le=20000)
@@ -98,23 +150,8 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
                 raw = await client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
                 if raw:
                     existing_data = json.loads(raw)
+                    existing_data = await _reconcile_ingestion_status(client, latest_task_id, existing_data)
                     existing_status = existing_data.get("status")
-                    if existing_status in ("PROCESSING", "DISPATCHED"):
-                        task_res = AsyncResult(latest_task_id)
-                        if task_res.state in ("FAILURE", "REVOKED"):
-                            existing_status = "FAILED"
-                    if existing_status == "DISPATCHED":
-                        # Check if the task is orphaned (stuck for > 5 minutes)
-                        dispatched_at = existing_data.get("dispatched_at", 0)
-                        if dispatched_at and time.time() - dispatched_at > 300:
-                            existing_data["status"] = "FAILED"
-                            existing_data["error"] = "Task orphaned (dispatched but not running for > 5 min)"
-                            await client.set(
-                                f"{REDIS_KEY_PREFIX}:{latest_task_id}",
-                                json.dumps(existing_data),
-                                ex=86400,
-                            )
-                            existing_status = "FAILED"
                     if existing_status in ("PROCESSING", "DISPATCHED"):
                         raise HTTPException(
                             status_code=409,
@@ -170,7 +207,8 @@ async def get_ingestion_status(task_id: str) -> dict:
         )
 
     try:
-        return json.loads(raw)
+        state = json.loads(raw)
+        return await _reconcile_ingestion_status(client, task_id, state)
     except (json.JSONDecodeError, TypeError) as exc:
         raise HTTPException(
             status_code=500,
@@ -189,7 +227,7 @@ async def get_latest_ingestion() -> dict:
     raw = await client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
     if not raw:
         raise HTTPException(status_code=404, detail="Task status expired.")
-    return json.loads(raw)
+    return await _reconcile_ingestion_status(client, task_id, json.loads(raw))
 
 
 @router.post("/api/v1/ingest/{task_id}/cancel")
@@ -205,7 +243,8 @@ async def cancel_ingestion(task_id: str) -> dict:
     if raw:
         data = json.loads(raw)
         data["status"] = "CANCELLED"
-        await client.set(redis_key, json.dumps(data))
+        data["error"] = data.get("error") or "Task revoked by user"
+        await client.set(redis_key, json.dumps(data), ex=_STATUS_KEY_TTL_SECONDS)
     else:
         await client.set(
             redis_key,
@@ -220,7 +259,9 @@ async def cancel_ingestion(task_id: str) -> dict:
                     "error": None,
                 }
             ),
+            ex=_STATUS_KEY_TTL_SECONDS,
         )
+    await client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
 
     return {"task_id": task_id, "status": "CANCELLED"}
 

@@ -125,6 +125,7 @@ class TestIngestEndpoint:
             "error": None,
         }
         redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+        redis_test_client.set(f"ingestion:lease:{existing_task_id}", "alive", ex=300)
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 409
@@ -230,6 +231,7 @@ class TestIngestEndpoint:
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
         status_doc = {"task_id": existing_task_id, "status": "PROCESSING"}
         redis_test_client.set(f"ingestion:status:{existing_task_id}", json.dumps(status_doc), ex=86400)
+        redis_test_client.set(f"ingestion:lease:{existing_task_id}", "alive", ex=300)
 
         mock_celery_task = MagicMock()
         mock_celery_task.state = "PENDING"
