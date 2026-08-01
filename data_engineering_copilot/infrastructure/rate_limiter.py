@@ -7,6 +7,7 @@ provider, so they must coordinate to stay under the same RPM / RPD limits.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import deque
@@ -89,20 +90,74 @@ class SlidingWindowRateLimiter:
             self._request_timestamps.append(time.time())
             self._daily_count += 1
 
-    async def handle_429(self, response_headers: dict | None = None) -> None:
-        """React to a 429 response by waiting for the appropriate ``Retry-After``.
+    async def try_acquire(self) -> bool:
+        """Non-blocking slot acquisition.
 
-        If the provider includes a ``Retry-After`` header that value is used;
-        otherwise a default 60s backoff is applied.
+        Returns ``True`` and records a slot (shared with ``acquire``) when a
+        slot is free under both RPM and RPD limits. Returns ``False`` without
+        recording when either limit is exhausted. Never sleeps.
+
+        Used by the LLM router as a pre-flight gate so an over-limit provider
+        is skipped without making a paid API call.
         """
-        import contextlib
+        async with self._lock:
+            now = time.time()
 
+            # Purge timestamps older than 60 seconds
+            while self._request_timestamps and self._request_timestamps[0] < now - 60:
+                self._request_timestamps.popleft()
+
+            # Daily reset
+            if now >= self._daily_reset:
+                self._daily_count = 0
+                self._daily_reset = now + 86400
+
+            if self._rpd_limit > 0 and self._daily_count >= self._rpd_limit:
+                return False
+
+            if len(self._request_timestamps) >= self._rpm_limit:
+                return False
+
+            self._request_timestamps.append(time.time())
+            self._daily_count += 1
+            return True
+
+    def wait_until_available(self) -> float:
+        """Estimated seconds until the next slot frees (RPM window or RPD reset).
+
+        Returns ``0.0`` when a slot is currently available. Best-effort and
+        non-mutating; used for observability (``available_in_seconds``).
+        """
+        now = time.time()
+        if self._rpd_limit > 0 and self._daily_count >= self._rpd_limit and now < self._daily_reset:
+            return max(0.0, self._daily_reset - now)
+        if len(self._request_timestamps) >= self._rpm_limit:
+            oldest = self._request_timestamps[0]
+            if oldest > now - 60:
+                return max(0.0, oldest + 60 - now)
+        return 0.0
+
+    @staticmethod
+    def parse_retry_after(response_headers: dict | None = None) -> float:
+        """Extract the ``Retry-After`` value from response headers.
+
+        Defaults to 60s when the header is absent or not parseable.
+        """
         retry_after = 60
         if response_headers:
             raw = response_headers.get("Retry-After")
             if raw is not None:
                 with contextlib.suppress(ValueError, TypeError):
                     retry_after = float(raw)
+        return retry_after
+
+    async def handle_429(self, response_headers: dict | None = None) -> None:
+        """React to a 429 response by waiting for the appropriate ``Retry-After``.
+
+        If the provider includes a ``Retry-After`` header that value is used;
+        otherwise a default 60s backoff is applied.
+        """
+        retry_after = self.parse_retry_after(response_headers)
         logger.warning("Rate limit 429 hit. Waiting %.0fs before retry.", retry_after)
         await asyncio.sleep(retry_after)
 

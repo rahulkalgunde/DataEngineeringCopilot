@@ -179,31 +179,19 @@ class AppSettings(BaseSettings):
     gemini_rpd_limit: int = 1000
 
     # LLM fallback chain: ordered list of providers to try on failure
-    llm_fallback_order: list[str] = Field(
-        default_factory=lambda: ["openrouter", "groq", "gemini", "cerebras", "ollama"]
-    )
-    llm_fallback_call_timeout: int = (
-        120  # shorter circuit-breaker timeout for fallback providers (must exceed max rate-limit retry wait)
-    )
+    llm_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "groq", "cerebras", "ollama"])
+    llm_fallback_call_timeout: int = 120  # per-attempt timeout for non-primary fallback providers
 
-    # Adaptive router settings
-    retry_max_attempts: int = 3
-    retry_backoff_min: float = 1.0
-    retry_backoff_max: float = 30.0
-    retry_backoff_multiplier: float = 2.0
-    retry_jitter_factor: float = 0.1
-    circuit_breaker_failure_threshold: int = 3
-    circuit_breaker_recovery_timeout: int = 30
+    # Provider cooldown / routing
     provider_cooldown_seconds: int = 60
-    load_balance_strategy: str = "least_used"
     health_success_rate_weight: float = 0.6
     health_latency_weight: float = 0.2
     health_recency_weight: float = 0.2
     health_consecutive_failure_penalty: float = 0.3
 
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
-    answer_llm_provider: str = ""
-    answer_llm_model: str = ""
+    answer_llm_provider: str = "openrouter"
+    answer_llm_model: str = "openrouter/free"
     rewrite_llm_provider: str = "groq"
     rewrite_llm_model: str = ""
     groundedness_llm_provider: str = "groq"
@@ -250,12 +238,13 @@ class AppSettings(BaseSettings):
     cerebras_evaluation_llm_model: str = ""
     cerebras_code_llm_model: str = ""
     gemini_answer_llm_model: str = ""
-    gemini_rewrite_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_groundedness_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_intent_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_enrichment_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_evaluation_llm_model: str = "gemini-2.0-flash-lite"
-    gemini_code_llm_model: str = "gemini-2.0-flash-lite"
+    gemini_rewrite_llm_model: str = ""
+    gemini_groundedness_llm_model: str = ""
+    gemini_intent_llm_model: str = ""
+    gemini_enrichment_llm_model: str = ""
+    gemini_evaluation_llm_model: str = ""
+    gemini_code_llm_model: str = ""
+
     ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
@@ -298,6 +287,9 @@ class AppSettings(BaseSettings):
     crawl_async_conditional_get: bool = True
     crawl_async_cache_url: str = ""
     crawl_async_thread_pool_size: int = 4
+    # Maximum number of times a FAILED frontier URL is re-discovered before it
+    # becomes terminal (stops being retried).
+    frontier_max_attempts: int = 3
     logging_enabled: bool = True
     # Hybrid search
     hybrid_search_enabled: bool = True

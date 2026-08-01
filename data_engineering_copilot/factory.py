@@ -187,7 +187,6 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_retries=5,
             extra_headers={"HTTP-Referer": "https://data-engineering-copilot.local"},
             rate_limiter=rate_limiter,
         )
@@ -201,7 +200,6 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_retries=5,
             rate_limiter=rate_limiter,
         )
 
@@ -214,7 +212,6 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_retries=5,
             rate_limiter=rate_limiter,
         )
 
@@ -227,7 +224,6 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_retries=5,
             rate_limiter=rate_limiter,
         )
 
@@ -240,7 +236,6 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_retries=5,
             rate_limiter=rate_limiter,
         )
 
@@ -331,12 +326,6 @@ def _build_fallback_chain(
         clients=clients,
         health=health,
         rate_limiters=provider_rate_limiters,
-        max_retries=app_settings.retry_max_attempts,
-        backoff_min=app_settings.retry_backoff_min,
-        backoff_max=app_settings.retry_backoff_max,
-        backoff_multiplier=app_settings.retry_backoff_multiplier,
-        jitter_factor=app_settings.retry_jitter_factor,
-        load_balance_strategy=app_settings.load_balance_strategy,
     )
 
 
@@ -558,7 +547,6 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
         delay_seconds=app_settings.crawl_delay_seconds,
         concurrency=app_settings.crawl_async_concurrency,
         max_concurrency=app_settings.crawl_async_max_concurrency,
-        conditional_get=app_settings.crawl_async_conditional_get,
         thread_pool_size=app_settings.crawl_async_thread_pool_size,
         per_domain_concurrency=app_settings.crawl_async_per_domain_concurrency,
         user_agent="DataEngineeringCopilot/1.0",

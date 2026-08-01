@@ -7,22 +7,12 @@ endpoint; differences are captured in constructor parameters.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
 from collections.abc import AsyncIterator
 
 import httpx
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
-from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
@@ -31,88 +21,23 @@ from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRa
 logger = logging.getLogger(__name__)
 
 
-def _make_http_post_retry(wait: wait_base | None = None):
-    """Build the tenacity retry decorator for LLM HTTP posts.
-
-    ``wait`` defaults to the production exponential backoff; tests pass a zero
-    wait so retry assertions don't sleep for real backoff durations.
-    """
-    return retry(
-        stop=stop_after_attempt(5),
-        wait=wait or wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception(LLMClient._is_retryable_llm_error),  # type: ignore[arg-type]
-        reraise=True,
-        before_sleep=before_sleep_log(logger, logging.DEBUG),
-    )
-
-
-class CircuitBreakerError(RuntimeError):
-    """Raised when the circuit breaker is open and the request is rejected."""
-
-
-class CircuitBreaker:
-    """Fail-fast circuit breaker for LLM provider calls.
-
-    After ``failure_threshold`` consecutive failures the circuit opens
-    and all subsequent calls are rejected immediately (without waiting
-    for a timeout) for ``recovery_timeout`` seconds. After that period,
-    a single test request is allowed (half-open). If it succeeds the
-    circuit closes; if it fails the circuit re-opens.
-    """
-
-    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 30.0, call_timeout: float = 60.0) -> None:
-        self._failure_threshold = failure_threshold
-        self._recovery_timeout = recovery_timeout
-        self._call_timeout = call_timeout
-        self._failures = 0
-        self._last_failure_time = 0.0
-        self._lock = asyncio.Lock()
-        self._state = "closed"  # closed | open | half-open
-
-    async def call(self, coro_factory):
-        # State check + probe-slot claim happen under the lock (fast, non-blocking).
-        # The actual coroutine execution happens OUTSIDE the lock so concurrent
-        # callers are not serialized through the provider.
-        async with self._lock:
-            if self._state == "open":
-                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
-                    self._state = "half-open"
-                else:
-                    raise CircuitBreakerError(
-                        f"Circuit breaker open for {self._recovery_timeout:.0f}s "
-                        f"after {self._failure_threshold} failures"
-                    )
-            if self._state == "half-open":
-                # Claim the single probe slot. Any concurrent caller that arrives
-                # while a probe is in flight fails fast instead of firing a second
-                # test request against a provider that was just failing.
-                self._state = "probing"
-            elif self._state == "probing":
-                raise CircuitBreakerError("Circuit breaker probing after recovery; concurrent request rejected")
-        try:
-            result = await asyncio.wait_for(coro_factory(), timeout=self._call_timeout)
-        except TimeoutError as exc:
-            await self._record_failure()
-            raise exc
-        except Exception as exc:
-            await self._record_failure()
-            raise exc
-        async with self._lock:
-            self._failures = 0
-            if self._state == "probing":
-                self._state = "closed"
-        return result
-
-    async def _record_failure(self) -> None:
-        async with self._lock:
-            self._failures += 1
-            self._last_failure_time = time.monotonic()
-            if self._state == "probing" or self._failures >= self._failure_threshold:
-                self._state = "open"
-
-
 class LLMClientError(RuntimeError):
-    """Raised when the LLM provider cannot return an answer."""
+    """Raised when the LLM provider cannot return an answer.
+
+    Carries optional structured metadata so the adaptive router can make
+    failover decisions without relying on message matching.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class LLMClient(SafeAsyncClientMixin):
@@ -121,10 +46,11 @@ class LLMClient(SafeAsyncClientMixin):
     Differences between providers are handled purely through constructor
     parameters — no subclassing required.
 
-    Includes a fail-fast circuit breaker: after ``circuit_breaker_threshold``
-    consecutive failures, subsequent requests are immediately rejected for
-    ``circuit_breaker_timeout`` seconds instead of waiting for the provider
-    timeout.
+    This client performs a single HTTP attempt per call: no retry loop and
+    no circuit breaker. Provider-level resilience is owned by the adaptive
+    router (fail fast, fail over to the next available provider). The rate
+    limiter is used as a non-blocking pre-flight gate so an over-limit
+    provider is never called.
 
     Parameters
     ----------
@@ -140,9 +66,6 @@ class LLMClient(SafeAsyncClientMixin):
         HTTP request timeout.
     temperature:
         Sampling temperature.
-    max_retries:
-        Number of retry attempts for transient failures (timeout, connect,
-        5xx). 429s are retried up to this limit as well.
     endpoint_path:
         API endpoint path (default ``"/chat/completions"``).
     extra_body:
@@ -153,14 +76,9 @@ class LLMClient(SafeAsyncClientMixin):
         ``{"HTTP-Referer": "https://..."}`` for OpenRouter).
     rate_limiter:
         Optional shared rate limiter for providers that enforce RPM/RPD
-        limits (OpenRouter, NVIDIA NIM, etc.).
-    circuit_breaker_threshold:
-        Consecutive failures before circuit opens (default 3).
-    circuit_breaker_timeout:
-        Seconds to keep circuit open (default 30).
-    retry_wait:
-        Override for the tenacity retry wait strategy (defaults to exponential
-        backoff of 1-10s). Used by tests to eliminate real backoff sleeps.
+        limits (OpenRouter, NVIDIA NIM, etc.). When set, a slot is acquired
+        non-blocking before each request; exhaustion raises a 429-class
+        ``LLMClientError`` instead of blocking.
     """
 
     def __init__(
@@ -170,32 +88,21 @@ class LLMClient(SafeAsyncClientMixin):
         api_key: str = "",
         timeout_seconds: int = 120,
         temperature: float = 0.05,
-        max_retries: int = 3,
         endpoint_path: str = "/chat/completions",
         extra_body: dict | None = None,
         extra_headers: dict | None = None,
         rate_limiter: SlidingWindowRateLimiter | None = None,
-        circuit_breaker_threshold: int = 3,
-        circuit_breaker_timeout: float = 30.0,
-        retry_wait: wait_base | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self._temperature = temperature
-        self._max_retries = max_retries
         self._endpoint_path = endpoint_path
         self._extra_body = extra_body or {}
         self._extra_headers = extra_headers or {}
         self._usage = LLMUsage()
         self._rate_limiter = rate_limiter
-        self._circuit_breaker = CircuitBreaker(
-            failure_threshold=circuit_breaker_threshold,
-            recovery_timeout=circuit_breaker_timeout,
-            call_timeout=timeout_seconds,
-        )
-        self._http_post = _make_http_post_retry(retry_wait)(self._http_post)
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -243,37 +150,33 @@ class LLMClient(SafeAsyncClientMixin):
         if options:
             payload.setdefault("options", {}).update(options)
 
-        # Fast-fail circuit breaker: fail immediately if provider is unhealthy
+        # Single attempt: no retry loop, no circuit breaker. Failures carry
+        # structured status_code / retry_after so the router can fail over fast.
         try:
-            body = await self._circuit_breaker.call(lambda: self._http_post(payload))
-        except CircuitBreakerError:
-            logger.warning(
-                "Circuit breaker open for model=%s, failing fast instead of waiting %ss",
-                self.model,
-                self.timeout_seconds,
-            )
-            raise LLMClientError(
-                f"LLM provider {self.model} is temporarily unavailable (circuit breaker open after repeated failures)."
-            ) from None
+            body = await self._http_post(payload)
         except TimeoutError as exc:
-            logger.warning(
-                "LLM generation timed out (circuit breaker call timeout) model=%s timeout=%ss",
-                self.model,
-                self._circuit_breaker._call_timeout,
-            )
-            raise LLMClientError(
-                f"LLM provider timed out after {self._circuit_breaker._call_timeout} seconds."
-            ) from exc
+            logger.warning("LLM generation timed out model=%s timeout=%ss", self.model, self.timeout_seconds)
+            raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.TimeoutException as exc:
             logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
             raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 429:
-                logger.exception("Rate limit persistently exceeded after retries.")
-                raise LLMClientError("Rate limit exceeded after all retries. Try again later.") from exc
-            logger.exception("LLM provider HTTP error: %s", exc)
-            raise LLMClientError(f"LLM provider returned HTTP {exc.response.status_code}.") from exc
-        except (httpx.ConnectError, httpx.HTTPError) as exc:
+            status = exc.response.status_code
+            retry_after = None
+            if self._rate_limiter is not None:
+                retry_after = self._rate_limiter.parse_retry_after(dict(exc.response.headers))
+            logger.warning(
+                "LLM provider HTTP error model=%s status=%s retry_after=%s",
+                self.model,
+                status,
+                retry_after,
+            )
+            raise LLMClientError(
+                f"LLM provider returned HTTP {status}.",
+                status_code=status,
+                retry_after=retry_after,
+            ) from exc
+        except (httpx.HTTPError, OSError) as exc:
             logger.exception("LLM provider connection failed")
             raise LLMClientError("Could not reach LLM provider. Check your network and API key.") from exc
 
@@ -302,25 +205,25 @@ class LLMClient(SafeAsyncClientMixin):
 
         return clean_text
 
-    @staticmethod
-    def _is_retryable_llm_error(exc: BaseException) -> bool:
-        """Retry on transient errors only. 429 is handled by rate limiter, not retried."""
-        if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, OSError)):
-            return True
-        if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response.status_code >= 500
-        return False
-
     async def _http_post(self, payload: dict) -> dict:
-        if self._rate_limiter is not None:
-            await self._rate_limiter.acquire()
+        if self._rate_limiter is not None and not await self._rate_limiter.try_acquire():
+            raise LLMClientError(
+                "Rate limit window exhausted; provider not called.",
+                status_code=429,
+                retry_after=self._rate_limiter.wait_until_available(),
+            )
         response = await (await self._get_client()).post(self._endpoint_path, json=payload)
         if response.status_code == 429:
             if self._rate_limiter is not None:
-                await self._rate_limiter.handle_429(dict(response.headers))
+                retry_after = self._rate_limiter.parse_retry_after(dict(response.headers))
+                logger.warning(
+                    "rate_limit_captured model=%s retry_after=%s",
+                    self.model,
+                    retry_after,
+                )
             raise httpx.HTTPStatusError("Rate limited by provider", request=response.request, response=response)
         if response.status_code == 401:
-            raise LLMClientError("LLM provider returned 401 Unauthorized. Check your API key.")
+            raise LLMClientError("LLM provider returned 401 Unauthorized. Check your API key.", status_code=401)
         response.raise_for_status()
         return response.json()
 
@@ -360,13 +263,17 @@ class LLMClient(SafeAsyncClientMixin):
             payload.update(self._extra_body)
 
         try:
-            if self._rate_limiter is not None:
-                await self._rate_limiter.acquire()
+            if self._rate_limiter is not None and not await self._rate_limiter.try_acquire():
+                raise LLMClientError(
+                    "Rate limit window exhausted; provider not called.",
+                    status_code=429,
+                    retry_after=self._rate_limiter.wait_until_available(),
+                )
             client = await self._get_client()
             async with client.stream("POST", self._endpoint_path, json=payload) as response:
                 if response.status_code == 429:
                     if self._rate_limiter is not None:
-                        await self._rate_limiter.handle_429(dict(response.headers))
+                        self._rate_limiter.parse_retry_after(dict(response.headers))
                     raise httpx.HTTPStatusError("Rate limited", request=response.request, response=response)
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -386,69 +293,3 @@ class LLMClient(SafeAsyncClientMixin):
             logger.warning("Streaming failed, falling back to non-streaming generate()")
             result = await self.generate(prompt, temperature=temperature)
             yield result
-
-
-class FallbackLLMClient:
-    """Wrapper that tries multiple LLM providers in sequence on failure.
-
-    Each provider is a separate ``LLMClient`` instance with its own circuit
-    breaker and rate limiter.  On ``LLMClientError`` the next provider in the
-    chain is tried.  If all fail the last error is re-raised.
-
-    Shares the same public interface as ``LLMClient`` so consumers do not
-    need to distinguish between them.
-    """
-
-    def __init__(self, clients: list[tuple[str, LLMClient]]) -> None:
-        self._clients = clients
-        self._last_usage = LLMUsage()
-
-    @property
-    def model(self) -> str:
-        return self._clients[0][1].model if self._clients else ""
-
-    @property
-    def last_usage(self) -> LLMUsage:
-        return self._last_usage
-
-    async def generate(
-        self,
-        prompt: str,
-        temperature: float | None = None,
-        num_predict: int | None = None,
-        num_ctx: int | None = None,
-    ) -> str:
-        last_error: Exception | None = None
-        for name, client in self._clients:
-            try:
-                text = await client.generate(
-                    prompt=prompt,
-                    temperature=temperature,
-                    num_predict=num_predict,
-                    num_ctx=num_ctx,
-                )
-                self._last_usage = client.last_usage
-                return text
-            except LLMClientError as e:
-                logger.warning("Fallback: %s failed (%s), trying next provider", name, e)
-                last_error = e
-        raise LLMClientError(f"All LLM providers in fallback chain failed. Last error: {last_error}") from last_error
-
-    async def generate_stream(
-        self,
-        prompt: str,
-        temperature: float | None = None,
-    ) -> AsyncIterator[str]:
-        for name, client in self._clients:
-            try:
-                async for token in client.generate_stream(prompt=prompt, temperature=temperature):
-                    yield token
-                return
-            except (LLMClientError, Exception) as e:
-                logger.warning("Fallback stream: %s failed (%s), trying next provider", name, e)
-        result = await self._clients[-1][1].generate(prompt=prompt, temperature=temperature)
-        yield result
-
-    async def close(self) -> None:
-        for _, client in self._clients:
-            await client.close()
