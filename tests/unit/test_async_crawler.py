@@ -76,50 +76,62 @@ def crawler(mock_frontier, mock_cache):
         concurrency=5,
         max_concurrency=20,
         max_retries=2,
-        conditional_get=True,
     )
 
 
-class TestPhase1Head:
-    """Tests for _phase1_head (conditional GET via HEAD request)."""
+class TestAlwaysGet:
+    """Tests for the always-GET crawl strategy (no conditional-GET fast path)."""
+
+    def test_no_conditional_get_flag(self, crawler):
+        assert not hasattr(crawler, "conditional_get")
+        assert not hasattr(crawler, "_phase1_head")
 
     @pytest.mark.asyncio
-    async def test_head_304_returns_true(self, crawler, mock_cache):
-        record = _make_record()
-        mock_cache.get_headers = AsyncMock(return_value={"status": "200", "etag": '"abc"'})
-
-        mock_resp = _make_context_response(status=304)
-        mock_session = MagicMock()
-        mock_session.head = MagicMock(return_value=mock_resp)
-
-        result = await crawler._phase1_head(mock_session, record, {"etag": '"abc"'})
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_head_200_returns_false_and_updates_cache(self, crawler, mock_cache):
-        record = _make_record()
-
-        mock_resp = _make_context_response(
-            status=200,
-            headers={"ETag": '"new"', "Last-Modified": "Tue, 01 Jan 2025 00:00:00 GMT"},
+    async def test_fetches_page_with_cached_headers(self, crawler, mock_frontier, mock_cache, aresponses):
+        """Even when cache headers exist, the page is fetched (never skipped on 304)."""
+        aresponses.add(
+            "example.com",
+            "/sitemap.xml",
+            "GET",
+            aresponses.Response(status=404, text="Not Found"),
         )
-        mock_session = MagicMock()
-        mock_session.head = MagicMock(return_value=mock_resp)
+        aresponses.add(
+            "example.com",
+            "/",
+            "GET",
+            aresponses.Response(
+                status=200,
+                headers={"Content-Type": "text/html", "ETag": '"v1"'},
+                text="<html><body><p>Hello world</p></body></html>",
+            ),
+        )
 
-        result = await crawler._phase1_head(mock_session, record, {"etag": '"old"'})
-        assert result is False
-        mock_cache.set_headers.assert_awaited_once()
+        mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])
+        mock_frontier.claim = AsyncMock(return_value=_make_record("https://example.com/"))
+        mock_frontier._db = "not_none"
+        mock_cache.get_headers = AsyncMock(return_value={"status": "200", "etag": '"v1"'})
+        mock_cache.set_headers = AsyncMock()
 
-    @pytest.mark.asyncio
-    async def test_head_exception_returns_false(self, crawler, mock_cache):
-        record = _make_record()
-        mock_cache.get_headers = AsyncMock(return_value={"etag": '"abc"'})
+        crawler = AsyncDocumentationCrawler(
+            frontier=mock_frontier,
+            cache=mock_cache,
+            timeout_seconds=5,
+            delay_seconds=0.0,
+            concurrency=1,
+            max_concurrency=5,
+            max_retries=1,
+        )
 
-        mock_session = MagicMock()
-        mock_session.head = MagicMock(side_effect=Exception("network error"))
+        source = _make_source()
+        docs = []
+        async for doc in crawler.crawl(source, max_pages=1):
+            docs.append(doc)
 
-        result = await crawler._phase1_head(mock_session, record, {"etag": '"abc"'})
-        assert result is False
+        assert len(docs) == 1
+        assert "Hello world" in docs[0].html
+        # The crawler must NOT mark the page processed — the ingestion worker
+        # owns the PROCESSED transition after a successful index.
+        mock_frontier.mark_processed.assert_not_awaited()
 
 
 class TestPhase2Get:
@@ -282,6 +294,7 @@ class TestCrawlWithAresponses:
         )
 
         mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])
+        mock_frontier.claim = AsyncMock(return_value=_make_record("https://example.com/"))
         mock_frontier.mark_processed = AsyncMock()
         mock_frontier._db = "not_none"
         mock_cache.get_headers = AsyncMock(return_value=None)
@@ -295,7 +308,6 @@ class TestCrawlWithAresponses:
             concurrency=1,
             max_concurrency=5,
             max_retries=1,
-            conditional_get=False,
         )
 
         source = _make_source()
@@ -304,11 +316,14 @@ class TestCrawlWithAresponses:
             docs.append(doc)
 
         assert len(docs) == 1
+        mock_frontier.claim.assert_awaited()
+        mock_frontier.mark_processed.assert_not_awaited()
         assert "Hello world" in docs[0].html
-        mock_frontier.mark_processed.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_crawl_skips_304_cached(self, mock_frontier, mock_cache, aresponses):
+    async def test_crawl_gets_page_even_if_server_would_304(self, mock_frontier, mock_cache, aresponses):
+        """The crawler always issues a full GET; cached (304-eligible) pages are
+        still fetched so the ingestion pipeline can verify against Qdrant."""
         aresponses.add(
             "example.com",
             "/sitemap.xml",
@@ -318,11 +333,16 @@ class TestCrawlWithAresponses:
         aresponses.add(
             "example.com",
             "/",
-            "HEAD",
-            aresponses.Response(status=304),
+            "GET",
+            aresponses.Response(
+                status=200,
+                headers={"Content-Type": "text/html", "ETag": '"v1"'},
+                text="<html><body><p>Still present</p></body></html>",
+            ),
         )
 
         mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])
+        mock_frontier.claim = AsyncMock(return_value=_make_record("https://example.com/"))
         mock_frontier.mark_processed = AsyncMock()
         mock_frontier._db = "not_none"
         mock_cache.get_headers = AsyncMock(return_value={"status": "200", "etag": '"v1"'})
@@ -336,7 +356,6 @@ class TestCrawlWithAresponses:
             concurrency=1,
             max_concurrency=5,
             max_retries=1,
-            conditional_get=True,
         )
 
         source = _make_source()
@@ -344,5 +363,59 @@ class TestCrawlWithAresponses:
         async for doc in crawler.crawl(source, max_pages=1):
             docs.append(doc)
 
-        assert len(docs) == 0
-        mock_frontier.mark_processed.assert_awaited()
+        assert len(docs) == 1
+        assert "Still present" in docs[0].html
+        mock_frontier.mark_processed.assert_not_awaited()
+
+
+class TestSeedFrontier:
+    """Tests for _seed_frontier seeding semantics."""
+
+    @pytest.mark.asyncio
+    async def test_seeds_sitemap_urls_and_start_urls(self, crawler, mock_frontier):
+        source = _make_source()
+        crawler._try_sitemap = AsyncMock(
+            return_value=[
+                "https://example.com/docs/a.html",
+                "https://example.com/docs/b.html",
+            ]
+        )
+
+        await crawler._seed_frontier(source, max_pages=0)
+
+        discovered = {call.kwargs["url"] for call in mock_frontier.discover.await_args_list}
+        assert discovered == {
+            "https://example.com/docs/a.html",
+            "https://example.com/docs/b.html",
+            "https://example.com",
+        }
+
+    @pytest.mark.asyncio
+    async def test_seeds_start_urls_when_sitemap_unavailable(self, crawler, mock_frontier):
+        source = _make_source()
+        crawler._try_sitemap = AsyncMock(return_value=None)
+
+        await crawler._seed_frontier(source, max_pages=0)
+
+        mock_frontier.discover.assert_awaited_once_with(
+            url="https://example.com",
+            source_name="test",
+            parent_hash=None,
+            depth=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_url_duplicate_in_sitemap_seeded_once(self, crawler, mock_frontier):
+        source = _make_source()
+        crawler._try_sitemap = AsyncMock(
+            return_value=[
+                "https://example.com",
+                "https://example.com/docs/a.html",
+            ]
+        )
+
+        await crawler._seed_frontier(source, max_pages=0)
+
+        discovered = [call.kwargs["url"] for call in mock_frontier.discover.await_args_list]
+        assert discovered.count("https://example.com") == 1
+        assert len(discovered) == 2

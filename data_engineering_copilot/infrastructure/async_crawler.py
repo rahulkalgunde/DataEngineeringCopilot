@@ -34,8 +34,6 @@ FATAL_ERROR_TYPES = (
 class CrawlMetrics:
     pages_discovered: int = 0
     pages_fetched: int = 0
-    pages_skipped_304: int = 0
-    pages_rediscovered_304: int = 0
     pages_failed: int = 0
 
 
@@ -61,7 +59,13 @@ class _LinkExtractor(HTMLParser):
 
 
 class AsyncDocumentationCrawler:
-    """Two-phase async crawler: HEAD conditional check -> full GET -> yield RawDocument."""
+    """Async crawler: full GET per URL -> yield RawDocument.
+
+    No conditional-GET fast path: every queued URL is fetched and the
+    content-hash dedup in the ingestion pipeline decides whether re-indexing
+    is required. This guarantees pages are never skipped based on stale cache
+    state (e.g. after a Qdrant reset).
+    """
 
     def __init__(
         self,
@@ -73,7 +77,6 @@ class AsyncDocumentationCrawler:
         max_concurrency: int = 40,
         max_retries: int = 3,
         retry_backoff_base: float = 1.0,
-        conditional_get: bool = True,
         user_agent: str = "DataEngineeringCopilot/1.0",
         thread_pool_size: int = 8,
         per_domain_concurrency: int = 3,
@@ -88,7 +91,6 @@ class AsyncDocumentationCrawler:
         self.max_concurrency = max_concurrency
         self.max_retries = max_retries
         self.retry_backoff_base = retry_backoff_base
-        self.conditional_get = conditional_get
         self.user_agent = user_agent
         self.thread_pool_size = thread_pool_size
         self.per_domain_concurrency = per_domain_concurrency
@@ -158,13 +160,14 @@ class AsyncDocumentationCrawler:
             yielded_count = 0
             total_attempted = 0
             max_attempted = max(max_pages * 3, 200)
+            in_flight = 0
 
             async def worker() -> None:
+                nonlocal in_flight
                 while True:
                     record = await queue.get()
                     try:
                         doc = await self._process_url(session, record, source, on_event)
-                        await results_queue.put(doc)
                     except Exception as exc:
                         if isinstance(exc, FATAL_ERROR_TYPES):
                             self._fatal_error = exc
@@ -174,6 +177,7 @@ class AsyncDocumentationCrawler:
                                 error=str(exc),
                                 url=record.url,
                             )
+                            in_flight -= 1
                             queue.task_done()
                             break
                         log.warning(
@@ -182,9 +186,10 @@ class AsyncDocumentationCrawler:
                             error=str(exc),
                             url=record.url,
                         )
-                        await results_queue.put(None)
-                    finally:
-                        queue.task_done()
+                        doc = None
+                    await results_queue.put(doc)
+                    in_flight -= 1
+                    queue.task_done()
 
             # Spin up static pool of long-running concurrent worker tasks
             workers = [asyncio.create_task(worker()) for _ in range(self.concurrency)]
@@ -196,14 +201,17 @@ class AsyncDocumentationCrawler:
                         needed = self.concurrency - queue.qsize()
                         records = await self.frontier.get_pending(source.name, limit=needed)
 
-                        if not records and queue.empty() and results_queue.empty():
+                        if not records and queue.empty() and results_queue.empty() and in_flight <= 0:
                             break
 
                         for record in records:
                             if total_attempted >= max_attempted:
                                 break
-                            await queue.put(record)
-                            total_attempted += 1
+                            claimed = await self.frontier.claim(record.url_hash)
+                            if claimed is not None:
+                                in_flight += 1
+                                await queue.put(claimed)
+                                total_attempted += 1
 
                     # Non-blocking, predictable yielding mechanism
                     if not results_queue.empty() or queue.empty():
@@ -243,37 +251,6 @@ class AsyncDocumentationCrawler:
         async with domain_state.semaphore:
             await self._enforce_delay(domain_state)
 
-            if self.conditional_get:
-                cached = await self.cache.get_headers(record.url_hash)
-                if cached:
-                    is_304 = await self._phase1_head(session, record, cached)
-                    if is_304:
-                        await self.frontier.mark_processed(record.url_hash)
-                        self._metrics.pages_skipped_304 += 1
-                        # BFS expansion: re-discover children from sitemap_edges
-                        rediscovered = await self.frontier.rediscover_children(
-                            record.url_hash,
-                            record.source_name,
-                            record.depth + 1,
-                        )
-                        self._metrics.pages_rediscovered_304 += rediscovered
-                        if rediscovered:
-                            log.debug(
-                                "crawler.bfs_304_rediscovered parent=%s children=%d",
-                                record.url[:80],
-                                rediscovered,
-                            )
-                        self._emit(
-                            on_event,
-                            IngestionEvent(
-                                event_type="page_skipped_cached",
-                                source_name=record.source_name,
-                                message=f"Cache hit (304): {record.url}",
-                                url=record.url,
-                            ),
-                        )
-                        return None
-
             result = await self._phase2_get(session, record)
             if result is None:
                 return None
@@ -281,7 +258,6 @@ class AsyncDocumentationCrawler:
             html, content_type = result
 
             await self._extract_and_discover(record, html, source)
-            await self.frontier.mark_processed(record.url_hash)
             self._metrics.pages_fetched += 1
 
             self._emit(
@@ -301,26 +277,6 @@ class AsyncDocumentationCrawler:
                 html=html,
                 content_type=content_type,
             )
-
-    async def _phase1_head(self, session: aiohttp.ClientSession, record: CrawlRecord, cached: dict[str, str]) -> bool:
-        headers: dict[str, str] = {"User-Agent": self.user_agent}
-        if cached.get("etag"):
-            headers["If-None-Match"] = cached["etag"]
-        if cached.get("last_modified"):
-            headers["If-Modified-Since"] = cached["last_modified"]
-        try:
-            async with session.head(record.url, headers=headers) as resp:
-                if resp.status == 304:
-                    return True
-                await self.cache.set_headers(
-                    record.url_hash,
-                    status=resp.status,
-                    etag=resp.headers.get("ETag"),
-                    last_modified=resp.headers.get("Last-Modified"),
-                )
-                return False
-        except Exception:
-            return False
 
     async def _phase2_get(self, session: aiohttp.ClientSession, record: CrawlRecord) -> tuple[str, str] | None:
         for attempt in range(self.max_retries):
@@ -354,14 +310,16 @@ class AsyncDocumentationCrawler:
         return None
 
     async def _seed_frontier(self, source: DocumentationSource, max_pages: int) -> None:
-        seed_urls = None
+        seed_urls: list[str] = []
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            seed_urls = await self._try_sitemap(session, source)
-
-        if not seed_urls:
-            seed_urls = list(source.start_urls)
-        seed_limit = min(len(seed_urls), max(max_pages * 5, 50))
-        for url in seed_urls[:seed_limit]:
+            sitemap_urls = await self._try_sitemap(session, source)
+        if sitemap_urls:
+            seed_urls.extend(sitemap_urls)
+        for url in source.start_urls:
+            cleaned = self._clean_url(url)
+            if cleaned not in seed_urls:
+                seed_urls.append(cleaned)
+        for url in seed_urls:
             await self.frontier.discover(
                 url=self._clean_url(url),
                 source_name=source.name,
