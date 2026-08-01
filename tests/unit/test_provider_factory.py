@@ -5,49 +5,39 @@ from __future__ import annotations
 import pytest
 
 from data_engineering_copilot.config.settings import AppSettings
+from tests.conftest import make_settings
 
-
-def _make_settings(**overrides) -> AppSettings:
-    defaults = {
-        "llm_provider": "ollama",
-        "llm_model": "llama3.2:3b",
-        "embedding_provider": "ollama",
-        "openrouter_api_key": "",
-        "openrouter_model": "anthropic/claude-3.5-sonnet",
-        "openrouter_embedding_model": "nvidia/nemotron-3-embed-1b:free",
-        "ollama_base_url": "http://localhost:11434",
-        "ollama_model": "llama3.2:3b",
-        "ollama_timeout_seconds": 300,
-        "ollama_num_ctx": 4096,
-        "ollama_num_predict": 512,
-        "embedding_model_name": "nomic-embed-text",
-        "embedding_batch_size": 32,
-    }
-    # Clear all purpose overrides and API keys to prevent .env from leaking in
-    for key in (
+_PROVIDER_FIELDS = frozenset(
+    {
+        "llm_provider",
+        "embedding_provider",
+        "code_llm_provider",
         "answer_llm_provider",
         "rewrite_llm_provider",
         "groundedness_llm_provider",
         "intent_llm_provider",
         "enrichment_llm_provider",
         "evaluation_llm_provider",
-        "code_llm_provider",
-        "nvidia_api_key",
-        "groq_api_key",
-        "cerebras_api_key",
-        "gemini_api_key",
-    ):
-        defaults.setdefault(key, "")
-    defaults.update(overrides)
-    return AppSettings(skip_provider_check=True, _env_file=None, **defaults)
+    }
+)
+
+
+def _make_settings(**overrides) -> AppSettings:
+    """Hermetic test settings via ``tests.conftest.make_settings``.
+
+    Auto-opts into non-Ollama provider routing (``_test_allow_non_ollama``)
+    whenever a provider field explicitly requests a non-Ollama provider — this
+    file deliberately exercises the factory's provider-routing logic, always
+    with placeholder API keys.
+    """
+    if any(k in _PROVIDER_FIELDS and v not in ("", "ollama") for k, v in overrides.items()):
+        overrides.setdefault("_test_allow_non_ollama", True)
+    return make_settings(**overrides)
 
 
 def _make_settings_empty_key(provider: str, key_type: str = "llm") -> AppSettings:
-    """Create settings with a provider set and a placeholder key, then clear the key.
-
-    This bypasses pydantic's model_validator to let the factory function
-    be the one that raises on missing keys.
-    """
+    """Build settings with a placeholder key, then clear it post-validation so
+    the factory's own missing-key check is what raises."""
     if key_type == "embedding":
         s = _make_settings(embedding_provider=provider, openrouter_api_key="sk-placeholder")
     else:
@@ -72,6 +62,7 @@ class TestBuildGlobalLLMClient:
         s = _make_settings(
             llm_provider="openrouter",
             llm_model="anthropic/claude-3.5-sonnet",
+            openrouter_model="anthropic/claude-3.5-sonnet",
             openrouter_api_key="sk-or-v1-test",
         )
         client = build_global_llm_client(s)
@@ -143,6 +134,7 @@ class TestBuildPurposeLLMClient:
         s = _make_settings(
             llm_provider="openrouter",
             llm_model="anthropic/claude-3.5-sonnet",
+            openrouter_model="anthropic/claude-3.5-sonnet",
             openrouter_api_key="sk-or-v1-test",
         )
         client = _build_purpose_llm_client(

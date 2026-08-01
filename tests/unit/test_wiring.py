@@ -225,14 +225,9 @@ class TestAsyncFactoryWiring:
     @staticmethod
     def _make_settings():
         """Hermetic settings: no env files, no real API keys, no infra required."""
-        from data_engineering_copilot.config.settings import AppSettings
+        from tests.conftest import make_settings
 
-        return AppSettings(
-            skip_provider_check=True,
-            llm_provider="ollama",
-            llm_model="llama3.2:3b",
-            embedding_provider="ollama",
-            embedding_model_name="nomic-embed-text",
+        return make_settings(
             crawl_db_url="postgresql://test:test@localhost:5432/test",
         )
 
