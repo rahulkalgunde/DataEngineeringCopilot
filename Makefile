@@ -1,10 +1,11 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
 PROJECT_NAME := dataengineeringcopilot
+COMPOSE := docker compose --profile app
 GIT_SHA := $(shell git rev-parse --short HEAD)
 IMAGE_TAG := dev-$(GIT_SHA)
 
-.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-cleanup docker-prune docker-setup docker-dev docker-ci-up
+.PHONY: install test test-quick test-unit test-unit-serial test-integration test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-build docker-pull docker-config docker-restart docker-shell docker-cleanup docker-prune docker-setup docker-dev docker-ci-up docker-ci-down
 
 install:
 	uv pip install -e ".[dev]"
@@ -77,49 +78,74 @@ clean:
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 
 docker-up:
-	docker compose --profile app up -d
+	$(COMPOSE) up -d
 
 docker-down:
-	docker compose --profile app down
+	$(COMPOSE) down
 
 docker-status:
 	@echo "=== Project Containers ==="
-	docker compose --profile app ps --format "table {{.Name}}\t{{.Status}}\t{{.RunningFor}}"
+	$(COMPOSE) ps --format "table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.RunningFor}}"
 	@echo ""
 	@echo "=== Health Checks ==="
-	@for svc in de_copilot_broker de_copilot_vectorstore de_copilot_ollama; do \
+	@for svc in de_copilot_broker de_copilot_vectorstore de_copilot_ollama de_copilot_clickhouse de_copilot_observability de_copilot_postgres; do \
 		echo -n "$$svc: "; \
 		docker inspect --format='{{.State.Health.Status}}' "$$svc" 2>/dev/null || echo "no health check"; \
 	done
 
 docker-rebuild:
-	docker compose --profile app build --no-cache
-	docker compose --profile app up -d
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up -d
 
 docker-logs:
-	docker compose --profile app logs --tail=100 -f
+	$(COMPOSE) logs --tail=100 -f
 
 docker-logs-worker:
-	docker compose --profile app logs --tail=50 -f celery_worker
+	$(COMPOSE) logs --tail=50 -f celery_worker
 
 docker-health:
 	@echo "=== Component Health ==="
 	@dec_venv/bin/dec health
 
 docker-stop-all:
-	docker compose --profile app stop
+	$(COMPOSE) stop
 	@echo "All services stopped"
 
-docker-cleanup:
-	# NOTE: intentionally NOT --volumes — prunes images/cache/containers but keeps your data.
-	docker system prune -f
-	docker image prune -f
-	@echo "Docker cleanup complete"
+# Build the base image only (tagged dev-<git sha>) without starting anything.
+docker-build:
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) build --build-arg GIT_SHA=$(GIT_SHA) backend-api
+	@echo "Image de_copilot_base_image:$(IMAGE_TAG) built"
 
+# Pull every third-party image referenced by the stack (skip any that fail).
+docker-pull:
+	docker compose pull --ignore-pull-failures
+	@echo "All third-party images pulled"
+
+# Validate both compose layouts (dev override is auto-loaded, CI file is explicit).
+docker-config:
+	$(COMPOSE) config --quiet && docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+	@echo "Compose config OK (dev + CI)"
+
+docker-restart:
+	$(COMPOSE) restart
+	@echo "All services restarted"
+
+# Open a shell in a service: make docker-shell svc=redis (default: celery_worker).
+docker-shell:
+	$(COMPOSE) exec $(or $(svc),celery_worker) sh -c "command -v bash >/dev/null 2>&1 && bash || sh"
+
+# Project-scoped: stop and remove this project's containers only.
+# Images, volumes (data), and build cache are kept.
+docker-cleanup:
+	$(COMPOSE) down
+	@echo "Docker cleanup complete (project: $(PROJECT_NAME))"
+
+# Project-scoped: remove this project's containers, their images, and the build
+# cache. Volumes (data) are always kept — never deletes other projects' resources.
 docker-prune:
+	$(COMPOSE) down --rmi all
 	docker builder prune -f
-	docker system prune -f
-	@echo "Docker prune complete"
+	@echo "Docker prune complete (project: $(PROJECT_NAME))"
 
 docker-setup: docker-up
 	@echo "Waiting for services to be ready..."
@@ -134,9 +160,12 @@ docker-setup: docker-up
 # services. The celery worker auto-reloads via watchfiles (override file), so
 # no manual restart is needed after code edits.
 docker-dev:
-	IMAGE_TAG=$(IMAGE_TAG) docker compose --profile app build --build-arg GIT_SHA=$(GIT_SHA) backend-api
-	IMAGE_TAG=$(IMAGE_TAG) docker compose --profile app up -d backend-api celery_worker
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) build --build-arg GIT_SHA=$(GIT_SHA) backend-api
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) up -d backend-api celery_worker
 	@echo "Dev stack ready (image tag: $(IMAGE_TAG)). Check /api/v1/version for deps_fingerprint_ok."
 
 docker-ci-up:
 	docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait
+
+docker-ci-down:
+	docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
