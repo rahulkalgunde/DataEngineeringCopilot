@@ -25,7 +25,7 @@ dependencies = [
     "pydantic-settings>=2.1",
     "python-dotenv>=1.0",
     "uvicorn>=0.27",
-    "langfuse>=2.0",
+    "langfuse>=2.0,<3",
     "structlog>=24.1",
     "tiktoken>=0.7",
     "celery>=5.3",
@@ -103,3 +103,8 @@ ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["data_engineering_copilot"]
+
+[tool.pyright]
+typeCheckingMode = "basic" # Use "basic" for existing projects, "strict" ONLY for brand new code
+reportMissingTypeStubs = false # Stops it from complaining about poorly-typed third-party libraries
+
