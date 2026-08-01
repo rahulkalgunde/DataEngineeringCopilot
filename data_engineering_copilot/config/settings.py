@@ -114,7 +114,8 @@ class AppSettings(BaseSettings):
         validation_alias="LANGFUSE_HOST",
     )
 
-    embedding_batch_size: int = 256
+    embedding_batch_size: int = 128
+    embed_concurrency: int = 1
     enrichment_batch_size: int = 20
 
     # LLM Provider selection: "ollama" | "openrouter"
@@ -142,8 +143,8 @@ class AppSettings(BaseSettings):
     openrouter_model: str = "openrouter/free"
     openrouter_embedding_model: str = "nvidia/nemotron-3-embed-1b:free"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_rpm_limit: int = 20
-    openrouter_rpd_limit: int = 1000
+    openrouter_rpm_limit: int = 18
+    openrouter_rpd_limit: int = 900
 
     # NVIDIA settings (LLM + Embeddings)
     nvidia_api_key: SecretStr = Field(
@@ -153,33 +154,33 @@ class AppSettings(BaseSettings):
     nvidia_model: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_embedding_model: str = "nvidia/nemotron-3-embed-1b"
-    nvidia_rpm_limit: int = 40
-    nvidia_rpd_limit: int = 1000
+    nvidia_rpm_limit: int = 36
+    nvidia_rpd_limit: int = 10000
 
     # Groq settings (LLM only)
     groq_api_key: SecretStr = SecretStr("")
     groq_model: str = "llama-3.1-8b-instant"
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    groq_rpm_limit: int = 30
-    groq_rpd_limit: int = 1000
+    groq_rpm_limit: int = 27
+    groq_rpd_limit: int = 13000
 
     # Cerebras settings (LLM only)
     cerebras_api_key: SecretStr = SecretStr("")
     cerebras_model: str = "gpt-oss-120b"
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
-    cerebras_rpm_limit: int = 30
-    cerebras_rpd_limit: int = 1000
+    cerebras_rpm_limit: int = 4
+    cerebras_rpd_limit: int = 2200
 
     # Gemini settings (LLM + Embeddings)
     gemini_api_key: SecretStr = SecretStr("")
     gemini_model: str = "gemini-2.5-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     gemini_embedding_model: str = "text-embedding-004"
-    gemini_rpm_limit: int = 30
-    gemini_rpd_limit: int = 1000
+    gemini_rpm_limit: int = 13
+    gemini_rpd_limit: int = 450
 
     # LLM fallback chain: ordered list of providers to try on failure
-    llm_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "groq", "cerebras", "ollama"])
+    llm_fallback_order: list[str] = Field(default_factory=lambda: ["groq", "gemini", "cerebras", "ollama"])
     llm_fallback_call_timeout: int = 120  # per-attempt timeout for non-primary fallback providers
 
     # Provider cooldown / routing
@@ -268,7 +269,10 @@ class AppSettings(BaseSettings):
     max_context_chars: int = 4000
     confidence_threshold: float = 0.18
     request_timeout_seconds: int = 15
-    ollama_timeout_seconds: int = 300
+    ollama_timeout_seconds: int = 180
+    ollama_connect_timeout_seconds: int = 5
+    ollama_pool_timeout_seconds: int = 5
+    ollama_keep_alive: str | int = "10m"
     ollama_num_ctx: int = 4096
     ollama_num_predict: int = 512
     ollama_retry_context_ratio: float = 0.5

@@ -265,7 +265,7 @@ async def ask(request: AskRequest, fastapi_request: Request):
                 request.question,
                 source_filter=effective_source_filter,
             ),
-            timeout=120.0,
+            timeout=max(120.0, float(settings.ollama_timeout_seconds)),
         )
         parsed = parse_rag_response(answer_obj.text)
 
@@ -296,7 +296,11 @@ async def ask(request: AskRequest, fastapi_request: Request):
             },
         )
     except TimeoutError:
-        logger.warning("RAG ask timed out after 120s question=%r", request.question[:100])
+        logger.warning(
+            "RAG ask timed out after %ss question=%r",
+            max(120, settings.ollama_timeout_seconds),
+            request.question[:100],
+        )
         raise HTTPException(status_code=504, detail="Request timed out. Try a simpler question.") from None
     except Exception as exc:
         logger.exception("RAG ask failed: %s", exc)

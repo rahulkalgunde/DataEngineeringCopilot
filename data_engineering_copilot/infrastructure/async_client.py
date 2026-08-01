@@ -17,6 +17,8 @@ class SafeAsyncClientMixin:
     _client: httpx.AsyncClient | None = None
     base_url: str = ""
     timeout_seconds: int | float = 30.0
+    connect_timeout_seconds: int | float | None = None
+    pool_timeout_seconds: int | float | None = None
 
     def _make_client_kwargs(self) -> dict:
         return {}
@@ -24,9 +26,14 @@ class SafeAsyncClientMixin:
     async def _get_safe_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             kwargs = self._make_client_kwargs()
+            timeout = httpx.Timeout(
+                self.timeout_seconds,
+                connect=self.connect_timeout_seconds,
+                pool=self.pool_timeout_seconds,
+            )
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
-                timeout=httpx.Timeout(self.timeout_seconds),
+                timeout=timeout,
                 limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
                 **kwargs,
             )
