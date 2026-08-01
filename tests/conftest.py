@@ -239,10 +239,12 @@ def pytest_configure(config):
         # test explicitly opts into a (test-only) env file.  os.environ vars
         # (e.g. monkeypatch.setenv) still take precedence over defaults.
         kwargs.setdefault("_env_file", None)
-        # Several per-purpose providers default to 'groq', so a hermetic
-        # settings object would otherwise fail validation for a missing key.
-        # Use a placeholder (never a real key) unless a test sets its own.
+        # Several per-purpose providers default to 'groq' / 'openrouter', so a
+        # hermetic settings object would otherwise fail validation for a
+        # missing key.  Use placeholders (never real keys) unless a test sets
+        # its own.
         kwargs.setdefault("groq_api_key", "placeholder")
+        kwargs.setdefault("openrouter_api_key", "placeholder")
 
         # Check explicit kwargs first — catches test code that deliberately
         # passes a non-Ollama provider.  Env-file provider overrides can't

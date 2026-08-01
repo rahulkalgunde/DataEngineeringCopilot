@@ -196,7 +196,7 @@ class TestBuildFallbackChain:
             purpose="enrichment",
         )
         assert client is not None
-        assert client.model == "gemini-2.0-flash-lite"
+        assert client.model == "gemini-2.5-flash"
 
     def test_answer_purpose_explicit_model(self):
         from data_engineering_copilot.factory import _build_fallback_chain

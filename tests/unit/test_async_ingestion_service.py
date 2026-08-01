@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from data_engineering_copilot.config.settings import AppSettings, DocumentationSource
-from data_engineering_copilot.domain.exceptions import IngestionError
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument
 from data_engineering_copilot.services.chunker import DocumentChunker
 
@@ -38,8 +37,15 @@ def mock_settings():
 def mock_crawler():
     c = MagicMock()
     c.crawl = MagicMock()
-    c.frontier = MagicMock()
-    c.frontier.close = AsyncMock()
+    frontier = AsyncMock()
+    frontier.stats = AsyncMock(return_value={"DISCOVERED": 1})
+    frontier.all_urls = AsyncMock(return_value=[])
+    frontier.reactivate_missing = AsyncMock(return_value=0)
+    frontier.mark_processed = AsyncMock()
+    frontier.mark_failed = AsyncMock()
+    frontier.mark_skipped = AsyncMock()
+    frontier.close = AsyncMock()
+    c.frontier = frontier
     return c
 
 
@@ -70,6 +76,7 @@ def mock_vector_store():
     v.upsert_chunks = AsyncMock()
     v.get_content_hash_for_url = AsyncMock(return_value=None)
     v.delete_by_url = AsyncMock()
+    v.count_urls = AsyncMock(return_value=0)
     return v
 
 
@@ -229,7 +236,8 @@ class TestAsyncIngestionServiceIngest:
         mock_crawler.crawl.assert_called()
 
     @pytest.mark.asyncio
-    async def test_worker_error_does_not_deadlock(self, mock_settings, mock_crawler):
+    async def test_worker_error_is_isolated(self, mock_settings, mock_crawler):
+        """A single page's processing error must not fail the whole run."""
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
@@ -252,8 +260,10 @@ class TestAsyncIngestionServiceIngest:
         raw = _make_raw()
         mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
-        with pytest.raises(IngestionError, match="boom"):
-            await asyncio.wait_for(service.ingest(), timeout=10)
+        # The run completes without raising; the page is marked FAILED.
+        total = await asyncio.wait_for(service.ingest(), timeout=10)
+        assert total == 0
+        mock_crawler.frontier.mark_failed.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_on_event_callback(self, mock_settings, mock_crawler):
@@ -413,3 +423,330 @@ class TestAsyncIngestionServiceWorkerPool:
         assert total == 3
         assert mock_embeddings.embed_texts.call_count >= 2
         assert mock_vector_store.upsert_chunks.call_count >= 2
+
+
+class TestDedupAuthority:
+    """Qdrant is the source of truth for content-hash dedup."""
+
+    @pytest.mark.asyncio
+    async def test_stored_hash_consults_vector_store_only(self, service, mock_vector_store):
+        """A stale/divergent Redis hash must never trigger a dedup skip."""
+        fake_redis = MagicMock()
+        registry = MagicMock()
+        registry.get_html_hash = AsyncMock(return_value="sha256:stale")
+        service._redis_client = fake_redis
+        service._url_registries["test"] = registry
+        mock_vector_store.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        result = await service._get_stored_content_hash("https://example.com/doc", "test")
+        assert result is None
+        registry.get_html_hash.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_page_indexed_when_redis_divergent_and_qdrant_empty(
+        self, mock_settings, mock_crawler, mock_vector_store
+    ):
+        """Regression: after `dec reset-qdrant`, pages previously recorded in
+        Redis must still be re-indexed because Qdrant no longer has them."""
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=mock_vector_store,
+        )
+        fake_redis = MagicMock()
+        registry = MagicMock()
+        registry.get_html_hash = AsyncMock(return_value="sha256:stale")
+        registry.set_html_hash = AsyncMock()
+        service._redis_client = fake_redis
+        service._url_registries["test"] = registry
+
+        mock_vector_store.get_content_hash_for_url = AsyncMock(return_value=None)
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        total = await service.ingest()
+        assert total == 1
+        mock_vector_store.upsert_chunks.assert_awaited()
+
+
+class TestFrontierStateTransitions:
+    """The ingestion worker owns PROCESSED/SKIPPED/FAILED transitions."""
+
+    @pytest.mark.asyncio
+    async def test_marks_processed_after_successful_flush(self, mock_settings, mock_crawler):
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        await service.ingest()
+        mock_crawler.frontier.mark_processed.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_when_flush_errors(self, mock_settings, mock_crawler):
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock(side_effect=RuntimeError("store down"))
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        total = await service.ingest()
+        assert total == 0
+        mock_crawler.frontier.mark_failed.assert_awaited()
+        mock_crawler.frontier.mark_processed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_marks_skipped_for_no_content(self, mock_settings, mock_crawler):
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse_skip
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock()
+        vector_store_mock.delete_by_url = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        total = await service.ingest()
+        assert total == 0
+        mock_crawler.frontier.mark_skipped.assert_awaited()
+        mock_crawler.frontier.mark_processed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_marks_processed_for_duplicate(self, mock_settings, mock_crawler):
+        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value="sha256:somehash")
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        original_hash = AsyncIngestionService._compute_content_hash
+        AsyncIngestionService._compute_content_hash = staticmethod(lambda text: "sha256:somehash")
+        try:
+            total = await service.ingest()
+            assert total == 0
+            mock_crawler.frontier.mark_processed.assert_awaited()
+            vector_store_mock.upsert_chunks.assert_not_called()
+        finally:
+            AsyncIngestionService._compute_content_hash = original_hash
+
+
+class TestReactivation:
+    @pytest.mark.asyncio
+    async def test_reactivates_missing_urls_after_full_crawl(self, mock_settings, mock_crawler, mock_vector_store):
+        """After a fully-drained crawl, URLs missing from Qdrant (reset) are
+        re-discovered so the next run re-indexes them."""
+
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=mock_vector_store,
+        )
+        # Simulate a fully-drained crawl: frontier has no DISCOVERED records.
+        mock_crawler.frontier.stats = AsyncMock(return_value={"DISCOVERED": 0, "PROCESSED": 1})
+        mock_crawler.frontier.reactivate_missing = AsyncMock(return_value=1)
+
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+        await service.ingest()
+
+        mock_crawler.frontier.reactivate_missing.assert_awaited()
+        call_kwargs = mock_crawler.frontier.reactivate_missing.await_args.kwargs
+        assert call_kwargs.get("max_attempts") == mock_settings.frontier_max_attempts
+
+    @pytest.mark.asyncio
+    async def test_no_reactivation_on_partial_crawl(self, mock_settings, mock_crawler):
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+        # Non-empty index: the start-of-run reset check must not fire.
+        vector_store_mock.count_urls = AsyncMock(return_value=1)
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        mock_crawler.frontier.stats = AsyncMock(return_value={"DISCOVERED": 10, "PROCESSED": 1})
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+
+        await service.ingest()
+        mock_crawler.frontier.reactivate_missing.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reactivates_at_start_when_index_empty_despite_partial_crawl(
+        self, mock_settings, mock_crawler, mock_vector_store
+    ):
+        """Regression: after `dec reset-qdrant` (empty index + PROCESSED history),
+        a page-capped run still re-discovers missing URLs at the start, even when
+        DISCOVERED records remain (which suppress the post-crawl reactivation)."""
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=mock_vector_store,
+        )
+        mock_vector_store.count_urls = AsyncMock(return_value=0)
+        mock_crawler.frontier.stats = AsyncMock(return_value={"DISCOVERED": 10, "PROCESSED": 5})
+        mock_crawler.frontier.reactivate_missing = AsyncMock(return_value=5)
+
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+        await service.ingest()
+
+        mock_crawler.frontier.reactivate_missing.assert_awaited()
+        call_args = mock_crawler.frontier.reactivate_missing.await_args
+        assert call_args is not None
+        assert call_args.args[0] == "test"
+        assert call_args.args[1] == set()
+        assert call_args.kwargs.get("max_attempts") == mock_settings.frontier_max_attempts
+
+    @pytest.mark.asyncio
+    async def test_no_start_reactivation_when_index_nonempty(self, mock_settings, mock_crawler, mock_vector_store):
+        """A non-empty index means content is present, so no start-of-run reset."""
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=mock_vector_store,
+        )
+        mock_vector_store.count_urls = AsyncMock(return_value=1)
+        mock_crawler.frontier.stats = AsyncMock(return_value={"DISCOVERED": 5, "PROCESSED": 5})
+        mock_crawler.frontier.reactivate_missing = AsyncMock(return_value=0)
+
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+        await service.ingest()
+
+        mock_crawler.frontier.reactivate_missing.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reactivation_failure_is_nonfatal(self, mock_settings, mock_crawler, mock_vector_store):
+        """A transient error in the start-of-run reset check must not fail ingestion."""
+        parser_mock = MagicMock()
+        parser_mock.parse = _picklable_parse
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=parser_mock,
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=mock_vector_store,
+        )
+        mock_vector_store.count_urls = AsyncMock(side_effect=RuntimeError("Qdrant down"))
+
+        raw = _make_raw()
+        mock_crawler.crawl.return_value = _AsyncListIterator([raw])
+        await service.ingest()
+
+        mock_crawler.frontier.reactivate_missing.assert_not_awaited()
