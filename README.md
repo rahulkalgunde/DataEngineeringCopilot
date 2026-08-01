@@ -206,7 +206,7 @@ Each chunk stores:
 ## Rate Limiting
 
 - **Sliding Window Rate Limiter**: Shared `SlidingWindowRateLimiter` coordinates RPM and RPD between embeddings and LLM clients. Configured per-provider (OpenRouter: 20 RPM / 1000 RPD; NVIDIA NIM: 40 RPM).
-- **429 Handling**: Both clients parse `Retry-After` header and retry up to 5 times with exponential backoff.
+- **429 Handling**: LLM calls are fail-fast and failover-first — no same-provider retries, no circuit breaker. `Retry-After` is parsed into a category-based provider cooldown and the adaptive router fails over to the next provider in `llm_fallback_order`, ending at Ollama. The rate limiter acts as a non-blocking pre-flight gate so an over-limit provider is skipped without a paid API call. Embeddings still block on the limiter and retry transient errors.
 
 ## Ingestion & Workers
 

@@ -1,7 +1,7 @@
 # ADR-001: Circuit Breaker for LLM Providers
 
 **Date:** 2026-07-30  
-**Status:** Accepted  
+**Status:** Superseded (2026-08-01) — the per-client `CircuitBreaker` was removed. The provider-health cooldown registry in `infrastructure/provider_health.py` now acts as the single circuit breaker: any failure sets a category-based cooldown and the fail-fast/failover-first `AdaptiveLLMRouter` skips providers in cooldown without a call. See `AGENTS.md` → Adaptive fallback chain.
 **Deciders:** Architecture Team  
 
 ## Context

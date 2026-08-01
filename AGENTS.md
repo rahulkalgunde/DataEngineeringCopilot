@@ -35,6 +35,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec cancel <task-id>` | Cancels running ingestion via API |
 | `dec profile` | Ingestion concurrency profiler |
 | `dec monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
+| `dec probe-llm` | One real request per configured LLM/embedding provider — shows status, HTTP code, latency, error category, `Retry-After`; `--json`/`--verbose`/`--purpose`/`--providers` |
 | `dec status` / `dec health` / `dec config` | System status, health checks, config validation |
 
 ## API Routes (`api/routes.py`)
@@ -81,7 +82,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - **Async only**: `SafeAsyncClientMixin` (uses `httpx.AsyncClient`; `aiohttp` is crawler-only).
 - **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-qdrant` (dimension change).
 - **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global.
-- **Adaptive fallback chain**: `AdaptiveLLMRouter` tries primary provider, falls through `llm_fallback_order`, ends at Ollama. Provider health registry tracks failures for cooldown.
+- **Adaptive fallback chain**: `AdaptiveLLMRouter` is fail-fast and failover-first — no same-provider retries, no circuit breaker. Every provider (incl. purpose-assigned) passes a non-blocking gate (cooldown + rate-limiter window) before a single attempt; failures set a category-based cooldown and it moves to the next provider in `llm_fallback_order`, ending at Ollama (degraded mode). `Retry-After` propagates into cooldowns. Streaming failures skip health bookkeeping (they fall back to non-streaming `generate()`).
 - **Embedding dimension**: Model-dependent lookup in `embedding_model_dimensions` dict (`settings.py:124`).
 - **Chunking** (`chunking_strategy`): `"sentence_preserving"` (default, `chunk_size_words * 5` chars), `"semantic"`, `"header_aware"`, `"fixed_size"`.
 - **Hybrid search**: Enabled by default (dense + sparse, `hybrid_rrf_k=60`).
@@ -116,12 +117,20 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 ## Operational Gotchas
 - **Qdrant health**: Use `GET /` (port 6333). `/health` returns 404.
 - **Ollama `raw: True`**: Strips `<think>` tags. Empty response = output budget exhausted (increase `ollama_num_predict`).
-- **OpenRouter rate limiter**: Per-provider `SlidingWindowRateLimiter` (20 RPM / 1000 RPD). Retries 429s up to 5x with exp backoff + `Retry-After`.
+- **LLM rate limiting**: Per-provider `SlidingWindowRateLimiter` (OpenRouter 20 RPM / 1000 RPD). It is a non-blocking pre-flight gate for LLM calls — an over-limit provider is skipped without a paid API call (embeddings still block via `acquire()`). No same-provider retries; `Retry-After` is captured into the cooldown registry.
+- **Never run `dec probe-llm` without explicit user approval**: it makes live paid API calls to every configured LLM/embedding provider. Ask first.
 - **Worker time limits**: Soft 36000s (10h), Hard 43200s (12h). Zombie recovery via `task_failure` signal handler.
 - **Qdrant batch splitting**: `upsert_chunks` splits into 256-chunk sub-batches (avoids 32MB payload limit).
 - **URL dedup**: SHA-256 via `AsyncUrlRegistry` in Redis.
 - **Ollama testcontainer caching**: Integration/e2e conftests mount `~/.ollama`; models cached across runs.
 - **respx + Ollama embeddings**: `respx` passthrough returns empty bodies for `/api/embed`. To mock LLM with real embeddings, implement `LLMClientProtocol` instead of wire-mocking.
+
+## Docs Maintenance
+- `docs/cli_guide.md` and `docs/makefile_guide.md` must always match the code's actual behavior. Keep them updated in the same change as the code they describe.
+- Update the relevant guide whenever you add, remove, rename, or change the behavior of any `dec` command, its options/exit codes/output, or any Makefile target.
+- Do not document behavior from memory — verify against the real output (`dec <command> --help`, running the command, or reading the Makefile / `cli.py`).
+- If a command or flag is not implemented (e.g. `dec version`), say so explicitly in the guide instead of documenting it as working.
+- Keep the CLI tables in this file (`## CLI`, `## Testing`) in sync with `docs/cli_guide.md` / `docs/makefile_guide.md`.
 
 ## Additional Instruction Sources
 - `.clinerules/` — python-env-rules.md, guardrails.md, behavioral-constraints.md, memory-bank.md
