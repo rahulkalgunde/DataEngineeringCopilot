@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
+from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 from data_engineering_copilot.services.contextual_chunk_enricher import (
     ContextualChunkEnricher,
     LLMContextSummarizer,
@@ -46,10 +48,74 @@ class TestLLMContextSummarizer:
 
     async def test_summarize_error_returns_empty(self):
         llm = AsyncMock()
-        llm.generate.side_effect = RuntimeError("LLM down")
+        llm.generate.side_effect = LLMClientError("permanent failure", category=ProviderErrorCategory.PERMANENT_ERROR)
         summarizer = LLMContextSummarizer(llm_client=llm)
         result = await summarizer.summarize(_doc())
         assert result == ""
+        assert llm.generate.call_count == 1
+
+    async def test_summarize_transient_error_retries_then_succeeds(self):
+        llm = AsyncMock()
+        llm.generate.side_effect = [
+            LLMClientError("timed out", category=ProviderErrorCategory.RETRYABLE),
+            LLMClientError("timed out", category=ProviderErrorCategory.RETRYABLE),
+            "recovered summary",
+        ]
+        summarizer = LLMContextSummarizer(llm_client=llm, retry_backoff_seconds=0)
+        result = await summarizer.summarize(_doc())
+        assert result == "recovered summary"
+        assert llm.generate.call_count == 3
+
+    async def test_summarize_transient_error_exhausts_retries(self):
+        llm = AsyncMock()
+        llm.generate.side_effect = LLMClientError("timed out", category=ProviderErrorCategory.RETRYABLE)
+        summarizer = LLMContextSummarizer(llm_client=llm, max_retries=2, retry_backoff_seconds=0)
+        result = await summarizer.summarize(_doc())
+        assert result == ""
+        assert llm.generate.call_count == 3
+
+    async def test_summarize_permanent_error_single_attempt(self):
+        llm = AsyncMock()
+        llm.generate.side_effect = LLMClientError("bad request", category=ProviderErrorCategory.INVALID_REQUEST)
+        summarizer = LLMContextSummarizer(llm_client=llm, max_retries=2, retry_backoff_seconds=0)
+        result = await summarizer.summarize(_doc())
+        assert result == ""
+        assert llm.generate.call_count == 1
+
+    async def test_summarize_failure_recorder_called_on_failure(self):
+        llm = AsyncMock()
+        llm.generate.side_effect = LLMClientError("timed out", category=ProviderErrorCategory.RETRYABLE)
+        recorder = AsyncMock()
+        summarizer = LLMContextSummarizer(
+            llm_client=llm,
+            max_retries=1,
+            retry_backoff_seconds=0,
+            failure_recorder=recorder,
+        )
+        result = await summarizer.summarize(_doc(url="http://x", source="s"))
+        assert result == ""
+        recorder.assert_awaited_once()
+        recorded = recorder.call_args[0][0]
+        assert recorded.url == "http://x"
+        assert recorded.source_name == "s"
+
+    async def test_summarize_failure_recorder_not_called_on_success(self):
+        llm = AsyncMock()
+        llm.generate.return_value = "a summary"
+        recorder = AsyncMock()
+        summarizer = LLMContextSummarizer(llm_client=llm, failure_recorder=recorder)
+        result = await summarizer.summarize(_doc())
+        assert result == "a summary"
+        recorder.assert_not_called()
+
+    async def test_summarize_failure_recorder_not_called_on_no_content(self):
+        llm = AsyncMock()
+        llm.generate.return_value = "NO_CONTENT_TO_SUMMARIZE"
+        recorder = AsyncMock()
+        summarizer = LLMContextSummarizer(llm_client=llm, failure_recorder=recorder)
+        result = await summarizer.summarize(_doc())
+        assert result == ""
+        recorder.assert_not_called()
 
     async def test_summarize_no_preamble_stripped(self):
         llm = AsyncMock()

@@ -192,6 +192,105 @@ class TestAdaptiveLLMRouter:
         ollama_client.generate.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_ollama_degraded_skipped_when_consecutive_failures_exceeded(self, health):
+        ext_client = AsyncMock()
+        ext_client.model = "ext-model"
+        ext_client.generate = AsyncMock(side_effect=LLMClientError("timed out"))
+        ext_client.last_usage = MagicMock()
+
+        ollama_client = AsyncMock()
+        ollama_client.model = "ollama-model"
+        ollama_client.generate = AsyncMock(return_value="Ollama response")
+        ollama_client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", ext_client), ("ollama", ollama_client)],
+            health=health,
+            ollama_max_consecutive_failures=3,
+        )
+        health.register_provider("openrouter", ["ext-model"])
+        health.register_provider("ollama", ["ollama-model"])
+        for _ in range(3):
+            health.track_failure("ollama", "ollama-model", ProviderErrorCategory.RETRYABLE)
+
+        with pytest.raises(LLMClientError, match="All LLM providers in adaptive fallback chain failed"):
+            await router.generate("test prompt")
+
+        ext_client.generate.assert_called()
+        ollama_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ollama_degraded_attempted_below_threshold(self, health):
+        ext_client = AsyncMock()
+        ext_client.model = "ext-model"
+        ext_client.generate = AsyncMock(side_effect=LLMClientError("timed out"))
+        ext_client.last_usage = MagicMock()
+
+        ollama_client = AsyncMock()
+        ollama_client.model = "ollama-model"
+        ollama_client.generate = AsyncMock(return_value="Ollama response")
+        ollama_client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", ext_client), ("ollama", ollama_client)],
+            health=health,
+        )
+        health.register_provider("openrouter", ["ext-model"])
+        health.register_provider("ollama", ["ollama-model"])
+        for _ in range(2):
+            health.track_failure("ollama", "ollama-model", ProviderErrorCategory.RETRYABLE)
+
+        result = await router.generate("test prompt")
+
+        assert result == "Ollama response"
+        ollama_client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ollama_degraded_recovers_after_success(self, health):
+        ext_client = AsyncMock()
+        ext_client.model = "ext-model"
+        ext_client.generate = AsyncMock(side_effect=LLMClientError("timed out"))
+        ext_client.last_usage = MagicMock()
+
+        ollama_client = AsyncMock()
+        ollama_client.model = "ollama-model"
+        ollama_client.generate = AsyncMock(return_value="Ollama response")
+        ollama_client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", ext_client), ("ollama", ollama_client)],
+            health=health,
+        )
+        health.register_provider("openrouter", ["ext-model"])
+        health.register_provider("ollama", ["ollama-model"])
+        for _ in range(3):
+            health.track_failure("ollama", "ollama-model", ProviderErrorCategory.RETRYABLE)
+        health.track_success("ollama", "ollama-model", latency=1.0)
+
+        result = await router.generate("test prompt")
+
+        assert result == "Ollama response"
+        ollama_client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_raised_error_carries_last_provider_category(self, health):
+        client = AsyncMock()
+        client.model = "test-model"
+        client.generate = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
+        client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", client)],
+            health=health,
+        )
+        health.register_provider("openrouter", ["test-model"])
+
+        with pytest.raises(LLMClientError) as exc_info:
+            await router.generate("test prompt")
+
+        assert exc_info.value.category == ProviderErrorCategory.RETRYABLE
+
+    @pytest.mark.asyncio
     async def test_rate_limited_with_other_provider_failovers(self, health):
         or_client = AsyncMock()
         or_client.model = "or-model"
