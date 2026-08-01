@@ -96,11 +96,21 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - Lint: `select = ["E", "F", "W", "I", "UP", "B", "SIM"]`, `ignore = ["E501"]`
 - `isort.known-first-party = ["data_engineering_copilot"]`
 
+## Testing Conventions
+- **Hermetic settings**: `AppSettings` must never see `.env`/`.env.secrets`/`.env.local` or ambient provider env vars. `tests/conftest.py` no-ops `dotenv.load_dotenv` process-wide, forces `_env_file=None`, and fails on exported provider/API-key env vars. Never build `AppSettings` directly — use `make_settings(**overrides)` (Ollama-only defaults, per-purpose overrides empty, API keys empty).
+- **Ollama-only by default**: Explicit non-Ollama providers raise unless the test passes `_test_allow_non_ollama=True` with placeholder keys (provider-routing/factory/wiring tests only). Never real API keys.
+- **Deterministic doubles**: Real-LLM/Qdrant pipeline tests live in `tests/unit/test_rag_pipeline_logic.py` using `tests/doubles/` (`StubLLM`/`StaticLLM`, `StubEmbedder`, `InMemoryVectorStore`, `_StubRedis`, `InMemoryFrontierDB`). Contracts pinned in `tests/unit/test_doubles_contract.py`. `test_rag_integration.py` keeps 1 real-LLM smoke test + wire-mocked tests.
+- **Infra availability**: Every availability guard routes through `infra_unavailable()` — normally it `pytest.skip`s, but with `REQUIRE_INFRA=1` it raises (real infra mandatory). `pytest_collection_modifyitems` auto-skips marked tests when services are down; under `REQUIRE_INFRA=1` it fails collection if the services the collected tests need are unreachable (marker-driven — e2e never needs Langfuse).
+- **`make test-real`** = integration + e2e serial legs with `REQUIRE_INFRA=1`; use it (or CI) to prove infra health honestly. Local `make test-integration`/`test-e2e` still skip silently when services are down.
+- **Redis probe is auth-aware**: `_redis_is_reachable()` defaults to `redis://:local_secure_password_123@localhost:6379/0` and authenticates on `-NOAUTH`; compose Redis runs `--requirepass`.
+- **Harness contract pinned** in `tests/unit/test_test_harness_contract.py` (`infra_unavailable`, redis probe, `_needed_infra`, `_test_allow_non_ollama`, `make_settings`).
+
 ## CI Workflow (`.github/workflows/test.yml`)
 - 4 job pipeline: `lint` → `test-unit` + `test-eval` (parallel) → `test-integration` → `test-e2e`.
 - CI uses `uv sync --frozen --extra dev` (not `uv pip install -e .`).
 - Integration/e2e jobs cache Docker images and Ollama models (`~/.ollama`).
 - Ollama models pulled: `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b`.
+- Integration + e2e jobs run with `REQUIRE_INFRA=1`, so unavailable services fail the job instead of silently skipping all tests.
 - Also has identical disabled copy at `.github/workflows.disabled/test.yml`.
 
 ## Operational Gotchas
