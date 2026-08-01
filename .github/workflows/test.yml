@@ -159,6 +159,8 @@ jobs:
 
       - name: Integration Tests
         run: uv run make test-integration
+        env:
+          REQUIRE_INFRA: "1"
 
       - name: Save Docker images to cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
@@ -241,6 +243,8 @@ jobs:
 
       - name: E2E Tests
         run: uv run make test-e2e
+        env:
+          REQUIRE_INFRA: "1"
 
       - name: Save Docker images to cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
