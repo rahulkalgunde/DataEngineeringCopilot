@@ -24,6 +24,7 @@ def mock_vector_store():
     m.upsert_chunks = AsyncMock()
     m.query = AsyncMock()
     m.count = AsyncMock()
+    m.count_urls = AsyncMock(return_value=0)
     m.get_content_hash_for_url = AsyncMock()
     m.delete_by_url = AsyncMock()
     return m

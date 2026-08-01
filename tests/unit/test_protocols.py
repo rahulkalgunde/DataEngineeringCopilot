@@ -106,6 +106,7 @@ class TestProtocolStructure:
         assert hasattr(VectorStoreProtocol, "upsert_chunks")
         assert hasattr(VectorStoreProtocol, "query")
         assert hasattr(VectorStoreProtocol, "count")
+        assert hasattr(VectorStoreProtocol, "count_urls")
         assert hasattr(VectorStoreProtocol, "get_content_hash_for_url")
         assert hasattr(VectorStoreProtocol, "delete_by_url")
 
