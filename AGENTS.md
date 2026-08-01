@@ -27,6 +27,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | Command | Notes |
 |---|---|
 | `dec ask <question>` | Calls `build_rag_service()` directly (no API needed) |
+| `dec reenrich --source "X" [--urls <file>]` | Re-enriches pages whose contextual enrichment failed: clears Qdrant chunks + Redis URL-registry entries, requeues frontier rows to DISCOVERED, re-runs ingestion in-process. URL source = Redis `ingest:enrichment_failed:<source>` set (or `--urls` file). Requires `CRAWL_DB_URL`. |
 | `dec ingest --source "X"` | POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery) |
 | `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
 | `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
@@ -82,11 +83,12 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - **Async only**: `SafeAsyncClientMixin` (uses `httpx.AsyncClient`; `aiohttp` is crawler-only).
 - **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-qdrant` (dimension change).
 - **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global.
-- **Adaptive fallback chain**: `AdaptiveLLMRouter` is fail-fast and failover-first — no same-provider retries, no circuit breaker. Every provider (incl. purpose-assigned) passes a non-blocking gate (cooldown + rate-limiter window) before a single attempt; failures set a category-based cooldown and it moves to the next provider in `llm_fallback_order`, ending at Ollama (degraded mode). `Retry-After` propagates into cooldowns. Streaming failures skip health bookkeeping (they fall back to non-streaming `generate()`).
+- **Adaptive fallback chain**: `AdaptiveLLMRouter` is fail-fast and failover-first — no same-provider retries, no circuit breaker. Every provider (incl. purpose-assigned) passes a non-blocking gate (cooldown + rate-limiter window) before a single attempt; failures set a category-based cooldown and it moves to the next provider in `llm_fallback_order`, ending at Ollama (degraded mode). `Retry-After` propagates into cooldowns. The degraded Ollama fallback is skipped (fail-fast) once a local model hits `ollama_degraded_max_consecutive_failures` consecutive failures (default 3); one success resets the counter. Streaming failures skip health bookkeeping (they fall back to non-streaming `generate()`). 429s without `Retry-After` escalate their cooldown geometrically (`10s → 20s → 40s → 60s` cap) per consecutive failure.
 - **Embedding dimension**: Model-dependent lookup in `embedding_model_dimensions` dict (`settings.py:124`).
 - **Chunking** (`chunking_strategy`): `"sentence_preserving"` (default, `chunk_size_words * 5` chars), `"semantic"`, `"header_aware"`, `"fixed_size"`.
 - **Hybrid search**: Enabled by default (dense + sparse, `hybrid_rrf_k=60`).
 - **RAG pipeline** (`services/async_rag.py`): Query rewriting → vector retrieval → cross-encoder reranking → context assembly → LLM → groundedness verification. Two-tier query cache (exact + semantic).
+- **Contextual enrichment retry**: `LLMContextSummarizer` is fail-open (a page with no summary still indexes). Transient provider errors (RETRYABLE / RATE_LIMITED / TEMPORARY_UNAVAILABLE / QUOTA_EXCEEDED, or unknown category) are retried up to `max_retries=2` with a 2s backoff; permanent errors are not. After the budget is exhausted the URL is recorded into the Redis set `ingest:enrichment_failed:<source>` (via the factory-injected `failure_recorder`) for a later `dec reenrich` pass.
 - **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` via `sentence-transformers`. Downloaded at runtime (~450MB). Singleton-cached in `services/reranker.py`.
 - **Output parsing**: `parse_rag_response()` + `verify_citations()` in `services/structured_output.py`.
 - **Crawl DB**: PostgreSQL via `PostgresCrawlFrontierDB` (set `CRAWL_DB_URL`).

@@ -5,7 +5,7 @@ COMPOSE := docker compose --profile app
 GIT_SHA := $(shell git rev-parse --short HEAD)
 IMAGE_TAG := dev-$(GIT_SHA)
 
-.PHONY: install test test-quick test-unit test-unit-serial test-integration test-real test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-build docker-pull docker-config docker-restart docker-shell docker-cleanup docker-prune docker-setup docker-dev docker-ci-up docker-ci-down
+.PHONY: install test test-quick test-unit test-unit-serial test-integration test-real test-e2e test-ci test-ci-unit test-smoke test-eval lint format clean docker-up docker-down docker-status docker-rebuild docker-logs docker-logs-worker docker-health docker-stop-all docker-build docker-pull docker-config docker-restart docker-shell docker-cleanup docker-prune docker-prune-stale docker-setup docker-dev docker-ci-up docker-ci-down
 
 install:
 	uv pip install -e ".[dev]"
@@ -153,6 +153,26 @@ docker-prune:
 	$(COMPOSE) down --rmi all
 	docker builder prune -f
 	@echo "Docker prune complete (project: $(PROJECT_NAME))"
+
+# Remove only this project's stale, unused images (de_copilot_base_image:*).
+# Never touches other projects' images, and keeps any image still referenced by
+# a container (running or stopped). No-op when nothing matches.
+docker-prune-stale:
+	@images=$$(docker images --filter "reference=de_copilot_base_image:*" --format "{{.Repository}}:{{.Tag}}"); \
+	if [ -z "$$images" ]; then \
+		echo "No stale project images to prune (de_copilot_base_image:* not present)."; \
+	else \
+		for img in $$images; do \
+			if docker ps -aq --filter "ancestor=$$img" | grep -q .; then \
+				echo "  keep   $$img (in use by a container)"; \
+			else \
+				echo "  remove $$img"; \
+				docker image rm "$$img" >/dev/null 2>&1 || echo "    ! could not remove $$img"; \
+			fi; \
+		done; \
+	fi; \
+	echo "Remaining project images:"; \
+	docker images --filter "reference=de_copilot_base_image:*" --format "  {{.Repository}}:{{.Tag}}" || true
 
 docker-setup: docker-up
 	@echo "Waiting for services to be ready..."
