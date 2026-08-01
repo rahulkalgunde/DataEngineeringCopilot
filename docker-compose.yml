@@ -123,6 +123,7 @@ services:
       - "5432:5432"
     networks:
       - de_copilot_net
+    restart: unless-stopped
 
   langfuse:
     image: langfuse/langfuse:3
