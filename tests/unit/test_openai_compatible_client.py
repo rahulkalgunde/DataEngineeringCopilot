@@ -115,6 +115,38 @@ async def test_generate_empty_content_returns_empty(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_null_content_returns_empty(client):
+    with respx.mock:
+        respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": None}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0},
+                    "model": "anthropic/claude-3.5-sonnet",
+                },
+            )
+        )
+        result = await client.generate("test")
+        assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_missing_usage_ok(client):
+    with respx.mock:
+        respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}], "model": "anthropic/claude-3.5-sonnet"},
+            )
+        )
+        result = await client.generate("test")
+        assert result == "ok"
+        assert client.last_usage.prompt_tokens == 0
+        assert client.last_usage.completion_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_generate_http_error(client):
     with respx.mock:
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(

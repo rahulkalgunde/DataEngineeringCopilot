@@ -114,12 +114,41 @@ def test_track_failure_rate_limited_sets_cooldown():
     assert mh.cooldown_until > time.monotonic()
 
 
-def test_track_failure_rate_limited_without_retry_after_uses_category_default():
+def test_track_failure_rate_limited_without_retry_after_uses_short_initial_cooldown():
     reg = ProviderHealthRegistry(default_cooldown_seconds=30.0)
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
     mh = reg.get_model_health("openrouter", "openrouter/free")
-    assert mh.cooldown_until > time.monotonic() + 50.0
+    assert mh.cooldown_until > time.monotonic()
+    assert mh.cooldown_until - time.monotonic() <= 10.1
+
+
+def test_track_failure_rate_limited_without_retry_after_escalates_on_repeats():
+    reg = ProviderHealthRegistry(default_cooldown_seconds=30.0)
+    reg.register_provider("openrouter", ["openrouter/free"])
+    durations = []
+    for _ in range(4):
+        reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
+        mh = reg.get_model_health("openrouter", "openrouter/free")
+        durations.append(round(mh.cooldown_until - time.monotonic(), 1))
+    assert durations == [10.0, 20.0, 40.0, 60.0]
+
+
+def test_track_failure_rate_limited_without_retry_after_caps_at_default():
+    reg = ProviderHealthRegistry(default_cooldown_seconds=30.0)
+    reg.register_provider("openrouter", ["openrouter/free"])
+    for _ in range(10):
+        reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
+    mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh.cooldown_until - time.monotonic() <= 60.1
+
+
+def test_track_failure_rate_limited_with_retry_after_honored():
+    reg = ProviderHealthRegistry(default_cooldown_seconds=30.0)
+    reg.register_provider("openrouter", ["openrouter/free"])
+    reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED, retry_after=25.0)
+    mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert round(mh.cooldown_until - time.monotonic(), 1) == 25.0
 
 
 def test_track_failure_retryable_uses_short_cooldown():
