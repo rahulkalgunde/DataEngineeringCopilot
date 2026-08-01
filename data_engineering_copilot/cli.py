@@ -116,8 +116,8 @@ def ask(question: str) -> None:
     print(f"\nConfidence: {answer.confidence:.2f}")
 
 
-def reset_qdrant() -> None:
-    """Delete and recreate the Qdrant collection with the correct dimension/hybrid config."""
+def _recreate_qdrant_collection() -> None:
+    """Delete and recreate the Qdrant collection with the current dimension/hybrid config."""
     url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
     logger.warning("Resetting Qdrant collection=%s url=%s", settings.collection_name, url)
     try:
@@ -154,11 +154,43 @@ def reset_qdrant() -> None:
     logger.info("Qdrant collection reset completed collection=%s", settings.collection_name)
 
 
-def reset_index() -> None:
-    """Reset the crawl frontier: clear Redis crawl keys and drop PostgreSQL frontier tables.
+def _bm25_cache_path() -> pathlib.Path:
+    """Return the default persisted BM25 tokenizer path for the current collection."""
+    from data_engineering_copilot.config.settings import PROJECT_ROOT
 
-    Does NOT touch the Qdrant collection — use ``dec reset-qdrant`` for that.
+    return PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
+
+
+def _delete_bm25_cache() -> None:
+    """Best-effort removal of the persisted BM25 tokenizer for the current collection."""
+    path = _bm25_cache_path()
+    if not path.exists():
+        print(f"No BM25 cache to delete: {path}")
+        return
+    try:
+        path.unlink()
+        print(f"Deleted BM25 cache: {path}")
+    except OSError as exc:
+        print(f"Warning: could not delete BM25 cache {path}: {exc}")
+
+
+def reset_qdrant() -> None:
+    """Delete and recreate the Qdrant collection and its persisted BM25 cache."""
+    _recreate_qdrant_collection()
+    _delete_bm25_cache()
+
+
+def reset_index() -> None:
+    """Full clean rebuild: recreate Qdrant + BM25 cache, clear Redis, drop PG frontier.
+
+    Wipes the crawl state (Redis ``crawl:*`` keys + PostgreSQL frontier tables)
+    and the vector index (Qdrant collection + persisted BM25 tokenizer) so the
+    next ingest rebuilds both sides consistently.  Qdrant is recreated first so
+    a failure aborts before the frontier history is dropped.
     """
+    _recreate_qdrant_collection()
+    _delete_bm25_cache()
+
     # Clear crawl-related keys from Redis (URL registry + HTTP conditional-GET cache)
     from data_engineering_copilot.workers.progress import get_redis_client
 
@@ -814,10 +846,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("question", help="Question to answer.")
 
     subparsers.add_parser(
-        "reset-index", help="Reset the crawl frontier: clear Redis crawl keys and drop PostgreSQL frontier tables."
+        "reset-index",
+        help="Full clean rebuild: recreate Qdrant + BM25 cache, clear Redis crawl keys, drop PostgreSQL frontier tables.",
     )
     subparsers.add_parser(
-        "reset-qdrant", help="Delete and recreate the Qdrant collection with the correct dimension/hybrid config."
+        "reset-qdrant",
+        help="Delete and recreate the Qdrant collection and its persisted BM25 cache.",
     )
     subparsers.add_parser("ui", help="Print the Streamlit command.")
 

@@ -25,6 +25,22 @@ from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlR
 log = structlog.get_logger(__name__)
 
 
+@dataclasses.dataclass
+class _ProcessedResult:
+    """Outcome of processing one raw document.
+
+    ``disposition`` is one of:
+    - ``"indexed"``: chunks were produced and are ready to flush.
+    - ``"duplicate"``: content already indexed with an identical hash.
+    - ``"no_content"``: page parsed to no indexable content (skip permanently).
+    """
+
+    disposition: str
+    chunks: list[DocumentChunk] = dataclasses.field(default_factory=list)
+    content_hash: str = ""
+    parsed: ParsedDocument | None = None
+
+
 class AsyncIngestionService:
     def __init__(
         self,
@@ -72,7 +88,7 @@ class AsyncIngestionService:
         raw_document: RawDocument,
         on_event: Callable[[IngestionEvent], None] | None,
         make_event: Callable[..., IngestionEvent],
-    ) -> tuple[list[DocumentChunk], str, ParsedDocument] | None:
+    ) -> _ProcessedResult:
         parsed = await loop.run_in_executor(self._parse_executor, self.parser.parse, raw_document)
         if parsed is None:
             log.info(
@@ -89,7 +105,7 @@ class AsyncIngestionService:
                     message=f"Skipped page with no readable content: {raw_document.url}",
                 ),
             )
-            return None
+            return _ProcessedResult(disposition="no_content")
 
         content_hash = self._compute_content_hash(parsed.text)
         stored_hash = await self._get_stored_content_hash(parsed.url, parsed.source_name)
@@ -110,7 +126,7 @@ class AsyncIngestionService:
                     message=f"Skipped duplicate page (content unchanged): {parsed.url}",
                 ),
             )
-            return None
+            return _ProcessedResult(disposition="duplicate")
 
         if stored_hash is not None:
             log.info("async_ingestion.content_changed", url=parsed.url)
@@ -119,7 +135,7 @@ class AsyncIngestionService:
         if hasattr(self.chunker, "extract_sentences"):
             sentences = self.chunker.extract_sentences(parsed.text)
             if not sentences:
-                return None
+                return _ProcessedResult(disposition="no_content", parsed=parsed)
             embeddings = await self.embeddings.embed_texts(sentences)
             chunks = await self.chunker.chunk(parsed, embeddings)
         else:
@@ -129,7 +145,7 @@ class AsyncIngestionService:
         if self._contextual_enricher is not None:
             chunks = await self._contextual_enricher.enrich(parsed, chunks)
 
-        return chunks, content_hash, parsed
+        return _ProcessedResult(disposition="indexed", chunks=chunks, content_hash=content_hash, parsed=parsed)
 
     async def _flush_batch(
         self,
@@ -232,6 +248,7 @@ class AsyncIngestionService:
         total_chunks = 0
         errors: list[str] = []
         source_counts: dict[str, int] = {}
+        full_crawl_flags: dict[str, bool] = {}
 
         async with asyncio.TaskGroup() as tg:
             for source in selected_sources:
@@ -244,6 +261,7 @@ class AsyncIngestionService:
                         embed_semaphore,
                         results=errors,
                         source_counts=source_counts,
+                        full_crawl_flags=full_crawl_flags,
                     )
                 )
 
@@ -251,8 +269,11 @@ class AsyncIngestionService:
         total_elapsed = time.time() - start_time
         log.info("async_ingestion.completed", total_chunks=total_chunks, elapsed=round(total_elapsed, 1))
 
-        # Fit BM25 tokenizer on the full corpus after all sources are indexed
-        if self._corpus_texts and hasattr(self.vector_store, "fit_bm25"):
+        # Fit BM25 tokenizer only when every selected source was fully crawled
+        # (frontier drained).  Fitting on a partial run would overwrite the
+        # persisted model with an incomplete corpus.
+        all_fully_crawled = all(full_crawl_flags.get(source.name, False) for source in selected_sources)
+        if all_fully_crawled and self._corpus_texts and hasattr(self.vector_store, "fit_bm25"):
             self.vector_store.fit_bm25(self._corpus_texts)
             log.info("async_ingestion.bm25_fitted", corpus_size=len(self._corpus_texts))
             self._corpus_texts.clear()
@@ -290,9 +311,17 @@ class AsyncIngestionService:
         embed_semaphore: asyncio.Semaphore,
         results: list[str],
         source_counts: dict[str, int],
+        full_crawl_flags: dict[str, bool],
     ) -> int:
         try:
-            count = await self._ingest_source(source, page_limit, on_event, start_time, embed_semaphore)
+            count = await self._ingest_source(
+                source,
+                page_limit,
+                on_event,
+                start_time,
+                embed_semaphore,
+                full_crawl_flags=full_crawl_flags,
+            )
             source_counts[source.name] = count
             return count
         except Exception as exc:
@@ -307,6 +336,7 @@ class AsyncIngestionService:
         on_event: Callable[[IngestionEvent], None] | None,
         start_time: float,
         embed_semaphore: asyncio.Semaphore,
+        full_crawl_flags: dict[str, bool] | None = None,
     ) -> int:
         log.info("async_ingestion.crawling_source", source=source.name)
         queue: asyncio.Queue[RawDocument | None] = asyncio.Queue(
@@ -319,6 +349,7 @@ class AsyncIngestionService:
             "global_pages_fetched": 0,
             "batch_chunks": [],
             "seen_urls": set(),
+            "failures": [],
         }
         source_pages = 0
         source_chunks = 0
@@ -343,7 +374,6 @@ class AsyncIngestionService:
             )
 
         loop = asyncio.get_running_loop()
-        first_error: BaseException | None = None
 
         async def worker(
             _queue=queue,
@@ -351,7 +381,7 @@ class AsyncIngestionService:
             _shared=shared,
             _mk_event=_make_event,
         ) -> None:
-            nonlocal source_pages, source_chunks, first_error
+            nonlocal source_pages, source_chunks
             wloop = asyncio.get_running_loop()
             while True:
                 raw_doc = await _queue.get()
@@ -359,18 +389,25 @@ class AsyncIngestionService:
                     _queue.task_done()
                     break
                 try:
-                    if first_error is not None:
-                        continue
                     result = await self._process_raw(wloop, raw_doc, on_event, _mk_event)
-                    if result is None:
+                    if result.disposition == "duplicate":
+                        await self._mark_url_state(raw_doc.url, "processed")
+                        _shared["seen_urls"].add(raw_doc.url)
                         continue
-                    chunks, content_hash, parsed = result
+                    if result.disposition == "no_content":
+                        await self._mark_url_state(raw_doc.url, "skipped")
+                        _shared["seen_urls"].add(raw_doc.url)
+                        continue
+
+                    chunks = result.chunks
+                    parsed = result.parsed
+                    if parsed is None:
+                        _shared["seen_urls"].add(raw_doc.url)
+                        continue
 
                     pending_batch = None
                     async with _lock:
                         n_chunks = len(chunks)
-                        _shared["total_chunks"] += n_chunks
-                        _shared["global_pages_fetched"] += 1
                         _shared["batch_chunks"].extend(chunks)
                         _shared["seen_urls"].add(raw_doc.url)
                         source_pages += 1
@@ -396,11 +433,19 @@ class AsyncIngestionService:
 
                     if pending_batch is not None:
                         async with embed_semaphore:
-                            await self._flush_batch(wloop, pending_batch, on_event, _mk_event)
+                            await self._flush_batch_tracked(wloop, pending_batch, on_event, _mk_event, _shared)
                 except Exception as exc:
-                    if first_error is None:
-                        first_error = exc
-                    log.error("async_ingestion.worker_failed", error=str(exc))
+                    # Per-page isolation: record the failure, mark the URL FAILED
+                    # so it is retried on a later run, and keep going.
+                    _shared["failures"].append((raw_doc.url, str(exc)))
+                    log.error(
+                        "async_ingestion.worker_failed",
+                        url=raw_doc.url,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    with contextlib.suppress(Exception):
+                        await self._mark_url_state(raw_doc.url, "failed", str(exc))
                 finally:
                     _queue.task_done()
 
@@ -415,6 +460,25 @@ class AsyncIngestionService:
                 current_phase="crawling",
             ),
         )
+
+        # Recover content missing from the index (e.g. after `dec reset-qdrant`)
+        # before crawling, regardless of the page limit.  The post-crawl
+        # reconciliation below only fires on a fully drained frontier, so a
+        # page-capped run would otherwise never re-discover these URLs.
+        try:
+            reactivated = await self._reactivate_after_reset(source.name)
+            if reactivated > 0:
+                log.info(
+                    "async_ingestion.reactivated_missing_at_start",
+                    source=source.name,
+                    count=reactivated,
+                )
+        except Exception as exc:
+            log.warning(
+                "async_ingestion.start_reactivation_failed",
+                source=source.name,
+                error=str(exc),
+            )
 
         crawl_succeeded = False
         try:
@@ -442,7 +506,7 @@ class AsyncIngestionService:
                 shared["batch_chunks"].clear()
 
             async with embed_semaphore:
-                await self._flush_batch(loop, pending_batch, on_event, _make_event)
+                await self._flush_batch_tracked(loop, pending_batch, on_event, _make_event, shared)
 
             for w in w_tasks:
                 w.cancel()
@@ -451,17 +515,64 @@ class AsyncIngestionService:
                 if isinstance(result, Exception):
                     log.error("async_ingestion.worker_failed", worker=i, error=str(result))
 
-            # Prune stale chunks: delete chunks for URLs that were NOT seen in this crawl
-            # Only run when the crawl completed fully and at least one URL was
-            # actually processed.  When `seen_urls` is empty (all pages skipped
-            # as duplicates), pruning would delete ALL stored chunks.
+            # Post-crawl reconciliation for fully-drained sources:
+            #   - Prune: delete Qdrant chunks for URLs with no frontier record.
+            #   - Reactivate: re-discover URLs whose content is missing from
+            #     Qdrant (e.g. after `dec reset-qdrant`) so the next run
+            #     re-fetches and re-indexes them.
+            # Guards: the crawl must have succeeded and processed at least one
+            # URL; any remaining DISCOVERED records mean the run was truncated by
+            # the page limit, so "unseen" URLs are just not-crawled-yet.
             if crawl_succeeded and shared["seen_urls"]:
-                stale_count = await self._prune_stale_chunks(source.name, shared["seen_urls"])
-                if stale_count > 0:
-                    log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
+                remaining = await self.crawler.frontier.stats(source.name)
+                if remaining.get("DISCOVERED", 0) > 0:
+                    log.info(
+                        "async_ingestion.stale_prune_skipped_partial",
+                        source=source.name,
+                        remaining_discovered=remaining.get("DISCOVERED", 0),
+                    )
+                else:
+                    indexed_urls = await self._scroll_indexed_urls(source.name)
+                    # Guard against a scroll failure masquerading as an empty
+                    # index: an empty URL list alongside a non-empty index means
+                    # the scroll errored, so skip prune + reactivate rather than
+                    # wiping every chunk or re-crawling the whole source.
+                    scroll_ok = True
+                    if not indexed_urls:
+                        indexed_count = await self.vector_store.count_urls(source.name)
+                        if indexed_count > 0:
+                            scroll_ok = False
+                            log.warning(
+                                "async_ingestion.stale_reconcile_skipped_scroll_error",
+                                source=source.name,
+                                indexed_count=indexed_count,
+                            )
+                    if scroll_ok:
+                        stale_count = await self._prune_stale_chunks(source.name, set(indexed_urls))
+                        if stale_count > 0:
+                            log.info("async_ingestion.stale_chunks_pruned", source=source.name, count=stale_count)
+                        reactivated = await self.crawler.frontier.reactivate_missing(
+                            source.name,
+                            set(indexed_urls),
+                            max_attempts=self.settings.frontier_max_attempts,
+                        )
+                        if reactivated > 0:
+                            log.info(
+                                "async_ingestion.reactivated_missing",
+                                source=source.name,
+                                count=reactivated,
+                            )
+                        if full_crawl_flags is not None:
+                            full_crawl_flags[source.name] = True
 
-        if first_error is not None:
-            raise first_error
+        failures = shared["failures"]
+        if failures:
+            log.warning(
+                "async_ingestion.partial_failures",
+                source=source.name,
+                failure_count=len(failures),
+                failed_urls=[url for url, _ in failures[:20]],
+            )
 
         self._emit(
             on_event,
@@ -517,11 +628,13 @@ class AsyncIngestionService:
         return self._url_registries[source_name]
 
     async def _get_stored_content_hash(self, url: str, source_name: str = "") -> str | None:
-        registry = self._get_url_registry(source_name) if source_name else None
-        if registry is not None:
-            cached = await registry.get_html_hash(url)
-            if cached is not None:
-                return cached
+        """Return the content hash stored in the vector store for a URL.
+
+        The vector store (Qdrant) is the source of truth for dedup decisions.
+        Redis is only written through as a cache and is never consulted for
+        skip decisions, so a stale/divergent Redis hash can never cause a page
+        to be skipped after the vector store was reset.
+        """
         return await self.vector_store.get_content_hash_for_url(url)
 
     async def _set_content_hash(self, url: str, source_name: str, content_hash: str) -> None:
@@ -536,18 +649,106 @@ class AsyncIngestionService:
         else:
             log.debug("vector_store.no_delete_by_url", url=url)
 
-    async def _prune_stale_chunks(self, source_name: str, seen_urls: set[str]) -> int:
-        """Delete chunks whose URLs were not seen in the current crawl."""
+    async def _mark_url_state(self, url: str, disposition: str, error: str = "") -> None:
+        """Transition a frontier URL based on the ingestion outcome.
+
+        The frontier is only mutated after the actual indexing outcome is
+        known (PROCESSED = indexed, SKIPPED = no indexable content, FAILED =
+        transient error).  ``url_hash`` is derived deterministically from the
+        URL, so no schema change is required.
+        """
+        frontier = self.crawler.frontier
+        url_hash = frontier.hash_url(url)
+        if disposition == "processed":
+            await frontier.mark_processed(url_hash)
+        elif disposition == "skipped":
+            await frontier.mark_skipped(url_hash)
+        elif disposition == "failed":
+            await frontier.mark_failed(url_hash, error)
+
+    async def _flush_batch_tracked(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        batch_chunks: list[DocumentChunk],
+        on_event: Callable[[IngestionEvent], None] | None,
+        make_event: Callable[..., IngestionEvent],
+        shared: dict,
+    ) -> None:
+        """Flush a batch and update frontier state for its URLs.
+
+        On success every URL in the batch is marked PROCESSED; on failure the
+        URLs are marked FAILED (retried on a later run) and the error is
+        recorded in ``shared["failures"]`` so a single batch cannot fail the
+        whole run.
+        """
+        if not batch_chunks:
+            return
+        urls = {chunk.url for chunk in batch_chunks if chunk.url}
+        try:
+            await self._flush_batch(loop, batch_chunks, on_event, make_event)
+            shared["total_chunks"] += len(batch_chunks)
+            shared["global_pages_fetched"] += len(urls)
+            for url in urls:
+                await self._mark_url_state(url, "processed")
+        except Exception as exc:
+            log.error(
+                "async_ingestion.flush_failed",
+                batch_size=len(batch_chunks),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            for url in urls:
+                shared["failures"].append((url, str(exc)))
+                with contextlib.suppress(Exception):
+                    await self._mark_url_state(url, "failed", str(exc))
+
+    async def _reactivate_after_reset(self, source_name: str) -> int:
+        """Re-discover indexed URLs that went missing from the vector store.
+
+        When the vector store holds no points for a source but the frontier has
+        PROCESSED/FAILED records (e.g. after ``dec reset-qdrant``), re-discover
+        them so the current run re-fetches and re-indexes them.  Runs at the
+        start of ingestion, so it works even when ``max_pages`` caps the run.
+        """
+        count = await self.vector_store.count_urls(source_name)
+        if count > 0:
+            return 0
+        stats = await self.crawler.frontier.stats(source_name)
+        if not (stats.get("PROCESSED", 0) or stats.get("FAILED", 0)):
+            return 0
+        return await self.crawler.frontier.reactivate_missing(
+            source_name,
+            set(),
+            max_attempts=self.settings.frontier_max_attempts,
+        )
+
+    async def _scroll_indexed_urls(self, source_name: str) -> list[str]:
         from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
         if not isinstance(self.vector_store, AsyncQdrantVectorStore):
+            return []
+        try:
+            return await self.vector_store.scroll_urls(source_name)
+        except Exception as exc:
+            log.warning("async_ingestion.scroll_urls_failed", source=source_name, error=str(exc))
+            return []
+
+    async def _prune_stale_chunks(self, source_name: str, stored_urls: set[str]) -> int:
+        """Delete chunks for URLs present in Qdrant but unknown to the frontier.
+
+        ``stored_urls`` are the URLs currently indexed for the source; a URL is
+        stale when the frontier has no record of it at all.  This runs only
+        after a fully drained crawl, so URLs that are merely not-crawled-yet
+        (still DISCOVERED) are never touched.
+        """
+        if not stored_urls:
             return 0
         try:
-            stored_urls = await self.vector_store.scroll_urls(source_name)
+            known = set(await self.crawler.frontier.all_urls(source_name))
         except Exception as exc:
-            log.warning("async_ingestion.stale_prune_scroll_failed", source=source_name, error=str(exc))
+            log.warning("async_ingestion.stale_prune_known_urls_failed", source=source_name, error=str(exc))
             return 0
-        stale = [u for u in stored_urls if u not in seen_urls]
+        stale = [u for u in stored_urls if u not in known]
         if not stale:
             return 0
         deleted = 0
@@ -561,7 +762,7 @@ class AsyncIngestionService:
             "async_ingestion.stale_prune_complete",
             source=source_name,
             stored=len(stored_urls),
-            seen=len(seen_urls),
+            known=len(known),
             deleted=deleted,
         )
         return deleted
