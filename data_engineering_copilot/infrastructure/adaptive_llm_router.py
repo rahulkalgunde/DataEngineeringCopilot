@@ -102,11 +102,13 @@ class AdaptiveLLMRouter:
         clients: list[tuple[str, LLMClient]],
         health: ProviderHealthRegistry,
         rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+        ollama_max_consecutive_failures: int = 3,
     ) -> None:
         self._clients = clients
         self._client_map: dict[str, LLMClient] = {name: client for name, client in clients}
         self._health = health
         self._rate_limiters = rate_limiters or {}
+        self._ollama_max_consecutive_failures = max(1, ollama_max_consecutive_failures)
         self._last_usage = LLMUsage()
 
     @property
@@ -119,6 +121,17 @@ class AdaptiveLLMRouter:
 
     def _get_ollama_clients(self) -> list[tuple[str, LLMClient]]:
         return [(n, c) for n, c in self._clients if n.lower() == "ollama"]
+
+    def _ollama_degraded_available(self, name: str, client: LLMClient) -> tuple[bool, int]:
+        """Whether the degraded Ollama fallback is worth attempting.
+
+        Once a local model has racked up ``ollama_max_consecutive_failures``
+        in a row (e.g. repeated 120s timeouts), the router fails fast instead
+        of stalling every request on it. Returns ``(available, consecutive)``.
+        """
+        mh = self._health.get_model_health(name, client.model)
+        consecutive = mh.consecutive_failures if mh is not None else 0
+        return consecutive < self._ollama_max_consecutive_failures, consecutive
 
     def _provider_gate(self, provider: str) -> tuple[bool, str, float]:
         """Pre-flight availability gate.
@@ -249,25 +262,37 @@ class AdaptiveLLMRouter:
                 fallback="ollama",
             )
             name, client = ollama_clients[0]
-            logger.info(
-                "llm_provider_call",
-                provider=name,
-                model=client.model,
-                position=f"{len(main_candidates) + 1}/{total}",
-                reason="degraded_no_external",
-            )
-            try:
-                return await self._try_provider_once(
-                    name,
-                    client,
-                    prompt,
-                    temperature,
-                    num_predict,
-                    num_ctx,
+            available, consecutive = self._ollama_degraded_available(name, client)
+            if not available:
+                logger.warning(
+                    "llm_ollama_degraded_skipped",
+                    provider=name,
+                    model=client.model,
+                    reason="consecutive_failures",
+                    consecutive_failures=consecutive,
+                    max_consecutive_failures=self._ollama_max_consecutive_failures,
                 )
-            except ProviderError as p_err:
-                last_error = p_err
-                attempted.append({"provider": name, "outcome": f"failed:{p_err.category.value}"})
+                attempted.append({"provider": name, "outcome": f"skipped:degraded({consecutive})"})
+            else:
+                logger.info(
+                    "llm_provider_call",
+                    provider=name,
+                    model=client.model,
+                    position=f"{len(main_candidates) + 1}/{total}",
+                    reason="degraded_no_external",
+                )
+                try:
+                    return await self._try_provider_once(
+                        name,
+                        client,
+                        prompt,
+                        temperature,
+                        num_predict,
+                        num_ctx,
+                    )
+                except ProviderError as p_err:
+                    last_error = p_err
+                    attempted.append({"provider": name, "outcome": f"failed:{p_err.category.value}"})
 
         logger.error(
             "llm_all_providers_failed",
@@ -275,7 +300,9 @@ class AdaptiveLLMRouter:
             last_error=str(last_error) if last_error else "no providers configured",
         )
         raise LLMClientError(
-            f"All LLM providers in adaptive fallback chain failed. Attempts: {attempted}. Last error: {last_error}"
+            f"All LLM providers in adaptive fallback chain failed. Attempts: {attempted}. Last error: {last_error}",
+            retry_after=last_error.retry_after if isinstance(last_error, ProviderError) else None,
+            category=last_error.category if isinstance(last_error, ProviderError) else None,
         ) from last_error
 
     async def generate_stream(
@@ -345,26 +372,38 @@ class AdaptiveLLMRouter:
                 fallback="ollama",
             )
             name, client = ollama_clients[0]
-            logger.info(
-                "llm_provider_call",
-                provider=name,
-                model=client.model,
-                reason="degraded_no_external",
-            )
-            try:
-                async for token in client.generate_stream(prompt=prompt, temperature=temperature):
-                    yield token
-                return
-            except Exception as exc:
-                p_err = _categorize_llm_error(exc, name, client.model)
+            available, consecutive = self._ollama_degraded_available(name, client)
+            if not available:
                 logger.warning(
-                    "llm_provider_failed",
+                    "llm_ollama_degraded_skipped",
                     provider=name,
                     model=client.model,
-                    category=p_err.category.value,
-                    error=str(exc),
+                    reason="consecutive_failures",
+                    consecutive_failures=consecutive,
+                    max_consecutive_failures=self._ollama_max_consecutive_failures,
                 )
-                attempted.append({"provider": name, "outcome": f"failed:{p_err.category.value}"})
+                attempted.append({"provider": name, "outcome": f"skipped:degraded({consecutive})"})
+            else:
+                logger.info(
+                    "llm_provider_call",
+                    provider=name,
+                    model=client.model,
+                    reason="degraded_no_external",
+                )
+                try:
+                    async for token in client.generate_stream(prompt=prompt, temperature=temperature):
+                        yield token
+                    return
+                except Exception as exc:
+                    p_err = _categorize_llm_error(exc, name, client.model)
+                    logger.warning(
+                        "llm_provider_failed",
+                        provider=name,
+                        model=client.model,
+                        category=p_err.category.value,
+                        error=str(exc),
+                    )
+                    attempted.append({"provider": name, "outcome": f"failed:{p_err.category.value}"})
 
         logger.warning(
             "llm_all_streaming_failed",

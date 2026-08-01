@@ -24,6 +24,14 @@ _COOLDOWN_BY_CATEGORY: dict[ProviderErrorCategory, float] = {
     ProviderErrorCategory.PERMANENT_ERROR: 60.0,
 }
 
+# When a provider returns 429 WITHOUT a ``Retry-After`` header, escalate the
+# cooldown with each consecutive rate-limit failure instead of always applying
+# the flat category default (60s). A single transient 429 then backs the
+# provider off only briefly, while sustained throttling still escalates to the
+# cap. ``RATE_LIMITED`` with an explicit ``Retry-After`` still honors it.
+_RATE_LIMITED_COOLDOWN_BASE = 10.0
+_RATE_LIMITED_COOLDOWN_CAP = 60.0
+
 
 @dataclass
 class ModelHealth:
@@ -144,6 +152,11 @@ class ProviderHealthRegistry:
             cooldown = (
                 retry_after if retry_after else _COOLDOWN_BY_CATEGORY.get(category, self.default_cooldown_seconds)
             )
+            if category == ProviderErrorCategory.RATE_LIMITED and not retry_after:
+                cooldown = min(
+                    _RATE_LIMITED_COOLDOWN_BASE * (2 ** (mh.consecutive_failures - 1)),
+                    _RATE_LIMITED_COOLDOWN_CAP,
+                )
             mh.cooldown_until = time.monotonic() + cooldown
             logger.info(
                 "provider_cooldown_set provider=%s model=%s duration=%.1fs category=%s",

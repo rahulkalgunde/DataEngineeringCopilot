@@ -6,10 +6,13 @@ carry document-level meaning during similarity search.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 
 logger = logging.getLogger(__name__)
@@ -30,17 +33,53 @@ _INDEX_URL_BLACKLIST = frozenset(
 
 _MIN_CONTENT_WORDS = 40
 
+_TRANSIENT_CATEGORIES = frozenset(
+    {
+        ProviderErrorCategory.RETRYABLE,
+        ProviderErrorCategory.RATE_LIMITED,
+        ProviderErrorCategory.TEMPORARY_UNAVAILABLE,
+        ProviderErrorCategory.QUOTA_EXCEEDED,
+    }
+)
+
 
 class ContextSummarizer(Protocol):
     async def summarize(self, document: ParsedDocument) -> str: ...
 
 
 class LLMContextSummarizer:
-    """Generates a concise document summary for contextual chunk enrichment."""
+    """Generates a concise document summary for contextual chunk enrichment.
 
-    def __init__(self, llm_client, max_summary_words: int = 50) -> None:
+    Failures are fail-open: a page that cannot be summarised is still indexed
+    without context.  Transient provider errors are retried a bounded number
+    of times; permanent errors skip straight to the failure path.  After the
+    retry budget is exhausted the URL is handed to ``failure_recorder`` (when
+    provided) so a later re-enrichment pass can pick it up.
+    """
+
+    def __init__(
+        self,
+        llm_client,
+        max_summary_words: int = 50,
+        max_retries: int = 2,
+        retry_backoff_seconds: float = 2.0,
+        failure_recorder: Callable[[ParsedDocument], Awaitable[None]] | None = None,
+    ) -> None:
         self._llm_client = llm_client
         self._max_summary_words = max_summary_words
+        self._max_retries = max_retries
+        self._retry_backoff_seconds = retry_backoff_seconds
+        self._failure_recorder = failure_recorder
+
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        category = getattr(exc, "category", None)
+        if category is not None:
+            return category in _TRANSIENT_CATEGORIES
+        status_code = getattr(exc, "status_code", None)
+        if status_code is not None:
+            return status_code in (408, 429) or status_code >= 500
+        return True
 
     async def summarize(self, document: ParsedDocument) -> str:
         prompt = (
@@ -55,12 +94,28 @@ class LLMContextSummarizer:
             f"Content:\n{document.text[:3000]}\n\n"
             "Summary:"
         )
-        try:
-            result = await self._llm_client.generate(prompt)
-            return self._clean_summary(result)
-        except Exception as exc:
-            logger.warning("Context summarisation failed for title '%s': %s", document.title, exc)
-            return ""
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                result = await self._llm_client.generate(prompt)
+                return self._clean_summary(result)
+            except Exception as exc:
+                last_error = exc
+                if attempt < self._max_retries and self._is_transient(exc):
+                    await asyncio.sleep(self._retry_backoff_seconds * (attempt + 1))
+                    continue
+                break
+        logger.warning(
+            "Context summarisation failed for title '%s': %s",
+            document.title,
+            last_error,
+        )
+        if self._failure_recorder is not None:
+            try:
+                await self._failure_recorder(document)
+            except Exception:
+                logger.exception("Context summarisation failure recorder error for url=%s", document.url)
+        return ""
 
     def _clean_summary(self, raw_text: str) -> str:
         if not raw_text:

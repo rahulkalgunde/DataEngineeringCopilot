@@ -248,6 +248,29 @@ class PostgresCrawlFrontierDB:
             )
             return [row["url"] for row in rows]
 
+    async def requeue_urls(self, urls: list[str]) -> int:
+        """Reset a set of URLs to DISCOVERED so the next crawl re-processes them.
+
+        Used to re-ingest pages whose enrichment failed: after clearing the
+        vector-store chunks and the Redis URL-registry entry, this returns the
+        frontier rows to a fetchable state with a fresh attempts budget.
+        Returns the number of rows transitioned.
+        """
+        if not urls:
+            return 0
+        assert self._pool is not None
+        url_hashes = [self.hash_url(url) for url in urls]
+        now = time.time()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, attempts = 0, last_error = NULL, updated_at = $2 "
+                "WHERE url_hash = ANY($3::text[])",
+                CrawlState.DISCOVERED.value,
+                now,
+                url_hashes,
+            )
+            return int(result.split()[1]) if result and result.startswith("UPDATE") else 0
+
     async def reactivate_missing(
         self,
         source_name: str,

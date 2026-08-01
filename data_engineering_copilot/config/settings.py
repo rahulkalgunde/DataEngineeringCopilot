@@ -189,6 +189,11 @@ class AppSettings(BaseSettings):
     health_recency_weight: float = 0.2
     health_consecutive_failure_penalty: float = 0.3
 
+    # After this many consecutive failures the degraded Ollama fallback is
+    # skipped (fail fast) instead of stalling the request on a broken local
+    # model. A single success resets the counter.
+    ollama_degraded_max_consecutive_failures: int = 3
+
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = "openrouter"
     answer_llm_model: str = "openrouter/free"
