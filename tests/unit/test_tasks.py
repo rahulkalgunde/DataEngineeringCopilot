@@ -37,33 +37,30 @@ class TestAsyncIngestTaskConfig:
 
 class TestAsyncIngestTaskBehavior:
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
-    @patch("data_engineering_copilot.factory.build_async_ingestion_service")
-    @patch("data_engineering_copilot.workers.tasks.asyncio.run")
-    def test_success_path_calls_mark_completed(self, mock_asyncio_run, mock_build_svc, mock_tracker_cls):
+    @patch("data_engineering_copilot.workers.tasks.run_async")
+    def test_success_path_calls_mark_completed(self, mock_run_async, mock_tracker_cls):
         from data_engineering_copilot.workers.tasks import async_ingest_task
 
         mock_tracker = MagicMock()
         mock_tracker_cls.return_value = mock_tracker
 
-        mock_service = MagicMock()
-        mock_build_svc.return_value = mock_service
+        mock_run_async.return_value = None
 
         async_ingest_task.run(["Test Source"], 10)
 
         mock_tracker_cls.assert_called_once()
-        mock_asyncio_run.assert_called_once()
+        mock_run_async.assert_called_once()
         mock_tracker.mark_completed.assert_called_once()
 
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
-    @patch("data_engineering_copilot.factory.build_async_ingestion_service")
-    @patch("data_engineering_copilot.workers.tasks.asyncio.run")
-    def test_exception_re_raised_after_mark_failed(self, mock_asyncio_run, mock_build_svc, mock_tracker_cls):
+    @patch("data_engineering_copilot.workers.tasks.run_async")
+    def test_exception_re_raised_after_mark_failed(self, mock_run_async, mock_tracker_cls):
         from data_engineering_copilot.workers.tasks import async_ingest_task
 
         mock_tracker = MagicMock()
         mock_tracker_cls.return_value = mock_tracker
 
-        mock_asyncio_run.side_effect = ValueError("connection refused")
+        mock_run_async.side_effect = ValueError("connection refused")
 
         with pytest.raises(ValueError, match="connection refused"):
             async_ingest_task.run(["Test Source"], 10)
@@ -71,15 +68,14 @@ class TestAsyncIngestTaskBehavior:
         mock_tracker.mark_failed.assert_called_once_with("connection refused")
 
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
-    @patch("data_engineering_copilot.factory.build_async_ingestion_service")
-    @patch("data_engineering_copilot.workers.tasks.asyncio.run")
-    def test_soft_time_limit_raises_and_marks_failed(self, mock_asyncio_run, mock_build_svc, mock_tracker_cls):
+    @patch("data_engineering_copilot.workers.tasks.run_async")
+    def test_soft_time_limit_raises_and_marks_failed(self, mock_run_async, mock_tracker_cls):
         from data_engineering_copilot.workers.tasks import async_ingest_task
 
         mock_tracker = MagicMock()
         mock_tracker_cls.return_value = mock_tracker
 
-        mock_asyncio_run.side_effect = SoftTimeLimitExceeded()
+        mock_run_async.side_effect = SoftTimeLimitExceeded()
 
         with pytest.raises(SoftTimeLimitExceeded):
             async_ingest_task.run(["Test Source"], 10)
@@ -87,15 +83,14 @@ class TestAsyncIngestTaskBehavior:
         mock_tracker.mark_failed.assert_called_once_with("Task exceeded soft time limit. Execution cancelled.")
 
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
-    @patch("data_engineering_copilot.factory.build_async_ingestion_service")
-    @patch("data_engineering_copilot.workers.tasks.asyncio.run")
-    def test_mark_completed_not_called_on_failure(self, mock_asyncio_run, mock_build_svc, mock_tracker_cls):
+    @patch("data_engineering_copilot.workers.tasks.run_async")
+    def test_mark_completed_not_called_on_failure(self, mock_run_async, mock_tracker_cls):
         from data_engineering_copilot.workers.tasks import async_ingest_task
 
         mock_tracker = MagicMock()
         mock_tracker_cls.return_value = mock_tracker
 
-        mock_asyncio_run.side_effect = RuntimeError("unexpected error")
+        mock_run_async.side_effect = RuntimeError("unexpected error")
 
         with pytest.raises(RuntimeError):
             async_ingest_task.run(["Test Source"], 10)
