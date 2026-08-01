@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -95,6 +97,9 @@ class LLMClient(SafeAsyncClientMixin):
         extra_body: dict | None = None,
         extra_headers: dict | None = None,
         rate_limiter: SlidingWindowRateLimiter | None = None,
+        keep_alive: str | int | None = None,
+        connect_timeout_seconds: int | float | None = None,
+        pool_timeout_seconds: int | float | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -104,8 +109,11 @@ class LLMClient(SafeAsyncClientMixin):
         self._endpoint_path = endpoint_path
         self._extra_body = extra_body or {}
         self._extra_headers = extra_headers or {}
+        self._keep_alive = keep_alive
         self._usage = LLMUsage()
         self._rate_limiter = rate_limiter
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.pool_timeout_seconds = pool_timeout_seconds
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -130,8 +138,11 @@ class LLMClient(SafeAsyncClientMixin):
         num_ctx: int | None = None,
     ) -> str:
         temp = temperature if temperature is not None else self._temperature
+        request_id = uuid.uuid4().hex[:12]
+        started = time.perf_counter()
         logger.info(
-            "LLM generation started model=%s prompt_chars=%s temperature=%.2f",
+            "LLM generation started request_id=%s model=%s prompt_chars=%s temperature=%.2f",
+            request_id,
             self.model,
             len(prompt),
             temp,
@@ -144,6 +155,8 @@ class LLMClient(SafeAsyncClientMixin):
         }
         if self._extra_body:
             payload.update(self._extra_body)
+        if self._keep_alive is not None:
+            payload["keep_alive"] = self._keep_alive
 
         options: dict = {}
         if num_predict is not None:
@@ -158,10 +171,21 @@ class LLMClient(SafeAsyncClientMixin):
         try:
             body = await self._http_post(payload)
         except TimeoutError as exc:
-            logger.warning("LLM generation timed out model=%s timeout=%ss", self.model, self.timeout_seconds)
+            logger.warning(
+                "LLM generation timed out request_id=%s model=%s timeout=%ss duration_ms=%.0f",
+                request_id,
+                self.model,
+                self.timeout_seconds,
+                (time.perf_counter() - started) * 1000,
+            )
             raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.TimeoutException as exc:
-            logger.exception("LLM generation timed out timeout_seconds=%s", self.timeout_seconds)
+            logger.exception(
+                "LLM generation timed out request_id=%s timeout_seconds=%s duration_ms=%.0f",
+                request_id,
+                self.timeout_seconds,
+                (time.perf_counter() - started) * 1000,
+            )
             raise LLMClientError(f"LLM provider timed out after {self.timeout_seconds} seconds.") from exc
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
@@ -201,12 +225,14 @@ class LLMClient(SafeAsyncClientMixin):
         clean_text = self._extract_final_response(content)
 
         logger.info(
-            "LLM generation completed model=%s response_chars=%s final_chars=%s prompt_tokens=%d completion_tokens=%d",
+            "LLM generation completed request_id=%s model=%s response_chars=%s final_chars=%s prompt_tokens=%d completion_tokens=%d duration_ms=%.0f",
+            request_id,
             self.model,
             len(content),
             len(clean_text),
             prompt_tokens,
             completion_tokens,
+            (time.perf_counter() - started) * 1000,
         )
 
         return clean_text

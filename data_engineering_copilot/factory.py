@@ -170,6 +170,9 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key="",
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            keep_alive=app_settings.ollama_keep_alive,
+            connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+            pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
             extra_body={
                 "options": {
                     "num_ctx": app_settings.ollama_num_ctx,
@@ -289,7 +292,9 @@ def _build_fallback_chain(
             continue
         try:
             model_arg = purpose_model if idx == 0 else ""
-            timeout = None if idx == 0 else client_timeout
+            timeout = (
+                None if idx == 0 else (app_settings.ollama_timeout_seconds if provider == "ollama" else client_timeout)
+            )
             client = _build_purpose_llm_client(
                 provider=provider,
                 model=model_arg,
@@ -406,6 +411,12 @@ def build_embedder(
         return AsyncOllamaEmbeddings(
             model_name=app_settings.embedding_model_name,
             base_url=embed_base,
+            batch_size=app_settings.embedding_batch_size,
+            timeout_seconds=app_settings.ollama_timeout_seconds,
+            max_concurrency=app_settings.embed_concurrency,
+            keep_alive=app_settings.ollama_keep_alive,
+            connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+            pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
         )
     elif provider == "groq":
         raise ValueError(
