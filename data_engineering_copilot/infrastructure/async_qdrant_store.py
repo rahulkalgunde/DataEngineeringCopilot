@@ -257,6 +257,7 @@ class AsyncQdrantVectorStore:
         if filter_conditions:
             query_filter = models.Filter(must=filter_conditions)
 
+        rrf_confidence_scale: float | None = None
         try:
             query_kwargs: dict = dict(
                 collection_name=self._collection_name,
@@ -270,6 +271,10 @@ class AsyncQdrantVectorStore:
                 if sparse is None and query_text is not None:
                     sparse = self._bm25.tokenize_query(query_text)
                 if sparse is not None:
+                    # RRF fused scores are 1/(k+rank) summed over the dense +
+                    # sparse prefetches (2). Normalize to the same 0..1 scale as
+                    # cosine similarity so downstream confidence thresholds hold.
+                    rrf_confidence_scale = (self._hybrid_rrf_k + 1) / 2
                     query_kwargs["prefetch"] = [
                         models.Prefetch(
                             query=query_embedding,
@@ -316,7 +321,10 @@ class AsyncQdrantVectorStore:
                     heading_path=tuple(payload.get("heading_path", [])),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
-                confidence = max(0.0, min(1.0, score))
+                if rrf_confidence_scale is not None and score > 0.0:
+                    confidence = min(1.0, score * rrf_confidence_scale)
+                else:
+                    confidence = max(0.0, min(1.0, score))
                 distance = 1.0 - confidence
                 retrieved.append(RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence))
 
@@ -442,6 +450,26 @@ class AsyncQdrantVectorStore:
         except Exception as exc:
             logger.exception("Failed to get async Qdrant collection count: %s", exc)
             raise
+
+    async def count_urls(self, source_name: str) -> int:
+        """Return the number of points stored for a given source.
+
+        Uses the ``source_name`` payload index so it is cheap enough to call at
+        the start of every source ingestion (unlike :meth:`scroll_urls`, which
+        paginates the whole source).  Raises on failure so callers can
+        distinguish an empty index from a Qdrant error.
+        """
+        if self._client is None:
+            logger.warning("Qdrant client not initialized. Returning 0.")
+            return 0
+        result = await self._client.count(
+            collection_name=self._collection_name,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="source_name", match=models.MatchValue(value=source_name))]
+            ),
+            exact=True,
+        )
+        return result.count or 0
 
     async def close(self) -> None:
         """Close the async client connection."""

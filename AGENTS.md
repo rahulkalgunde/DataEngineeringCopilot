@@ -28,8 +28,8 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 |---|---|
 | `dec ask <question>` | Calls `build_rag_service()` directly (no API needed) |
 | `dec ingest --source "X"` | POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery) |
-| `dec reset-index` | Clears Redis `crawl:*` keys, drops PG frontier tables (does NOT touch Qdrant) |
-| `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config |
+| `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
+| `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
 | `dec evaluate` | RAG eval on `tests/evaluation/eval_dataset.jsonl` |
 | `dec inspect-db` | Scrolls Qdrant points, shows source/chunk-type/URL distribution |
 | `dec cancel <task-id>` | Cancels running ingestion via API |
