@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 # complete or are abandoned.
 _STATUS_KEY_TTL_SECONDS = 86400
 
+# A short liveness lease distinguishes an active task from a progress record
+# left behind after a worker process is killed.
+_LEASE_KEY_PREFIX = "ingestion:lease"
+_LEASE_TTL_SECONDS = 300
+
 # Maximum number of recent events to retain in the rolling buffer.
 _MAX_RECENT_EVENTS = 15
 
@@ -70,6 +75,7 @@ class IngestionProgressTracker:
         self._state: dict[str, Any] = {
             "task_id": task_id,
             "status": "PROCESSING",
+            "started_at": time.time(),
             "source_names": resolved_names,
             "pages_fetched": 0,
             "chunks_indexed": 0,
@@ -80,6 +86,7 @@ class IngestionProgressTracker:
             "pages_skipped": 0,
         }
         self._sync()
+        self.heartbeat()
 
     @property
     def redis_key(self) -> str:
@@ -168,11 +175,29 @@ class IngestionProgressTracker:
     def mark_completed(self) -> None:
         self._state["status"] = "COMPLETED"
         self._sync()
+        self.clear_lease()
 
     def mark_failed(self, error: str) -> None:
         self._state["status"] = "FAILED"
         self._state["error"] = error
         self._sync()
+        self.clear_lease()
+
+    @property
+    def lease_key(self) -> str:
+        return f"{_LEASE_KEY_PREFIX}:{self._task_id}"
+
+    def heartbeat(self) -> None:
+        """Refresh the task liveness lease without changing progress data."""
+        self._redis.set(
+            self.lease_key,
+            json.dumps({"task_id": self._task_id, "heartbeat_at": time.time()}),
+            ex=_LEASE_TTL_SECONDS,
+        )
+
+    def clear_lease(self) -> None:
+        """Remove the liveness lease after a terminal task state."""
+        self._redis.delete(self.lease_key)
 
     def get_status(self) -> dict[str, Any]:
         return dict(self._state)

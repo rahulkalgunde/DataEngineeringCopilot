@@ -23,6 +23,9 @@ class FakeRedis:
         val = self.store.get(key)
         return val.encode() if val is not None else None
 
+    def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
 
 @pytest.fixture
 def redis() -> FakeRedis:
@@ -51,6 +54,13 @@ class TestSourceStats:
     def test_initial_source_stats_empty(self, tracker, redis):
         state = _get_state(redis)
         assert state.get("source_stats") == {}
+
+    def test_initial_task_has_live_lease(self, tracker, redis):
+        assert "ingestion:lease:test-task-123" in redis.store
+
+    def test_terminal_state_clears_live_lease(self, tracker, redis):
+        tracker.mark_failed("worker lost")
+        assert "ingestion:lease:test-task-123" not in redis.store
 
     def test_page_indexed_increments_source(self, tracker, redis):
         tracker.on_event(
