@@ -135,9 +135,10 @@ class TestMultiStagePools:
         )
 
         assert result is not None
-        chunks, content_hash, parsed = result
-        assert len(chunks) == 1
-        assert parsed.url == "http://example.com"
+        assert result.disposition == "indexed"
+        assert len(result.chunks) == 1
+        assert result.parsed is not None
+        assert result.parsed.url == "http://example.com"
 
     @pytest.mark.asyncio
     async def test_flush_batch_calls_embed_and_store_directly(self):
