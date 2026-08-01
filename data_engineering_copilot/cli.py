@@ -9,6 +9,7 @@ import sys
 import urllib.error
 import urllib.request
 
+from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
@@ -897,6 +898,51 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--task-id", default=None, help="Specific task ID to monitor.")
     monitor_parser.add_argument("--interval", type=int, default=30, help="Refresh interval in seconds.")
 
+    # Probe LLM providers
+    probe_parser = subparsers.add_parser(
+        "probe-llm",
+        help="Probe each configured LLM/embedding provider with one real request to verify status.",
+    )
+    probe_parser.add_argument(
+        "--providers",
+        nargs="*",
+        default=None,
+        help="Probe only these providers (default: all configured). E.g. --providers openrouter groq.",
+    )
+    probe_parser.add_argument(
+        "--purpose",
+        type=str,
+        default=None,
+        help="Probe only the chain for one purpose (answer, rewrite, groundedness, intent, enrichment, evaluation, code).",
+    )
+    probe_parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Reply with exactly: pong",
+        help="Prompt to send to each provider (default: 'Reply with exactly: pong').",
+    )
+    probe_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Per-provider request timeout in seconds (default: 10).",
+    )
+    probe_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON (machine-readable).",
+    )
+    probe_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show request headers, response preview, dimensions, and token usage.",
+    )
+    probe_parser.add_argument(
+        "--no-embeddings",
+        action="store_true",
+        help="Skip the embedding provider probe (LLM providers only).",
+    )
+
     return parser
 
 
@@ -949,6 +995,16 @@ def main() -> None:
                 api_url=args.api_url,
                 task_id=args.task_id,
                 interval=args.interval,
+            )
+        elif args.command == "probe-llm":
+            llm_probe_main(
+                providers=args.providers,
+                purpose=args.purpose,
+                prompt=args.prompt,
+                timeout=args.timeout,
+                json_output=args.json,
+                verbose=args.verbose,
+                no_embeddings=args.no_embeddings,
             )
     except SystemExit:
         raise
