@@ -371,6 +371,22 @@ def make_settings(**overrides) -> "AppSettings":
     return AppSettings(**defaults)
 
 
+def _needed_infra(markers: set[str]) -> set[str]:
+    """Map pytest markers onto the infra services they require."""
+    needed: set[str] = set()
+    if "qdrant" in markers:
+        needed.add("Qdrant")
+    if "ollama" in markers:
+        needed.add("Ollama")
+    if "langfuse" in markers:
+        needed.add("Langfuse")
+    if "redis" in markers:
+        needed.add("Redis")
+    if "rag" in markers or "ingestion" in markers:
+        needed.update(("Qdrant", "Ollama"))
+    return needed
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-skip integration-marked tests when required services are unreachable.
 
@@ -381,17 +397,7 @@ def pytest_collection_modifyitems(config, items):
     """
     needed: set[str] = set()
     for item in items:
-        markers = {m.name for m in item.iter_markers()}
-        if "qdrant" in markers:
-            needed.add("Qdrant")
-        if "ollama" in markers:
-            needed.add("Ollama")
-        if "langfuse" in markers:
-            needed.add("Langfuse")
-        if "redis" in markers:
-            needed.add("Redis")
-        if "rag" in markers or "ingestion" in markers:
-            needed.update(("Qdrant", "Ollama"))
+        needed |= _needed_infra({m.name for m in item.iter_markers()})
 
     if _REQUIRE_INFRA and needed:
         available = {
