@@ -44,6 +44,7 @@ class CrawlState(StrEnum):
     FETCHING = "FETCHING"
     PROCESSED = "PROCESSED"
     FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 class PostgresCrawlFrontierDB:
@@ -87,6 +88,7 @@ class PostgresCrawlFrontierDB:
         source_name: str,
         parent_hash: str | None,
         depth: int,
+        max_attempts: int = 3,
     ) -> str | None:
         assert self._pool is not None
         url_hash = self.hash_url(url)
@@ -116,13 +118,14 @@ class PostgresCrawlFrontierDB:
                     )
                 return url_hash
             row = await conn.fetchrow(
-                "SELECT state FROM crawl_frontier WHERE url_hash = $1",
+                "SELECT state, attempts FROM crawl_frontier WHERE url_hash = $1",
                 url_hash,
             )
-            # Only re-discover FAILED pages (retry transient errors).
-            # PROCESSED pages must stay PROCESSED — re-discovering them
-            # creates infinite loops in cyclic link graphs (e.g. docs sites).
-            if row and row["state"] == CrawlState.FAILED.value:
+            # Only re-discover FAILED pages that have not exhausted their retry
+            # budget (transient errors).  PROCESSED/SKIPPED pages stay terminal —
+            # re-discovering them creates infinite loops in cyclic link graphs
+            # (e.g. docs sites).  Past the attempts cap, FAILED becomes terminal.
+            if row and row["state"] == CrawlState.FAILED.value and row["attempts"] < max_attempts:
                 await conn.execute(
                     "UPDATE crawl_frontier SET state = $1, parent_hash = $2, depth = $3, updated_at = $4 WHERE url_hash = $5",
                     CrawlState.DISCOVERED.value,
@@ -179,6 +182,22 @@ class PostgresCrawlFrontierDB:
                 url_hash,
             )
 
+    async def mark_skipped(self, url_hash: str) -> None:
+        """Mark a URL as deliberately not indexed (e.g. no readable content).
+
+        SKIPPED is terminal: the URL is never re-discovered.  This prevents
+        pages with no indexable content from being re-fetched on every run.
+        """
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
+                CrawlState.SKIPPED.value,
+                now,
+                url_hash,
+            )
+
     async def get_pending(self, source_name: str, limit: int = 50) -> list[CrawlRecord]:
         assert self._pool is not None
         async with self._pool.acquire() as conn:
@@ -201,15 +220,69 @@ class PostgresCrawlFrontierDB:
                 return None
             return _pg_row_to_record(row)
 
-    async def reset_stranded(self) -> int:
+    async def reset_stranded(self, stale_after_seconds: float = 1800.0) -> int:
+        """Reset FETCHING records abandoned by a crashed/overlapped run.
+
+        Only resets records whose ``updated_at`` is older than
+        ``stale_after_seconds`` so a live concurrent run's in-flight claims are
+        never clobbered.
+        """
         assert self._pool is not None
         async with self._pool.acquire() as conn:
+            cutoff = time.time() - stale_after_seconds
             result = await conn.execute(
-                "UPDATE crawl_frontier SET state = $1 WHERE state = $2",
+                "UPDATE crawl_frontier SET state = $1 WHERE state = $2 AND updated_at < $3",
                 CrawlState.DISCOVERED.value,
                 CrawlState.FETCHING.value,
+                cutoff,
             )
             return int(result.split()[1]) if result and result.startswith("UPDATE") else 0
+
+    async def all_urls(self, source_name: str) -> list[str]:
+        """Return every URL known to the frontier for a source (any state)."""
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT url FROM crawl_frontier WHERE source_name = $1",
+                source_name,
+            )
+            return [row["url"] for row in rows]
+
+    async def reactivate_missing(
+        self,
+        source_name: str,
+        indexed_urls: set[str],
+        max_attempts: int = 3,
+    ) -> int:
+        """Re-discover URLs whose content is absent from the vector store.
+
+        After a full crawl (frontier drained), any PROCESSED or FAILED URL that
+        is missing from ``indexed_urls`` (e.g. after a Qdrant reset) is set back
+        to DISCOVERED so the next run re-fetches and re-indexes it.  SKIPPED
+        pages and FAILED pages past their attempts budget stay terminal.
+        """
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            rows = await conn.fetch(
+                "SELECT url_hash, url FROM crawl_frontier "
+                "WHERE source_name = $1 AND state IN ($2, $3) "
+                "AND (state = $2 OR attempts < $4)",
+                source_name,
+                CrawlState.PROCESSED.value,
+                CrawlState.FAILED.value,
+                max_attempts,
+            )
+            missing = [r["url_hash"] for r in rows if r["url"] not in indexed_urls]
+            if not missing:
+                return 0
+            await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = ANY($3::text[])",
+                CrawlState.DISCOVERED.value,
+                now,
+                missing,
+            )
+            return len(missing)
 
     async def add_edge(self, parent_hash: str, child_hash: str) -> None:
         assert self._pool is not None
