@@ -16,7 +16,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 from unittest.mock import patch
 
 import dotenv
@@ -112,8 +112,11 @@ def _langfuse_is_reachable(url: str = "http://localhost:3000", timeout: int = 3)
     return False
 
 
-def _redis_is_reachable(url: str = "redis://localhost:6379/0", timeout: int = 3) -> bool:
-    """Return True if Redis responds to PING."""
+def _redis_is_reachable(url: str = "redis://:local_secure_password_123@localhost:6379/0", timeout: int = 3) -> bool:
+    """Return True if Redis responds to PING (authenticating if the URL has a password).
+
+    The default matches the repo's compose Redis, which requires ``--requirepass``.
+    """
     try:
         import socket
         from urllib.parse import urlparse
@@ -121,10 +124,16 @@ def _redis_is_reachable(url: str = "redis://localhost:6379/0", timeout: int = 3)
         parsed = urlparse(url)
         host = parsed.hostname or "localhost"
         port = parsed.port or 6379
+        password = parsed.password or ""
 
         sock = socket.create_connection((host, port), timeout=timeout)
         sock.sendall(b"PING\r\n")
         response = sock.recv(1024)
+        if b"NOAUTH" in response and password:
+            sock.sendall(f"AUTH {password}\r\n".encode())
+            sock.recv(1024)
+            sock.sendall(b"PING\r\n")
+            response = sock.recv(1024)
         sock.close()
         return b"PONG" in response
     except Exception:
@@ -166,26 +175,41 @@ def redis_available() -> bool:
     return _redis_ok
 
 
+_REQUIRE_INFRA = os.environ.get("REQUIRE_INFRA") == "1"
+
+
+def infra_unavailable(reason: str) -> NoReturn:
+    """Fail when REAL infra is required (``REQUIRE_INFRA=1``), else skip.
+
+    Every infrastructure-availability guard in the test suite routes through
+    here so that ``make test-real`` / CI never silently pass with all tests
+    skipped because a service was down.
+    """
+    if _REQUIRE_INFRA:
+        raise RuntimeError(f"REQUIRE_INFRA=1: required infra unavailable: {reason}")
+    pytest.skip(reason)
+
+
 def require_qdrant(url: str | None = None):
     target = url or "http://localhost:6333"
     if not _qdrant_is_reachable(target):
-        pytest.skip("Qdrant is not reachable — skipping test")
+        infra_unavailable(f"Qdrant not reachable at {target}")
 
 
 def require_ollama():
     if not ollama_available():
-        pytest.skip("Ollama is not reachable — skipping test")
+        infra_unavailable("Ollama not reachable")
 
 
 def require_langfuse():
     if not langfuse_available():
-        pytest.skip("Langfuse is not reachable — skipping test")
+        infra_unavailable("Langfuse not reachable")
 
 
 def require_redis(url: str | None = None):
-    target = url or "redis://localhost:6379/0"
+    target = url or "redis://:local_secure_password_123@localhost:6379/0"
     if not _redis_is_reachable(target):
-        pytest.skip("Redis is not reachable — skipping test")
+        infra_unavailable(f"Redis not reachable at {target}")
 
 
 def require_qdrant_and_ollama(qdrant_url: str | None = None):
@@ -348,7 +372,42 @@ def make_settings(**overrides) -> "AppSettings":
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip integration-marked tests when required services are unreachable."""
+    """Auto-skip integration-marked tests when required services are unreachable.
+
+    With ``REQUIRE_INFRA=1`` the run fails at collection instead of silently
+    skipping — real infra is mandatory (``make test-real``, CI). Only the
+    services actually needed by the collected tests are required (e.g. the e2e
+    suite never needs Langfuse).
+    """
+    needed: set[str] = set()
+    for item in items:
+        markers = {m.name for m in item.iter_markers()}
+        if "qdrant" in markers:
+            needed.add("Qdrant")
+        if "ollama" in markers:
+            needed.add("Ollama")
+        if "langfuse" in markers:
+            needed.add("Langfuse")
+        if "redis" in markers:
+            needed.add("Redis")
+        if "rag" in markers or "ingestion" in markers:
+            needed.update(("Qdrant", "Ollama"))
+
+    if _REQUIRE_INFRA and needed:
+        available = {
+            "Qdrant": qdrant_available(),
+            "Ollama": ollama_available(),
+            "Langfuse": langfuse_available(),
+            "Redis": redis_available(),
+        }
+        missing = [svc for svc in needed if not available[svc]]
+        if missing:
+            raise pytest.UsageError(
+                "REQUIRE_INFRA=1 but required service(s) unavailable: "
+                + ", ".join(missing)
+                + ". Start them with 'make docker-up' (or 'make docker-setup') before running real-infra tests."
+            )
+
     for item in items:
         markers = {m.name for m in item.iter_markers()}
 

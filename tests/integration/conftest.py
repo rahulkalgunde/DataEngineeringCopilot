@@ -17,6 +17,8 @@ import pathlib
 
 import pytest
 
+from tests.conftest import infra_unavailable
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ def qdrant_url():
     """Session-scoped Qdrant URL (from testcontainers or Docker Compose)."""
     url = _get_or_start_qdrant_container()
     if url is None:
-        pytest.skip("Qdrant is not available (testcontainers failed and Docker Compose not running)")
+        infra_unavailable("Qdrant not available (testcontainers failed and Docker Compose not running)")
     return url
 
 
@@ -129,7 +131,7 @@ def redis_url():
     """Session-scoped Redis URL (from testcontainers or Docker Compose)."""
     url = _get_or_start_redis_container()
     if url is None:
-        pytest.skip("Redis is not available (testcontainers failed and Docker Compose not running)")
+        infra_unavailable("Redis not available (testcontainers failed and Docker Compose not running)")
     return url
 
 
@@ -215,7 +217,7 @@ def pg_dsn():
     """Session-scoped PostgreSQL DSN (from testcontainer)."""
     dsn = _get_or_start_pg_container()
     if dsn is None:
-        pytest.skip("PostgreSQL testcontainer could not be started")
+        infra_unavailable("PostgreSQL testcontainer could not be started")
     return dsn
 
 
@@ -300,7 +302,7 @@ def ollama_url():
     """Session-scoped Ollama URL (from testcontainer)."""
     url = _get_or_start_ollama_container()
     if url is None:
-        pytest.skip("Ollama testcontainer could not be started")
+        infra_unavailable("Ollama testcontainer could not be started")
     return url
 
 

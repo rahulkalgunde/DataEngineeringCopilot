@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from tests.conftest import infra_unavailable
+
 if TYPE_CHECKING:
     from data_engineering_copilot.config.settings import AppSettings
 
@@ -53,7 +55,7 @@ def e2e_qdrant_url() -> str:
     """Session-scoped Qdrant URL from testcontainer."""
     url = _get_or_start_qdrant_container()
     if url is None:
-        pytest.skip("Qdrant testcontainer could not be started")
+        infra_unavailable("Qdrant testcontainer could not be started")
     return url
 
 
@@ -92,7 +94,7 @@ def e2e_redis_url() -> str:
     """Session-scoped Redis URL from testcontainer."""
     url = _get_or_start_redis_container()
     if url is None:
-        pytest.skip("Redis testcontainer could not be started")
+        infra_unavailable("Redis testcontainer could not be started")
     return url
 
 
@@ -146,7 +148,7 @@ def e2e_ollama_url() -> str:
     """Session-scoped Ollama URL from testcontainer."""
     url = _get_or_start_ollama_container()
     if url is None:
-        pytest.skip("Ollama testcontainer could not be started")
+        infra_unavailable("Ollama testcontainer could not be started")
     return url
 
 
