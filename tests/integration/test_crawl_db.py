@@ -7,6 +7,8 @@ the same ``crawl_frontier`` schema.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import pytest_asyncio
 
@@ -141,12 +143,40 @@ async def test_reset_stranded(frontier):
     h2 = await frontier.discover("https://b.com", "test", None, 0)
     await frontier.claim(h1)
     await frontier.claim(h2)
-    count = await frontier.reset_stranded()
+    count = await frontier.reset_stranded(stale_after_seconds=0)
     assert count == 2
     r1 = await frontier.get_record(h1)
     r2 = await frontier.get_record(h2)
     assert r1 is not None and r1.state == "DISCOVERED"
     assert r2 is not None and r2.state == "DISCOVERED"
+
+
+@pytest.mark.asyncio
+async def test_reset_stranded_skips_fresh_fetching(frontier):
+    """A live run's fresh FETCHING claims must never be clobbered."""
+    h1 = await frontier.discover("https://a.com", "test", None, 0)
+    await frontier.claim(h1)
+    count = await frontier.reset_stranded()
+    assert count == 0
+    record = await frontier.get_record(h1)
+    assert record is not None and record.state == "FETCHING"
+
+
+@pytest.mark.asyncio
+async def test_reset_stranded_resets_stale_fetching(frontier):
+    """FETCHING records older than the staleness threshold are reset."""
+    h1 = await frontier.discover("https://a.com", "test", None, 0)
+    await frontier.claim(h1)
+    async with frontier._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE crawl_frontier SET updated_at = $1 WHERE url_hash = $2",
+            time.time() - 7200,
+            h1,
+        )
+    count = await frontier.reset_stranded(stale_after_seconds=1800)
+    assert count == 1
+    record = await frontier.get_record(h1)
+    assert record is not None and record.state == "DISCOVERED"
 
 
 @pytest.mark.asyncio
@@ -254,3 +284,96 @@ async def test_rediscover_children_includes_failed(frontier):
     r = await frontier.get_record(h_child)
     assert r.state == "DISCOVERED"
     assert r.depth == 2
+
+
+@pytest.mark.asyncio
+async def test_discover_failed_past_attempts_cap_not_rediscovered(frontier):
+    """FAILED pages past their attempts budget must stay terminal."""
+    h1 = await frontier.discover("https://example.com", "test", None, 0)
+    await frontier.claim(h1)  # attempts -> 1
+    await frontier.mark_failed(h1, "HTTP 500")
+
+    h2 = await frontier.discover("https://example.com", "test", h1, 1, max_attempts=1)
+    assert h2 is None
+    record = await frontier.get_record(h1)
+    assert record.state == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_discover_failed_within_attempts_cap_rediscovered(frontier):
+    h1 = await frontier.discover("https://example.com", "test", None, 0)
+    await frontier.claim(h1)  # attempts -> 1
+    await frontier.mark_failed(h1, "HTTP 500")
+
+    h2 = await frontier.discover("https://example.com", "test", h1, 1, max_attempts=3)
+    assert h2 is not None
+    record = await frontier.get_record(h1)
+    assert record.state == "DISCOVERED"
+
+
+@pytest.mark.asyncio
+async def test_mark_skipped_is_terminal(frontier):
+    """SKIPPED pages (no indexable content) must never be re-discovered."""
+    h1 = await frontier.discover("https://example.com", "test", None, 0)
+    await frontier.claim(h1)
+    await frontier.mark_skipped(h1)
+
+    record = await frontier.get_record(h1)
+    assert record.state == "SKIPPED"
+
+    h2 = await frontier.discover("https://example.com", "test", h1, 1)
+    assert h2 is None
+    record = await frontier.get_record(h1)
+    assert record.state == "SKIPPED"
+
+    pending = await frontier.get_pending("test")
+    assert h1 not in {r.url_hash for r in pending}
+
+
+@pytest.mark.asyncio
+async def test_all_urls(frontier):
+    await frontier.discover("https://a.com", "src", None, 0)
+    h = await frontier.discover("https://b.com", "src", None, 0)
+    await frontier.claim(h)
+    await frontier.mark_processed(h)
+
+    urls = await frontier.all_urls("src")
+    assert set(urls) == {"https://a.com", "https://b.com"}
+
+    assert await frontier.all_urls("other") == []
+
+
+@pytest.mark.asyncio
+async def test_reactivate_missing(frontier):
+    """PROCESSED URLs missing from the vector store are re-discovered."""
+    h_kept = await frontier.discover("https://kept.com", "src", None, 0)
+    await frontier.claim(h_kept)
+    await frontier.mark_processed(h_kept)
+    h_missing = await frontier.discover("https://missing.com", "src", None, 0)
+    await frontier.claim(h_missing)
+    await frontier.mark_processed(h_missing)
+
+    # Simulate a Qdrant reset: only kept.com survives in the store.
+    count = await frontier.reactivate_missing("src", {"https://kept.com"}, max_attempts=3)
+    assert count == 1
+
+    record = await frontier.get_record(h_missing)
+    assert record.state == "DISCOVERED"
+    record_kept = await frontier.get_record(h_kept)
+    assert record_kept.state == "PROCESSED"
+
+
+@pytest.mark.asyncio
+async def test_reactivate_missing_skips_skipped_and_exhausted(frontier):
+    h_skipped = await frontier.discover("https://skipped.com", "src", None, 0)
+    await frontier.claim(h_skipped)
+    await frontier.mark_skipped(h_skipped)
+
+    h_failed = await frontier.discover("https://failed.com", "src", None, 0)
+    await frontier.claim(h_failed)
+    await frontier.mark_failed(h_failed, "HTTP 500")
+
+    count = await frontier.reactivate_missing("src", set(), max_attempts=0)
+    assert count == 0
+    assert (await frontier.get_record(h_skipped)).state == "SKIPPED"
+    assert (await frontier.get_record(h_failed)).state == "FAILED"
