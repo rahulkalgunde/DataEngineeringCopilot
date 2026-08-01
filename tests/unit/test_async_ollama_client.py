@@ -139,3 +139,28 @@ async def test_generate_empty_response(ollama_client):
         )
         result = await ollama_client.generate("test")
         assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_sends_keep_alive_and_uses_phase_timeouts():
+    client = LLMClient(
+        base_url="http://localhost:11434/v1",
+        model="llama3.2:3b",
+        timeout_seconds=180,
+        keep_alive="10m",
+        connect_timeout_seconds=5,
+        pool_timeout_seconds=5,
+    )
+    with respx.mock:
+        route = respx.post("http://localhost:11434/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "answer"}}], "usage": {}},
+            )
+        )
+        assert await client.generate("test") == "answer"
+        body = route.calls[0].request.content
+        assert b'"keep_alive":"10m"' in body
+        assert client.timeout_seconds == 180
+        assert client.connect_timeout_seconds == 5
+        assert client.pool_timeout_seconds == 5
