@@ -3,67 +3,22 @@
 Tests the end-to-end flow: embed query → retrieve from Qdrant → rerank →
 assemble context → generate answer.
 
-Pipeline-logic tests use a deterministic StubLLM so assertions on answer
-structure, citations, confidence, and performance are stable. A single slow
-smoke test keeps real-LLM coverage.
-
 Uses testcontainers for Qdrant and external Ollama (skipped if unreachable).
 
 Run with: pytest tests/integration/test_rag_integration.py -v -m integration
+
+Hermetic pipeline-logic coverage (the same assertions, fully offline) lives in
+``tests/unit/test_rag_pipeline_logic.py`` using tests.doubles.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
 
-from data_engineering_copilot.domain.models import Answer, DocumentChunk, LLMUsage
-from data_engineering_copilot.domain.protocols import LLMClientProtocol, VectorStoreProtocol
-
-_STUB_ANSWER = (
-    "Apache Spark is a unified analytics engine for large-scale data processing. "
-    "It provides high-level APIs in Scala, Java, Python, and R. Spark SQL enables "
-    "structured data processing with DataFrames, and Delta Lake brings ACID "
-    "transactions to big data workloads. PySpark is the Python API for Spark."
-)
-
-_STUB_GAP_ANSWER = (
-    "I cannot answer this question based on the provided documentation, which covers "
-    "only Apache Spark, Delta Lake, and Airflow topics."
-)
-
-
-class StubLLM(LLMClientProtocol):
-    """Deterministic LLM for pipeline-logic tests (no Ollama dependency)."""
-
-    def __init__(self, answer: str = _STUB_ANSWER, gap_trigger: str = "capital of France") -> None:
-        self.answer = answer
-        self.gap_trigger = gap_trigger
-        self.call_count = 0
-
-    async def generate(self, prompt: str, **kwargs) -> str:
-        self.call_count += 1
-        if self.gap_trigger and self.gap_trigger in prompt:
-            return _STUB_GAP_ANSWER
-        return self.answer
-
-    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
-        return _token_stream(await self.generate(prompt))
-
-    @property
-    def last_usage(self) -> LLMUsage:
-        return LLMUsage(prompt_tokens=0, completion_tokens=0, model="stub")
-
-    async def close(self) -> None:
-        pass
-
-
-async def _token_stream(text: str) -> AsyncIterator[str]:
-    for token in text.split(" "):
-        yield f"{token} "
-
+from data_engineering_copilot.domain.models import Answer, DocumentChunk
+from data_engineering_copilot.domain.protocols import VectorStoreProtocol
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -72,13 +27,11 @@ async def _token_stream(text: str) -> AsyncIterator[str]:
 
 @pytest.fixture(scope="module")
 def _settings(ollama_url):
-    from data_engineering_copilot.config.settings import AppSettings
+    from tests.conftest import make_settings
 
-    return AppSettings(
+    return make_settings(
         ollama_base_url=ollama_url,
-        embedding_provider="ollama",
         embedding_model_name="nomic-embed-text",
-        llm_provider="ollama",
         code_llm_provider="ollama",
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
@@ -208,41 +161,6 @@ def _populated(_store, _settings):
 
 
 @pytest.fixture
-async def _rag(_store, _settings):
-    """Function-scoped RAG service with a stub LLM (deterministic).
-
-    Fresh embedder and store client per test so the httpx/Qdrant clients bind
-    to the test's own event loop (avoids "Event loop is closed" from reusing a
-    module-scoped client across pytest-asyncio function-scoped loops).
-    """
-
-    from data_engineering_copilot.domain.models import RagConfig
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
-    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
-    from data_engineering_copilot.services.async_rag import AsyncRagService
-
-    store = AsyncQdrantVectorStore(
-        url=_store._url,
-        collection_name=_store._collection_name,
-        embedding_dimension=768,
-    )
-    await store.initialize()
-    embedder = AsyncOllamaEmbeddings(
-        model_name=_settings.embedding_model_name,
-        base_url=_settings.ollama_base_url,
-    )
-    service = AsyncRagService(
-        config=RagConfig(),
-        vector_store=cast(VectorStoreProtocol, store),
-        llm_client=StubLLM(),
-        embedder=embedder,
-    )
-    yield service
-    await embedder.close()
-    await store.close()
-
-
-@pytest.fixture
 async def _rag_real(_store, _settings, _ollama):
     """Function-scoped RAG service with the real Ollama LLM (quality smoke test)."""
 
@@ -270,90 +188,6 @@ async def _rag_real(_store, _settings, _ollama):
     yield service
     await embedder.close()
     await store.close()
-
-
-# ---------------------------------------------------------------------------
-# RAG Pipeline tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.rag
-@pytest.mark.xdist_group("qdrant")
-class TestRAGPipeline:
-    @pytest.mark.asyncio
-    async def test_answer_returns_answer_object(self, _rag, _populated):
-        answer = await _rag.answer("What is Apache Spark?")
-        assert isinstance(answer, Answer)
-        assert isinstance(answer.text, str)
-        assert isinstance(answer.sources, tuple)
-        assert isinstance(answer.confidence, float)
-
-    @pytest.mark.asyncio
-    async def test_answer_has_substantial_text(self, _rag, _populated):
-        answer = await _rag.answer("What is Apache Spark?")
-        assert len(answer.text) > 20, f"Answer too short: {answer.text!r}"
-
-    @pytest.mark.asyncio
-    async def test_answer_cites_sources(self, _rag, _populated):
-        answer = await _rag.answer("What is Delta Lake?")
-        assert len(answer.sources) > 0, "Should cite at least one source"
-
-    @pytest.mark.asyncio
-    async def test_answer_confidence_nonnegative(self, _rag, _populated):
-        answer = await _rag.answer("What is Apache Airflow?")
-        assert answer.confidence >= 0.0
-
-    @pytest.mark.asyncio
-    async def test_multiple_sequential_questions(self, _rag, _populated):
-        for q in [
-            "What is Apache Spark?",
-            "What is Delta Lake?",
-        ]:
-            answer = await _rag.answer(q)
-            assert len(answer.text) > 10, f"Bad answer for: {q}"
-
-    @pytest.mark.asyncio
-    async def test_performance_within_bounds(self, _rag, _populated):
-        import time
-
-        start = time.time()
-        answer = await _rag.answer("What is Apache Spark?")
-        elapsed = time.time() - start
-        assert elapsed < 60, f"RAG query took {elapsed:.1f}s"
-        assert len(answer.text) > 0
-
-
-# ---------------------------------------------------------------------------
-# Edge cases (these use their own empty store)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.rag
-@pytest.mark.xdist_group("qdrant")
-class TestRAGEdgeCases:
-    @pytest.mark.asyncio
-    async def test_unrelated_question_acknowledges_gap(self, _rag, _populated):
-        """An unrelated question should produce an answer that acknowledges
-        the docs don't cover it (via the gap-acknowledging stub response)."""
-        answer = await _rag.answer("What is the capital of France?")
-        text_lower = answer.text.lower()
-        acknowledges_gap = any(
-            phrase in text_lower
-            for phrase in [
-                "cannot answer",
-                "does not provide",
-                "does not address",
-                "not covered",
-                "outside",
-                "does not contain",
-            ]
-        )
-        assert acknowledges_gap or answer.confidence < 0.5, (
-            f"Expected the answer to acknowledge the gap. "
-            f"confidence={answer.confidence:.4f}, text={answer.text[:200]!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -389,20 +223,16 @@ class TestRAGWireMocked:
     async def test_rag_cache_hit_skips_llm(self, fresh_qdrant_store, ollama_url):
         """Real Qdrant, mock LLM client — verify cache hit skips LLM."""
 
-        from data_engineering_copilot.config.settings import AppSettings
         from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
-        from data_engineering_copilot.domain.protocols import LLMClientProtocol
         from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
         from data_engineering_copilot.services.async_rag import AsyncRagService
         from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
+        from tests.conftest import make_settings
+        from tests.doubles.llm import StaticLLM
 
-        settings = AppSettings(
-            _env_file=None,
+        settings = make_settings(
             ollama_base_url=ollama_url,
-            embedding_provider="ollama",
             embedding_model_name="nomic-embed-text",
-            llm_provider="ollama",
-            code_llm_provider="",
         )
 
         embedder = AsyncOllamaEmbeddings(
@@ -420,18 +250,7 @@ class TestRAGWireMocked:
         emb = await embedder.embed_texts([chunk.text])
         await fresh_qdrant_store.upsert_chunks([chunk], emb)
 
-        call_count = 0
-
-        class MockLLM(LLMClientProtocol):
-            async def generate(self, prompt: str, **kwargs) -> str:
-                nonlocal call_count
-                call_count += 1
-                return "Spark is an analytics engine."
-
-            async def close(self) -> None:
-                pass
-
-        llm_client = MockLLM()
+        llm_client = StaticLLM(answer="Spark is an analytics engine.")
         cache = TwoTierCache(similarity_threshold=0.95)
         rag_config = RagConfig(
             confidence_threshold=0.10,
@@ -449,11 +268,11 @@ class TestRAGWireMocked:
 
         result1 = await rag_service.answer("What is Spark?")
         assert "Spark" in result1.text
-        assert call_count == 1, "LLM should be called once on first query"
+        assert llm_client.call_count == 1, "LLM should be called once on first query"
 
         result2 = await rag_service.answer("What is Spark?")
         assert result2.text == result1.text
-        assert call_count == 1, "LLM should NOT be called again (cache hit)"
+        assert llm_client.call_count == 1, "LLM should NOT be called again (cache hit)"
 
         await embedder.close()
 
@@ -463,10 +282,10 @@ class TestRAGWireMocked:
         import respx
         from httpx import Response
 
-        from data_engineering_copilot.config.settings import AppSettings
         from data_engineering_copilot.infrastructure.llm_client import LLMClient
+        from tests.conftest import make_settings
 
-        settings = AppSettings()
+        settings = make_settings()
         with respx.mock(assert_all_mocked=False) as respx_mock:
             respx_mock.post(f"{settings.ollama_base_url}/v1/chat/completions").mock(
                 return_value=Response(
@@ -501,11 +320,10 @@ class TestRAGWireMocked:
         import respx
         from httpx import Response
 
-        from data_engineering_copilot.config.settings import AppSettings
         from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+        from tests.conftest import make_settings
 
-        settings = AppSettings(
-            embedding_provider="ollama",
+        settings = make_settings(
             embedding_model_name="nomic-embed-text",
         )
         dim = settings.get_embedding_dimension()
