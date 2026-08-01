@@ -9,6 +9,21 @@ from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 
 logger = logging.getLogger(__name__)
 
+# Default cooldown per failure category. Transient failures (timeout, 5xx)
+# recover fast, so they get a short cooldown; hard failures keep a provider
+# out of the routing pool longer. ``RATE_LIMITED`` uses ``Retry-After`` when
+# available, otherwise this default. This registry is the single circuit
+# breaker: a provider in cooldown is skipped by the router without a call.
+_COOLDOWN_BY_CATEGORY: dict[ProviderErrorCategory, float] = {
+    ProviderErrorCategory.RETRYABLE: 10.0,
+    ProviderErrorCategory.TEMPORARY_UNAVAILABLE: 10.0,
+    ProviderErrorCategory.RATE_LIMITED: 60.0,
+    ProviderErrorCategory.AUTHENTICATION_ERROR: 60.0,
+    ProviderErrorCategory.QUOTA_EXCEEDED: 60.0,
+    ProviderErrorCategory.INVALID_REQUEST: 60.0,
+    ProviderErrorCategory.PERMANENT_ERROR: 60.0,
+}
+
 
 @dataclass
 class ModelHealth:
@@ -126,12 +141,17 @@ class ProviderHealthRegistry:
             mh.last_used_at = time.monotonic()
             mh.last_error_category = category
 
-            if category in (
-                ProviderErrorCategory.TEMPORARY_UNAVAILABLE,
-                ProviderErrorCategory.RATE_LIMITED,
-            ):
-                cooldown = retry_after if retry_after else self.default_cooldown_seconds
-                mh.cooldown_until = time.monotonic() + cooldown
+            cooldown = (
+                retry_after if retry_after else _COOLDOWN_BY_CATEGORY.get(category, self.default_cooldown_seconds)
+            )
+            mh.cooldown_until = time.monotonic() + cooldown
+            logger.info(
+                "provider_cooldown_set provider=%s model=%s duration=%.1fs category=%s",
+                provider,
+                model,
+                cooldown,
+                category.value,
+            )
 
     def mark_provider_cooldown(self, provider: str, duration: float | None = None) -> None:
         with self._lock:
