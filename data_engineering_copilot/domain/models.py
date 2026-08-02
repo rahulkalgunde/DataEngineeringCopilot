@@ -4,6 +4,39 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class CacheScope:
+    """Identifies the isolation scope a cache entry belongs to.
+
+    Two scopes differing in any field (tenant, role, source filter, embedding
+    model, or collection) must never share cached answers. The fingerprint is
+    embedded in every cache key so cross-tenant / cross-filter leakage is
+    structurally impossible.
+    """
+
+    tenant_id: str = "default"
+    role: str = "reader"
+    source_filter: tuple[str, ...] = ()
+    embedding_model: str = ""
+    collection_name: str = ""
+
+
+@dataclass(frozen=True)
+class CachedAnswer:
+    """Serializable envelope stored in the query cache.
+
+    Unlike the bare answer string, this preserves sources, confidence, and
+    groundedness so a cache hit reconstructs the full ``Answer`` instead of a
+    fabricated ``confidence=1.0`` / empty ``sources``.
+    """
+
+    text: str
+    sources: tuple[DocumentChunk, ...] = ()
+    confidence: float = 1.0
+    groundedness_score: float = 1.0
+    cached_at: float = 0.0
+
+
+@dataclass(frozen=True)
 class RawDocument:
     source_name: str
     url: str
