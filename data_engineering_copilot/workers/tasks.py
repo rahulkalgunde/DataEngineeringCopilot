@@ -78,7 +78,6 @@ async def _run_async_crawl(urls: list[str]):
         return results
 
 
-
 def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int | None) -> None:
     """Validate task inputs that arrive from the Celery broker.
 
