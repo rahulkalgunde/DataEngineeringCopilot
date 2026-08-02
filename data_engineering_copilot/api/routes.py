@@ -359,11 +359,18 @@ async def ask(request: AskRequest, fastapi_request: Request):
             fastapi_request, request.source_filter, rbac_enabled=settings.rbac_enabled
         )
         cache_scope = _build_cache_scope(fastapi_request, effective_source_filter)
+
+        # Extract user/session from request for Langfuse tracking
+        user_id = fastapi_request.headers.get("X-User-ID") or fastapi_request.query_params.get("user_id")
+        session_id = fastapi_request.headers.get("X-Session-ID") or fastapi_request.query_params.get("session_id")
+
         answer_obj = await asyncio.wait_for(
             service.answer(
                 request.question,
                 source_filter=effective_source_filter,
                 cache_scope=cache_scope,
+                user_id=user_id,
+                session_id=session_id,
             ),
             timeout=max(120.0, float(settings.ollama_timeout_seconds)),
         )

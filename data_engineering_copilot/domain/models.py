@@ -132,6 +132,7 @@ class Answer:
     confidence: float
     groundedness_score: float = 1.0
     stage_times: dict[str, float] = field(default_factory=dict)
+    trace_id: str | None = None
 
 
 @dataclass(frozen=True)

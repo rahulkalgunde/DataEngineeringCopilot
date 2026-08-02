@@ -119,6 +119,22 @@ class OTelTelemetryTracer:
         span.set_attribute("app.span_type", as_type)
         return _OTelSpan(span)
 
+    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs: Any) -> None:
+        """Record a score as an OTel span attribute (OTel has no native scoring)."""
+        if self._tracer is None:
+            return
+        try:
+            span = self._tracer.start_span(f"score.{name}")
+            span.set_attribute("score.trace_id", trace_id)
+            span.set_attribute("score.name", name)
+            span.set_attribute("score.value", value)
+            span.set_attribute("score.data_type", data_type)
+            for key, val in kwargs.items():
+                span.set_attribute(f"score.{key}", str(val))
+            span.end()
+        except Exception:
+            pass
+
     def flush(self) -> None:
         pass
 

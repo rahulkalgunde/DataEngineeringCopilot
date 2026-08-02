@@ -91,6 +91,8 @@ class AsyncRagService:
         on_step: Callable[[str], None] | None = None,
         source_filter: list[str] | None = None,
         cache_scope: CacheScope | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
     ) -> Answer:
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
@@ -129,11 +131,16 @@ class AsyncRagService:
 
         trace = None
         if self.telemetry:
-            trace = self.telemetry.start_observation(
-                name="rag-query-pipeline",
-                input=_scrub_pii(question),
-                as_type="trace",
-            )
+            trace_kwargs: dict[str, str | None] = {
+                "name": "rag-query-pipeline",
+                "input": _scrub_pii(question),
+                "as_type": "trace",
+            }
+            if user_id:
+                trace_kwargs["user_id"] = user_id
+            if session_id:
+                trace_kwargs["session_id"] = session_id
+            trace = self.telemetry.start_observation(**trace_kwargs)
 
         # Phase 2A: Query rewriting — collect all queries for multi-step retrieval
         rewritten = None
@@ -392,12 +399,19 @@ class AsyncRagService:
                         model=usage.model,
                     )
 
-                    # Also send token usage to Langfuse
+                    # Also send token usage and cost to Langfuse
                     if self.telemetry and trace:
                         try:
                             trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
                             if trace_id:
-                                # Update trace with token usage metadata
+                                # Calculate cost based on provider pricing
+                                cost = self._estimate_cost(
+                                    usage.prompt_tokens,
+                                    usage.completion_tokens,
+                                    usage.model,
+                                )
+
+                                # Update trace with token usage and cost metadata
                                 trace.update(
                                     metadata={
                                         "token_usage": {
@@ -405,10 +419,24 @@ class AsyncRagService:
                                             "completion_tokens": usage.completion_tokens,
                                             "total_tokens": usage.prompt_tokens + usage.completion_tokens,
                                             "model": usage.model,
-                                        }
+                                        },
+                                        "cost_usd": cost,
                                     }
                                 )
-                                logger.debug("Langfuse token usage recorded for trace %s", trace_id)
+
+                                # Score cost for monitoring
+                                self.telemetry.score(
+                                    trace_id=trace_id,
+                                    name="cost_usd",
+                                    value=cost,
+                                    data_type="NUMERIC",
+                                )
+
+                                logger.debug(
+                                    "Langfuse token usage and cost recorded: tokens=%d cost=$%.6f",
+                                    usage.prompt_tokens + usage.completion_tokens,
+                                    cost,
+                                )
                         except Exception as exc:
                             logger.warning("Failed to record Langfuse token usage: %s", exc)
 
@@ -467,11 +495,13 @@ class AsyncRagService:
                     logger.warning("Telemetry flush failed, ignoring", exc_info=True)
 
             _record_stage("total")
+            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None) if trace else None
             result = Answer(
                 text=answer_text,
                 sources=tuple(c.chunk for c in retrieved_chunks),
                 confidence=retrieved_chunks[0].confidence,
                 stage_times=_stage_times,
+                trace_id=trace_id,
             )
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
@@ -519,7 +549,7 @@ class AsyncRagService:
                     )
                     groundedness_span.end()
 
-            # Phase 2E: Langfuse scoring (confidence, groundedness)
+            # Phase 2E: Langfuse scoring (confidence, groundedness, quality)
             if self.telemetry and trace:
                 try:
                     # Get trace ID from the trace object
@@ -538,6 +568,37 @@ class AsyncRagService:
                             name="groundedness",
                             value=groundedness_score,
                             data_type="NUMERIC",
+                        )
+
+                        # LLM-as-Judge: compute relevance score
+                        # Relevance = confidence * groundedness (composite metric)
+                        relevance_score = result.confidence * groundedness_score
+                        self.telemetry.score(
+                            trace_id=trace_id,
+                            name="relevance",
+                            value=relevance_score,
+                            data_type="NUMERIC",
+                        )
+
+                        # Completeness heuristic: based on answer length and source count
+                        # Longer answers with more sources tend to be more complete
+                        source_count = len(result.sources)
+                        answer_length = len(result.text.split())
+                        completeness = min(1.0, (answer_length / 100) * (1 + source_count * 0.1))
+                        self.telemetry.score(
+                            trace_id=trace_id,
+                            name="completeness",
+                            value=completeness,
+                            data_type="NUMERIC",
+                        )
+
+                        # Log quality metrics for monitoring
+                        logger.info(
+                            "quality_scores confidence=%.3f groundedness=%.3f relevance=%.3f completeness=%.3f",
+                            result.confidence,
+                            groundedness_score,
+                            relevance_score,
+                            completeness,
                         )
                         logger.debug("Langfuse scores recorded for trace %s", trace_id)
                 except Exception as exc:
@@ -591,6 +652,8 @@ class AsyncRagService:
         self,
         question: str,
         source_filter: list[str] | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream answer tokens via SSE while performing retrieval.
 
@@ -599,7 +662,22 @@ class AsyncRagService:
         - ``{"type": "token", "content": "..."}`` for answer tokens
         - ``{"type": "done", "text": "...", "confidence": 0.0}`` at completion
         """
+        _t0 = time.monotonic()
         yield _sse({"type": "status", "message": "Sanitizing query"})
+
+        # Create trace for streaming path
+        trace = None
+        if self.telemetry:
+            trace_kwargs: dict[str, str | None] = {
+                "name": "rag-query-pipeline-stream",
+                "input": _scrub_pii(question),
+                "as_type": "trace",
+            }
+            if user_id:
+                trace_kwargs["user_id"] = user_id
+            if session_id:
+                trace_kwargs["session_id"] = session_id
+            trace = self.telemetry.start_observation(**trace_kwargs)
 
         # PII redaction
         safe_question = PromptBuilder.sanitize_query(question)
@@ -610,6 +688,9 @@ class AsyncRagService:
 
         # Query rewriting
         rewritten = None
+        rewrite_span = None
+        if trace:
+            rewrite_span = trace.start_observation(name="query-rewriting", as_type="span")
         if self.query_rewriter is not None:
             yield _sse({"type": "status", "message": "Rewriting query"})
             try:
@@ -619,6 +700,12 @@ class AsyncRagService:
                 rewritten = None
             if rewritten is not None:
                 yield _sse({"type": "status", "message": f"Intent: {rewritten.intent}"})
+        if rewrite_span:
+            rewrite_span.update(
+                input=question,
+                output={"intent": rewritten.intent if rewritten else "factual"},
+            )
+            rewrite_span.end()
 
         if rewritten is not None and rewritten.decomposed_steps:
             effective_query = rewritten.decomposed_steps[0]
@@ -627,10 +714,16 @@ class AsyncRagService:
         intent = rewritten.intent if rewritten else "factual"
 
         # Retrieval
+        retrieval_span = None
+        if trace:
+            retrieval_span = trace.start_observation(name="retrieval", as_type="span")
         yield _sse({"type": "status", "message": "Retrieving documents"})
         try:
             query_emb = await self.embedder.embed_query(effective_query)
         except Exception as exc:
+            if trace:
+                trace.update(output=f"EmbeddingError: {exc}")
+                trace.end()
             raise RetrievalError(f"Embedding failed: {exc}") from exc
 
         top_k = self.config.retrieval_top_k
@@ -640,13 +733,25 @@ class AsyncRagService:
             query_text=effective_query,
             source_filter=source_filter,
         )
+        if retrieval_span:
+            retrieval_span.update(
+                input=effective_query,
+                output=f"{len(retrieved_chunks)} chunks retrieved",
+            )
+            retrieval_span.end()
         yield _sse({"type": "status", "message": f"Retrieved {len(retrieved_chunks)} chunks"})
 
         if not retrieved_chunks:
+            if trace:
+                trace.update(output="No chunks retrieved")
+                trace.end()
             yield _sse({"type": "done", "text": "No relevant documents found.", "confidence": 0.0})
             return
 
         # Reranking
+        rerank_span = None
+        if trace:
+            rerank_span = trace.start_observation(name="reranking", as_type="span")
         if self.reranker is not None and self.reranker.is_available() and len(retrieved_chunks) > 1:
             yield _sse({"type": "status", "message": "Reranking"})
             retrieved_chunks = await self.reranker.rerank(
@@ -654,6 +759,12 @@ class AsyncRagService:
                 chunks=retrieved_chunks,
                 top_k=self.config.reranker_top_k,
             )
+        if rerank_span:
+            rerank_span.update(
+                input=f"{len(retrieved_chunks)} chunks before reranking",
+                output=f"{len(retrieved_chunks)} chunks after reranking",
+            )
+            rerank_span.end()
 
         # Context assembly
         sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
@@ -665,6 +776,9 @@ class AsyncRagService:
         yield _sse({"type": "status", "message": "Generating answer"})
 
         # Stream LLM tokens
+        generation_span = None
+        if trace:
+            generation_span = trace.start_observation(name="generation", as_type="generation")
         llm_client = self._select_llm_client(intent)
         full_text = ""
         try:
@@ -673,8 +787,17 @@ class AsyncRagService:
                 yield _sse({"type": "token", "content": token})
         except Exception:
             logger.exception("Streaming generation failed")
+            if generation_span:
+                generation_span.update(output="Generation failed", level="ERROR")
+                generation_span.end()
+            if trace:
+                trace.update(output="Streaming generation failed")
+                trace.end()
             yield _sse({"type": "error", "message": "Generation failed"})
             return
+        if generation_span:
+            generation_span.update(input=prompt, output=full_text)
+            generation_span.end()
 
         # Post-generation validation: PII redaction, output guardrails, caching
         if self._pii_redactor is not None:
@@ -690,6 +813,23 @@ class AsyncRagService:
 
         confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
 
+        # Score and end trace
+        if trace:
+            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+            if trace_id and self.telemetry:
+                with contextlib.suppress(Exception):
+                    self.telemetry.score(trace_id=trace_id, name="confidence", value=confidence)
+            trace.update(
+                output=full_text,
+                metadata={
+                    "intent": intent,
+                    "num_sources": len(retrieved_chunks),
+                    "streaming": True,
+                    "total_ms": round((time.monotonic() - _t0) * 1000, 1),
+                },
+            )
+            trace.end()
+
         if self.cache is not None:
             try:
                 envelope = CachedAnswer(
@@ -703,6 +843,10 @@ class AsyncRagService:
                 await self.cache.aset_semantic(safe_question, query_emb_for_cache, envelope)
             except Exception:
                 logger.warning("Cache write failed in stream", exc_info=True)
+
+        if self.telemetry:
+            with contextlib.suppress(Exception):
+                await self.telemetry.flush_async()
 
         # Done event with metadata
         yield _sse({"type": "done", "text": full_text, "confidence": confidence})
@@ -748,6 +892,43 @@ class AsyncRagService:
         except Exception:
             logger.warning("Code syntax fix retry failed, returning original")
             return answer_text
+
+    def _estimate_cost(self, prompt_tokens: int, completion_tokens: int, model: str) -> float:
+        """Estimate cost in USD based on token usage and provider pricing.
+
+        Pricing is approximate and based on common provider rates.
+        For Ollama (local), cost is 0.
+        """
+        # Ollama is free (local inference)
+        if not model or model.startswith(("llama", "qwen", "mistral", "gemma", "phi")):
+            return 0.0
+
+        # Approximate pricing per 1M tokens (as of 2024-2025)
+        # Source: provider documentation
+        pricing = {
+            # OpenRouter models (approximate)
+            "openrouter/": {"input": 0.0000003, "output": 0.0000006},
+            # Cloudflare Workers AI
+            "cf-": {"input": 0.000000011, "output": 0.000000036},
+            # Groq
+            "groq/": {"input": 0.00000005, "output": 0.00000008},
+            # Cerebras
+            "cerebras/": {"input": 0.0000001, "output": 0.0000001},
+            # Gemini
+            "gemini/": {"input": 0.000000125, "output": 0.000000375},
+            # NVIDIA
+            "nvidia/": {"input": 0.0000001, "output": 0.0000001},
+        }
+
+        # Find matching provider
+        for prefix, rates in pricing.items():
+            if model.lower().startswith(prefix.lower()) or prefix.lower() in model.lower():
+                input_cost = prompt_tokens * rates["input"]
+                output_cost = completion_tokens * rates["output"]
+                return input_cost + output_cost
+
+        # Default: assume free (Ollama or unknown)
+        return 0.0
 
     async def close(self) -> None:
         """Close all underlying clients and connection pools. Idempotent."""
