@@ -27,7 +27,9 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | Command | Notes |
 |---|---|
 | `dec ask <question>` | Calls `build_rag_service()` directly (no API needed) |
-| `dec reenrich --source "X" [--urls <file>]` | Re-enriches pages whose contextual enrichment failed: clears Qdrant chunks + Redis URL-registry entries, requeues frontier rows to DISCOVERED, re-runs ingestion in-process. URL source = Redis `ingest:enrichment_failed:<source>` set (or `--urls` file). Requires `CRAWL_DB_URL`. |
+| `dec reenrich --source "X" [--urls <file>] [--category enrichment\|fetch\|embed\|all]` | Re-processes failed pages: clears Qdrant chunks + Redis URL-registry, requeues frontier to DISCOVERED, re-runs ingestion. Default: enrichment failures from Redis. `--category all` retries all failure types. |
+| `dec retry-failed --source "X" [--category fetch\|embed\|upsert\|all]` | Retries all FAILED pages for a source, optionally filtered by error category. |
+| `dec unskip --source "X"` | Re-processes SKIPPED pages (pages where parsing returned no content). |
 | `dec ingest --source "X"` | POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery) |
 | `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
 | `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
@@ -150,6 +152,20 @@ make status   # Check health
 - Ollama models pulled: `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b`.
 - Integration + e2e jobs run with `REQUIRE_INFRA=1`, so unavailable services fail the job instead of silently skipping all tests.
 - Also has identical disabled copy at `.github/workflows.disabled/test.yml`.
+
+## Ingestion Throttling
+| Setting | Default | Purpose |
+|---|---|---|
+| `processing_concurrency` | 2 | Max pages processed simultaneously per source |
+| `enrichment_concurrency` | 1 | Max LLM calls to Ollama at a time |
+| `crawl_async_concurrency` | 5 | Max concurrent HTTP fetch workers |
+| `crawl_async_per_domain_concurrency` | 1 | Max requests per domain simultaneously |
+| `crawl_delay_seconds` | 0.5 | Min delay between same-domain requests |
+| `ingestion_batch_chunk_size` | 256 | Chunks accumulated before embedding flush |
+
+- **Adaptive backpressure**: After 3 consecutive Ollama failures, system logs warnings and tracks overload state. Ollama 503 errors are retried 3x with exponential backoff.
+- **Enrichment semaphore**: Only `enrichment_concurrency` LLM calls hit Ollama simultaneously, preventing GPU contention between embedding and enrichment.
+- **Failure recovery**: `dec retry-failed` retries all failed pages; `dec unskip` re-processes SKIPPED pages; `dec reenrich --category all` retries all failure types.
 
 ## Operational Gotchas
 - **Qdrant health**: Use `GET /` (port 6333). `/health` returns 404.
