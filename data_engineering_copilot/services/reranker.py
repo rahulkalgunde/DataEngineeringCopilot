@@ -117,20 +117,28 @@ class CrossEncoderReranker:
             chunk_texts = [chunk.chunk.text for chunk in chunks]
             pairs = [[query, text] for text in chunk_texts]
 
-            # Score each (query, chunk) pair — raw logits from cross-encoder.
-            # Run CPU-bound PyTorch inference OFF the event loop.
+            # Score in batches to avoid memory spikes on large candidate sets.
+            _BATCH_SIZE = 32
+            _TIMEOUT_SECONDS = 30
+            all_scores: list[float] = []
             executor = self._executor
             if executor is None:
                 executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
                 self._executor = executor
             loop = asyncio.get_running_loop()
-            raw_scores = await loop.run_in_executor(
-                executor,
-                lambda: self.model.predict(pairs),  # type: ignore[union-attr]
-            )
+            for i in range(0, len(pairs), _BATCH_SIZE):
+                batch = pairs[i : i + _BATCH_SIZE]
+                raw_scores = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        executor,
+                        lambda b=batch: self.model.predict(b),  # type: ignore[union-attr]
+                    ),
+                    timeout=_TIMEOUT_SECONDS,
+                )
+                all_scores.extend(float(s) for s in raw_scores)
 
             # Normalize logits to [0, 1] via sigmoid
-            scores = [1.0 / (1.0 + math.exp(-float(s))) for s in raw_scores]
+            scores = [1.0 / (1.0 + math.exp(-s)) for s in all_scores]
 
             # Sort chunks by normalized score (highest first)
             scored_chunks = list(zip(chunks, scores, strict=False))

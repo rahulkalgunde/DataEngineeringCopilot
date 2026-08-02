@@ -699,6 +699,7 @@ def build_rag_service(
         reranker_model=app_settings.reranker_model,
         reranker_top_k=app_settings.reranker_top_k,
         max_context_chars=app_settings.max_context_chars,
+        max_expansion_queries=app_settings.max_expansion_queries,
     )
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)

@@ -231,7 +231,7 @@ class AsyncIngestionService:
         if hasattr(self.vector_store, "initialize") and asyncio.iscoroutinefunction(self.vector_store.initialize):
             await self.vector_store.initialize()
         start_time = time.time()
-        page_limit = max_pages_per_source or self.settings.max_pages_per_source
+        page_limit = max_pages_per_source if max_pages_per_source is not None else self.settings.max_pages_per_source
         selected_sources = self._selected_sources(source_names)
         log.info(
             "async_ingestion.started",

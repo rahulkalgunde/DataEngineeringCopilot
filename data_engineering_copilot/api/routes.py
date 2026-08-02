@@ -203,7 +203,7 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
-        task = async_ingest_task.delay(effective_sources, request.max_pages or 0)
+        task = async_ingest_task.delay(effective_sources, request.max_pages)
 
         # Write an initial status so the polling endpoint has something to
         # return immediately, before the worker picks up the task.
