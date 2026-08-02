@@ -163,7 +163,12 @@ class SlidingWindowRateLimiter:
 
     @property
     def remaining_rpm(self) -> int:
-        """Approximate remaining requests available in the current RPM window."""
+        """Approximate remaining requests available in the current RPM window.
+
+        Note: popleft on deque is thread-safe under CPython GIL. This is a
+        sync property called from async code — no true concurrency (single-
+        threaded event loop), so no lock needed.
+        """
         now = time.time()
         while self._request_timestamps and self._request_timestamps[0] < now - 60:
             self._request_timestamps.popleft()
