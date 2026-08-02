@@ -87,6 +87,10 @@ class QueryCache:
 
             self._redis = aioredis.from_url(redis_url, decode_responses=True)
 
+        # Hit rate metrics
+        self._hits = 0
+        self._misses = 0
+
     def _exact_key(self, query: str, scope: CacheScope | None = None) -> str:
         fp = scope_fingerprint(scope)
         normalized = _normalize_query(query)
@@ -99,6 +103,25 @@ class QueryCache:
     def _redis_semantic_namespace(self, scope: CacheScope | None = None) -> str:
         fp = scope_fingerprint(scope)
         return f"rag:cache:semantic:{fp}"
+
+    @property
+    def hit_rate(self) -> float:
+        """Cache hit rate (0.0–1.0). Returns 0.0 if no queries yet."""
+        total = self._hits + self._misses
+        return self._hits / total if total > 0 else 0.0
+
+    @property
+    def stats(self) -> dict[str, int | float]:
+        """Return cache statistics."""
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "total": total,
+            "hit_rate": self._hits / total if total > 0 else 0.0,
+            "exact_size": len(self._exact_cache),
+            "semantic_size": len(self._semantic_cache),
+        }
 
     # --- exact tier ---
 
@@ -177,12 +200,15 @@ class QueryCache:
     ) -> CachedAnswer | None:
         exact = self.get_exact(query, scope)
         if exact is not None:
+            self._hits += 1
             return exact
         if query_embedding is not None:
             seen = self.get_semantic(query, query_embedding, scope)
             if seen is not None:
+                self._hits += 1
                 return seen
         if self._redis is None:
+            self._misses += 1
             return None
         try:
             val = await self._redis.get(self._redis_exact_key(query, scope))
@@ -191,10 +217,12 @@ class QueryCache:
                 envelope = _deserialize_envelope(cached)
                 if envelope is not None:
                     self.set_exact(query, envelope, scope)
+                    self._hits += 1
                     return envelope
         except Exception:
             logger.warning("Redis L2 get_exact failed", exc_info=True)
         if query_embedding is None:
+            self._misses += 1
             return None
         try:
             namespace = self._redis_semantic_namespace(scope)
@@ -231,6 +259,7 @@ class QueryCache:
                     return best_envelope
         except Exception:
             logger.warning("Redis L2 get_semantic failed", exc_info=True)
+        self._misses += 1
         return None
 
     async def aset_exact(self, query: str, answer: CachedAnswer, scope: CacheScope | None = None) -> None:

@@ -493,7 +493,7 @@ def status() -> None:
         print(f"  ❌ Error: {e}")
 
 
-def evaluate() -> None:
+def evaluate(verbose: bool = False) -> None:
     """Run RAG evaluation on golden dataset."""
     import asyncio
 
@@ -533,8 +533,14 @@ def evaluate() -> None:
 
             # RAGAS metrics need the retrieved contexts and ground truth.
             contexts = [c.text for c in answer.sources]
-            print(f"  Answer: {answer.text[:100]}...")
-            print(f"  Confidence: {answer.confidence:.2f} ({len(contexts)} contexts retrieved, {latency:.1f}s)")
+            if verbose:
+                print(f"  Answer: {answer.text[:200]}...")
+                print(f"  Confidence: {answer.confidence:.2f} ({len(contexts)} contexts retrieved, {latency:.1f}s)")
+                if answer.sources:
+                    print(f"  Sources: {', '.join(c.source_name for c in answer.sources[:3])}")
+            else:
+                status = "IC" if "INSUFFICIENT_CONTEXT" in (answer.text or "") else f"{answer.confidence:.2f}"
+                print(f"  Confidence: {status} ({len(contexts)} contexts, {latency:.1f}s)")
             if latency > 10.0:
                 print(f"  ⚠️  Slow query ({latency:.1f}s > 10s threshold)")
             print()
@@ -993,7 +999,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="Show ingestion and system status.")
 
     # Evaluate
-    subparsers.add_parser("evaluate", help="Run RAG evaluation on golden dataset.")
+    eval_parser = subparsers.add_parser("evaluate", help="Run RAG evaluation on golden dataset.")
+    eval_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed per-query output")
 
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
@@ -1098,7 +1105,7 @@ def main() -> None:
         elif args.command == "status":
             status()
         elif args.command == "evaluate":
-            evaluate()
+            evaluate(verbose=getattr(args, "verbose", False))
         elif args.command == "config":
             config()
         elif args.command == "inspect-db":

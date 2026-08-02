@@ -805,10 +805,12 @@ def build_rag_service(
     groundedness = GroundednessVerifier(
         llm_client=groundedness_client or llm_client,
         enabled=app_settings.groundedness_enabled,
+        groundedness_threshold=app_settings.groundedness_threshold,
     )
     context_compressor = ContextCompressor(
         enabled=app_settings.context_compression_enabled,
         max_chunks=app_settings.retrieval_top_k,
+        compression_ratio=app_settings.context_compression_ratio,
     )
 
     # PII redaction

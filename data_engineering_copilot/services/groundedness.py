@@ -71,10 +71,12 @@ class GroundednessVerifier:
         llm_client: object | None,
         enabled: bool = True,
         min_support_score: float = 0.3,
+        groundedness_threshold: float = 0.6,
     ) -> None:
         self._llm_client = llm_client
         self._enabled = enabled
         self._min_support_score = min_support_score
+        self._groundedness_threshold = groundedness_threshold
 
     @staticmethod
     def _build_context_excerpt(answer_text: str, context_docs: list[DocumentChunk]) -> str:
@@ -140,7 +142,7 @@ class GroundednessVerifier:
 
             overall = sum(a.score for a in annotations) / len(annotations) if annotations else 0.0
             unsupported = [a.claim for a in annotations if not a.supported]
-            return (overall >= 0.5, unsupported)
+            return (overall >= self._groundedness_threshold, unsupported)
         except Exception as exc:
             logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
             return self._fallback_tuple(answer_text, context_docs)
@@ -148,7 +150,7 @@ class GroundednessVerifier:
     def _fallback_tuple(self, answer_text: str, context_chunks: list[DocumentChunk]) -> tuple[bool, list[str]]:
         """Fallback: text-overlap heuristic returning ``(supported, unsupported_claims)``."""
         result = self.verify(answer_text, context_chunks)
-        return (result.overall_score >= 0.5, [a.claim for a in result.annotations if not a.supported])
+        return (result.overall_score >= self._groundedness_threshold, [a.claim for a in result.annotations if not a.supported])
 
     async def async_verify_with_score(
         self,
@@ -205,7 +207,7 @@ class GroundednessVerifier:
 
             overall = sum(a.score for a in annotations) / len(annotations) if annotations else 0.0
             unsupported = [a.claim for a in annotations if not a.supported]
-            return (overall >= 0.5, unsupported, overall)
+            return (overall >= self._groundedness_threshold, unsupported, overall)
         except Exception as exc:
             logger.warning("LLM groundedness verification failed, falling back to text-overlap: %s", exc)
             result = self.verify(answer_text, context_docs)
