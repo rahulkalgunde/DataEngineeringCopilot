@@ -249,7 +249,7 @@ class TestAsyncRagService:
             cache=None,
         )
 
-        with pytest.raises(RetrievalError, match="(?i)embedding"):
+        with pytest.raises(RetrievalError, match="(?i)vector store query failed"):
             await service.answer("what is spark")
 
     @pytest.mark.asyncio

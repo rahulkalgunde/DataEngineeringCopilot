@@ -159,23 +159,34 @@ class BM25Tokenizer:
     def fit(self, texts: list[str]) -> None:
         """Build vocabulary and IDF tables from a training corpus.
 
-        After calling ``fit()`` the tokenizer is frozen.
+        Accumulates across multiple calls: each call adds new documents
+        to the existing stats (doc_freq, corpus_size, vocab).  After the
+        first call the tokenizer is *frozen* (new words in queries are
+        dropped), but ``fit()`` itself can be called repeatedly to refine
+        IDF statistics as more data arrives.
+
+        With ``Modifier.IDF`` on the Qdrant side, ``tokenize()`` now
+        returns raw term-frequency weights — IDF is handled server-side.
         """
         token_lists = [self._extract_tokens(t) for t in texts if t.strip()]
         if not token_lists:
             return
 
-        # Doc frequency: each unique token per document
+        # Doc frequency: each unique token per document (accumulates)
         for token_list in token_lists:
             for t in set(token_list):
                 self._doc_freq[t] += 1
 
-        # Corpus statistics
+        # Corpus statistics (accumulate)
         all_tokens = [t for tl in token_lists for t in tl]
-        self._corpus_size = len(token_lists)
-        self._avg_doc_len = len(all_tokens) / self._corpus_size if self._corpus_size else 0
+        new_corpus_size = len(token_lists)
+        self._corpus_size += new_corpus_size
+        if self._corpus_size > 0:
+            self._avg_doc_len = (
+                self._avg_doc_len * (self._corpus_size - new_corpus_size) + len(all_tokens)
+            ) / self._corpus_size
 
-        # Build vocab — assign sequential IDs
+        # Build vocab — assign sequential IDs (accumulates)
         for token_list in token_lists:
             for t in token_list:
                 if t not in self._vocab:

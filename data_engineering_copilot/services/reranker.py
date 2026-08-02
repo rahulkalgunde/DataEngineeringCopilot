@@ -189,26 +189,24 @@ class CrossEncoderReranker:
             self._executor.shutdown(wait=True)
             self._executor = None
 
-    def max_marginal_relevance(
+    def diversify_by_lexical_content(
         self,
-        query_emb: list[float],
         chunks: list[RetrievedChunk],
-        lambda_param: float = 0.5,
         top_k: int = 5,
     ) -> list[RetrievedChunk]:
-        """MMR diversity reranking — relevance (cross-encoder or embedding score) + diversity.
+        """Lexical diversity reranking — relevance + diversity.
+
+        Uses chunk token overlap to penalize semantically similar chunks,
+        ensuring diverse context in the final result.
 
         Args:
-            query_emb: Query embedding vector.
             chunks: Candidate chunks (already scored by cross-encoder or embedding).
-            lambda_param: Tradeoff between relevance (1.0) and diversity (0.0).
             top_k: Max chunks to return.
         """
         if not chunks or top_k <= 0:
             return []
-        sorted_chunks = sorted(chunks, key=lambda c: c.confidence, reverse=True)
         selected: list[RetrievedChunk] = []
-        remaining = list(sorted_chunks)
+        remaining = list(chunks)
         selected_tokens: list[set[str]] = []
         while remaining and len(selected) < top_k:
             best_score = -1.0
@@ -217,7 +215,7 @@ class CrossEncoderReranker:
                 relevance = chunk.confidence
                 chunk_tokens = _mmr_tokenize(chunk.chunk.text)
                 max_sim = max((_mmr_cosine(chunk_tokens, s) for s in selected_tokens), default=0.0)
-                mmr = lambda_param * relevance - (1 - lambda_param) * max_sim
+                mmr = 0.5 * relevance - 0.5 * max_sim
                 if mmr > best_score:
                     best_score = mmr
                     best_idx = idx
