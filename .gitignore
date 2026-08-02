@@ -44,3 +44,4 @@ profil*/
 .ollama_cache/
 .bm25_cache/
 docs/
+memory-bank/
