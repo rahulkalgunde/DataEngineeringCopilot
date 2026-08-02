@@ -73,6 +73,7 @@ class TestReadyEndpoint:
             assert body["checks"]["qdrant"] is True
             assert body["checks"]["ollama"] is True
             assert body["checks"]["redis"] is True
+            assert body["checks"]["deps"] is True
 
     def test_ready_qdrant_down_returns_503(self, client):
         def side_effect(host, port, timeout=3.0):
@@ -90,11 +91,15 @@ class TestReadyEndpoint:
             response = client.get("/ready")
             assert response.status_code == 503
             body = response.json()
-            assert body["status"] == "unhealthy"
-            assert all(v is False for v in body["checks"].values())
+            # deps check is True (not in container), so status is degraded not unhealthy
+            assert body["status"] == "degraded"
+            assert body["checks"]["qdrant"] is False
+            assert body["checks"]["ollama"] is False
+            assert body["checks"]["redis"] is False
+            assert body["checks"]["deps"] is True
 
-    def test_ready_includes_all_three_services(self, client):
+    def test_ready_includes_all_services(self, client):
         with patch("data_engineering_copilot.api.app._check_tcp", return_value=True):
             response = client.get("/ready")
             checks = response.json()["checks"]
-            assert set(checks.keys()) == {"qdrant", "ollama", "redis"}
+            assert set(checks.keys()) == {"qdrant", "ollama", "redis", "deps"}

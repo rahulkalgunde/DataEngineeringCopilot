@@ -74,7 +74,13 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - `make docker-setup` = start full stack + pulls `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b` into Ollama.
 - CI: `make docker-ci-up` = `docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait`.
 - Both `backend-api` and `celery_worker` share image `de_copilot_base_image:${IMAGE_TAG:-latest}`; both volume-mount `.:/app`.
-- **Staleness detection**: the image bakes `/image_deps_sha256.txt` (sha256 of `pyproject.toml`+`uv.lock`). At startup the API checks it (`GET /api/v1/version` → `deps_fingerprint_ok`) and the Celery worker refuses to start on a mismatch. Dep changes ⇒ run `make docker-dev`; the bind mount does NOT update installed packages.
+- **Staleness detection** (5-layer defense): the image bakes `/image_deps_sha256.txt` (sha256 of `pyproject.toml`+`uv.lock`).
+  1. **API gate**: `POST /api/v1/ingest` returns HTTP 503 when stale — no orphaned tasks.
+  2. **CLI pre-flight**: `dec ingest` checks `GET /api/v1/version` before dispatching — exits with clear error.
+  3. **Streamlit UI**: Red warning banner + disabled ingest button + System Health tab shows status.
+  4. **Celery worker**: Writes `ingestion:worker_stale=true` to Redis and exits on startup.
+  5. **Version endpoint**: `GET /api/v1/version` returns `deps_fingerprint_ok`, `deps_baked_hash`, `deps_live_hash`, `deps_stale_message`.
+  - Dep changes ⇒ run `make docker-dev`; the bind mount does NOT update installed packages.
 - Only `dec ingest` or manual testing needs full Docker Compose — tests use testcontainers only.
 
 ## Architecture

@@ -107,6 +107,27 @@ def _check_langfuse_reachable(timeout: float = 2.0) -> tuple[bool, str]:
         )
 
 
+def _check_deps_fingerprint(timeout: float = 2.0) -> tuple[bool, str]:
+    """Check if the Docker image dependencies are fresh. Returns (ok, message)."""
+    try:
+        url = f"{API_BASE_URL}/api/v1/version"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+            deps_ok = data.get("deps_fingerprint_ok")
+            if deps_ok is True:
+                return True, "Dependencies are fresh"
+            elif deps_ok is False:
+                msg = data.get("deps_stale_message", "Docker image is stale.")
+                return False, msg
+            else:
+                return True, "Not running in Docker (check skipped)"
+    except urllib.error.URLError:
+        return True, "API not reachable (check skipped)"
+    except (TimeoutError, OSError):
+        return True, "API timeout (check skipped)"
+
+
 # ---------------------------------------------------------------------------
 # Ingestion API helpers
 # ---------------------------------------------------------------------------
@@ -942,8 +963,9 @@ def render_health_tab() -> None:
     qdrant_ok, qdrant_msg = _check_qdrant_reachable()
     ollama_ok, ollama_msg = _check_ollama_reachable()
     langfuse_ok, langfuse_msg = _check_langfuse_reachable()
+    deps_ok, deps_msg = _check_deps_fingerprint()
 
-    col_q, col_o, col_l = st.columns(3)
+    col_q, col_o, col_l, col_d = st.columns(4)
     with col_q:
         if qdrant_ok:
             st.success("Qdrant")
@@ -965,6 +987,13 @@ def render_health_tab() -> None:
         else:
             st.warning("Langfuse")
             st.caption(langfuse_msg)
+    with col_d:
+        if deps_ok:
+            st.success("Docker image")
+            st.caption(deps_msg)
+        else:
+            st.error("Docker image STALE")
+            st.caption(f"Run `make docker-dev`\n\n{deps_msg}")
 
     st.divider()
 
@@ -1207,6 +1236,7 @@ def main() -> None:
         # Service indicators
         qdrant_ok, _ = _check_qdrant_reachable(timeout=1.0)
         ollama_ok, _ = _check_ollama_reachable(timeout=1.0)
+        deps_ok, deps_msg = _check_deps_fingerprint(timeout=1.0)
         if qdrant_ok:
             st.success("Qdrant: up")
         else:
@@ -1215,6 +1245,11 @@ def main() -> None:
             st.success("Ollama: up")
         else:
             st.error("Ollama: down")
+        if deps_ok:
+            st.success("Docker image: fresh")
+        else:
+            st.error("Docker image: STALE")
+            st.caption(f"Run `make docker-dev` to fix. {deps_msg}")
 
         # Chunk count
         try:
@@ -1237,6 +1272,11 @@ def main() -> None:
             st.caption("Last answer confidence shown in Q&A tab.")
 
     # Tab layout
+    # Stale image warning banner (top of page, highly visible)
+    deps_ok, deps_msg = _check_deps_fingerprint(timeout=2.0)
+    if not deps_ok:
+        st.error(f"**Docker image is STALE** — ingestion will fail. Run `make docker-dev` to rebuild.\n\n{deps_msg}")
+
     tab_ask, tab_ingest, tab_health, tab_metrics = st.tabs(["💬 Ask", "📥 Ingestion", "🔧 System Health", "📊 Metrics"])
     with tab_ask:
         render_qa_tab()

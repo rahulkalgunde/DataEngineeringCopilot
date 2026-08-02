@@ -18,12 +18,31 @@ from data_engineering_copilot.profiler import cli as profiler_cli
 logger = logging.getLogger(__name__)
 
 
+def _check_deps_before_dispatch(api_url: str = "http://localhost:8000") -> None:
+    """Pre-flight check: verify the API's Docker image is not stale before dispatching."""
+    try:
+        req = urllib.request.Request(f"{api_url}/api/v1/version")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("deps_fingerprint_ok") is False:
+                msg = data.get("deps_stale_message", "Docker image is stale.")
+                print(f"\n{'=' * 60}")
+                print(f"ERROR: {msg}")
+                print(f"{'=' * 60}\n")
+                sys.exit(1)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        pass  # API unreachable — let the dispatch fail naturally
+
+
 def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
     import time
 
     API_BASE_URL = "http://localhost:8000"
 
     logger.info("CLI async ingest started max_pages=%s sources=%s", max_pages, source_names or "all")
+
+    # Pre-flight: refuse to dispatch if the Docker image is stale
+    _check_deps_before_dispatch(API_BASE_URL)
 
     # Dispatch through the production API path (Celery task + Redis tracking)
     payload = json.dumps(
@@ -307,8 +326,25 @@ def health() -> None:
     print("Checking service health...\n")
     all_healthy = True
 
+    # Check Docker image freshness
+    print("Docker Image:")
+    try:
+        req = urllib.request.Request("http://localhost:8000/api/v1/version")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            deps_ok = data.get("deps_fingerprint_ok")
+            if deps_ok is True:
+                print("  ✅ Dependencies: fresh")
+            elif deps_ok is False:
+                print("  ❌ Dependencies: STALE — run `make docker-dev`")
+                all_healthy = False
+            else:
+                print("  ℹ️  Dependencies: unknown (not running in Docker)")
+    except Exception:
+        print("  ❌ API not reachable at localhost:8000")
+
     # Check Qdrant
-    print("Qdrant:")
+    print("\nQdrant:")
     try:
         req = urllib.request.Request(f"{settings.qdrant_url}/", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -399,8 +435,27 @@ def status() -> None:
 
     print("System Status\n" + "=" * 40 + "\n")
 
+    # Check Docker image freshness
+    print("Docker Image:")
+    try:
+        req = urllib.request.Request("http://localhost:8000/api/v1/version")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            deps_ok = data.get("deps_fingerprint_ok")
+            if deps_ok is True:
+                print("  ✅ Dependencies: fresh")
+            elif deps_ok is False:
+                print("  ❌ Dependencies: STALE — run `make docker-dev`")
+                print(f"     {data.get('deps_stale_message', '')}")
+            else:
+                print("  ℹ️  Dependencies: unknown (not running in Docker)")
+            git_sha = data.get("git_sha", "unknown")
+            print(f"  Git SHA: {git_sha[:8] if git_sha else 'unknown'}")
+    except Exception:
+        print("  ❌ API not reachable at localhost:8000")
+
     # Check Qdrant collection status
-    print("Qdrant Collection:")
+    print("\nQdrant Collection:")
     try:
         req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:

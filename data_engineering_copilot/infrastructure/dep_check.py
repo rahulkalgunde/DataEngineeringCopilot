@@ -8,6 +8,7 @@ means the image was not rebuilt after a dependency change.
 Usage:
     API (warn only):  ``check_deps(fail_fast=False)`` at startup
     Worker (refuse):  ``check_deps(fail_fast=True)`` at import
+    Version endpoint: ``deps_detail()`` for structured status info
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,17 @@ STALE_MESSAGE = (
     "this image was built. Rebuild with `make docker-dev` (or "
     "`docker compose --profile app up -d --build backend-api celery_worker`)."
 )
+
+
+@dataclass(frozen=True)
+class DepsStatus:
+    """Structured dependency freshness status."""
+
+    ok: bool | None  # True=fresh, False=stale, None=indeterminate (not in container)
+    baked_hash: str | None
+    live_hash: str | None
+    message: str | None  # Human-readable error when stale
+    in_container: bool  # Whether we're running inside a Docker image
 
 
 def _read_baked(baked_path: str = IMAGE_FINGERPRINT_FILE) -> str | None:
@@ -61,6 +74,23 @@ def fingerprint_ok(baked_path: str = IMAGE_FINGERPRINT_FILE, live_dir: str = LIV
     if live is None:
         return None
     return live == baked
+
+
+def deps_detail(
+    baked_path: str = IMAGE_FINGERPRINT_FILE,
+    live_dir: str = LIVE_DIR,
+) -> DepsStatus:
+    """Return structured dependency freshness status for API/CLI/UI consumption."""
+    baked = _read_baked(baked_path)
+    live = _live_fingerprint(live_dir)
+    in_container = baked is not None
+
+    if baked is None or live is None:
+        return DepsStatus(ok=None, baked_hash=baked, live_hash=live, message=None, in_container=in_container)
+
+    ok = live == baked
+    message = None if ok else STALE_MESSAGE
+    return DepsStatus(ok=ok, baked_hash=baked, live_hash=live, message=message, in_container=in_container)
 
 
 def check_deps(
