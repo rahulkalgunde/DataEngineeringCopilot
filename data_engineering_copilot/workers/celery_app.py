@@ -36,7 +36,6 @@ celery_app.conf.update(
     # Task routing: ingestion tasks go to dedicated queue
     task_routes={
         "data_engineering_copilot.workers.tasks.async_ingest_task": {"queue": "ingestion"},
-        "data_engineering_copilot.workers.tasks.execute_background_ingestion": {"queue": "ingestion"},
     },
     # Worker concurrency: let worker auto-detect, but cap at 4
     worker_concurrency=4,

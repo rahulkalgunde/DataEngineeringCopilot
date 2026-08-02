@@ -49,6 +49,7 @@ def _build_rbac_map(rbac_users_json: str) -> dict[str, UserPermissions]:
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests via X-API-Key or Authorization: Bearer header.
 
+    Supports single ``API_KEY`` or comma-separated ``API_KEYS`` env var.
     Optionally resolves the key to RBAC permissions stored on
     ``request.state.user_permissions``.
     """
@@ -63,10 +64,14 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         rbac_users_json: str = "",
     ) -> None:
         super().__init__(app)
-        self._api_key = api_key or ""
+        # Support comma-separated API_KEYS for multi-key auth
+        raw_key = api_key or ""
+        self._valid_keys: set[str] = {
+            k.strip() for k in raw_key.split(",") if k.strip()
+        } if raw_key else set()
         self._rbac_enabled = rbac_enabled
         self._rbac_map = _build_rbac_map(rbac_users_json) if rbac_enabled else {}
-        if not self._api_key:
+        if not self._valid_keys:
             logger.warning(
                 "SECURITY: API_KEY not set — authentication is DISABLED. "
                 "All requests pass through unauthenticated. Set the API_KEY "
@@ -105,7 +110,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in self.EXEMPT_PATHS:
             return await call_next(request)
 
-        if not self._api_key:
+        if not self._valid_keys:
             return await call_next(request)
 
         provided_key = request.headers.get("X-API-Key")
@@ -114,7 +119,9 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             if auth_header.startswith("Bearer "):
                 provided_key = auth_header[7:]
 
-        if not provided_key or not hmac.compare_digest(provided_key, self._api_key):
+        if not provided_key or not any(
+            hmac.compare_digest(provided_key, valid) for valid in self._valid_keys
+        ):
             self._audit("auth_failed", request, provided_key)
             return JSONResponse(
                 status_code=401,

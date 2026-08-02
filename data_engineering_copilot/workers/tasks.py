@@ -1,6 +1,5 @@
 """Celery tasks for background ingestion.
 
-``execute_background_ingestion`` is the legacy Crawl4AI-based task.
 ``async_ingest_task`` is the production task that uses the full
 IngestionService pipeline with Redis progress tracking.
 """
@@ -17,10 +16,7 @@ import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.signals import task_failure, task_revoked
 
-from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.factory import build_embedder, get_shared_redis_client
-from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
-from data_engineering_copilot.services.chunker import DocumentChunker
+from data_engineering_copilot.factory import get_shared_redis_client
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import (
     _LEASE_KEY_PREFIX,
@@ -82,50 +78,6 @@ async def _run_async_crawl(urls: list[str]):
         return results
 
 
-@celery_app.task
-def execute_background_ingestion(urls: list[str]):
-    """Legacy Celery entry point that crawls URLs directly using Crawl4AI."""
-
-    async def _pipeline():
-        raw_docs = await _run_async_crawl(urls)
-
-        embedder = build_embedder(settings)
-        chunker = DocumentChunker(
-            chunk_size=settings.chunk_size_words * 5,
-            chunk_overlap=settings.chunk_overlap_words * 5,
-        )
-        vector_store = AsyncQdrantVectorStore(
-            url=settings.qdrant_url,
-            collection_name=settings.collection_name,
-        )
-
-        await vector_store.initialize()
-
-        processed = 0
-        for doc in raw_docs:
-            if not getattr(doc, "success", False):
-                continue
-            text = doc.markdown
-            chunks = chunker.chunk(
-                type(
-                    "TmpDoc",
-                    (),
-                    {
-                        "source_name": "crawl4ai",
-                        "title": doc.title or doc.url,
-                        "url": doc.url,
-                        "text": text,
-                    },
-                )()
-            )
-            embeddings = await embedder.embed_texts([c.text for c in chunks])
-            await vector_store.upsert_chunks(chunks, embeddings)
-            processed += 1
-        return processed
-
-    processed_count = run_async(_pipeline())
-    return {"status": "INGESTION_COMPLETED", "processed_count": processed_count}
-
 
 def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int | None) -> None:
     """Validate task inputs that arrive from the Celery broker.
@@ -160,6 +112,18 @@ def async_ingest_task(self, source_names: list[str], max_pages: int | None):
     Progress is persisted to Redis via ``IngestionProgressTracker`` so that
     the Streamlit UI and API endpoints can poll for real-time updates.
     """
+    # Propagate W3C trace context from Celery task headers
+    try:
+        from data_engineering_copilot.observability.otel_telemetry import extract_w3c_context
+
+        trace_ctx = extract_w3c_context(dict(self.request.headers or {}))
+        if trace_ctx is not None:
+            from opentelemetry import context as otel_context
+
+            otel_context.attach(trace_ctx)
+    except Exception:
+        pass
+
     task_id = self.request.id
     _validate_ingest_inputs(source_names, max_pages)
     log.info(
