@@ -288,6 +288,8 @@ class AppSettings(BaseSettings):
     reranker_top_k: int = 5
     max_context_chars: int = 4000
     max_expansion_queries: int = 2
+    context_compression_ratio: float = 0.8
+    groundedness_threshold: float = 0.6
     confidence_threshold: float = 0.18
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 180

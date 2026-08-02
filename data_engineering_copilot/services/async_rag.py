@@ -452,6 +452,15 @@ class AsyncRagService:
                 if query_emb_for_cache is not None:
                     await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)
 
+            # Log cache hit rate for observability
+            if self.cache is not None:
+                logger.info(
+                    "query_cache_stats hits=%d misses=%d hit_rate=%.2f",
+                    self.cache._hits,
+                    self.cache._misses,
+                    self.cache.hit_rate,
+                )
+
             return result
         except LLMGenerationError:
             if trace:

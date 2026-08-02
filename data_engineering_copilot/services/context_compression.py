@@ -38,10 +38,12 @@ class ContextCompressor:
         enabled: bool = True,
         similarity_threshold: float = 0.85,
         max_chunks: int = 10,
+        compression_ratio: float = 0.8,
     ) -> None:
         self._enabled = enabled
         self._similarity_threshold = similarity_threshold
         self._max_chunks = max_chunks
+        self._compression_ratio = compression_ratio
 
     def compress(
         self,
@@ -72,7 +74,15 @@ class ContextCompressor:
         # Sort by score descending, then original order for ties
         scored.sort(key=lambda x: (-x[0], x[1]))
 
-        return [chunk for _, _, chunk in scored[: self._max_chunks]]
+        # Apply compression ratio: keep at most ratio * input size, capped by max_chunks
+        # Only apply ratio limit when input is larger than max_chunks
+        if len(chunks) > self._max_chunks:
+            ratio_limit = max(1, int(len(chunks) * self._compression_ratio))
+            effective_limit = min(ratio_limit, self._max_chunks)
+        else:
+            effective_limit = self._max_chunks
+
+        return [chunk for _, _, chunk in scored[:effective_limit]]
 
     def _deduplicate(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
         """Remove near-duplicate chunks using Jaccard similarity."""

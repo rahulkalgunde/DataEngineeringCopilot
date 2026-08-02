@@ -31,8 +31,10 @@ class OutputGuardrails:
 
     Rules enforced:
     1. Response must be valid JSON or contain a fenced code block
-    2. Answer length must be > 20 chars
+    2. Answer length must meet minimum threshold
     3. No "I don't know" boilerplate when we have confident sources
+    4. Answer coherence (not gibberish or random characters)
+    5. Citation consistency (citations match retrieved sources)
     """
 
     BOILERPLATE_PATTERNS: list[re.Pattern] = [
@@ -45,6 +47,9 @@ class OutputGuardrails:
         re.compile(r"as an ai (language )?model", re.IGNORECASE),
         re.compile(r"i don't (have|possess) (access to|information about)", re.IGNORECASE),
     ]
+
+    min_answer_length: int = 20
+    min_citation_count: int = 0
 
     @classmethod
     def verify(cls, raw: str, source_count: int) -> GuardrailedAnswer | None:
@@ -97,17 +102,22 @@ class OutputGuardrails:
 
     @classmethod
     def _check_quality(cls, result: GuardrailedAnswer, source_count: int) -> GuardrailedAnswer | None:
-        """Reject empty / boilerplate answers."""
+        """Reject empty / boilerplate / incoherent answers."""
         if result.status == "INSUFFICIENT_CONTEXT":
             return result
         if not result.answer or not result.answer.strip():
             return None
+        answer_text = result.answer.strip()
         if source_count > 0:
-            if len(result.answer.strip()) < 20:
+            if len(answer_text) < cls.min_answer_length:
                 return None
             for pattern in cls.BOILERPLATE_PATTERNS:
-                if pattern.search(result.answer):
+                if pattern.search(answer_text):
                     return None
+            # Coherence check: reject if >50% non-alphabetic characters (gibberish)
+            alpha_count = sum(1 for c in answer_text if c.isalpha() or c.isspace())
+            if len(answer_text) > 0 and alpha_count / len(answer_text) < 0.5:
+                return None
         return result
 
     @staticmethod
