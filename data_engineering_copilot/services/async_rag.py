@@ -150,13 +150,6 @@ class AsyncRagService:
             on_step("Embedding query")
         logger.info("async_rag.answer question=%r queries=%d", question[:100], len(all_queries))
 
-        # Compute a representative embedding for reranking/MMR
-        try:
-            query_emb = await self.embedder.embed_query(effective_query)
-        except Exception as exc:
-            logger.exception("Failed to compute representative embedding: %s", exc)
-            raise RetrievalError(f"Embedding failed: {exc}") from exc
-
         retrieval_span = None
         if trace:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
@@ -295,8 +288,8 @@ class AsyncRagService:
 
             # MMR diversity reranking — ensures diverse context
             if len(retrieved_chunks) > 3 and self.reranker is not None:
-                retrieved_chunks = self.reranker.max_marginal_relevance(
-                    query_emb, retrieved_chunks, top_k=self.config.reranker_top_k
+                retrieved_chunks = self.reranker.diversify_by_lexical_content(
+                    retrieved_chunks, top_k=self.config.reranker_top_k
                 )
 
             # Phase 2D: Context compression (dedup + relevance re-ranking) — runs after reranking
@@ -306,10 +299,9 @@ class AsyncRagService:
                 logger.info("context_compressed chunks=%d", len(retrieved_chunks))
             _record_stage("rerank")
 
-            sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
             context_str, source_names = assembler.assemble(
-                sorted_chunks,
+                retrieved_chunks,
                 deduplicate=self.context_compressor is None,
             )
 

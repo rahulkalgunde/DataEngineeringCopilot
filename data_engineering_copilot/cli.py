@@ -417,6 +417,15 @@ def status() -> None:
     except Exception as e:
         print(f"  ❌ Error: {e}")
 
+    # BM25 tokenizer status
+    from data_engineering_copilot.config.settings import PROJECT_ROOT
+
+    bm25_cache = PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
+    if bm25_cache.exists():
+        print(f"  BM25: fitted (cached at {bm25_cache.name})")
+    else:
+        print("  BM25: not fitted (run `dec ingest` to fit)")
+
     # Check active Celery tasks
     print("\nCelery Workers:")
     try:
@@ -505,17 +514,23 @@ def evaluate() -> None:
 
     async def run_eval():
         results = []
+        latencies = []
         for i, item in enumerate(queries, 1):
             query = item.get("question") or item.get("query", "")
 
             print(f"[{i}/{len(queries)}] Query: {query[:60]}...")
 
+            t0 = __import__("time").monotonic()
             answer = await service.answer(query)
+            latency = __import__("time").monotonic() - t0
+            latencies.append(latency)
 
             # RAGAS metrics need the retrieved contexts and ground truth.
             contexts = [c.text for c in answer.sources]
             print(f"  Answer: {answer.text[:100]}...")
-            print(f"  Confidence: {answer.confidence:.2f} ({len(contexts)} contexts retrieved)")
+            print(f"  Confidence: {answer.confidence:.2f} ({len(contexts)} contexts retrieved, {latency:.1f}s)")
+            if latency > 10.0:
+                print(f"  ⚠️  Slow query ({latency:.1f}s > 10s threshold)")
             print()
 
             results.append(
@@ -525,8 +540,18 @@ def evaluate() -> None:
                     "confidence": answer.confidence,
                     "contexts": contexts,
                     "ground_truth": item.get("ground_truth", ""),
+                    "latency": latency,
                 }
             )
+
+        # Latency summary
+        if latencies:
+            sorted_lat = sorted(latencies)
+            n = len(sorted_lat)
+            p50 = sorted_lat[n // 2]
+            p95 = sorted_lat[int(n * 0.95)] if n >= 20 else sorted_lat[-1]
+            p99 = sorted_lat[int(n * 0.99)] if n >= 100 else sorted_lat[-1]
+            print(f"Latency: P50={p50:.1f}s P95={p95:.1f}s P99={p99:.1f}s")
 
         return results
 

@@ -271,11 +271,11 @@ class AsyncIngestionService:
         total_elapsed = time.time() - start_time
         log.info("async_ingestion.completed", total_chunks=total_chunks, elapsed=round(total_elapsed, 1))
 
-        # Fit BM25 tokenizer only when every selected source was fully crawled
-        # (frontier drained).  Fitting on a partial run would overwrite the
-        # persisted model with an incomplete corpus.
+        # Always fit BM25 — fit() accumulates across calls.  Warn if partial.
         all_fully_crawled = all(full_crawl_flags.get(source.name, False) for source in selected_sources)
-        if all_fully_crawled and self._corpus_texts and hasattr(self.vector_store, "fit_bm25"):
+        if not all_fully_crawled:
+            log.warning("async_ingestion.bm25_partial_crawl")
+        if self._corpus_texts and hasattr(self.vector_store, "fit_bm25"):
             self.vector_store.fit_bm25(self._corpus_texts)
             log.info("async_ingestion.bm25_fitted", corpus_size=len(self._corpus_texts))
             self._corpus_texts.clear()
