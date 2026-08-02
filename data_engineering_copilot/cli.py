@@ -479,6 +479,85 @@ def reset_index() -> None:
             logger.warning("Skipping PostgreSQL reset — already running in an event loop")
 
 
+def reset_crawler_db() -> None:
+    """Clear crawler state without touching Qdrant.
+
+    Resets Redis ``crawl:*`` keys (URL registry + HTTP cache) and PostgreSQL
+    frontier tables (``crawl_frontier`` + ``sitemap_edges``).  Qdrant is
+    preserved so the dedup mechanism (``content_hash`` in Qdrant payloads)
+    still works — re-crawled pages with unchanged content are skipped.
+    """
+    print("Resetting crawler database (Qdrant preserved)...\n")
+
+    # Step 1: Clear Redis crawl-related keys
+    from data_engineering_copilot.workers.progress import get_redis_client
+
+    redis_cleared = 0
+    try:
+        redis_client = get_redis_client()
+
+        # Clear URL registry keys
+        registry_keys = list(redis_client.scan_iter("crawl:url_registry:*"))
+        if registry_keys:
+            redis_client.delete(*registry_keys)
+            redis_cleared += len(registry_keys)
+            print(f"  Cleared {len(registry_keys)} URL registry keys")
+
+        # Clear HTTP cache keys (crawl:<hash>)
+        all_crawl_keys = list(redis_client.scan_iter("crawl:*"))
+        cache_keys = [
+            k
+            for k in all_crawl_keys
+            if not (isinstance(k, str) and k.startswith("crawl:url_registry:"))
+            and not (isinstance(k, bytes) and k.startswith(b"crawl:url_registry:"))
+        ]
+        if cache_keys:
+            redis_client.delete(*cache_keys)
+            redis_cleared += len(cache_keys)
+            print(f"  Cleared {len(cache_keys)} HTTP cache keys")
+
+        # Clear enrichment failure sets (stale after reset)
+        enrichment_keys = list(redis_client.scan_iter("ingest:enrichment_failed:*"))
+        if enrichment_keys:
+            redis_client.delete(*enrichment_keys)
+            redis_cleared += len(enrichment_keys)
+            print(f"  Cleared {len(enrichment_keys)} enrichment failure sets")
+
+    except Exception as exc:
+        print(f"  Warning: Could not clear Redis keys: {exc}")
+
+    # Step 2: Drop and recreate PostgreSQL frontier tables
+    db_url = settings.crawl_db_url
+    pg_cleared = False
+    if db_url:
+        from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
+
+        async def _reset_pg():
+            f = PostgresCrawlFrontierDB(db_url)
+            await f.initialize()
+            await f.drop_all()
+            await f.close()
+
+        try:
+            asyncio.run(_reset_pg())
+            pg_cleared = True
+            print("  Dropped PostgreSQL tables (crawl_frontier, sitemap_edges)")
+            print("  Tables will be recreated on next ingestion")
+        except RuntimeError:
+            print("  Warning: Could not reset PostgreSQL — already running in an event loop")
+        except Exception as exc:
+            print(f"  Warning: PostgreSQL reset failed: {exc}")
+    else:
+        print("  Skipped PostgreSQL reset (CRAWL_DB_URL not set)")
+
+    # Summary
+    print(f"\nCrawler DB reset complete.")
+    print(f"  Redis: {redis_cleared} keys cleared")
+    print(f"  PostgreSQL: {'reset' if pg_cleared else 'skipped'}")
+    print(f"  Qdrant: preserved (dedup still works)")
+    print(f"\nNext step: run 'dec ingest --source <name>' to re-crawl.")
+
+
 def health() -> None:
     """Check health of all services."""
 
@@ -1233,6 +1312,10 @@ def build_parser() -> argparse.ArgumentParser:
         "reset-qdrant",
         help="Delete and recreate the Qdrant collection and its persisted BM25 cache.",
     )
+    subparsers.add_parser(
+        "reset-crawler-db",
+        help="Clear crawler state (Redis crawl:* + PostgreSQL frontier) without touching Qdrant.",
+    )
     subparsers.add_parser("ui", help="Print the Streamlit command.")
 
     profile_parser = subparsers.add_parser("profile", help="Profile ingestion pipeline with concurrency sweep.")
@@ -1351,6 +1434,8 @@ def main() -> None:
             reset_index()
         elif args.command == "reset-qdrant":
             reset_qdrant()
+        elif args.command == "reset-crawler-db":
+            reset_crawler_db()
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
