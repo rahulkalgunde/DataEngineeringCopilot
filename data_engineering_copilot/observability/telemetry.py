@@ -7,6 +7,7 @@ Provides ``OTelTelemetryTracer`` (primary, via OpenTelemetry),
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -27,6 +28,9 @@ class NoOpTelemetryTracer:
 
     def flush(self) -> None:
         pass
+
+    async def flush_async(self, timeout: float = 2.0) -> None:
+        return None
 
 
 class _NoOpObservation:
@@ -69,6 +73,14 @@ class LangfuseTelemetryTracer:
     def flush(self) -> None:
         if self._client is not None:
             self._client.flush()
+
+    async def flush_async(self, timeout: float = 2.0) -> None:
+        if self._client is None:
+            return None
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._client.flush), timeout=timeout)
+        except Exception:
+            logger.debug("Telemetry flush_async timed out or failed (silent)", exc_info=True)
 
 
 def build_telemetry_tracer() -> NoOpTelemetryTracer | LangfuseTelemetryTracer:

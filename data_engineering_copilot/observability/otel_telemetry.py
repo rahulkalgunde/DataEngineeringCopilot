@@ -107,6 +107,9 @@ class OTelTelemetryTracer:
     def flush(self) -> None:
         pass
 
+    async def flush_async(self, timeout: float = 2.0) -> None:
+        return None
+
 
 class _OTelSpan:
     """Wrapper around an OTel span that conforms to the observation protocol."""
