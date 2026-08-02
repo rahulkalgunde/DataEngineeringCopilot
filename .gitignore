@@ -45,3 +45,4 @@ profil*/
 .bm25_cache/
 docs/
 memory-bank/
+.docker-tag

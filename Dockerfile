@@ -43,9 +43,8 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system . watchfiles
 
 # Dependency fingerprint: compared at runtime against the live uv.lock/pyproject.toml
-# (bind-mounted). A mismatch means the image is stale and needs `make docker-dev`.
-RUN uv pip freeze > /image_deps.txt \
-    && cat pyproject.toml uv.lock | sha256sum | cut -d' ' -f1 > /image_deps_sha256.txt
+# (bind-mounted). A mismatch means the image is stale and needs `make rebuild`.
+RUN cat pyproject.toml uv.lock | sha256sum | cut -d' ' -f1 > /image_deps_sha256.txt
 
 # Bake the git revision into the image for /api/v1/version.
 ARG GIT_SHA=unknown
