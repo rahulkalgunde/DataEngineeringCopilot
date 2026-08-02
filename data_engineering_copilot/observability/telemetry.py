@@ -1,7 +1,7 @@
 """Telemetry adapter conforming to TelemetryTracerProtocol.
 
-Provides ``OTelTelemetryTracer`` (primary, via OpenTelemetry),
-``LangfuseTelemetryTracer`` (fallback), and ``NoOpTelemetryTracer``
+Provides ``LangfuseTelemetryTracer`` (primary, via Langfuse SDK),
+``OTelTelemetryTracer`` (fallback, via OpenTelemetry), and ``NoOpTelemetryTracer``
 (graceful no-op when neither is available).
 """
 
@@ -88,32 +88,36 @@ class LangfuseTelemetryTracer:
             logger.debug("Telemetry flush_async timed out or failed (silent)", exc_info=True)
 
 
-def build_telemetry_tracer() -> NoOpTelemetryTracer | LangfuseTelemetryTracer:
+def build_telemetry_tracer() -> NoOpTelemetryTracer | LangfuseTelemetryTracer | Any:
     """Factory that returns the best available tracer.
 
-    Priority: OTel → Langfuse → NoOp.
+    Priority: Langfuse → OTel → NoOp.
+
+    Langfuse is preferred because it provides richer observability (scoring,
+    prompt management, cost tracking, user feedback) compared to raw OTel.
+    OTel is used as a fallback when Langfuse is unavailable.
     """
-    # Try OpenTelemetry first
-    try:
-        from data_engineering_copilot.observability.otel_telemetry import OTelTelemetryTracer
-
-        otel = OTelTelemetryTracer()
-        if otel._tracer is not None:
-            logger.info("Using OpenTelemetry tracer")
-            return otel  # type: ignore[return-value]
-    except Exception as exc:
-        logger.debug("OTel telemetry unavailable: %s", exc)
-
-    # Fall back to Langfuse
+    # Try Langfuse first — richer features, scoring, prompt management
     try:
         from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
         instance = get_langfuse_instance()
         if instance is not None:
-            logger.info("Using Langfuse tracer")
+            logger.info("Using Langfuse tracer (primary)")
             return LangfuseTelemetryTracer(instance)
     except Exception as exc:
         logger.debug("Langfuse telemetry unavailable: %s", exc)
+
+    # Fall back to OpenTelemetry
+    try:
+        from data_engineering_copilot.observability.otel_telemetry import OTelTelemetryTracer
+
+        otel = OTelTelemetryTracer()
+        if otel._tracer is not None:
+            logger.info("Using OpenTelemetry tracer (fallback)")
+            return otel  # type: ignore[return-value]
+    except Exception as exc:
+        logger.debug("OTel telemetry unavailable: %s", exc)
 
     logger.info("Using NoOp tracer")
     return NoOpTelemetryTracer()

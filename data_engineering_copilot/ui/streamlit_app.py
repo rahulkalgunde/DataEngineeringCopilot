@@ -736,6 +736,9 @@ def render_qa_tab() -> None:
                         raise RuntimeError("Background thread completed without result")
 
                     answer = result_box[0]
+                    # Store trace_id for feedback tracking
+                    if hasattr(answer, "trace_id") and answer.trace_id:
+                        st.session_state.last_trace_id = answer.trace_id
                     status.update(label="✅ Answer ready", state="complete")
             except Exception as exc:
                 logger.exception("RAG answer failed")
@@ -779,6 +782,20 @@ def render_qa_tab() -> None:
                         "rating": "helpful",
                         "timestamp": time.time(),
                     }
+                    # Send feedback to Langfuse
+                    try:
+                        from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
+                        tracer = build_telemetry_tracer()
+                        if hasattr(tracer, "score") and hasattr(st.session_state, "last_trace_id"):
+                            tracer.score(
+                                trace_id=st.session_state.last_trace_id,
+                                name="user_feedback",
+                                value=1.0,
+                                data_type="NUMERIC",
+                            )
+                    except Exception:
+                        pass
                     st.toast("Thanks for your feedback!")
             with col_feedback2:
                 if st.button("👎 Not Helpful", key=f"not_helpful_{len(collector.queries)}"):
@@ -789,6 +806,20 @@ def render_qa_tab() -> None:
                         "rating": "not_helpful",
                         "timestamp": time.time(),
                     }
+                    # Send feedback to Langfuse
+                    try:
+                        from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
+                        tracer = build_telemetry_tracer()
+                        if hasattr(tracer, "score") and hasattr(st.session_state, "last_trace_id"):
+                            tracer.score(
+                                trace_id=st.session_state.last_trace_id,
+                                name="user_feedback",
+                                value=0.0,
+                                data_type="NUMERIC",
+                            )
+                    except Exception:
+                        pass
                     st.toast("Thanks for your feedback!")
 
             if answer.sources:
