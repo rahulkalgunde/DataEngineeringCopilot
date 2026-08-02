@@ -67,20 +67,49 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 - All markers defined in `pyproject.toml`: `unit`, `integration`, `slow`, `qdrant`, `ollama`, `langfuse`, `rag`, `ingestion`, `api`, `celery`, `e2e`, `evaluation`, `xdist_group`, `serial`.
 
 ## Docker Services (full app stack)
+
+### Quick Start (Python Developers)
+
+```bash
+make dev      # First time: build image, start stack, pull models
+make rebuild  # After changing pyproject.toml/uv.lock
+make up       # Start without rebuilding
+make down     # Stop everything
+make logs     # Watch logs
+make status   # Check health
+```
+
+**Code changes are instant** (bind-mounted). Only dependency changes need `make rebuild`.
+
+### Required Host Ports
+
+| Port | Service |
+|------|---------|
+| 6379 | Redis |
+| 8000 | API |
+| 11434 | Ollama |
+| 3000 | Langfuse |
+| 5432 | Langfuse Postgres |
+| 5433 | Crawl Frontier Postgres |
+| 6333 | Qdrant |
+| 8123 | ClickHouse |
+| 9001-9002 | MinIO |
+
+### Services
+
 `redis`, `qdrant`, `ollama`, `minio`, `clickhouse`, `langfuse` (incl. postgres + worker), `postgres` (crawl frontier), `backend-api`, `celery_worker`
+
 - **Compose layout**: `docker-compose.yml` = single source of truth (all 12 services). `docker-compose.override.yml` = dev-only overrides (auto-loaded when no `-f` is passed). `docker-compose.ci.yml` = thin CI override (`-f docker-compose.yml -f docker-compose.ci.yml`).
-- **Profiles**: `backend-api` + `celery_worker` are gated behind `--profile app`. Bare `docker compose up -d` starts infra only; use `make docker-dev` (or explicit service names) for the full stack. CI never starts them.
-- `make docker-dev` = the one-command dev ritual: rebuilds `de_copilot_base_image` with a git-SHA tag (`dev-<sha>`), recreates both app services. Celery worker auto-reloads via `watchfiles` (dev override), so no manual restart after code edits.
-- `make docker-setup` = start full stack + pulls `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b` into Ollama.
-- CI: `make docker-ci-up` = `docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait`.
+- **Profiles**: `backend-api` + `celery_worker` are gated behind `--profile app`. Bare `docker compose up -d` starts infra only; use `make dev` (or explicit service names) for the full stack. CI never starts them.
 - Both `backend-api` and `celery_worker` share image `de_copilot_base_image:${IMAGE_TAG:-latest}`; both volume-mount `.:/app`.
+- **Image tagging**: `make dev` and `make rebuild` build to `dev-<git-sha>` and write the tag to `.docker-tag`. `make up` reads this file to use the correct image.
 - **Staleness detection** (5-layer defense): the image bakes `/image_deps_sha256.txt` (sha256 of `pyproject.toml`+`uv.lock`).
   1. **API gate**: `POST /api/v1/ingest` returns HTTP 503 when stale — no orphaned tasks.
   2. **CLI pre-flight**: `dec ingest` checks `GET /api/v1/version` before dispatching — exits with clear error.
   3. **Streamlit UI**: Red warning banner + disabled ingest button + System Health tab shows status.
   4. **Celery worker**: Writes `ingestion:worker_stale=true` to Redis and exits on startup.
   5. **Version endpoint**: `GET /api/v1/version` returns `deps_fingerprint_ok`, `deps_baked_hash`, `deps_live_hash`, `deps_stale_message`.
-  - Dep changes ⇒ run `make docker-dev`; the bind mount does NOT update installed packages.
+  - Dep changes ⇒ run `make rebuild`; the bind mount does NOT update installed packages.
 - Only `dec ingest` or manual testing needs full Docker Compose — tests use testcontainers only.
 
 ## Architecture
