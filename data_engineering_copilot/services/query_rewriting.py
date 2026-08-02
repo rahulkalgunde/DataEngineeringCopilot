@@ -154,7 +154,7 @@ class QueryRewriter:
             parsed = json.loads(result.strip())
             intent = parsed.get("intent", "")
             if intent in ("code_example", "factual"):
-                logger.info("LLM intent classification: %s (query=%r)", intent, query[:80])
+                logger.debug("LLM intent classification: %s (query=%r)", intent, query[:80])
                 return intent
             return None
         except Exception as exc:
@@ -254,7 +254,7 @@ class QueryRewriter:
                     parsed = json.loads(result.strip())
                     intent = parsed.get("intent", "")
                     if intent in ("code_example", "factual"):
-                        logger.info("Async LLM intent classification: %s (query=%r)", intent, query[:80])
+                        logger.debug("Async LLM intent classification: %s (query=%r)", intent, query[:80])
                         return intent
             except Exception as exc:
                 logger.warning("Async LLM intent classification failed: %s", exc)

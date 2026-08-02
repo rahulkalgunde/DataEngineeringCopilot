@@ -41,6 +41,9 @@ class OutputGuardrails:
         re.compile(r"i don't have (enough|sufficient)", re.IGNORECASE),
         re.compile(r"i am not able to", re.IGNORECASE),
         re.compile(r"beyond my knowledge", re.IGNORECASE),
+        re.compile(r"i'm sorry,? (but )?i (can't|cannot|am unable to)", re.IGNORECASE),
+        re.compile(r"as an ai (language )?model", re.IGNORECASE),
+        re.compile(r"i don't (have|possess) (access to|information about)", re.IGNORECASE),
     ]
 
     @classmethod

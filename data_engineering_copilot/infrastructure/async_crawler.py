@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from ipaddress import ip_address
 from urllib.parse import urldefrag, urljoin, urlparse
 
 import aiohttp
@@ -27,6 +28,34 @@ SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 FATAL_ERROR_TYPES = (
     redis.exceptions.AuthenticationError,
     redis.exceptions.AuthorizationError,
+)
+
+# Maximum number of redirects to follow
+MAX_REDIRECTS = 5
+
+# Private/reserved IP ranges for SSRF protection
+_PRIVATE_IP_PREFIXES = (
+    "10.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "172.21.",
+    "172.22.",
+    "172.23.",
+    "172.24.",
+    "172.25.",
+    "172.26.",
+    "172.27.",
+    "172.28.",
+    "172.29.",
+    "172.30.",
+    "172.31.",
+    "192.168.",
+    "127.",
+    "0.",
+    "169.254.",
 )
 
 
@@ -278,19 +307,83 @@ class AsyncDocumentationCrawler:
                 content_type=content_type,
             )
 
+    def _is_private_ip(self, url: str) -> bool:
+        """Check if URL resolves to a private/reserved IP (SSRF protection)."""
+        try:
+            parsed = urlparse(url)
+            hostname = parsed.hostname
+            if not hostname:
+                return True
+            # Check if it's an IP address
+            try:
+                ip = ip_address(hostname)
+                return ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local
+            except ValueError:
+                # Not an IP address — check for common internal hostnames
+                return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+        except Exception:
+            return True
+
     async def _phase2_get(self, session: aiohttp.ClientSession, record: CrawlRecord) -> tuple[str, str] | None:
+        # SSRF protection: reject private IPs
+        if self._is_private_ip(record.url):
+            await self.frontier.mark_failed(record.url_hash, "SSRF: private/reserved IP")
+            self._metrics.pages_failed += 1
+            return None
+
+        redirect_count = 0
+        current_url = record.url
+
         for attempt in range(self.max_retries):
             try:
-                async with session.get(record.url, headers={"User-Agent": self.user_agent}) as resp:
+                async with session.get(
+                    current_url,
+                    headers={"User-Agent": self.user_agent},
+                    max_redirects=MAX_REDIRECTS,
+                ) as resp:
+                    # Handle redirects manually to count them
+                    if resp.status in (301, 302, 303, 307, 308):
+                        redirect_count += 1
+                        if redirect_count > MAX_REDIRECTS:
+                            await self.frontier.mark_failed(record.url_hash, f"Too many redirects: {redirect_count}")
+                            self._metrics.pages_failed += 1
+                            return None
+                        location = resp.headers.get("Location", "")
+                        if location:
+                            current_url = urljoin(current_url, location)
+                            continue
+                        # No Location header — treat as error
+                        await self.frontier.mark_failed(record.url_hash, f"Redirect without Location: {resp.status}")
+                        self._metrics.pages_failed += 1
+                        return None
+
+                    # Handle 410 Gone
+                    if resp.status == 410:
+                        await self.frontier.mark_gone(record.url_hash)
+                        self._metrics.pages_failed += 1
+                        return None
+
+                    # Handle 429 Too Many Requests with Retry-After
+                    if resp.status == 429:
+                        retry_after = resp.headers.get("Retry-After", "")
+                        try:
+                            wait_time = float(retry_after)
+                        except (ValueError, TypeError):
+                            wait_time = self.retry_backoff_base * (2**attempt)
+                        await asyncio.sleep(wait_time)
+                        continue
+
                     if resp.status != 200:
                         await self.frontier.mark_failed(record.url_hash, f"HTTP {resp.status}")
                         self._metrics.pages_failed += 1
                         return None
+
                     content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
                     if "text/html" not in content_type and "text/plain" not in content_type:
                         await self.frontier.mark_failed(record.url_hash, f"Not HTML: {content_type}")
                         self._metrics.pages_failed += 1
                         return None
+
                     html = await resp.text()
                     await self.cache.set_headers(
                         record.url_hash,
