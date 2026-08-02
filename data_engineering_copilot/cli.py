@@ -361,6 +361,8 @@ def health() -> None:
         print(f"  ℹ️  Configured: Cerebras ({settings.cerebras_model})")
     elif llm_provider == "gemini":
         print(f"  ℹ️  Configured: Gemini ({settings.gemini_model})")
+    elif llm_provider == "cloudflare":
+        print(f"  ℹ️  Configured: Cloudflare ({settings.cloudflare_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health

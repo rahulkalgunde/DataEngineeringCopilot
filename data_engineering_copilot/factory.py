@@ -107,6 +107,11 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpm_limit=app_settings.gemini_rpm_limit,
                 rpd_limit=app_settings.gemini_rpd_limit,
             )
+        elif p == "cloudflare":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.cloudflare_rpm_limit,
+                rpd_limit=app_settings.cloudflare_rpd_limit,
+            )
     return rate_limiters
 
 
@@ -242,8 +247,20 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
+    if eff_provider == "cloudflare":
+        api_key = app_settings.cloudflare_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("CLOUDFLARE_API_KEY is required when provider='cloudflare'")
+        return LLMClient(
+            base_url=app_settings.cloudflare_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            rate_limiter=rate_limiter,
+        )
+
     raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini'."
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare'."
     )
 
 

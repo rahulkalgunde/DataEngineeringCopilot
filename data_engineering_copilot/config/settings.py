@@ -182,8 +182,18 @@ class AppSettings(BaseSettings):
     gemini_rpm_limit: int = 13
     gemini_rpd_limit: int = 450
 
+    # Cloudflare Workers AI settings (LLM only)
+    cloudflare_api_key: SecretStr = SecretStr("")
+    cloudflare_model: str = ""
+    cloudflare_account_id: str = ""
+    cloudflare_base_url: str = ""
+    cloudflare_rpm_limit: int = 60
+    cloudflare_rpd_limit: int = 100000
+
     # LLM fallback chain: ordered list of providers to try on failure
-    llm_fallback_order: list[str] = Field(default_factory=lambda: ["groq", "gemini", "cerebras", "ollama"])
+    llm_fallback_order: list[str] = Field(
+        default_factory=lambda: ["cloudflare", "groq", "openrouter", "gemini", "cerebras", "ollama"]
+    )
     llm_fallback_call_timeout: int = 120  # per-attempt timeout for non-primary fallback providers
 
     # Provider cooldown / routing
@@ -253,6 +263,13 @@ class AppSettings(BaseSettings):
     gemini_enrichment_llm_model: str = ""
     gemini_evaluation_llm_model: str = ""
     gemini_code_llm_model: str = ""
+    cloudflare_answer_llm_model: str = ""
+    cloudflare_rewrite_llm_model: str = ""
+    cloudflare_groundedness_llm_model: str = ""
+    cloudflare_intent_llm_model: str = ""
+    cloudflare_enrichment_llm_model: str = ""
+    cloudflare_evaluation_llm_model: str = ""
+    cloudflare_code_llm_model: str = ""
 
     ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
@@ -341,6 +358,16 @@ class AppSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _resolve_cloudflare_base_url(self) -> AppSettings:
+        if not self.cloudflare_base_url and self.cloudflare_account_id:
+            object.__setattr__(
+                self,
+                "cloudflare_base_url",
+                f"https://api.cloudflare.com/client/v4/accounts/{self.cloudflare_account_id}/ai/v1",
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_provider_api_keys(self) -> AppSettings:
         if self.skip_provider_check:
             return self
@@ -366,6 +393,7 @@ class AppSettings(BaseSettings):
             "groq": ("groq_api_key", "GROQ_API_KEY"),
             "cerebras": ("cerebras_api_key", "CEREBRAS_API_KEY"),
             "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
+            "cloudflare": ("cloudflare_api_key", "CLOUDFLARE_API_KEY"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():
             key_value = getattr(self, field_name).get_secret_value()
