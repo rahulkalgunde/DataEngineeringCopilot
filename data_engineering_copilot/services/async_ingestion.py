@@ -267,6 +267,7 @@ class AsyncIngestionService:
                         on_event,
                         start_time,
                         embed_semaphore,
+                        enrichment_semaphore,
                         results=errors,
                         source_counts=source_counts,
                         full_crawl_flags=full_crawl_flags,
@@ -317,6 +318,7 @@ class AsyncIngestionService:
         on_event: Callable[[IngestionEvent], None] | None,
         start_time: float,
         embed_semaphore: asyncio.Semaphore,
+        enrichment_semaphore: asyncio.Semaphore,
         results: list[str],
         source_counts: dict[str, int],
         full_crawl_flags: dict[str, bool],
@@ -328,6 +330,7 @@ class AsyncIngestionService:
                 on_event,
                 start_time,
                 embed_semaphore,
+                enrichment_semaphore,
                 full_crawl_flags=full_crawl_flags,
             )
             source_counts[source.name] = count
@@ -344,6 +347,7 @@ class AsyncIngestionService:
         on_event: Callable[[IngestionEvent], None] | None,
         start_time: float,
         embed_semaphore: asyncio.Semaphore,
+        enrichment_semaphore: asyncio.Semaphore,
         full_crawl_flags: dict[str, bool] | None = None,
     ) -> int:
         log.info("async_ingestion.crawling_source", source=source.name)
