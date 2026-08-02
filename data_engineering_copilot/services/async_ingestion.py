@@ -88,6 +88,7 @@ class AsyncIngestionService:
         raw_document: RawDocument,
         on_event: Callable[[IngestionEvent], None] | None,
         make_event: Callable[..., IngestionEvent],
+        enrichment_semaphore: asyncio.Semaphore | None = None,
     ) -> _ProcessedResult:
         parsed = await loop.run_in_executor(self._parse_executor, self.parser.parse, raw_document)
         if parsed is None:
@@ -143,7 +144,11 @@ class AsyncIngestionService:
         chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
 
         if self._contextual_enricher is not None:
-            chunks = await self._contextual_enricher.enrich(parsed, chunks)
+            if enrichment_semaphore is not None:
+                async with enrichment_semaphore:
+                    chunks = await self._contextual_enricher.enrich(parsed, chunks)
+            else:
+                chunks = await self._contextual_enricher.enrich(parsed, chunks)
 
         return _ProcessedResult(disposition="indexed", chunks=chunks, content_hash=content_hash, parsed=parsed)
 
@@ -246,6 +251,7 @@ class AsyncIngestionService:
             1, min(len(selected_sources) * self.settings.embed_concurrency, self._processing_concurrency)
         )
         embed_semaphore = asyncio.Semaphore(max_parallel)
+        enrichment_semaphore = asyncio.Semaphore(self.settings.enrichment_concurrency)
 
         total_chunks = 0
         errors: list[str] = []
@@ -352,6 +358,7 @@ class AsyncIngestionService:
             "batch_chunks": [],
             "seen_urls": set(),
             "failures": [],
+            "consecutive_ollama_failures": 0,
         }
         source_pages = 0
         source_chunks = 0
@@ -382,6 +389,7 @@ class AsyncIngestionService:
             _lock=batch_lock,
             _shared=shared,
             _mk_event=_make_event,
+            _enrichment_sem=enrichment_semaphore,
         ) -> None:
             nonlocal source_pages, source_chunks
             wloop = asyncio.get_running_loop()
@@ -391,7 +399,7 @@ class AsyncIngestionService:
                     _queue.task_done()
                     break
                 try:
-                    result = await self._process_raw(wloop, raw_doc, on_event, _mk_event)
+                    result = await self._process_raw(wloop, raw_doc, on_event, _mk_event, _enrichment_sem)
                     if result.disposition == "duplicate":
                         await self._mark_url_state(raw_doc.url, "processed")
                         _shared["seen_urls"].add(raw_doc.url)
@@ -440,14 +448,39 @@ class AsyncIngestionService:
                     # Per-page isolation: record the failure, mark the URL FAILED
                     # so it is retried on a later run, and keep going.
                     _shared["failures"].append((raw_doc.url, str(exc)))
-                    log.error(
-                        "async_ingestion.worker_failed",
-                        url=raw_doc.url,
-                        error_type=type(exc).__name__,
-                        error=str(exc),
+
+                    # Detect Ollama overload for adaptive backpressure
+                    is_ollama_error = (
+                        isinstance(exc, EmbeddingError)
+                        or "timeout" in str(exc).lower()
+                        or "503" in str(exc)
+                        or "overloaded" in str(exc).lower()
                     )
+                    if is_ollama_error:
+                        _shared["consecutive_ollama_failures"] += 1
+                        log.warning(
+                            "async_ingestion.ollama_overloaded",
+                            consecutive_failures=_shared["consecutive_ollama_failures"],
+                            url=raw_doc.url,
+                            error=str(exc)[:200],
+                        )
+                        if _shared["consecutive_ollama_failures"] >= 3:
+                            log.warning(
+                                "async_ingestion.ollama_backpressure",
+                                message="Ollama overloaded, reducing effective concurrency",
+                                consecutive_failures=_shared["consecutive_ollama_failures"],
+                            )
+                    else:
+                        _shared["consecutive_ollama_failures"] = 0
+                        log.error(
+                            "async_ingestion.worker_failed",
+                            url=raw_doc.url,
+                            error_type=type(exc).__name__,
+                            error=str(exc)[:500],
+                        )
+
                     with contextlib.suppress(Exception):
-                        await self._mark_url_state(raw_doc.url, "failed", str(exc))
+                        await self._mark_url_state(raw_doc.url, "failed", str(exc)[:500])
                 finally:
                     _queue.task_done()
 

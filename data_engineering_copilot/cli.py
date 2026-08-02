@@ -136,7 +136,7 @@ def ask(question: str) -> None:
     print(f"\nConfidence: {answer.confidence:.2f}")
 
 
-def reenrich(source: str, urls_file: str | None) -> None:
+def reenrich(source: str, urls_file: str | None, category: str = "enrichment") -> None:
     """Re-enrich pages whose contextual enrichment previously failed.
 
     For each URL this clears the vector-store chunks, the Redis
@@ -146,6 +146,12 @@ def reenrich(source: str, urls_file: str | None) -> None:
     re-enriched.  URLs come from ``--urls <file>`` or, when omitted, from the
     Redis set ``ingest:enrichment_failed:<source>`` written by the ingestion
     pipeline's enrichment failure recorder.
+
+    Use ``--category`` to filter by failure type:
+    - enrichment (default): only enrichment failures from Redis
+    - fetch: HTTP errors, timeouts, connection errors
+    - embed: embedding failures
+    - all: all failure types
     """
     import redis as sync_redis
 
@@ -156,19 +162,44 @@ def reenrich(source: str, urls_file: str | None) -> None:
     if not settings.crawl_db_url:
         raise RuntimeError("CRAWL_DB_URL must be set to re-enrich (the crawler frontier is PostgreSQL-backed).")
 
-    if urls_file:
-        with open(urls_file, encoding="utf-8") as fh:
-            urls = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+    if category == "enrichment":
+        # Original behavior: use Redis set or --urls file
+        if urls_file:
+            with open(urls_file, encoding="utf-8") as fh:
+                urls = [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+        else:
+            r = get_redis_client()
+            member_bytes = r.smembers(f"ingest:enrichment_failed:{source}")
+            urls = [m.decode() if isinstance(m, bytes) else m for m in member_bytes]
     else:
-        r = get_redis_client()
-        member_bytes = r.smembers(f"ingest:enrichment_failed:{source}")
-        urls = [m.decode() if isinstance(m, bytes) else m for m in member_bytes]
+        # Use frontier queries for other categories
+        frontier = PostgresCrawlFrontierDB(settings.crawl_db_url)
+
+        async def _get_urls() -> list[str]:
+            await frontier.initialize()
+            if category == "all":
+                failed = await frontier.get_failed_urls(source, "all")
+                skipped = await frontier.get_skipped_urls(source)
+                await frontier.close()
+                return failed + skipped
+            elif category == "fetch":
+                await frontier.close()
+                return await frontier.get_failed_urls(source, "fetch")
+            elif category == "embed":
+                await frontier.close()
+                return await frontier.get_failed_urls(source, "embed")
+            else:
+                await frontier.close()
+                return []
+
+        urls = asyncio.run(_get_urls())
+
     if not urls:
-        print(f"No URLs to re-enrich for source '{source}' (empty --urls file or Redis set).")
+        print(f"No URLs to reprocess for source '{source}' (category: {category}).")
         return
 
     url_set = sorted(set(urls))
-    print(f"Re-enriching {len(url_set)} URLs for source '{source}'")
+    print(f"Reprocessing {len(url_set)} URLs for source '{source}' (category: {category})")
 
     service = build_async_ingestion_service()
 
@@ -195,6 +226,134 @@ def reenrich(source: str, urls_file: str | None) -> None:
         await frontier.close()
         print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
 
+        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+
+    total = asyncio.run(_run())
+    print(f"Re-ingestion complete: {total} chunks indexed.")
+
+
+def retry_failed(source: str, category: str | None) -> None:
+    """Retry all failed pages for a source, optionally filtered by category.
+
+    Categories: fetch (HTTP errors), embed (embedding failures),
+    upsert (vector store failures), all (everything).
+    """
+    from data_engineering_copilot.factory import build_async_ingestion_service
+    from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
+
+    if not settings.crawl_db_url:
+        raise RuntimeError("CRAWL_DB_URL must be set to retry failed pages.")
+
+    print(f"Retrieving failed pages for source '{source}'" + (f" (category: {category})" if category else ""))
+
+    frontier = PostgresCrawlFrontierDB(settings.crawl_db_url)
+
+    async def _run() -> int:
+        await frontier.initialize()
+        urls = await frontier.get_failed_urls(source, category)
+        await frontier.close()
+
+        if not urls:
+            print(f"No failed pages found for source '{source}'" + (f" in category '{category}'" if category else ""))
+            return 0
+
+        url_set = sorted(set(urls))
+        print(f"Found {len(url_set)} failed pages to retry")
+
+        service = build_async_ingestion_service()
+
+        # Clear Qdrant chunks
+        if hasattr(service.vector_store, "initialize"):
+            await service.vector_store.initialize()
+        deleted = 0
+        for url in url_set:
+            try:
+                await service.vector_store.delete_by_url(url)
+                deleted += 1
+            except Exception as exc:
+                logger.warning("retry_failed.delete_chunks_failed url=%s error=%s", url, exc)
+        print(f"Deleted existing chunks for {deleted}/{len(url_set)} URLs")
+
+        # Clear URL registry
+        import redis as sync_redis
+
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        for url in url_set:
+            registry.hdel(f"crawl:url_registry:{source}", url)
+        print(f"Cleared URL-registry entries for {len(url_set)} URLs")
+
+        # Requeue frontier rows
+        frontier2 = PostgresCrawlFrontierDB(settings.crawl_db_url)
+        await frontier2.initialize()
+        requeued = await frontier2.requeue_urls(url_set)
+        await frontier2.close()
+        print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
+
+        # Re-run ingestion
+        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+
+    total = asyncio.run(_run())
+    print(f"Re-ingestion complete: {total} chunks indexed.")
+
+
+def unskip(source: str) -> None:
+    """Re-process SKIPPED pages for a source.
+
+    SKIPPED pages are those where parsing returned no readable content.
+    This command resets them to DISCOVERED so they can be re-fetched and re-processed.
+    """
+    from data_engineering_copilot.factory import build_async_ingestion_service
+    from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
+
+    if not settings.crawl_db_url:
+        raise RuntimeError("CRAWL_DB_URL must be set to unskip pages.")
+
+    print(f"Retrieving skipped pages for source '{source}'")
+
+    frontier = PostgresCrawlFrontierDB(settings.crawl_db_url)
+
+    async def _run() -> int:
+        await frontier.initialize()
+        urls = await frontier.get_skipped_urls(source)
+        await frontier.close()
+
+        if not urls:
+            print(f"No skipped pages found for source '{source}'")
+            return 0
+
+        url_set = sorted(set(urls))
+        print(f"Found {len(url_set)} skipped pages to re-process")
+
+        service = build_async_ingestion_service()
+
+        # Clear Qdrant chunks (in case some were partially indexed)
+        if hasattr(service.vector_store, "initialize"):
+            await service.vector_store.initialize()
+        deleted = 0
+        for url in url_set:
+            try:
+                await service.vector_store.delete_by_url(url)
+                deleted += 1
+            except Exception as exc:
+                logger.warning("unskip.delete_chunks_failed url=%s error=%s", url, exc)
+        print(f"Deleted existing chunks for {deleted}/{len(url_set)} URLs")
+
+        # Clear URL registry
+        import redis as sync_redis
+
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        for url in url_set:
+            registry.hdel(f"crawl:url_registry:{source}", url)
+        print(f"Cleared URL-registry entries for {len(url_set)} URLs")
+
+        # Requeue frontier rows
+        frontier2 = PostgresCrawlFrontierDB(settings.crawl_db_url)
+        await frontier2.initialize()
+        requeued = await frontier2.requeue_urls(url_set)
+        await frontier2.close()
+        print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
+
+        # Re-run ingestion
         return await service.ingest(source_names=[source], max_pages_per_source=100000)
 
     total = asyncio.run(_run())
@@ -527,6 +686,20 @@ def status() -> None:
                     print(f"  ✅ Connected ({frontier_count} pages, {edge_count} edges)")
                     for row in states:
                         print(f"     {row['state']}: {row['cnt']}")
+
+                    # Show failure breakdown
+                    failed_count = await conn.fetchval("SELECT COUNT(*) FROM crawl_frontier WHERE state = 'FAILED'")
+                    if failed_count > 0:
+                        failed_errors = await conn.fetch(
+                            "SELECT last_error, COUNT(*)::int as cnt FROM crawl_frontier "
+                            "WHERE state = 'FAILED' AND last_error IS NOT NULL AND last_error != '' "
+                            "GROUP BY last_error ORDER BY cnt DESC LIMIT 5"
+                        )
+                        if failed_errors:
+                            print("     Failed breakdown (top errors):")
+                            for row in failed_errors:
+                                error_preview = (row["last_error"] or "")[:60]
+                                print(f"       - {error_preview}: {row['cnt']}")
                 finally:
                     await conn.close()
 
@@ -1019,6 +1192,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="File with one URL per line ('#' comments allowed). Defaults to the Redis set "
         "ingest:enrichment_failed:<source> populated by the pipeline.",
     )
+    reenrich_parser.add_argument(
+        "--category",
+        choices=["enrichment", "fetch", "embed", "all"],
+        default="enrichment",
+        help="Failure category to reprocess (default: enrichment). Use 'all' for all failure types.",
+    )
+
+    retry_failed_parser = subparsers.add_parser(
+        "retry-failed",
+        help="Retry all failed pages for a source (fetch/embed/upsert failures).",
+    )
+    retry_failed_parser.add_argument(
+        "--source",
+        required=True,
+        help="Documentation source name to retry.",
+    )
+    retry_failed_parser.add_argument(
+        "--category",
+        choices=["fetch", "embed", "upsert", "all"],
+        default=None,
+        help="Filter by failure category (default: all).",
+    )
+
+    unskip_parser = subparsers.add_parser(
+        "unskip",
+        help="Re-process SKIPPED pages for a source.",
+    )
+    unskip_parser.add_argument(
+        "--source",
+        required=True,
+        help="Documentation source name to unskip.",
+    )
 
     subparsers.add_parser(
         "reset-index",
@@ -1137,7 +1342,11 @@ def main() -> None:
         elif args.command == "ask":
             ask(question=args.question)
         elif args.command == "reenrich":
-            reenrich(source=args.source, urls_file=args.urls)
+            reenrich(source=args.source, urls_file=args.urls, category=args.category)
+        elif args.command == "retry-failed":
+            retry_failed(source=args.source, category=args.category)
+        elif args.command == "unskip":
+            unskip(source=args.source)
         elif args.command == "reset-index":
             reset_index()
         elif args.command == "reset-qdrant":
