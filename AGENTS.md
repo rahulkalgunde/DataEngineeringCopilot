@@ -35,7 +35,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec inspect-db` | Scrolls Qdrant points, shows source/chunk-type/URL distribution |
 | `dec cancel <task-id>` | Cancels running ingestion via API |
 | `dec profile` | Ingestion concurrency profiler |
-| `dec monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
+| `dec ingestion-monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
 | `dec probe-llm` | One real request per configured LLM/embedding provider — shows status, HTTP code, latency, error category, `Retry-After`; `--json`/`--verbose`/`--purpose`/`--providers` |
 | `dec status` / `dec health` / `dec config` | System status, health checks, config validation |
 

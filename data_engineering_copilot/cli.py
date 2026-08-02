@@ -1012,8 +1012,8 @@ def build_parser() -> argparse.ArgumentParser:
     cancel_parser = subparsers.add_parser("cancel", help="Cancel a running ingestion task.")
     cancel_parser.add_argument("task_id", help="Task ID to cancel.")
 
-    # Monitor
-    monitor_parser = subparsers.add_parser("monitor", help="Live ingestion dashboard (auto-refresh < 30s).")
+    # Ingestion Monitor
+    monitor_parser = subparsers.add_parser("ingestion-monitor", help="Live ingestion dashboard (auto-refresh < 30s).")
     monitor_parser.add_argument("--api-url", default="http://localhost:8000", help="API base URL.")
     monitor_parser.add_argument("--task-id", default=None, help="Specific task ID to monitor.")
     monitor_parser.add_argument("--interval", type=int, default=30, help="Refresh interval in seconds.")
@@ -1112,7 +1112,7 @@ def main() -> None:
             inspect_db()
         elif args.command == "cancel":
             cancel(task_id=args.task_id)
-        elif args.command == "monitor":
+        elif args.command == "ingestion-monitor":
             monitor_main(
                 api_url=args.api_url,
                 task_id=args.task_id,

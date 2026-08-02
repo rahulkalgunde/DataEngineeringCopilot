@@ -1190,7 +1190,7 @@ def main() -> None:
             st.warning(f"Ingestion running ({_format_duration(progress.elapsed_seconds)})")
             task_id = st.session_state.get("ingestion_task_id")
             if task_id:
-                st.caption(f"Task: `{task_id[:8]}`")
+                st.caption(f"Task: `{task_id}`")
             total_sources = len(progress.source_names) or 1
             effective_max_pages = progress.max_pages_per_source or settings.max_pages_per_source
             sidebar_estimated = effective_max_pages * total_sources
