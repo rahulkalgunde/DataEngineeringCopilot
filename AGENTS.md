@@ -33,6 +33,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec ingest --source "X"` | POSTs to `http://localhost:8000/api/v1/ingest` (needs API+Celery) |
 | `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
 | `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
+| `dec reset-crawler-db` | Clears crawler state (Redis `crawl:*` + PostgreSQL frontier) without touching Qdrant. Dedup still works via Qdrant content hashes. |
 | `dec evaluate` | RAG eval on `tests/evaluation/eval_dataset.jsonl` |
 | `dec inspect-db` | Scrolls Qdrant points, shows source/chunk-type/URL distribution |
 | `dec cancel <task-id>` | Cancels running ingestion via API |
