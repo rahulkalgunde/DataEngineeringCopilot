@@ -45,6 +45,7 @@ class CrawlState(StrEnum):
     PROCESSED = "PROCESSED"
     FAILED = "FAILED"
     SKIPPED = "SKIPPED"
+    GONE = "GONE"
 
 
 class PostgresCrawlFrontierDB:
@@ -194,6 +195,21 @@ class PostgresCrawlFrontierDB:
             await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
                 CrawlState.SKIPPED.value,
+                now,
+                url_hash,
+            )
+
+    async def mark_gone(self, url_hash: str) -> None:
+        """Mark a URL as permanently gone (HTTP 410).
+
+        GONE is terminal: the URL is never re-discovered.
+        """
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            now = time.time()
+            await conn.execute(
+                "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
+                CrawlState.GONE.value,
                 now,
                 url_hash,
             )
