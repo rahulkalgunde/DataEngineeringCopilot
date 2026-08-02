@@ -28,6 +28,19 @@ from data_engineering_copilot.services.structured_output import parse_rag_respon
 
 logger = logging.getLogger(__name__)
 
+_PII_PATTERNS = [
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"), "[EMAIL]"),
+    (re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b"), "[PHONE]"),
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN]"),
+]
+
+
+def _scrub_pii(text: str) -> str:
+    """Redact common PII patterns (email, phone, SSN) from trace input."""
+    for pattern, replacement in _PII_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
 
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
@@ -118,7 +131,7 @@ class AsyncRagService:
         if self.telemetry:
             trace = self.telemetry.start_observation(
                 name="rag-query-pipeline",
-                input=question,
+                input=_scrub_pii(question),
                 as_type="trace",
             )
 
@@ -466,6 +479,9 @@ class AsyncRagService:
             if trace:
                 trace.update(output="LLMGenerationError")
                 trace.end()
+            if self.telemetry:
+                with contextlib.suppress(Exception):
+                    await self.telemetry.flush_async()
             raise
         except Exception as exc:
             logger.exception("Failed during answer generation: %s", exc)
@@ -475,6 +491,9 @@ class AsyncRagService:
             if trace:
                 trace.update(output=str(exc))
                 trace.end()
+            if self.telemetry:
+                with contextlib.suppress(Exception):
+                    await self.telemetry.flush_async()
             raise LLMGenerationError(f"LLM generation failed: {exc}") from exc
 
     async def answer_stream(
