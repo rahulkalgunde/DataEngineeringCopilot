@@ -1,7 +1,7 @@
 """Integration tests for IngestionProgressTracker against real Redis.
 
-Validates the Redis-backed progress tracker writes correct JSON documents
-and handles events accurately under real network conditions.
+Validates the async, coalescing Redis-backed progress tracker writes correct
+JSON documents and handles events accurately under real network conditions.
 
 Run with: pytest tests/integration/test_progress_integration.py -v -m integration
 """
@@ -47,13 +47,22 @@ def _event(
 
 
 @pytest.fixture
-def tracker(fresh_redis_client):
+async def tracker(redis_url):
     """Create an IngestionProgressTracker backed by the real Redis testcontainer."""
-    return IngestionProgressTracker(
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    tr = IngestionProgressTracker(
         task_id="test-task-001",
-        redis_client=fresh_redis_client,
+        redis_client=client,
         source_names=["test_source"],
     )
+    await tr.start()
+    try:
+        yield tr
+    finally:
+        await tr.aclose()
+        await client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +72,8 @@ def tracker(fresh_redis_client):
 
 @pytest.mark.integration
 class TestProgressInitialisation:
-    def test_initial_state_stored_in_redis(self, fresh_redis_client, tracker):
+    async def test_initial_state_stored_in_redis(self, fresh_redis_client, tracker):
+        await tracker.aclose()
         raw = fresh_redis_client.get("ingestion:status:test-task-001")
         assert raw is not None
         doc = json.loads(raw)
@@ -76,7 +86,8 @@ class TestProgressInitialisation:
         assert doc["source_stats"] == {}
         assert doc["recent_events"] == []
 
-    def test_redis_key_has_ttl(self, fresh_redis_client, tracker):
+    async def test_redis_key_has_ttl(self, fresh_redis_client, tracker):
+        await tracker.aclose()
         ttl = fresh_redis_client.ttl("ingestion:status:test-task-001")
         assert ttl > 0
 
@@ -88,40 +99,46 @@ class TestProgressInitialisation:
 
 @pytest.mark.integration
 class TestProgressEvents:
-    def test_page_indexed_increments_chunks(self, fresh_redis_client, tracker):
+    async def test_page_indexed_increments_chunks(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", chunks_indexed=5))
         tracker.on_event(_event("page_indexed", url="https://example.com/page2", chunks_indexed=3))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["chunks_indexed"] == 8
 
-    def test_total_pages_fetched_overwrites(self, fresh_redis_client, tracker):
+    async def test_total_pages_fetched_overwrites(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", pages_fetched=3))
         tracker.on_event(_event("page_indexed", total_pages_fetched=7))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["pages_fetched"] == 7
 
-    def test_error_event_sets_status_failed(self, fresh_redis_client, tracker):
+    async def test_error_event_sets_status_failed(self, fresh_redis_client, tracker):
         tracker.on_event(_event("error", error="Connection timeout"))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["status"] == "FAILED"
         assert doc["error"] == "Connection timeout"
 
-    def test_completion_event_sets_status_completed(self, fresh_redis_client, tracker):
+    async def test_completion_event_sets_status_completed(self, fresh_redis_client, tracker):
         tracker.on_event(_event("ingestion_complete", chunks_indexed=42))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["status"] == "COMPLETED"
         assert doc["chunks_indexed"] == 42
 
-    def test_pages_skipped_counter(self, fresh_redis_client, tracker):
+    async def test_pages_skipped_counter(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_skipped"))
         tracker.on_event(_event("page_skipped_duplicate"))
         tracker.on_event(_event("page_skipped_cached"))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["pages_skipped"] == 3
 
-    def test_current_url_updates(self, fresh_redis_client, tracker):
+    async def test_current_url_updates(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", url="https://example.com/page1"))
         tracker.on_event(_event("page_indexed", url="https://example.com/page2"))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["current_url"] == "https://example.com/page2"
 
@@ -133,15 +150,17 @@ class TestProgressEvents:
 
 @pytest.mark.integration
 class TestRecentEvents:
-    def test_recent_events_capped_at_max(self, fresh_redis_client, tracker):
+    async def test_recent_events_capped_at_max(self, fresh_redis_client, tracker):
         for i in range(_MAX_RECENT_EVENTS + 5):
             tracker.on_event(_event("page_indexed", url=f"https://example.com/page{i}", chunks_indexed=1))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert len(doc["recent_events"]) == _MAX_RECENT_EVENTS
 
-    def test_recent_events_order_is_fifo(self, fresh_redis_client, tracker):
+    async def test_recent_events_order_is_fifo(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", url="https://example.com/first", chunks_indexed=1))
         tracker.on_event(_event("page_indexed", url="https://example.com/second", chunks_indexed=1))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         urls = [e["url"] for e in doc["recent_events"]]
         assert urls == ["https://example.com/first", "https://example.com/second"]
@@ -154,33 +173,38 @@ class TestRecentEvents:
 
 @pytest.mark.integration
 class TestSourceStats:
-    def test_per_source_chunks_accumulated(self, fresh_redis_client, tracker):
+    async def test_per_source_chunks_accumulated(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=4))
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=6))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["source_stats"]["test_source"]["chunks_indexed"] == 10
 
-    def test_per_source_error_counted(self, fresh_redis_client, tracker):
+    async def test_per_source_error_counted(self, fresh_redis_client, tracker):
         tracker.on_event(_event("error", source_name="test_source", error="timeout"))
         tracker.on_event(_event("error", source_name="test_source", error="500"))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["source_stats"]["test_source"]["errors"] == 2
 
-    def test_per_source_pages_skipped(self, fresh_redis_client, tracker):
+    async def test_per_source_pages_skipped(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_skipped", source_name="test_source"))
         tracker.on_event(_event("page_skipped_duplicate", source_name="test_source"))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["source_stats"]["test_source"]["pages_skipped"] == 2
 
-    def test_source_complete_overwrites_cumulative_chunks(self, fresh_redis_client, tracker):
+    async def test_source_complete_overwrites_cumulative_chunks(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=3))
         tracker.on_event(_event("page_indexed", source_name="test_source", chunks_indexed=2))
         tracker.on_event(_event("source_complete", source_name="test_source", chunks_indexed=10))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["source_stats"]["test_source"]["chunks_indexed"] == 10
 
-    def test_unknown_source_not_tracked(self, fresh_redis_client, tracker):
+    async def test_unknown_source_not_tracked(self, fresh_redis_client, tracker):
         tracker.on_event(_event("page_indexed", source_name="unknown_source", chunks_indexed=1))
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert "unknown_source" not in doc["source_stats"]
 
@@ -192,18 +216,21 @@ class TestSourceStats:
 
 @pytest.mark.integration
 class TestConvenienceMethods:
-    def test_mark_completed(self, fresh_redis_client, tracker):
+    async def test_mark_completed(self, fresh_redis_client, tracker):
         tracker.mark_completed()
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["status"] == "COMPLETED"
 
-    def test_mark_failed(self, fresh_redis_client, tracker):
+    async def test_mark_failed(self, fresh_redis_client, tracker):
         tracker.mark_failed("Disk full")
+        await tracker.aclose()
         doc = json.loads(fresh_redis_client.get("ingestion:status:test-task-001"))
         assert doc["status"] == "FAILED"
         assert doc["error"] == "Disk full"
 
-    def test_get_status_returns_copy(self, tracker):
+    async def test_get_status_returns_copy(self, tracker):
         status = tracker.get_status()
         status["task_id"] = "mutated"
         assert tracker.get_status()["task_id"] == "test-task-001"
+        await tracker.aclose()

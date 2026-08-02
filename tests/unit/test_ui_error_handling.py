@@ -182,36 +182,42 @@ class TestIngestionManagerProgressErrors:
 class TestProgressTrackerTTL:
     """Tests for Redis key TTL on progress tracker."""
 
-    def test_initial_sync_includes_ttl(self):
-        """The _sync method sets a TTL on the Redis key."""
+    async def test_initial_sync_includes_ttl(self):
+        """start() writes the Redis key with a TTL."""
+        from typing import cast
+
+        import redis.asyncio as aioredis
+
         from data_engineering_copilot.workers.progress import IngestionProgressTracker
 
-        mock_redis = MagicMock()
-        IngestionProgressTracker(
+        fake_redis = _FakeRedis()
+        tracker = IngestionProgressTracker(
             task_id="ttl-test",
-            redis_client=mock_redis,
+            redis_client=cast(aioredis.Redis, fake_redis),
             source_names=["Test Source"],
         )
+        await tracker.start()
+        await tracker.aclose()
 
-        # Check that redis.set was called with 'ex' parameter
-        call_args = mock_redis.set.call_args
-        # Should have been called with positional args (key, value) and keyword arg ex=<ttl>
-        assert call_args.kwargs.get("ex") is not None or (
-            len(call_args.args) >= 3 or len(call_args[1]) > 0 or "ex" in str(call_args)
-        )
+        ex = fake_redis.last_ex("ingestion:status:ttl-test")
+        assert ex is not None and ex > 0
 
-    def test_event_sync_includes_ttl(self):
-        """Each event update preserves the TTL on the Redis key."""
+    async def test_event_sync_includes_ttl(self):
+        """Event updates preserve the TTL on the Redis key."""
+        from typing import cast
+
+        import redis.asyncio as aioredis
+
         from data_engineering_copilot.domain.models import IngestionEvent
         from data_engineering_copilot.workers.progress import IngestionProgressTracker
 
-        mock_redis = MagicMock()
+        fake_redis = _FakeRedis()
         tracker = IngestionProgressTracker(
             task_id="ttl-event-test",
-            redis_client=mock_redis,
+            redis_client=cast(aioredis.Redis, fake_redis),
             source_names=["Test"],
         )
-        mock_redis.reset_mock()
+        await tracker.start()
 
         event = IngestionEvent(
             event_type="page_indexed",
@@ -222,11 +228,34 @@ class TestProgressTrackerTTL:
             pages_fetched=1,
         )
         tracker.on_event(event)
+        await tracker.aclose()
 
-        call_args = mock_redis.set.call_args
-        # Verify TTL parameter is present
-        has_ttl = call_args.kwargs.get("ex") is not None
-        assert has_ttl, f"Expected TTL parameter in redis.set call, got: {call_args}"
+        ex = fake_redis.last_ex("ingestion:status:ttl-event-test")
+        assert ex is not None and ex > 0
+
+
+class _FakeRedis:
+    """Minimal async Redis stand-in that records the TTL passed to ``set``."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self._ex: dict[str, int | None] = {}
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.store[key] = value
+        self._ex[key] = ex
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+    async def aclose(self) -> None:
+        pass
+
+    def last_ex(self, key: str) -> int | None:
+        return self._ex.get(key)
 
 
 # ---------------------------------------------------------------------------
