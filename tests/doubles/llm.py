@@ -26,11 +26,6 @@ STUB_GAP_ANSWER = (
 )
 
 
-async def _token_stream(text: str) -> AsyncIterator[str]:
-    for token in text.split(" "):
-        yield f"{token} "
-
-
 class StubLLM(LLMClientProtocol):
     """Deterministic LLM: returns a fixed answer, or a gap-acknowledgement
     when the prompt contains *gap_trigger*.
@@ -51,7 +46,9 @@ class StubLLM(LLMClientProtocol):
         return self.answer
 
     async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
-        return _token_stream(await self.generate(prompt))
+        text = await self.generate(prompt)
+        for token in text.split(" "):
+            yield f"{token} "
 
     @property
     def last_usage(self) -> LLMUsage:
@@ -77,7 +74,9 @@ class StaticLLM(LLMClientProtocol):
         return self.answer
 
     async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
-        return _token_stream(await self.generate(prompt))
+        text = await self.generate(prompt)
+        for token in text.split(" "):
+            yield f"{token} "
 
     @property
     def last_usage(self) -> LLMUsage:

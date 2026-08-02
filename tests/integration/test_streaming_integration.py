@@ -1,7 +1,9 @@
 """Integration tests for the POST /api/v1/ask/stream SSE endpoint.
 
-Exercises the real HTTP streaming path end-to-end while mocking the
-underlying RAG service (which requires LLM/embeddings).
+Exercises the real HTTP streaming path end-to-end.  Happy-path cases run the
+*real* ``AsyncRagService.answer_stream`` body against deterministic doubles
+(no LLM/embeddings infra); only explicit error-injection cases swap in a
+crashing coroutine so the SSE error contract can be verified.
 
 Run with: pytest tests/integration/test_streaming_integration.py -v -m integration
 """
@@ -15,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# Fake RAG answer object returned by the mocked service
+# Fake RAG answer object returned by the mocked service (error-injection only)
 # ---------------------------------------------------------------------------
 
 
@@ -41,19 +43,45 @@ class FakeAnswer:
 
 
 @pytest.fixture
-def fake_rag_service():
-    service = AsyncMock()
-    service.answer.return_value = FakeAnswer()
+async def fake_rag_service():
+    """Real AsyncRagService wired to deterministic doubles.
 
-    async def _answer_stream(question, source_filter=None):
-        yield 'data: {"type": "start", "message": "started"}\n\n'
-        yield (
-            'data: {"type": "answer", "text": "The answer is **42**.", '
-            '"confidence": 0.85, "groundedness_score": 0.92, "sources": []}\n\n'
-        )
+    ``answer_stream`` runs its actual body so the SSE endpoint is exercised
+    against the real pipeline (retrieval → rerank → context → stream).
+    """
+    from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
+    from data_engineering_copilot.services.async_rag import AsyncRagService
+    from tests.doubles.embedder import StubEmbedder
+    from tests.doubles.llm import StubLLM
+    from tests.doubles.vector_store import InMemoryVectorStore
 
-    service.answer_stream = _answer_stream
-    return service
+    store = InMemoryVectorStore()
+    await store.initialize()
+    embedder = StubEmbedder(dimension=768)
+
+    chunk = DocumentChunk(
+        chunk_id="stream:doc000:chunk00",
+        source_name="RAG Test Docs",
+        title="Apache Spark",
+        url="https://example.com/docs/apache-spark.html",
+        text="Apache Spark is a unified analytics engine for large-scale data processing.",
+    )
+    vector = (await embedder.embed_texts([chunk.text]))[0]
+    await store.upsert_chunks([chunk], [vector])
+
+    service = AsyncRagService(
+        config=RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.05,
+            max_context_chars=2000,
+        ),
+        vector_store=store,
+        llm_client=StubLLM(),
+        embedder=embedder,
+    )
+    yield service
+    await embedder.close()
+    await store.close()
 
 
 @pytest.fixture
@@ -89,33 +117,39 @@ def _parse_sse_events(raw_text: str) -> list[dict]:
 class TestStreamingEndpoint:
     @patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service")
     def test_sse_stream_returns_start_answer_done(self, mock_get_service, fake_rag_service, client):
-        mock_get_service.return_value = fake_rag_service
-        resp = client.post("/api/v1/ask/stream", json={"question": "What is the answer?"})
+        async def _get_service():
+            return fake_rag_service
+
+        mock_get_service.side_effect = _get_service
+        resp = client.post("/api/v1/ask/stream", json={"question": "What is Apache Spark?"})
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "text/event-stream; charset=utf-8"
         assert resp.headers["cache-control"] == "no-cache"
         events = _parse_sse_events(resp.text)
         types = [e["type"] for e in events]
-        assert types[0] == "start"
-        assert types[-1] == "answer"
+        assert types[0] == "status"
+        assert types[-1] == "done"
 
     @patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service")
     def test_answer_event_structure(self, mock_get_service, fake_rag_service, client):
-        mock_get_service.return_value = fake_rag_service
-        resp = client.post("/api/v1/ask/stream", json={"question": "What is the answer?"})
+        async def _get_service():
+            return fake_rag_service
+
+        mock_get_service.side_effect = _get_service
+        resp = client.post("/api/v1/ask/stream", json={"question": "What is Apache Spark?"})
         events = _parse_sse_events(resp.text)
-        answer = next(e for e in events if e["type"] == "answer")
-        assert "text" in answer
-        assert "confidence" in answer
-        assert "groundedness_score" in answer
-        assert isinstance(answer["sources"], list)
-        assert answer["confidence"] == 0.85
-        assert answer["groundedness_score"] == 0.92
-        assert answer["text"] == "The answer is **42**."
+        done = next(e for e in events if e["type"] == "done")
+        assert "text" in done
+        assert "confidence" in done
+        assert isinstance(done["text"], str)
+        assert len(done["text"]) > 0
 
     @patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service")
     def test_done_marker_always_present(self, mock_get_service, fake_rag_service, client):
-        mock_get_service.return_value = fake_rag_service
+        async def _get_service():
+            return fake_rag_service
+
+        mock_get_service.side_effect = _get_service
         resp = client.post("/api/v1/ask/stream", json={"question": "test"})
         assert resp.text.rstrip().endswith("data: [DONE]")
 
