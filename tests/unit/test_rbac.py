@@ -1,4 +1,9 @@
-"""Unit tests for document-level RBAC (source filter enforcement)."""
+"""Unit tests for document-level RBAC (source filter enforcement).
+
+Encodes the fail-closed contract: with RBAC enabled, an unmapped key, an empty
+``allowed_sources``, or an empty intersection must raise ``AuthorizationError``
+(HTTP 403) — never silently widen the filter to "all sources".
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from data_engineering_copilot.api.auth import ApiKeyAuthMiddleware, _build_rbac_map
+from data_engineering_copilot.domain.exceptions import AuthorizationError
 from data_engineering_copilot.domain.models import UserPermissions
 
 
@@ -50,33 +56,46 @@ class TestResolveSourceFilter:
         request.state.user_permissions = user_permissions
         return request
 
-    def test_no_permissions_passthrough(self, resolve_source_filter) -> None:
+    def test_rbac_disabled_passes_client_filter_through(self, resolve_source_filter) -> None:
         request = self._make_request(None)
-        assert resolve_source_filter(request, ["A"]) == ["A"]
-        assert resolve_source_filter(request, None) is None
+        assert resolve_source_filter(request, ["A"], rbac_enabled=False) == ["A"]
+        assert resolve_source_filter(request, None, rbac_enabled=False) is None
+
+    def test_no_permissions_denied_when_rbac_enabled(self, resolve_source_filter) -> None:
+        request = self._make_request(None)
+        with pytest.raises(AuthorizationError):
+            resolve_source_filter(request, ["A"], rbac_enabled=True)
 
     def test_admin_bypasses_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-admin", role="admin", allowed_sources=("A",))
         request = self._make_request(perms)
-        assert resolve_source_filter(request, ["B"]) == ["B"]
-        assert resolve_source_filter(request, None) is None
+        assert resolve_source_filter(request, ["B"], rbac_enabled=True) == ["B"]
+        assert resolve_source_filter(request, None, rbac_enabled=True) is None
 
     def test_reader_with_no_client_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=("Spark", "Delta"))
         request = self._make_request(perms)
-        result = resolve_source_filter(request, None)
+        result = resolve_source_filter(request, None, rbac_enabled=True)
         assert result == ["Spark", "Delta"]
 
     def test_reader_intersects_with_client_filter(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=("Spark", "Delta"))
         request = self._make_request(perms)
-        result = resolve_source_filter(request, ["Spark", "Airflow"])
+        result = resolve_source_filter(request, ["Spark", "Airflow"], rbac_enabled=True)
         assert result == ["Spark"]
 
-    def test_reader_empty_allowed_sources_passthrough(self, resolve_source_filter) -> None:
+    def test_reader_with_no_allowed_sources_denied(self, resolve_source_filter) -> None:
         perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=())
         request = self._make_request(perms)
-        assert resolve_source_filter(request, ["A"]) == ["A"]
+        with pytest.raises(AuthorizationError):
+            resolve_source_filter(request, ["A"], rbac_enabled=True)
+
+    def test_empty_intersection_raises_not_allows_all(self, resolve_source_filter) -> None:
+        """Regression for the fail-open bug: [] must raise, not mean 'all'."""
+        perms = UserPermissions(api_key_prefix="sk-x", role="reader", allowed_sources=("Spark", "Delta"))
+        request = self._make_request(perms)
+        with pytest.raises(AuthorizationError):
+            resolve_source_filter(request, ["Airflow"], rbac_enabled=True)
 
 
 class TestRbacMiddlewareResolvePermissions:

@@ -36,6 +36,13 @@ class RetrievalError(CoreDomainException):
     """Raised when document retrieval fails during RAG pipeline."""
 
 
+class AuthorizationError(CoreDomainException):
+    """Raised when a caller lacks permission for a requested resource.
+
+    Mapped to HTTP 403 by the API layer. Never leaks internal detail.
+    """
+
+
 class LLMGenerationError(CoreDomainException):
     """Raised when LLM text generation fails."""
 
