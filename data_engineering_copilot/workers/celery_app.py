@@ -14,8 +14,21 @@ celery_app = Celery(
 
 
 def _enforce_fresh_deps(sender, **kwargs) -> None:
-    """Refuse to run the worker on a stale image (deps changed since build)."""
+    """Refuse to run the worker on a stale image (deps changed since build).
+
+    Writes a Redis key so the API/CLI can detect staleness even if the worker
+    dies before the API's own check runs.
+    """
     if not check_deps(fail_fast=False):
+        # Signal staleness via Redis so the API can read it
+        try:
+            import redis
+
+            r = redis.Redis.from_url(settings.redis_url)
+            r.set("ingestion:worker_stale", "true", ex=3600)
+            r.close()
+        except Exception:
+            pass
         sys.exit(1)
 
 

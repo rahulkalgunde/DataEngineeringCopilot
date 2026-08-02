@@ -164,6 +164,14 @@ class TaskStatus(BaseModel):
 
 @router.post("/api/v1/ingest", response_model=TaskStatus)
 async def ingest_documents(request: IngestRequest, fastapi_request: Request):
+    # Gate: refuse to dispatch if the Docker image is stale (deps changed since build)
+    from data_engineering_copilot.api.app import _deps_fingerprint_ok
+
+    if _deps_fingerprint_ok is False:
+        from data_engineering_copilot.infrastructure.dep_check import STALE_MESSAGE
+
+        raise HTTPException(status_code=503, detail=STALE_MESSAGE)
+
     # RBAC: restrict ingest sources to the caller's allowed_sources
     effective_sources = _resolve_source_filter(
         fastapi_request, request.source_names, rbac_enabled=settings.rbac_enabled

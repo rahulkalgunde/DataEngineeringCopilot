@@ -7,6 +7,7 @@ import pytest
 from data_engineering_copilot.infrastructure.dep_check import (
     FINGERPRINT_FILES,
     check_deps,
+    deps_detail,
     fingerprint_ok,
 )
 
@@ -56,6 +57,44 @@ class TestFingerprintOk:
         _write_fingerprint(baked, _live_hash(live))
         (live / "pyproject.toml").write_text('[project]\ndependencies = ["new-pkg"]\n', encoding="utf-8")
         assert fingerprint_ok(baked_path=str(baked / "image_deps_sha256.txt"), live_dir=str(live)) is False
+
+
+class TestDepsDetail:
+    def test_indeterminate_when_not_in_container(self, tmp_path):
+        result = deps_detail(baked_path=str(tmp_path / "missing.txt"), live_dir=str(tmp_path))
+        assert result.ok is None
+        assert result.in_container is False
+        assert result.message is None
+
+    def test_fresh_when_hashes_match(self, tmp_path):
+        baked = tmp_path / "baked"
+        baked.mkdir()
+        live = tmp_path / "live"
+        live.mkdir()
+        (live / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+        (live / "uv.lock").write_text("lock v1\n", encoding="utf-8")
+        _write_fingerprint(baked, _live_hash(live))
+        result = deps_detail(baked_path=str(baked / "image_deps_sha256.txt"), live_dir=str(live))
+        assert result.ok is True
+        assert result.in_container is True
+        assert result.baked_hash is not None
+        assert result.live_hash is not None
+        assert result.message is None
+
+    def test_stale_when_hashes_differ(self, tmp_path):
+        baked = tmp_path / "baked"
+        baked.mkdir()
+        live = tmp_path / "live"
+        live.mkdir()
+        (live / "pyproject.toml").write_text("a", encoding="utf-8")
+        (live / "uv.lock").write_text("b", encoding="utf-8")
+        _write_fingerprint(baked, "stale-hash")
+        result = deps_detail(baked_path=str(baked / "image_deps_sha256.txt"), live_dir=str(live))
+        assert result.ok is False
+        assert result.in_container is True
+        assert result.baked_hash == "stale-hash"
+        assert result.live_hash is not None
+        assert "STALE" in result.message
 
 
 class TestCheckDeps:

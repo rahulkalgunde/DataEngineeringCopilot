@@ -152,11 +152,17 @@ async def health():
 @app.get("/api/v1/version")
 async def version():
     """Report what image/code revision is actually running."""
+    from data_engineering_copilot.infrastructure.dep_check import deps_detail
+
+    detail = deps_detail()
     return {
         "service": "data-engineering-copilot",
         "git_sha": os.environ.get("IMAGE_GIT_SHA", "unknown"),
         "image_built_at": _image_built_at(),
         "deps_fingerprint_ok": _deps_fingerprint_ok,
+        "deps_baked_hash": detail.baked_hash,
+        "deps_live_hash": detail.live_hash,
+        "deps_stale_message": detail.message,
         "python_version": platform.python_version(),
     }
 
@@ -192,6 +198,9 @@ async def ready():
     redis_host = redis_parsed.hostname or "localhost"
     redis_port = redis_parsed.port or 6379
     results["redis"] = await _check_tcp(redis_host, redis_port)
+
+    # Dependencies freshness (True=fresh, None=not in container, False=stale)
+    results["deps"] = _deps_fingerprint_ok is not False
 
     all_healthy = all(results.values())
     overall = "healthy" if all_healthy else "unhealthy" if not any(results.values()) else "degraded"
