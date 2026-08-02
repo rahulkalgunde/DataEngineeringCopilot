@@ -10,7 +10,7 @@ Run with: pytest tests/integration/test_api_integration.py -v -m integration
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport
@@ -473,36 +473,42 @@ class TestSseStreaming:
 
     @pytest.mark.asyncio
     async def test_stream_returns_start_answer_done(self, routes_async_redis):
-        """Wire-mock RAG to produce a static answer, verify SSE event flow."""
+        """SSE event flow against the real answer_stream body wired to doubles."""
         import httpx
 
         from data_engineering_copilot.api.app import app
-        from data_engineering_copilot.domain.models import Answer
+        from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
         from data_engineering_copilot.services.async_rag import AsyncRagService
+        from tests.doubles.embedder import StubEmbedder
+        from tests.doubles.llm import StubLLM
+        from tests.doubles.vector_store import InMemoryVectorStore
 
-        mock_answer = Answer(
-            text="This is a wire-mocked answer about Spark.",
-            confidence=0.95,
-            groundedness_score=0.9,
-            sources=(),
+        store = InMemoryVectorStore()
+        await store.initialize()
+        embedder = StubEmbedder(dimension=768)
+        chunk = DocumentChunk(
+            chunk_id="stream:doc000:chunk00",
+            source_name="RAG Test Docs",
+            title="Apache Spark",
+            url="https://example.com/docs/apache-spark.html",
+            text="Apache Spark is a unified analytics engine for large-scale data processing.",
         )
-        mock_service = MagicMock(spec=AsyncRagService)
-        mock_service.answer = AsyncMock(return_value=mock_answer)
+        vector = (await embedder.embed_texts([chunk.text]))[0]
+        await store.upsert_chunks([chunk], [vector])
 
-        async def _answer_stream(question, source_filter=None):
-            yield 'data: {"type": "start", "message": "started"}\n\n'
-            yield (
-                'data: {"type": "answer", "text": "This is a wire-mocked answer about Spark.", '
-                '"confidence": 0.95, "groundedness_score": 0.9, "sources": []}\n\n'
-            )
+        service = AsyncRagService(
+            config=RagConfig(retrieval_top_k=5, confidence_threshold=0.05, max_context_chars=2000),
+            vector_store=store,
+            llm_client=StubLLM(),
+            embedder=embedder,
+        )
 
-        mock_service.answer_stream = _answer_stream
+        async def _get_service():
+            return service
 
-        with patch(
-            "data_engineering_copilot.services.rag_service_singleton.get_rag_service", return_value=mock_service
-        ):
+        with patch("data_engineering_copilot.services.rag_service_singleton.get_rag_service", side_effect=_get_service):
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                async with client.stream("POST", "/api/v1/ask/stream", json={"question": "test"}) as response:
+                async with client.stream("POST", "/api/v1/ask/stream", json={"question": "what is spark?"}) as response:
                     assert response.status_code == 200
                     assert "text/event-stream" in response.headers.get("content-type", "")
 
@@ -511,9 +517,11 @@ class TestSseStreaming:
                         if line.startswith("data: "):
                             chunks.append(line)
 
-                    assert any("start" in c for c in chunks), "Should emit start event"
-                    assert any("answer" in c for c in chunks), "Should emit answer event"
+                    assert any("status" in c for c in chunks), "Should emit status event"
+                    assert any("token" in c for c in chunks), "Should emit token event"
                     assert any("[DONE]" in c for c in chunks), "Should end with [DONE]"
+        await embedder.close()
+        await store.close()
 
     @pytest.mark.asyncio
     async def test_stream_invalid_request_returns_422(self, routes_async_redis):
@@ -525,3 +533,42 @@ class TestSseStreaming:
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/api/v1/ask/stream", json={"question": ""})
             assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# App lifespan: RAG service shutdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestAppLifespan:
+    """Verifies the API lifespan finally-block closes the RAG service."""
+
+    @pytest.mark.asyncio
+    async def test_api_lifespan_closes_service(self, routes_async_redis):
+        """Lifespan finally-block closes the initialized RAG service and leaks no tasks."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from data_engineering_copilot.api.app import _lifespan
+        from data_engineering_copilot.services.rag_service_singleton import reset_rag_service
+
+        service = MagicMock()
+        service.close = AsyncMock()
+
+        reset_rag_service()
+        try:
+            with patch(
+                "data_engineering_copilot.services.rag_service_singleton.get_rag_service_if_initialized",
+                return_value=service,
+            ):
+                async with _lifespan(app=MagicMock()):
+                    pass
+            service.close.assert_awaited_once()
+        finally:
+            reset_rag_service()
+
+        # No pending async tasks leaked from the lifespan shutdown.
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        assert pending == []
