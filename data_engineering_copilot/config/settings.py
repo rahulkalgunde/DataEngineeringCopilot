@@ -301,20 +301,21 @@ class AppSettings(BaseSettings):
     ollama_retry_context_ratio: float = 0.5
     ollama_retry_extra_num_predict: int = 512
     ollama_retry_max_num_predict: int = 1024
-    crawl_delay_seconds: float = 0.2
+    crawl_delay_seconds: float = 0.5
     max_pages_per_source: int = 80
     crawl_thread_pool_size: int = 4
     ingestion_batch_chunk_size: int = 256
-    processing_concurrency: int = 4
+    processing_concurrency: int = 2
+    enrichment_concurrency: int = 1
     # Multi-stage pipeline concurrency (isolated executor pools)
     parse_concurrency: int = 4
     chunk_concurrency: int = 4
     store_concurrency: int = 2
     # Async crawler settings
     crawl_db_url: str = ""
-    crawl_async_concurrency: int = 20
+    crawl_async_concurrency: int = 5
     crawl_async_max_concurrency: int = 40
-    crawl_async_per_domain_concurrency: int = 3
+    crawl_async_per_domain_concurrency: int = 1
     crawl_async_conditional_get: bool = True
     crawl_async_cache_url: str = ""
     crawl_async_thread_pool_size: int = 4

@@ -12,7 +12,7 @@ import time
 import uuid
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, retry_if_exception_type, stop_after_attempt, wait_exponential
 from tenacity.wait import wait_base
 
 from data_engineering_copilot.config.settings import settings
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 # Retryable network errors — these should propagate to the @retry decorator
 _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
+
+
+def _is_transient_http(exc: Exception) -> bool:
+    """Check if an HTTP error is transient (e.g., Ollama 503 overload)."""
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 503
 
 
 class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
@@ -53,7 +58,7 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         self._aollama_embed_single_batch = retry(
             stop=stop_after_attempt(3),
             wait=retry_wait or wait_exponential(multiplier=1, min=1, max=10),
-            retry=retry_if_exception_type(_RETRYABLE_ERRORS),
+            retry=retry_if_exception_type(_RETRYABLE_ERRORS) | retry_if_exception(_is_transient_http),
             reraise=True,
         )(self._aollama_embed_single_batch)
 

@@ -384,6 +384,91 @@ class PostgresCrawlFrontierDB:
                 )
             return {row["state"]: row["cnt"] for row in rows}
 
+    async def get_failed_urls(self, source_name: str, category: str | None = None) -> list[str]:
+        """Return FAILED URLs, optionally filtered by error category.
+
+        Categories are inferred from last_error:
+        - 'fetch': HTTP errors, timeouts, connection errors
+        - 'embed': Embedding failures
+        - 'upsert': Vector store failures
+        - 'other': Everything else
+        """
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            if category and category != "all":
+                rows = await conn.fetch(
+                    "SELECT url FROM crawl_frontier "
+                    "WHERE source_name = $1 AND state = $2 "
+                    "AND (last_error IS NOT NULL AND last_error != '') "
+                    "ORDER BY updated_at DESC",
+                    source_name,
+                    CrawlState.FAILED.value,
+                )
+                urls = [row["url"] for row in rows]
+                # Filter by category based on error keywords
+                category_keywords = {
+                    "fetch": ["http", "timeout", "connection", "ssrf", "redirect", "ssl"],
+                    "embed": ["embed", "embedding", "vector"],
+                    "upsert": ["upsert", "vector store", "qdrant"],
+                }
+                keywords = category_keywords.get(category, [])
+                if keywords:
+                    return [
+                        u
+                        for u in urls
+                        if any(
+                            kw in (row.get("last_error", "") or "").lower()
+                            for row in rows
+                            for kw in keywords
+                            if row["url"] == u
+                        )
+                    ]
+                return urls
+            else:
+                rows = await conn.fetch(
+                    "SELECT url FROM crawl_frontier WHERE source_name = $1 AND state = $2 ORDER BY updated_at DESC",
+                    source_name,
+                    CrawlState.FAILED.value,
+                )
+                return [row["url"] for row in rows]
+
+    async def get_skipped_urls(self, source_name: str) -> list[str]:
+        """Return SKIPPED URLs for a source."""
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT url FROM crawl_frontier WHERE source_name = $1 AND state = $2 ORDER BY updated_at DESC",
+                source_name,
+                CrawlState.SKIPPED.value,
+            )
+            return [row["url"] for row in rows]
+
+    async def get_failed_by_category(self, source_name: str) -> dict[str, int]:
+        """Count FAILED URLs grouped by error category."""
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT last_error FROM crawl_frontier "
+                "WHERE source_name = $1 AND state = $2 "
+                "AND last_error IS NOT NULL AND last_error != ''",
+                source_name,
+                CrawlState.FAILED.value,
+            )
+
+            categories: dict[str, int] = {"fetch": 0, "embed": 0, "upsert": 0, "other": 0}
+            for row in rows:
+                error = (row["last_error"] or "").lower()
+                if any(kw in error for kw in ["http", "timeout", "connection", "ssrf", "redirect", "ssl"]):
+                    categories["fetch"] += 1
+                elif any(kw in error for kw in ["embed", "embedding", "vector"]):
+                    categories["embed"] += 1
+                elif any(kw in error for kw in ["upsert", "qdrant"]):
+                    categories["upsert"] += 1
+                else:
+                    categories["other"] += 1
+
+            return categories
+
     async def drop_all(self) -> None:
         assert self._pool is not None
         async with self._pool.acquire() as conn:
