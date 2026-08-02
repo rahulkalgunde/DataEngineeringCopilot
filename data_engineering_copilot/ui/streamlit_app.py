@@ -768,6 +768,29 @@ def render_qa_tab() -> None:
             st.write(answer.text)
             st.caption(f"Confidence: {answer.confidence:.2%}")
 
+            # User feedback buttons
+            col_feedback1, col_feedback2, col_feedback3 = st.columns([1, 1, 4])
+            with col_feedback1:
+                if st.button("👍 Helpful", key=f"helpful_{len(collector.queries)}"):
+                    # Store feedback in session state
+                    if "feedback" not in st.session_state:
+                        st.session_state.feedback = {}
+                    st.session_state.feedback[question.strip()] = {
+                        "rating": "helpful",
+                        "timestamp": time.time(),
+                    }
+                    st.toast("Thanks for your feedback!")
+            with col_feedback2:
+                if st.button("👎 Not Helpful", key=f"not_helpful_{len(collector.queries)}"):
+                    # Store feedback in session state
+                    if "feedback" not in st.session_state:
+                        st.session_state.feedback = {}
+                    st.session_state.feedback[question.strip()] = {
+                        "rating": "not_helpful",
+                        "timestamp": time.time(),
+                    }
+                    st.toast("Thanks for your feedback!")
+
             if answer.sources:
                 with st.expander(f"Sources ({len(answer.sources)})", expanded=False):
                     for i, source in enumerate(answer.sources, 1):
