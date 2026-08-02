@@ -138,6 +138,9 @@ class AppSettings(BaseSettings):
     embedding_provider: str = "ollama"
     ollama_model: str = "llama3.2:3b"
 
+    # API key for the API auth middleware (pydantic-set, env-file aware).
+    api_key: SecretStr = SecretStr("")
+
     # OpenRouter settings (LLM + Embeddings)
     openrouter_api_key: SecretStr = SecretStr("")
     openrouter_model: str = "openrouter/free"
@@ -286,7 +289,6 @@ class AppSettings(BaseSettings):
     # Multi-stage pipeline concurrency (isolated executor pools)
     parse_concurrency: int = 4
     chunk_concurrency: int = 4
-    embed_concurrency: int = 4
     store_concurrency: int = 2
     # Async crawler settings
     crawl_db_url: str = ""
@@ -390,6 +392,58 @@ class AppSettings(BaseSettings):
         else:
             model_name = self.embedding_model_name
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
+
+    def validate_all(self) -> None:
+        """Cross-field consistency checks. Raises ``ValidationError`` on conflicts."""
+        from pydantic import ValidationError
+
+        errors: list[str] = []
+
+        if self.reranker_enabled and self.reranker_top_k > self.retrieval_top_k:
+            errors.append(
+                f"reranker_top_k ({self.reranker_top_k}) must be <= retrieval_top_k ({self.retrieval_top_k}) "
+                "— the reranker can only narrow the retrieved set."
+            )
+        if self.max_pages_per_source < 0:
+            errors.append(f"max_pages_per_source ({self.max_pages_per_source}) must be >= 0")
+
+        configured_providers = {
+            p
+            for p in [
+                self.llm_provider,
+                self.answer_llm_provider,
+                self.rewrite_llm_provider,
+                self.groundedness_llm_provider,
+                self.intent_llm_provider,
+                self.enrichment_llm_provider,
+                self.evaluation_llm_provider,
+                self.code_llm_provider,
+                self.embedding_provider,
+            ]
+            if p
+        }
+        if not configured_providers:
+            errors.append("At least one LLM or embedding provider must be configured")
+
+        if errors:
+            from typing import cast
+
+            from pydantic_core import InitErrorDetails
+
+            line_errors = [
+                {
+                    "type": "value_error",
+                    "loc": ("settings",),
+                    "msg": msg,
+                    "input": None,
+                    "ctx": {"error": ValueError(msg)},
+                }
+                for msg in errors
+            ]
+            raise ValidationError.from_exception_data(
+                title="AppSettings.validate_all",
+                line_errors=cast(list[InitErrorDetails], line_errors),
+            )
 
 
 # Module-load seam ONLY: skip the API-key validator so importing this module

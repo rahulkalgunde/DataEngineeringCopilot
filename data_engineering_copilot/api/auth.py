@@ -14,7 +14,6 @@ from __future__ import annotations
 import hmac
 import json
 import logging
-import os
 from collections.abc import Callable
 
 from fastapi import Request, Response
@@ -64,7 +63,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         rbac_users_json: str = "",
     ) -> None:
         super().__init__(app)
-        self._api_key = api_key or os.environ.get("API_KEY", "")
+        self._api_key = api_key or ""
         self._rbac_enabled = rbac_enabled
         self._rbac_map = _build_rbac_map(rbac_users_json) if rbac_enabled else {}
         if not self._api_key:
@@ -122,11 +121,17 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        # RBAC: resolve key to user permissions
+        # RBAC: resolve key to user permissions. When RBAC is enabled, a key
+        # with no mapped permissions is an authorization failure (fail-closed),
+        # never an implicit "everything allowed".
         if self._rbac_enabled:
             perms = self._resolve_permissions(provided_key)
-            if perms is not None:
-                request.state.user_permissions = perms
+            if perms is None:
+                from data_engineering_copilot.domain.exceptions import AuthorizationError
+
+                self._audit("auth_denied_no_permissions", request, provided_key)
+                raise AuthorizationError("API key has no configured permissions")
+            request.state.user_permissions = perms
 
         self._audit("auth_success", request, provided_key)
         return await call_next(request)

@@ -1,8 +1,10 @@
 import json
+import os
 
+import pytest
 from pydantic import SecretStr
 
-from data_engineering_copilot.config.settings import load_documentation_sources
+from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
 from tests.conftest import make_settings
 
 
@@ -108,7 +110,6 @@ def test_nvidia_nim_rpd_limit_default() -> None:
 
 
 def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
-    import pytest
 
     with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
         make_settings(
@@ -116,3 +117,82 @@ def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
             nvidia_api_key="",
             _test_allow_non_ollama=True,
         )
+
+
+def test_api_key_field_hermetic_default_empty() -> None:
+    settings = make_settings()
+    assert settings.api_key.get_secret_value() == ""
+
+
+def test_api_key_overridable() -> None:
+    settings = make_settings(api_key="sk-test-key")
+    assert settings.api_key.get_secret_value() == "sk-test-key"
+
+
+def test_api_key_not_in_str() -> None:
+    settings = make_settings(api_key="sk-ultra-secret-42")
+    rendered = str(settings)
+    assert "sk-ultra-secret-42" not in rendered
+
+
+def test_env_local_overrides_env(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    local_file = tmp_path / ".env.local"
+    env_file.write_text("COLLECTION_NAME=from_env\n", encoding="utf-8")
+    local_file.write_text("COLLECTION_NAME=from_env_local\n", encoding="utf-8")
+
+    previous_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        kwargs: dict = {
+            "_env_file": (".env", ".env.local"),
+            "skip_provider_check": True,
+            "llm_provider": "ollama",
+            "llm_model": "llama3.2:3b",
+            "embedding_provider": "ollama",
+            "embedding_model_name": "nomic-embed-text",
+            "ollama_base_url": "http://localhost:11434",
+        }
+        settings = AppSettings(**kwargs)
+    finally:
+        os.chdir(previous_cwd)
+
+    assert settings.collection_name == "from_env_local"
+
+
+def test_no_duplicate_embed_concurrency() -> None:
+    settings = make_settings()
+    assert settings.model_fields["embed_concurrency"].default == 1
+
+
+def test_validate_all_passes_on_defaults() -> None:
+    settings = make_settings()
+    settings.validate_all()  # must not raise
+
+
+def test_validate_all_detects_conflicts() -> None:
+    from pydantic import ValidationError
+
+    def _make_bad(**overrides) -> AppSettings:
+        from tests.conftest import make_settings
+
+        base = make_settings()
+        kwargs: dict = {
+            field: getattr(base, field)
+            for field in base.model_fields
+            if field not in {"sources", "skip_provider_check"}
+        }
+        kwargs.update(overrides)
+        return AppSettings(**kwargs)
+
+    bad = _make_bad(reranker_top_k=20, retrieval_top_k=5)
+    with pytest.raises(ValidationError, match="reranker_top_k"):
+        bad.validate_all()
+
+    negative = _make_bad(max_pages_per_source=-1)
+    with pytest.raises(ValidationError, match="max_pages_per_source"):
+        negative.validate_all()
+
+    no_provider = _make_bad(llm_provider="", embedding_provider="")
+    with pytest.raises(ValidationError, match="provider"):
+        no_provider.validate_all()
