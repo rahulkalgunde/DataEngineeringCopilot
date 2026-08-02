@@ -18,7 +18,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery.signals import task_failure, task_revoked
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.factory import build_embedder
+from data_engineering_copilot.factory import build_embedder, get_shared_redis_client
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.workers.celery_app import celery_app
@@ -26,7 +26,6 @@ from data_engineering_copilot.workers.progress import (
     _LEASE_KEY_PREFIX,
     _STATUS_KEY_TTL_SECONDS,
     IngestionProgressTracker,
-    get_redis_client,
 )
 
 log = structlog.get_logger(__name__)
@@ -36,7 +35,6 @@ app = celery_app
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _worker_loop_lock = threading.Lock()
-_INGESTION_HEARTBEAT_INTERVAL_SECONDS = 30
 
 
 def _get_worker_loop() -> asyncio.AbstractEventLoop:
@@ -170,27 +168,17 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         source_names=source_names,
         max_pages=max_pages,
     )
-    tracker = IngestionProgressTracker(task_id, redis_client=get_redis_client(), source_names=source_names)
-    heartbeat_stop = threading.Event()
-
-    def _heartbeat() -> None:
-        while not heartbeat_stop.wait(_INGESTION_HEARTBEAT_INTERVAL_SECONDS):
-            try:
-                tracker.heartbeat()
-            except Exception as exc:
-                log.warning("async_ingest_task.heartbeat_failed", task_id=task_id, error=str(exc))
-
-    heartbeat_thread = threading.Thread(
-        target=_heartbeat,
-        name=f"ingestion-heartbeat-{(task_id or 'unknown')[:8]}",
-        daemon=True,
+    tracker = IngestionProgressTracker(
+        task_id,
+        redis_client=get_shared_redis_client(),
+        source_names=source_names,
     )
-    heartbeat_thread.start()
 
     try:
         from data_engineering_copilot.factory import build_async_ingestion_service
 
         async def _run_ingest() -> None:
+            await tracker.start()
             service = build_async_ingestion_service()
             await service.ingest(
                 source_names=source_names,
@@ -211,9 +199,31 @@ def async_ingest_task(self, source_names: list[str], max_pages: int):
         tracker.mark_failed(str(e))
         raise
     finally:
-        heartbeat_stop.set()
-        heartbeat_thread.join(timeout=1)
-        tracker.clear_lease()
+        try:
+            run_async(tracker.aclose())
+        except Exception as exc:
+            log.warning("async_ingest_task.aclose_failed", task_id=task_id, error=str(exc))
+
+
+async def _set_status_one_shot(task_id: str, status: str, error: str) -> None:
+    """One-shot async write used by the ``task_failure``/``task_revoked`` handlers.
+
+    Runs on the worker event loop via :func:`run_async`.  The shared async
+    Redis client decodes responses as ``str``, but bytes are handled too for
+    safety.  Terminal states are never overwritten.
+    """
+    redis_client = get_shared_redis_client()
+    redis_key = f"ingestion:status:{task_id}"
+    raw = await redis_client.get(redis_key)
+    if raw is None:
+        return
+    state = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode("utf-8"))
+    if state.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
+        return
+    state["status"] = status
+    state["error"] = error
+    await redis_client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
+    await redis_client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
 
 
 @task_failure.connect
@@ -227,19 +237,10 @@ def _on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
     if not task_id:
         return
     try:
-        client = get_redis_client()
-        redis_key = f"ingestion:status:{task_id}"
-        raw = client.get(redis_key)
-        if raw is None:
-            return
-        state = json.loads(raw) if isinstance(raw, bytes) else json.loads(raw.decode("utf-8"))
-        if state.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
-            return
-        state["status"] = "FAILED"
-        state["error"] = str(exception or "Task failed unexpectedly (hard time limit?).")
-        client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
-        client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
-        log.info("task_failure.updated_redis", extra={"task_id": task_id, "error": state["error"]})
+        run_async(
+            _set_status_one_shot(task_id, "FAILED", str(exception or "Task failed unexpectedly (hard time limit?)."))
+        )
+        log.info("task_failure.updated_redis", extra={"task_id": task_id})
     except Exception as exc:
         log.warning("task_failure.update_failed", extra={"task_id": task_id, "error": str(exc)})
 
@@ -256,18 +257,7 @@ def _on_task_revoked(sender=None, request=None, terminated=None, signum=None, ex
     if not task_id:
         return
     try:
-        client = get_redis_client()
-        redis_key = f"ingestion:status:{task_id}"
-        raw = client.get(redis_key)
-        if raw is None:
-            return
-        state = json.loads(raw) if isinstance(raw, bytes) else json.loads(raw.decode("utf-8"))
-        if state.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
-            return
-        state["status"] = "CANCELLED"
-        state["error"] = "Task revoked by user"
-        client.set(redis_key, json.dumps(state), ex=_STATUS_KEY_TTL_SECONDS)
-        client.delete(f"{_LEASE_KEY_PREFIX}:{task_id}")
+        run_async(_set_status_one_shot(task_id, "CANCELLED", "Task revoked by user"))
         log.info("task_revoked.updated_redis", extra={"task_id": task_id})
     except Exception as exc:
         log.warning("task_revoked.update_failed", extra={"task_id": task_id, "error": str(exc)})

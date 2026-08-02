@@ -13,6 +13,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from data_engineering_copilot.domain.models import IngestionEvent
 
 
+class _FakeRedis:
+    """Minimal async Redis stand-in for tracker wiring tests."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.store[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+    async def aclose(self) -> None:
+        pass
+
+
 class TestTrackerWiring:
     """Verify IngestionProgressTracker can be instantiated and called
     with the exact arguments the Celery task uses."""
@@ -59,16 +78,20 @@ class TestTrackerWiring:
         )
         assert callable(getattr(tracker, "mark_failed", None))
 
-    def test_tracker_on_event_accepts_ingestion_event(self):
-        """on_event() accepts an IngestionEvent instance."""
+    async def test_tracker_on_event_accepts_ingestion_event(self):
+        """on_event() accepts an IngestionEvent instance and persists it."""
+        from typing import cast
+
+        import redis.asyncio as aioredis
+
         from data_engineering_copilot.workers.progress import IngestionProgressTracker
 
-        mock_redis = MagicMock()
+        fake_redis = _FakeRedis()
         tracker = IngestionProgressTracker(
             task_id="test-evt",
-            redis_client=mock_redis,
+            redis_client=cast(aioredis.Redis, fake_redis),
         )
-        mock_redis.reset_mock()
+        await tracker.start()
 
         event = IngestionEvent(
             event_type="page_indexed",
@@ -79,40 +102,50 @@ class TestTrackerWiring:
             pages_fetched=1,
         )
         tracker.on_event(event)
+        await tracker.aclose()
 
-        assert mock_redis.set.called
+        assert "ingestion:status:test-evt" in fake_redis.store
 
-    def test_tracker_mark_completed_writes_to_redis(self):
+    async def test_tracker_mark_completed_writes_to_redis(self):
         """mark_completed() writes status=COMPLETED to Redis."""
+        from typing import cast
+
+        import redis.asyncio as aioredis
+
         from data_engineering_copilot.workers.progress import IngestionProgressTracker
 
-        mock_redis = MagicMock()
+        fake_redis = _FakeRedis()
         tracker = IngestionProgressTracker(
             task_id="test-done",
-            redis_client=mock_redis,
+            redis_client=cast(aioredis.Redis, fake_redis),
         )
-        mock_redis.reset_mock()
+        await tracker.start()
 
         tracker.mark_completed()
+        await tracker.aclose()
 
-        mock_redis.set.assert_called_once()
-        payload = json.loads(mock_redis.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-done"])
         assert payload["status"] == "COMPLETED"
 
-    def test_tracker_mark_failed_writes_error(self):
+    async def test_tracker_mark_failed_writes_error(self):
         """mark_failed() writes status=FAILED and error message."""
+        from typing import cast
+
+        import redis.asyncio as aioredis
+
         from data_engineering_copilot.workers.progress import IngestionProgressTracker
 
-        mock_redis = MagicMock()
+        fake_redis = _FakeRedis()
         tracker = IngestionProgressTracker(
             task_id="test-fail2",
-            redis_client=mock_redis,
+            redis_client=cast(aioredis.Redis, fake_redis),
         )
-        mock_redis.reset_mock()
+        await tracker.start()
 
         tracker.mark_failed("Connection refused")
+        await tracker.aclose()
 
-        payload = json.loads(mock_redis.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-fail2"])
         assert payload["status"] == "FAILED"
         assert payload["error"] == "Connection refused"
 

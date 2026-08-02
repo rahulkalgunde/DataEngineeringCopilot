@@ -8,7 +8,9 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,39 +22,71 @@ from data_engineering_copilot.domain.models import IngestionEvent
 # ---------------------------------------------------------------------------
 
 
+class FakeRedis:
+    """In-memory async Redis stand-in for the progress tracker tests."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.write_count = 0
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.write_count += 1
+        self.store[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.fixture
+def fake_redis() -> FakeRedis:
+    return FakeRedis()
+
+
+async def _make_tracker(
+    fake_redis: FakeRedis,
+    task_id: str = "test-task-123",
+    flush_interval: float = 1.0,
+):
+    import redis.asyncio as aioredis
+
+    from data_engineering_copilot.workers.progress import IngestionProgressTracker
+
+    tracker = IngestionProgressTracker(
+        task_id=task_id,
+        redis_client=cast(aioredis.Redis, fake_redis),
+        source_names=["Apache Spark Documentation"],
+        flush_interval=flush_interval,
+    )
+    await tracker.start()
+    return tracker
+
+
 class TestIngestionProgressTracker:
     """Tests for the IngestionProgressTracker class that writes
     ingestion progress to Redis as IngestionEvents fire."""
 
-    def _make_tracker(self, mock_redis: MagicMock, task_id: str = "test-task-123"):
-        from data_engineering_copilot.workers.progress import IngestionProgressTracker
+    async def test_initial_state_written_to_redis(self, fake_redis):
+        """Tracker publishes an initial PROCESSING state on start()."""
+        tracker = await _make_tracker(fake_redis)
 
-        return IngestionProgressTracker(
-            task_id=task_id,
-            redis_client=mock_redis,
-            source_names=["Apache Spark Documentation"],
-        )
+        payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
 
-    def test_initial_state_written_to_redis(self, mock_redis_client: MagicMock):
-        """Tracker publishes an initial PROCESSING state on creation."""
-        self._make_tracker(mock_redis_client)
-
-        mock_redis_client.set.assert_called_once()
-        call_args = mock_redis_client.set.call_args
-        key = call_args[0][0]
-        payload = json.loads(call_args[0][1])
-
-        assert key == "ingestion:status:test-task-123"
         assert payload["status"] == "PROCESSING"
         assert payload["pages_fetched"] == 0
         assert payload["chunks_indexed"] == 0
         assert payload["current_url"] == ""
         assert payload["error"] is None
+        await tracker.aclose()
 
-    def test_page_indexed_event_updates_state(self, mock_redis_client: MagicMock):
+    async def test_page_indexed_event_updates_state(self, fake_redis):
         """A page_indexed event updates pages_fetched, chunks_indexed, and current_url."""
-        tracker = self._make_tracker(mock_redis_client)
-        mock_redis_client.reset_mock()
+        tracker = await _make_tracker(fake_redis)
 
         event = IngestionEvent(
             event_type="page_indexed",
@@ -64,19 +98,18 @@ class TestIngestionProgressTracker:
         )
 
         tracker.on_event(event)
+        await tracker.aclose()
 
-        mock_redis_client.set.assert_called_once()
-        payload = json.loads(mock_redis_client.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
 
         assert payload["pages_fetched"] == 1
         assert payload["chunks_indexed"] == 12
         assert payload["current_url"] == "https://spark.apache.org/docs/latest/quick-start.html"
         assert payload["status"] == "PROCESSING"
 
-    def test_multiple_events_accumulate_counters(self, mock_redis_client: MagicMock):
+    async def test_multiple_events_accumulate_counters(self, fake_redis):
         """Sequential events accumulate pages_fetched and chunks_indexed."""
-        tracker = self._make_tracker(mock_redis_client)
-        mock_redis_client.reset_mock()
+        tracker = await _make_tracker(fake_redis)
 
         for i in range(1, 4):
             event = IngestionEvent(
@@ -88,16 +121,16 @@ class TestIngestionProgressTracker:
                 pages_fetched=i,
             )
             tracker.on_event(event)
+        await tracker.aclose()
 
-        last_payload = json.loads(mock_redis_client.set.call_args[0][1])
+        last_payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
         assert last_payload["pages_fetched"] == 3
         assert last_payload["chunks_indexed"] == 30
         assert last_payload["current_url"] == "https://spark.apache.org/docs/latest/page3.html"
 
-    def test_error_event_sets_error_and_status(self, mock_redis_client: MagicMock):
+    async def test_error_event_sets_error_and_status(self, fake_redis):
         """An error in the event sets the error field and status to FAILED."""
-        tracker = self._make_tracker(mock_redis_client)
-        mock_redis_client.reset_mock()
+        tracker = await _make_tracker(fake_redis)
 
         event = IngestionEvent(
             event_type="error",
@@ -107,15 +140,15 @@ class TestIngestionProgressTracker:
         )
 
         tracker.on_event(event)
+        await tracker.aclose()
 
-        payload = json.loads(mock_redis_client.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
         assert payload["error"] == "ConnectionTimeout: could not reach server"
         assert payload["status"] == "FAILED"
 
-    def test_completion_event_sets_completed_status(self, mock_redis_client: MagicMock):
+    async def test_completion_event_sets_completed_status(self, fake_redis):
         """A source_complete or completion event sets status to COMPLETED."""
-        tracker = self._make_tracker(mock_redis_client)
-        mock_redis_client.reset_mock()
+        tracker = await _make_tracker(fake_redis)
 
         event = IngestionEvent(
             event_type="ingestion_complete",
@@ -126,15 +159,16 @@ class TestIngestionProgressTracker:
         )
 
         tracker.on_event(event)
+        await tracker.aclose()
 
-        payload = json.loads(mock_redis_client.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
         assert payload["status"] == "COMPLETED"
         assert payload["pages_fetched"] == 40
         assert payload["chunks_indexed"] == 320
 
-    def test_url_none_does_not_clear_current_url(self, mock_redis_client: MagicMock):
+    async def test_url_none_does_not_clear_current_url(self, fake_redis):
         """When event.url is None, the current_url is not cleared."""
-        tracker = self._make_tracker(mock_redis_client)
+        tracker = await _make_tracker(fake_redis)
 
         # First set a URL
         event_with_url = IngestionEvent(
@@ -146,7 +180,6 @@ class TestIngestionProgressTracker:
             pages_fetched=1,
         )
         tracker.on_event(event_with_url)
-        mock_redis_client.reset_mock()
 
         # Then fire event without URL
         event_no_url = IngestionEvent(
@@ -155,20 +188,21 @@ class TestIngestionProgressTracker:
             message="Embedding 25 chunks...",
         )
         tracker.on_event(event_no_url)
+        await tracker.aclose()
 
-        payload = json.loads(mock_redis_client.set.call_args[0][1])
+        payload = json.loads(fake_redis.store["ingestion:status:test-task-123"])
         assert payload["current_url"] == "https://spark.apache.org/docs/latest/foo.html"
 
-    def test_redis_key_format(self, mock_redis_client: MagicMock):
+    async def test_redis_key_format(self, fake_redis):
         """Redis key follows the ingestion:status:{task_id} convention."""
-        self._make_tracker(mock_redis_client, task_id="abc-456")
+        tracker = await _make_tracker(fake_redis, task_id="abc-456")
+        await tracker.aclose()
 
-        call_args = mock_redis_client.set.call_args
-        assert call_args[0][0] == "ingestion:status:abc-456"
+        assert "ingestion:status:abc-456" in fake_redis.store
 
-    def test_get_status_returns_current_state(self, mock_redis_client: MagicMock):
+    async def test_get_status_returns_current_state(self, fake_redis):
         """get_status returns the latest in-memory state dict."""
-        tracker = self._make_tracker(mock_redis_client)
+        tracker = await _make_tracker(fake_redis)
 
         event = IngestionEvent(
             event_type="page_indexed",
@@ -184,6 +218,32 @@ class TestIngestionProgressTracker:
         assert state["pages_fetched"] == 1
         assert state["chunks_indexed"] == 5
         assert state["task_id"] == "test-task-123"
+        await tracker.aclose()
+
+
+async def test_progress_updates_during_ingest(fake_redis):
+    """P1-04: progress is flushed to Redis while ingestion is still running."""
+    tracker = await _make_tracker(fake_redis, flush_interval=0.02)
+    fake_redis.write_count = 0
+
+    for i in range(1, 6):
+        tracker.on_event(
+            IngestionEvent(
+                event_type="page_indexed",
+                source_name="Apache Spark Documentation",
+                message=f"Indexed page {i}",
+                url=f"https://spark.apache.org/docs/latest/page{i}.html",
+                chunks_indexed=10,
+                pages_fetched=i,
+            )
+        )
+
+    await asyncio.sleep(0.1)
+    assert fake_redis.write_count >= 1
+    doc = json.loads(fake_redis.store["ingestion:status:test-task-123"])
+    assert doc["pages_fetched"] == 5
+    assert doc["chunks_indexed"] == 50
+    await tracker.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -399,16 +459,3 @@ class TestIngestionStatusEndpoint:
 
         assert response.status_code == 200
         assert response.json()["status"] == "CANCELLED"
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def mock_redis_client() -> MagicMock:
-    """A MagicMock simulating a Redis client."""
-    client = MagicMock()
-    client.get.return_value = None
-    return client

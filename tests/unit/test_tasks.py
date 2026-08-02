@@ -49,7 +49,8 @@ class TestAsyncIngestTaskBehavior:
         async_ingest_task.run(["Test Source"], 10)
 
         mock_tracker_cls.assert_called_once()
-        mock_run_async.assert_called_once()
+        # run_async is called for the ingest coroutine and for tracker.aclose()
+        assert mock_run_async.call_count == 2
         mock_tracker.mark_completed.assert_called_once()
 
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
@@ -100,7 +101,7 @@ class TestAsyncIngestTaskBehavior:
 
     @patch("data_engineering_copilot.workers.tasks.IngestionProgressTracker")
     @patch("data_engineering_copilot.workers.tasks.run_async")
-    def test_heartbeat_is_stopped_after_success(self, mock_run_async, mock_tracker_cls):
+    def test_tracker_closed_after_success(self, mock_run_async, mock_tracker_cls):
         from data_engineering_copilot.workers.tasks import async_ingest_task
 
         mock_tracker = MagicMock()
@@ -108,7 +109,7 @@ class TestAsyncIngestTaskBehavior:
 
         async_ingest_task.run(["Test Source"], 10)
 
-        mock_tracker.clear_lease.assert_called_once()
+        mock_tracker.aclose.assert_called_once()
 
 
 class TestIngestInputValidation:
