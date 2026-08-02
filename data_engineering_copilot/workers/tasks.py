@@ -127,7 +127,7 @@ def execute_background_ingestion(urls: list[str]):
     return {"status": "INGESTION_COMPLETED", "processed_count": processed_count}
 
 
-def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int) -> None:
+def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int | None) -> None:
     """Validate task inputs that arrive from the Celery broker.
 
     The API route validates requests via Pydantic, but the broker is a separate
@@ -139,7 +139,7 @@ def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int) -> N
 
     class _IngestTaskInput(BaseModel):
         source_names: list[str] = Field(min_length=1, max_length=20)
-        max_pages: int = Field(default=0, ge=0, le=20000)
+        max_pages: int | None = Field(default=None, ge=0, le=20000)
 
     try:
         _IngestTaskInput(source_names=source_names or [], max_pages=max_pages)
@@ -154,7 +154,7 @@ def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int) -> N
     retry_kwargs={"max_retries": 3, "countdown": 10},
     retry_backoff=True,
 )
-def async_ingest_task(self, source_names: list[str], max_pages: int):
+def async_ingest_task(self, source_names: list[str], max_pages: int | None):
     """Production ingestion task using the full AsyncIngestionService pipeline.
 
     Progress is persisted to Redis via ``IngestionProgressTracker`` so that

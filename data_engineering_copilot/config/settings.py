@@ -287,6 +287,7 @@ class AppSettings(BaseSettings):
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_top_k: int = 5
     max_context_chars: int = 4000
+    max_expansion_queries: int = 2
     confidence_threshold: float = 0.18
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 180

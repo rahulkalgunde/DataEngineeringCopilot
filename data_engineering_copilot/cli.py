@@ -257,7 +257,7 @@ def reset_index() -> None:
     _recreate_qdrant_collection()
     _delete_bm25_cache()
 
-    # Clear crawl-related keys from Redis (URL registry + HTTP conditional-GET cache)
+    # Clear crawl-related and query-cache keys from Redis
     from data_engineering_copilot.workers.progress import get_redis_client
 
     try:
@@ -276,6 +276,10 @@ def reset_index() -> None:
         if non_registry:
             redis_client.delete(*non_registry)
             logger.info("Cleared %d crawl cache keys", len(non_registry))
+        rag_cache_keys = list(redis_client.scan_iter("rag:cache:*"))
+        if rag_cache_keys:
+            redis_client.delete(*rag_cache_keys)
+            logger.info("Cleared %d rag query cache keys", len(rag_cache_keys))
     except Exception:
         logger.debug("Could not clear crawl Redis keys (Redis may be unavailable)")
 

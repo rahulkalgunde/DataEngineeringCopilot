@@ -111,6 +111,7 @@ class RagConfig:
     reranker_model: str = "ms-marco-MiniLM-L-6-v2"
     reranker_top_k: int = 3
     max_context_chars: int = 4000
+    max_expansion_queries: int = 2
 
 
 @dataclass(frozen=True)

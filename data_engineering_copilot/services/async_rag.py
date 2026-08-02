@@ -132,7 +132,7 @@ class AsyncRagService:
                 all_queries.extend(rewritten.decomposed_steps)
                 effective_query = rewritten.decomposed_steps[0]
             # Multi-query expansion: generate additional variations
-            expanded = await self.query_rewriter.expand_queries(question, max_variations=2)
+            expanded = await self.query_rewriter.expand_queries(question, max_variations=self.config.max_expansion_queries)
             for q in expanded:
                 if q not in all_queries:
                     all_queries.append(q)
