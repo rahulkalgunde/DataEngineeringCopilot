@@ -139,13 +139,20 @@ class AsyncRagService:
         rewritten = None
         all_queries: list[str] = [question]  # Always include original
         effective_query = question
+
+        rewrite_span = None
+        if trace:
+            rewrite_span = trace.start_observation(name="query-rewriting", as_type="span")
+
         if self.query_rewriter is not None:
             rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
                 all_queries.extend(rewritten.decomposed_steps)
                 effective_query = rewritten.decomposed_steps[0]
             # Multi-query expansion: generate additional variations
-            expanded = await self.query_rewriter.expand_queries(question, max_variations=self.config.max_expansion_queries)
+            expanded = await self.query_rewriter.expand_queries(
+                question, max_variations=self.config.max_expansion_queries
+            )
             for q in expanded:
                 if q not in all_queries:
                     all_queries.append(q)
@@ -158,6 +165,18 @@ class AsyncRagService:
                 bool(rewritten.hyde_query),
                 question[:80],
             )
+
+            if rewrite_span:
+                rewrite_span.update(
+                    input=question,
+                    output={
+                        "intent": rewritten.intent,
+                        "decomposed_steps": len(rewritten.decomposed_steps),
+                        "expanded_queries": len(expanded),
+                        "hyde_query": bool(rewritten.hyde_query),
+                    },
+                )
+                rewrite_span.end()
 
         if on_step:
             on_step("Embedding query")
@@ -289,6 +308,11 @@ class AsyncRagService:
         try:
             if on_step:
                 on_step("Reranking results")
+
+            rerank_span = None
+            if trace:
+                rerank_span = trace.start_observation(name="reranking", as_type="span")
+
             if (
                 self.config.reranker_enabled
                 and self.reranker is not None
@@ -311,6 +335,13 @@ class AsyncRagService:
                 retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
                 logger.info("context_compressed chunks=%d", len(retrieved_chunks))
             _record_stage("rerank")
+
+            if rerank_span:
+                rerank_span.update(
+                    input=f"{len(retrieved_chunks)} chunks before reranking",
+                    output=f"{len(retrieved_chunks)} chunks after reranking",
+                )
+                rerank_span.end()
 
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
             context_str, source_names = assembler.assemble(
@@ -360,6 +391,26 @@ class AsyncRagService:
                         completion_tokens=usage.completion_tokens,
                         model=usage.model,
                     )
+
+                    # Also send token usage to Langfuse
+                    if self.telemetry and trace:
+                        try:
+                            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+                            if trace_id:
+                                # Update trace with token usage metadata
+                                trace.update(
+                                    metadata={
+                                        "token_usage": {
+                                            "prompt_tokens": usage.prompt_tokens,
+                                            "completion_tokens": usage.completion_tokens,
+                                            "total_tokens": usage.prompt_tokens + usage.completion_tokens,
+                                            "model": usage.model,
+                                        }
+                                    }
+                                )
+                                logger.debug("Langfuse token usage recorded for trace %s", trace_id)
+                        except Exception as exc:
+                            logger.warning("Failed to record Langfuse token usage: %s", exc)
 
             # Output guardrails: verify structure and quality
             from data_engineering_copilot.services.output_guardrails import OutputGuardrails
@@ -425,6 +476,11 @@ class AsyncRagService:
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
             groundedness_score = 1.0
+
+            groundedness_span = None
+            if trace:
+                groundedness_span = trace.start_observation(name="groundedness-verification", as_type="span")
+
             if self.groundedness_verifier is not None:
                 (
                     supported,
@@ -451,6 +507,41 @@ class AsyncRagService:
                         confidence=result.confidence,
                         groundedness_score=groundedness_score,
                     )
+
+                if groundedness_span:
+                    groundedness_span.update(
+                        input="Answer and retrieved chunks",
+                        output={
+                            "supported": supported,
+                            "unsupported_claims_count": len(unsupported_claims),
+                            "groundedness_score": groundedness_score,
+                        },
+                    )
+                    groundedness_span.end()
+
+            # Phase 2E: Langfuse scoring (confidence, groundedness)
+            if self.telemetry and trace:
+                try:
+                    # Get trace ID from the trace object
+                    trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+                    if trace_id:
+                        # Score confidence
+                        self.telemetry.score(
+                            trace_id=trace_id,
+                            name="confidence",
+                            value=result.confidence,
+                            data_type="NUMERIC",
+                        )
+                        # Score groundedness
+                        self.telemetry.score(
+                            trace_id=trace_id,
+                            name="groundedness",
+                            value=groundedness_score,
+                            data_type="NUMERIC",
+                        )
+                        logger.debug("Langfuse scores recorded for trace %s", trace_id)
+                except Exception as exc:
+                    logger.warning("Failed to record Langfuse scores: %s", exc)
 
             # Phase 2C: Cache the result (exact + semantic tiers)
             if self.cache is not None:

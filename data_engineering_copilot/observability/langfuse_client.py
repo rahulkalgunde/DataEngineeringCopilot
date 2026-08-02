@@ -51,6 +51,45 @@ class _ObservationCompat:
             span.end()
         return self
 
+    def score(self, name: str, value: float, data_type: str = "NUMERIC", **kwargs):
+        """Score this observation (trace, span, or generation)."""
+        if self._observation is None:
+            return self
+
+        # Try to use the native Langfuse score method if available
+        if hasattr(self._client._client, "score"):
+            try:
+                # For Langfuse v3, we need to create a score on the trace
+                if self.kind == "trace" or self.trace_id is not None:
+                    trace_id = self.trace_id or self.id
+                    self._client._client.score(
+                        trace_id=trace_id,
+                        name=name,
+                        value=value,
+                        data_type=data_type,
+                        **kwargs,
+                    )
+                else:
+                    # For spans/generations, we need to use the observation ID
+                    observation_id = self.id
+                    if observation_id:
+                        self._client._client.score(
+                            trace_id=self.trace_id,
+                            observation_id=observation_id,
+                            name=name,
+                            value=value,
+                            data_type=data_type,
+                            **kwargs,
+                        )
+            except Exception:
+                # Fallback to using the observation's score method if available
+                if hasattr(self._observation, "score"):
+                    self._observation.score(name=name, value=value, data_type=data_type, **kwargs)
+        elif hasattr(self._observation, "score"):
+            # Fallback to observation's score method
+            self._observation.score(name=name, value=value, data_type=data_type, **kwargs)
+        return self
+
     def start_observation(self, name: str, **kwargs):
         as_type = kwargs.pop("as_type", "span")
         child_kwargs = dict(kwargs)
@@ -130,6 +169,21 @@ class LangfuseCompat:
     def flush(self):
         if hasattr(self._client, "flush"):
             self._client.flush()
+
+    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs):
+        """Score a trace directly."""
+        if hasattr(self._client, "score"):
+            try:
+                self._client.score(
+                    trace_id=trace_id,
+                    name=name,
+                    value=value,
+                    data_type=data_type,
+                    **kwargs,
+                )
+            except Exception as exc:
+                logger.warning("Failed to score trace %s: %s", trace_id, exc)
+        return self
 
     def __getattr__(self, name):
         return getattr(self._client, name)
