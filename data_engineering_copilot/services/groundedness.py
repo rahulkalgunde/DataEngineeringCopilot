@@ -150,7 +150,10 @@ class GroundednessVerifier:
     def _fallback_tuple(self, answer_text: str, context_chunks: list[DocumentChunk]) -> tuple[bool, list[str]]:
         """Fallback: text-overlap heuristic returning ``(supported, unsupported_claims)``."""
         result = self.verify(answer_text, context_chunks)
-        return (result.overall_score >= self._groundedness_threshold, [a.claim for a in result.annotations if not a.supported])
+        return (
+            result.overall_score >= self._groundedness_threshold,
+            [a.claim for a in result.annotations if not a.supported],
+        )
 
     async def async_verify_with_score(
         self,

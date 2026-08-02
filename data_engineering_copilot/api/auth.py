@@ -66,9 +66,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         # Support comma-separated API_KEYS for multi-key auth
         raw_key = api_key or ""
-        self._valid_keys: set[str] = {
-            k.strip() for k in raw_key.split(",") if k.strip()
-        } if raw_key else set()
+        self._valid_keys: set[str] = {k.strip() for k in raw_key.split(",") if k.strip()} if raw_key else set()
         self._rbac_enabled = rbac_enabled
         self._rbac_map = _build_rbac_map(rbac_users_json) if rbac_enabled else {}
         if not self._valid_keys:
@@ -119,9 +117,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             if auth_header.startswith("Bearer "):
                 provided_key = auth_header[7:]
 
-        if not provided_key or not any(
-            hmac.compare_digest(provided_key, valid) for valid in self._valid_keys
-        ):
+        if not provided_key or not any(hmac.compare_digest(provided_key, valid) for valid in self._valid_keys):
             self._audit("auth_failed", request, provided_key)
             return JSONResponse(
                 status_code=401,
