@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from data_engineering_copilot.config.settings import AppSettings, DocumentationSource
 
 
 def _make_settings(**overrides):
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         max_pages_per_source=10,
         ingestion_batch_chunk_size=2,
         processing_concurrency=4,

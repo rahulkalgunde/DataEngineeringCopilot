@@ -8,6 +8,7 @@ embedding and storage.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -40,7 +41,7 @@ async def _chunk_fn(parsed):
 
 
 def _make_settings(**overrides) -> AppSettings:
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         processing_concurrency=4,
         ingestion_batch_chunk_size=256,
         parse_concurrency=2,

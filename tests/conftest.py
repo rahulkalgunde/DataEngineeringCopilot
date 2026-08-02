@@ -363,12 +363,15 @@ def make_settings(**overrides) -> "AppSettings":
         "groq_api_key": "",
         "cerebras_api_key": "",
         "gemini_api_key": "",
+        "api_key": "",
     }
     defaults.update(overrides)
 
     from data_engineering_copilot.config.settings import AppSettings
 
-    return AppSettings(**defaults)
+    settings = AppSettings(**defaults)
+    settings.validate_all()
+    return settings
 
 
 def _needed_infra(markers: set[str]) -> set[str]:
