@@ -203,7 +203,19 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
-        task = async_ingest_task.delay(effective_sources, request.max_pages)
+        # Propagate W3C trace context to Celery worker for distributed tracing
+        trace_headers = {}
+        try:
+            from data_engineering_copilot.observability.otel_telemetry import inject_w3c_context
+
+            inject_w3c_context(trace_headers)
+        except Exception:
+            pass
+
+        task = async_ingest_task.apply_async(
+            args=(effective_sources, request.max_pages),
+            headers=trace_headers,
+        )
 
         # Write an initial status so the polling endpoint has something to
         # return immediately, before the worker picks up the task.

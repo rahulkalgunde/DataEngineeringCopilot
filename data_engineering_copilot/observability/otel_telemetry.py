@@ -81,6 +81,21 @@ def extract_w3c_context(headers: dict[str, str] | None) -> Any:
         return None
 
 
+def inject_w3c_context(carrier: dict[str, str]) -> None:
+    """Inject W3C trace context into a carrier dict (e.g. Celery task headers).
+
+    No-op when telemetry is unavailable.
+    """
+    if _tracer is None:
+        return
+    try:
+        from opentelemetry.propagate import inject
+
+        inject(carrier)
+    except Exception:
+        pass
+
+
 class OTelTelemetryTracer:
     """OpenTelemetry-based tracer implementing TelemetryTracerProtocol."""
 

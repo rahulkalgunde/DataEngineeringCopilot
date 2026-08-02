@@ -784,7 +784,7 @@ def build_rag_service(
     embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
     from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
 
-    embedder = CachedEmbedder(embedder)
+    embedder = CachedEmbedder(embedder, redis_client=get_shared_redis_client(app_settings.redis_url))
     reranker = None
     if app_settings.reranker_enabled:
         reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)

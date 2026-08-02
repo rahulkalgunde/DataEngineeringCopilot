@@ -43,11 +43,19 @@ class TestApiKeyFromSettings:
 
         mw = _make_middleware(api_key="settings-key")
 
-        assert mw._api_key == "settings-key"
+        assert mw._valid_keys == {"settings-key"}
 
     def test_empty_api_key_disables_auth(self) -> None:
         mw = _make_middleware(api_key="")
-        assert mw._api_key == ""
+        assert mw._valid_keys == set()
+
+    def test_comma_separated_keys_supported(self) -> None:
+        mw = _make_middleware(api_key="key1,key2,key3")
+        assert mw._valid_keys == {"key1", "key2", "key3"}
+
+    def test_whitespace_trimmed_from_keys(self) -> None:
+        mw = _make_middleware(api_key=" key1 , key2 ")
+        assert mw._valid_keys == {"key1", "key2"}
 
 
 class TestUnmappedKeyRaisesAuthorizationError:
