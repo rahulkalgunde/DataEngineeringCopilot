@@ -166,11 +166,12 @@ class TestAsyncRagService:
 
     @pytest.mark.asyncio
     async def test_answer_returns_cached_on_hit(self, mock_embedder, mock_vector_store, mock_llm, config):
+        from data_engineering_copilot.domain.models import CachedAnswer
         from data_engineering_copilot.services.async_rag import AsyncRagService
         from data_engineering_copilot.services.query_cache import QueryCache
 
         cache = QueryCache(exact_enabled=True, semantic_enabled=False)
-        cache.set_exact("what is spark", "cached answer")
+        cache.set_exact("what is spark", CachedAnswer(text="cached answer", confidence=0.9))
 
         service = AsyncRagService(
             config=config,
@@ -184,6 +185,7 @@ class TestAsyncRagService:
 
         result = await service.answer("what is spark")
         assert result.text == "cached answer"
+        assert result.confidence == 0.9
 
     @pytest.mark.asyncio
     async def test_answer_caches_result_on_miss(self, mock_embedder, mock_vector_store, mock_llm, config):
@@ -207,7 +209,8 @@ class TestAsyncRagService:
         result = await service.answer("what is spark")
         assert result.text == "generated answer"
         cached = cache.get_exact("what is spark")
-        assert cached == "generated answer"
+        assert cached is not None
+        assert cached.text == "generated answer"
 
     @pytest.mark.asyncio
     async def test_answer_without_cache_still_works(self, mock_embedder, mock_vector_store, mock_llm, config):
@@ -412,6 +415,7 @@ class TestAsyncRagService:
         mock_telemetry = MagicMock()
         mock_trace = MagicMock()
         mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
 
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
         mock_llm.generate = AsyncMock(return_value="answer")
@@ -428,7 +432,7 @@ class TestAsyncRagService:
 
         await service.answer("what is spark")
         mock_telemetry.start_observation.assert_called()
-        mock_telemetry.flush.assert_called_once()
+        mock_telemetry.flush_async.assert_awaited_once()
 
     def test_select_llm_client_no_code_llm_returns_primary(self, config):
         service = self._make_service(config=config)
@@ -565,3 +569,132 @@ class TestAsyncRagService:
         await service.answer("show me spark code")
         assert code_llm.generate.called
         assert not mock_llm.generate.called
+
+    @pytest.mark.asyncio
+    async def test_hyde_embedding_reused_not_regenerated(self, mock_embedder, config):
+        """HyDE hypothesis is embedded once and reused across sub-queries, not re-generated per query."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        mock_qr = MagicMock()
+        rewritten = MagicMock()
+        rewritten.intent = "factual"
+        rewritten.decomposed_steps = ()
+        rewritten.hyde_query = "Spark SQL is a module for structured data."
+        mock_qr.async_rewrite = AsyncMock(return_value=rewritten)
+        mock_qr.expand_queries = AsyncMock(return_value=[])
+        mock_qr.hyde = AsyncMock()
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=mock_qr,
+        )
+
+        await service.answer("what is spark sql")
+
+        hyde_emb = [0.1] * 768
+        mock_embedder.embed_query.assert_any_call("Spark SQL is a module for structured data.")
+        for call in mock_vs.query.await_args_list:
+            assert call.args[0] == hyde_emb
+        mock_qr.hyde.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_service_close_is_idempotent(self, config):
+        """close() closes every closable component exactly once across repeated calls."""
+        from typing import cast
+
+        from data_engineering_copilot.domain.protocols import (
+            EmbedderProtocol,
+            LLMClientProtocol,
+            RerankerProtocol,
+            VectorStoreProtocol,
+        )
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache
+
+        class _Closable:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def close(self) -> None:
+                self.closed = True
+
+        class _AClosable:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        vector_store = _Closable()
+        llm = _Closable()
+        embedder = _Closable()
+        cache = _AClosable()
+        reranker = _Closable()
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=cast(VectorStoreProtocol, vector_store),
+            llm_client=cast(LLMClientProtocol, llm),
+            embedder=cast(EmbedderProtocol, embedder),
+            reranker=cast(RerankerProtocol, reranker),
+            cache=cast(QueryCache, cache),
+        )
+
+        await service.close()
+        await service.close()
+
+        assert vector_store.closed is True
+        assert llm.closed is True
+        assert embedder.closed is True
+        assert reranker.closed is True
+        assert cache.closed is True
+
+    @pytest.mark.asyncio
+    async def test_service_close_is_resilient_to_failing_component(self, config):
+        """close() keeps closing remaining components when one raises."""
+        from typing import cast
+
+        from data_engineering_copilot.domain.protocols import (
+            EmbedderProtocol,
+            LLMClientProtocol,
+            VectorStoreProtocol,
+        )
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        class _Closable:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def close(self) -> None:
+                self.closed = True
+
+        class _Exploding:
+            async def close(self) -> None:
+                raise RuntimeError("boom")
+
+        vector_store = _Exploding()
+        llm = _Closable()
+        embedder = _Closable()
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=cast(VectorStoreProtocol, vector_store),
+            llm_client=cast(LLMClientProtocol, llm),
+            embedder=cast(EmbedderProtocol, embedder),
+        )
+
+        await service.close()
+        assert llm.closed is True
+        assert embedder.closed is True

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
 
 
@@ -224,3 +226,50 @@ class TestRewrite:
         result = rw.rewrite("What is Spark SQL?")
         assert "Spark SQL" in result.hyde_query
         assert result.original_query == "What is Spark SQL?"
+
+
+class TestAsyncRewrite:
+    @pytest.mark.asyncio
+    async def test_async_rewrite_returns_rewritten_query(self):
+        class RecordingLLM:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "spark sql module structured data"
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=True)
+
+        result = await rw.async_rewrite("What is Spark SQL?")
+
+        assert result.original_query == "What is Spark SQL?"
+        assert result.intent == "factual"
+        assert result.decomposed_steps == ("spark sql module structured data",)
+        assert "spark sql" in result.hyde_query
+        assert len(llm.calls) == 2  # rewrite + hyde
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_disabled_returns_passthrough(self):
+        rw = QueryRewriter(llm_client=None, enabled=False, hyde_enabled=True)
+
+        result = await rw.async_rewrite("What is Spark?")
+
+        assert result.original_query == "What is Spark?"
+        assert result.intent == "factual"
+        assert result.hyde_query == ""
+        assert result.decomposed_steps == ("What is Spark?",)
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_falls_back_to_rule_based_on_llm_error(self):
+        class FailingLLM:
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                raise RuntimeError("LLM unavailable")
+
+        rw = QueryRewriter(llm_client=FailingLLM(), enabled=True, hyde_enabled=True)
+
+        result = await rw.async_rewrite("How to configure Delta Lake with Spark")
+
+        assert result.intent == "how_to"
+        assert result.original_query == "How to configure Delta Lake with Spark"

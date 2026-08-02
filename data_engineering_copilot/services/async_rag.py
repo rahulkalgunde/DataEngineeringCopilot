@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
-from data_engineering_copilot.domain.models import Answer, RagConfig
+from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig
 from data_engineering_copilot.domain.protocols import (
     EmbedderProtocol,
     LLMClientProtocol,
@@ -77,6 +77,7 @@ class AsyncRagService:
         question: str,
         on_step: Callable[[str], None] | None = None,
         source_filter: list[str] | None = None,
+        cache_scope: CacheScope | None = None,
     ) -> Answer:
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
@@ -84,18 +85,32 @@ class AsyncRagService:
         def _record_stage(name: str) -> None:
             _stage_times[name] = round((time.monotonic() - _t0) * 1000, 1)
 
+        query_emb_for_cache: list[float] | None = None
         if self.cache is not None:
-            query_emb_for_cache = None
-            with contextlib.suppress(Exception):
-                query_emb_for_cache = await self.embedder.embed_query(question)
-            cached = await self.cache.aget(question, query_embedding=query_emb_for_cache)
+            # Exact tier first — no embedding round-trip on an exact hit.
+            cached = await self.cache.aget(question, scope=cache_scope)
             if cached is not None:
                 logger.info("cache_hit question=%r", question[:80])
                 _record_stage("cache_lookup")
                 return Answer(
-                    text=cached,
-                    sources=tuple(),
-                    confidence=1.0,
+                    text=cached.text,
+                    sources=cached.sources,
+                    confidence=cached.confidence,
+                    groundedness_score=cached.groundedness_score,
+                    stage_times=_stage_times,
+                )
+            # Exact miss: only now pay the embedding cost for semantic lookup.
+            with contextlib.suppress(Exception):
+                query_emb_for_cache = await self.embedder.embed_query(question)
+            cached = await self.cache.aget(question, query_embedding=query_emb_for_cache, scope=cache_scope)
+            if cached is not None:
+                logger.info("cache_hit_semantic question=%r", question[:80])
+                _record_stage("cache_lookup")
+                return Answer(
+                    text=cached.text,
+                    sources=cached.sources,
+                    confidence=cached.confidence,
+                    groundedness_score=cached.groundedness_score,
                     stage_times=_stage_times,
                 )
 
@@ -154,6 +169,12 @@ class AsyncRagService:
             elif rewritten.intent == "code_example":
                 chunk_type_filter = "code"
 
+        # Embed the HyDE hypothesis once and reuse the vector across all sub-queries,
+        # instead of regenerating the hypothetical text via the LLM for every query.
+        hyde_emb = None
+        if self.query_rewriter is not None and rewritten is not None and rewritten.hyde_query:
+            hyde_emb = await self.embedder.embed_query(rewritten.hyde_query)
+
         # Retrieve with all query variations and merge results
         all_retrieved: list = []
         seen_ids: set[str] = set()
@@ -162,10 +183,7 @@ class AsyncRagService:
         try:
             for q in all_queries:
                 try:
-                    if self.query_rewriter is not None and rewritten is not None and rewritten.hyde_query:
-                        q_emb = await self.query_rewriter.hyde(q, self.embedder)
-                    else:
-                        q_emb = await self.embedder.embed_query(q)
+                    q_emb = hyde_emb if hyde_emb is not None else await self.embedder.embed_query(q)
                     results = await self.vector_store.query(
                         q_emb,
                         top_k=self.config.retrieval_top_k,
@@ -387,7 +405,10 @@ class AsyncRagService:
                 trace.end()
 
             if self.telemetry:
-                self.telemetry.flush()
+                try:
+                    await self.telemetry.flush_async()
+                except Exception:
+                    logger.warning("Telemetry flush failed, ignoring", exc_info=True)
 
             _record_stage("total")
             result = Answer(
@@ -428,9 +449,16 @@ class AsyncRagService:
 
             # Phase 2C: Cache the result (exact + semantic tiers)
             if self.cache is not None:
-                await self.cache.aset_exact(question, result.text)
+                envelope = CachedAnswer(
+                    text=result.text,
+                    sources=result.sources,
+                    confidence=result.confidence,
+                    groundedness_score=result.groundedness_score,
+                    cached_at=time.time(),
+                )
+                await self.cache.aset_exact(question, envelope, scope=cache_scope)
                 if query_emb_for_cache is not None:
-                    await self.cache.aset_semantic(question, query_emb_for_cache, result.text)
+                    await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)
 
             return result
         except LLMGenerationError:
@@ -473,10 +501,18 @@ class AsyncRagService:
         rewritten = None
         if self.query_rewriter is not None:
             yield _sse({"type": "status", "message": "Rewriting query"})
-            rewritten = await self.query_rewriter.rewrite(safe_question)
-            yield _sse({"type": "status", "message": f"Intent: {rewritten.intent}"})
+            try:
+                rewritten = await self.query_rewriter.async_rewrite(safe_question)
+            except Exception:
+                logger.warning("Query rewrite failed during streaming, using raw query", exc_info=True)
+                rewritten = None
+            if rewritten is not None:
+                yield _sse({"type": "status", "message": f"Intent: {rewritten.intent}"})
 
-        effective_query = rewritten.rewritten_query if rewritten else safe_question
+        if rewritten is not None and rewritten.decomposed_steps:
+            effective_query = rewritten.decomposed_steps[0]
+        else:
+            effective_query = safe_question
         intent = rewritten.intent if rewritten else "factual"
 
         # Retrieval
@@ -486,7 +522,7 @@ class AsyncRagService:
         except Exception as exc:
             raise RetrievalError(f"Embedding failed: {exc}") from exc
 
-        top_k = self.config.reranker_top_k if self.config.reranker_enabled else self.config.retrieval_top_k
+        top_k = self.config.retrieval_top_k
         retrieved_chunks = await self.vector_store.query(
             query_embedding=query_emb,
             top_k=top_k,
@@ -541,16 +577,23 @@ class AsyncRagService:
         if validated is not None:
             full_text = validated.answer
 
+        confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
+
         if self.cache is not None:
             try:
+                envelope = CachedAnswer(
+                    text=full_text,
+                    sources=tuple(c.chunk for c in retrieved_chunks),
+                    confidence=confidence,
+                    cached_at=time.time(),
+                )
+                await self.cache.aset_exact(safe_question, envelope)
                 query_emb_for_cache = await self.embedder.embed_query(effective_query)
-                await self.cache.aset_exact(question, full_text)
-                await self.cache.aset_semantic(question, query_emb_for_cache, full_text)
+                await self.cache.aset_semantic(safe_question, query_emb_for_cache, envelope)
             except Exception:
                 logger.warning("Cache write failed in stream", exc_info=True)
 
         # Done event with metadata
-        confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
         yield _sse({"type": "done", "text": full_text, "confidence": confidence})
 
     def _select_llm_client(self, intent: str) -> LLMClientProtocol:
@@ -596,7 +639,10 @@ class AsyncRagService:
             return answer_text
 
     async def close(self) -> None:
-        """Close all underlying clients and connection pools."""
+        """Close all underlying clients and connection pools. Idempotent."""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         components = [
             self.vector_store,
             self.llm_client,
@@ -610,7 +656,13 @@ class AsyncRagService:
             self.context_compressor,
         ]
         for component in components:
-            if component is None or not hasattr(component, "close"):
+            if component is None:
                 continue
             with contextlib.suppress(TypeError, AttributeError, Exception):
-                await component.close()
+                closer = None
+                if hasattr(component, "aclose"):
+                    closer = component.aclose
+                elif hasattr(component, "close"):
+                    closer = component.close
+                if closer is not None:
+                    await closer()
