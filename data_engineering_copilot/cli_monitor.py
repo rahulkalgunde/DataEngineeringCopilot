@@ -58,7 +58,7 @@ def render_dashboard(
 
     status = current.get("status", "UNKNOWN")
     icon = STATUS_ICONS.get(status, "[?]")
-    task_id = current.get("task_id", "N/A")[:8]
+    task_id = current.get("task_id", "N/A")
     elapsed = _fmt_elapsed(time.time() - first_poll_ts)
     sources = ", ".join(current.get("source_names", []))
 
