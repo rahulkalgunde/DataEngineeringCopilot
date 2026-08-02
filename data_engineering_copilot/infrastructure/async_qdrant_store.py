@@ -240,7 +240,9 @@ class AsyncQdrantVectorStore:
         # Build Qdrant filter for source names and chunk type
         query_filter = None
         filter_conditions = []
-        if source_filter:
+        if source_filter is not None:
+            if not source_filter:
+                raise VectorStoreError("source_filter must not be empty; use None for 'no filter'")
             filter_conditions.append(
                 models.FieldCondition(
                     key="source_name",

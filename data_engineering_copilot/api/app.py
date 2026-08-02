@@ -19,6 +19,7 @@ from data_engineering_copilot.api.middleware import (
     SecurityHeadersMiddleware,
 )
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.domain.exceptions import AuthorizationError
 from data_engineering_copilot.infrastructure.dep_check import check_deps
 
 from .routes import router
@@ -30,29 +31,31 @@ logger = logging.getLogger(__name__)
 async def _lifespan(app: FastAPI):
     global _deps_fingerprint_ok
     _deps_fingerprint_ok = check_deps(fail_fast=False)
-    yield
-    # Graceful shutdown: close the RAG service singleton so all connection
-    # pools (Qdrant, Redis, PostgreSQL, httpx, thread executors) are released.
     try:
-        from data_engineering_copilot.services.rag_service_singleton import (
-            get_rag_service_if_initialized,
-        )
+        yield
+    finally:
+        # Graceful shutdown: close the RAG service singleton so all connection
+        # pools (Qdrant, Redis, PostgreSQL, httpx, thread executors) are released.
+        try:
+            from data_engineering_copilot.services.rag_service_singleton import (
+                get_rag_service_if_initialized,
+            )
 
-        rag_service = get_rag_service_if_initialized()
-        if rag_service is not None:
-            await rag_service.close()
-    except Exception:
-        logger.warning("Failed to close RAG service during shutdown", exc_info=True)
+            rag_service = get_rag_service_if_initialized()
+            if rag_service is not None:
+                await rag_service.close()
+        except Exception:
+            logger.warning("Failed to close RAG service during shutdown", exc_info=True)
 
-    # Close the process-wide shared Redis client if it was created.
-    try:
-        from data_engineering_copilot.factory import get_shared_redis_client
+        # Close the process-wide shared Redis client if it was created.
+        try:
+            from data_engineering_copilot.factory import get_shared_redis_client
 
-        shared_redis = get_shared_redis_client()
-        if shared_redis is not None:
-            await shared_redis.aclose()
-    except Exception:
-        logger.warning("Failed to close shared Redis client during shutdown", exc_info=True)
+            shared_redis = get_shared_redis_client()
+            if shared_redis is not None:
+                await shared_redis.aclose()
+        except Exception:
+            logger.warning("Failed to close shared Redis client during shutdown", exc_info=True)
 
 
 app = FastAPI(
@@ -62,12 +65,20 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+
+@app.exception_handler(AuthorizationError)
+async def _authorization_error_handler(request, exc: AuthorizationError) -> JSONResponse:
+    """Map AuthorizationError to a 403 without leaking internal detail."""
+    return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+
 # Rate limiting middleware: per-route (60/min for /ask, 10/min for /ingest)
 app.add_middleware(RateLimitMiddleware)
 
 # API key authentication (no-op if API_KEY env var not set)
 app.add_middleware(
     ApiKeyAuthMiddleware,
+    api_key=settings.api_key.get_secret_value(),
     rbac_enabled=settings.rbac_enabled,
     rbac_users_json=settings.rbac_users_json,
 )

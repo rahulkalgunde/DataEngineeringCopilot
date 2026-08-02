@@ -102,6 +102,20 @@ async def test_query_success(mock_async_qdrant):
     assert results[0].distance == pytest.approx(0.2)
 
 
+async def test_empty_source_filter_rejected(mock_async_qdrant):
+    """An empty source_filter must raise, never silently mean 'all sources'."""
+    from data_engineering_copilot.domain.exceptions import VectorStoreError
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+
+    with pytest.raises(VectorStoreError):
+        await store.query([0.1] * 768, top_k=1, source_filter=[])
+
+    mock_async_qdrant.query_points.assert_not_called()
+
+
 async def _rrf_mock_response(mock_async_qdrant, score: float):
     mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
     mock_hit = MagicMock()

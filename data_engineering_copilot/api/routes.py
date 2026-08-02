@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.domain.models import CacheScope
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import (
     _LEASE_KEY_PREFIX,
@@ -43,23 +44,63 @@ async def _get_async_redis() -> aioredis.Redis:
     return _async_redis
 
 
-def _resolve_source_filter(request, client_filter: list[str] | None) -> list[str] | None:
-    """Apply RBAC source filtering if permissions are present.
+def _resolve_source_filter(
+    request,
+    client_filter: list[str] | None,
+    *,
+    rbac_enabled: bool = False,
+) -> list[str] | None:
+    """Apply RBAC source filtering, failing closed when RBAC is enabled.
 
-    Admin roles bypass the filter. Reader roles intersect the client filter
-    (if any) with the user's allowed sources.
+    - ``rbac_enabled=False``: pass the client filter through unchanged.
+    - ``rbac_enabled=True``: admin roles bypass; readers are restricted to
+      their ``allowed_sources``. Any of the following raises
+      ``AuthorizationError`` (HTTP 403) instead of silently widening scope:
+      - no ``UserPermissions`` resolved for the caller;
+      - a reader with an empty ``allowed_sources`` (they can see nothing);
+      - an empty intersection between the client filter and the reader's
+        allowed sources.
+    An empty filter is never returned to signal "all sources".
     """
+    from data_engineering_copilot.domain.exceptions import AuthorizationError
+
+    if not rbac_enabled:
+        return client_filter
+
     perms = getattr(getattr(request, "state", None), "user_permissions", None)
     if perms is None:
-        return client_filter
+        raise AuthorizationError("Caller has no resolved permissions for this RBAC-enabled endpoint")
     if perms.role == "admin":
         return client_filter  # admin sees everything
     if not perms.allowed_sources:
-        return client_filter  # empty = all sources
+        raise AuthorizationError("Caller has no permitted sources")
     if client_filter:
-        # Intersect: user can only see sources they're allowed AND the client requested
-        return [s for s in client_filter if s in perms.allowed_sources]
+        intersection = [s for s in client_filter if s in perms.allowed_sources]
+        if not intersection:
+            raise AuthorizationError("Requested sources are not permitted for this caller")
+        return intersection
     return list(perms.allowed_sources)
+
+
+def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
+    """Build the cache isolation scope for the current request.
+
+    Combines tenant context, role, the resolved source filter, and the active
+    embedding model / collection so cached answers are never served across
+    tenants or scopes.
+    """
+    from data_engineering_copilot.domain.models import CacheScope
+
+    perms = getattr(getattr(request, "state", None), "user_permissions", None)
+    tenant_id = request.headers.get("X-Tenant-ID", "default")
+    role = perms.role if perms is not None else "anonymous"
+    return CacheScope(
+        tenant_id=tenant_id,
+        role=role,
+        source_filter=tuple(source_filter or ()),
+        embedding_model=settings.embedding_model_name,
+        collection_name=settings.collection_name,
+    )
 
 
 async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict:
@@ -124,7 +165,9 @@ class TaskStatus(BaseModel):
 @router.post("/api/v1/ingest", response_model=TaskStatus)
 async def ingest_documents(request: IngestRequest, fastapi_request: Request):
     # RBAC: restrict ingest sources to the caller's allowed_sources
-    effective_sources = _resolve_source_filter(fastapi_request, request.source_names)
+    effective_sources = _resolve_source_filter(
+        fastapi_request, request.source_names, rbac_enabled=settings.rbac_enabled
+    )
     log.info(
         "ingest.dispatch",
         source_names=effective_sources,
@@ -300,11 +343,15 @@ async def ask(request: AskRequest, fastapi_request: Request):
 
     try:
         service = await get_rag_service()
-        effective_source_filter = _resolve_source_filter(fastapi_request, request.source_filter)
+        effective_source_filter = _resolve_source_filter(
+            fastapi_request, request.source_filter, rbac_enabled=settings.rbac_enabled
+        )
+        cache_scope = _build_cache_scope(fastapi_request, effective_source_filter)
         answer_obj = await asyncio.wait_for(
             service.answer(
                 request.question,
                 source_filter=effective_source_filter,
+                cache_scope=cache_scope,
             ),
             timeout=max(120.0, float(settings.ollama_timeout_seconds)),
         )
@@ -355,7 +402,9 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
 
     from data_engineering_copilot.services.rag_service_singleton import get_rag_service
 
-    effective_source_filter = _resolve_source_filter(fastapi_request, request.source_filter)
+    effective_source_filter = _resolve_source_filter(
+        fastapi_request, request.source_filter, rbac_enabled=settings.rbac_enabled
+    )
 
     async def event_stream():
         try:
