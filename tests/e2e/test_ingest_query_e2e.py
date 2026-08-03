@@ -100,6 +100,7 @@ class TestIngestQueryPipeline:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
+            assert parsed is not None
             chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
             chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
@@ -141,6 +142,7 @@ class TestIngestQueryPipeline:
             url = "https://spark.apache.org/docs/latest/"
             raw = RawDocument(source_name="test", url=url, html=SAMPLE_HTML)
             parsed = MarkdownParser().parse(raw)
+            assert parsed is not None
             content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
 
             chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
@@ -164,6 +166,7 @@ class TestIngestQueryPipeline:
             url = "https://spark.apache.org/docs/latest/"
             raw = RawDocument(source_name="test", url=url, html=SAMPLE_HTML)
             parsed = MarkdownParser().parse(raw)
+            assert parsed is not None
             chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
             chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
