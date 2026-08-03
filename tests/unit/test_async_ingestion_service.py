@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -356,7 +357,7 @@ class TestAsyncIngestionServiceIngest:
         mock_vector_store.get_content_hash_for_url.return_value = "sha256:somehash"
 
         original_hash = AsyncIngestionService._compute_content_hash
-        AsyncIngestionService._compute_content_hash = staticmethod(lambda text: "sha256:somehash")
+        AsyncIngestionService._compute_content_hash = cast(Any, staticmethod(lambda text: "sha256:somehash"))
 
         try:
             total = await service.ingest()
@@ -602,7 +603,7 @@ class TestFrontierStateTransitions:
         mock_crawler.crawl.return_value = _AsyncListIterator([raw])
 
         original_hash = AsyncIngestionService._compute_content_hash
-        AsyncIngestionService._compute_content_hash = staticmethod(lambda text: "sha256:somehash")
+        AsyncIngestionService._compute_content_hash = cast(Any, staticmethod(lambda text: "sha256:somehash"))
         try:
             total = await service.ingest()
             assert total == 0
@@ -643,7 +644,9 @@ class TestReactivation:
         await service.ingest()
 
         mock_crawler.frontier.reactivate_missing.assert_awaited()
-        call_kwargs = mock_crawler.frontier.reactivate_missing.await_args.kwargs
+        await_args = mock_crawler.frontier.reactivate_missing.await_args
+        assert await_args is not None
+        call_kwargs = await_args.kwargs
         assert call_kwargs.get("max_attempts") == mock_settings.frontier_max_attempts
 
     @pytest.mark.asyncio

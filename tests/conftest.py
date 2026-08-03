@@ -551,8 +551,8 @@ def chunker(integration_settings):
     from data_engineering_copilot.services.chunker import DocumentChunker
 
     return DocumentChunker(
-        chunk_size_words=integration_settings.chunk_size_words,
-        overlap_words=integration_settings.chunk_overlap_words,
+        chunk_size_chars=integration_settings.chunk_size_words * 5,
+        chunk_overlap_chars=integration_settings.chunk_overlap_words * 5,
     )
 
 

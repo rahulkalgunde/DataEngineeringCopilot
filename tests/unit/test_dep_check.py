@@ -94,6 +94,7 @@ class TestDepsDetail:
         assert result.in_container is True
         assert result.baked_hash == "stale-hash"
         assert result.live_hash is not None
+        assert result.message is not None
         assert "STALE" in result.message
 
 

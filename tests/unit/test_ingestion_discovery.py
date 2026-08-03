@@ -33,13 +33,15 @@ class TestGetLatestTaskId:
         assert result == "abc-123"
 
     def test_returns_none_on_404(self):
+        from email.message import Message
+
         from data_engineering_copilot.ui.streamlit_app import _get_latest_task_id
 
         exc = urllib.error.HTTPError(
             url="http://localhost:8000/api/v1/ingest/latest",
             code=404,
             msg="Not Found",
-            hdrs=None,
+            hdrs=Message(),
             fp=MagicMock(),
         )
         with patch("data_engineering_copilot.ui.streamlit_app.urllib.request.urlopen", side_effect=exc):
@@ -67,13 +69,15 @@ class TestGetLatestTaskId:
         assert result is None
 
     def test_returns_none_on_500(self):
+        from email.message import Message
+
         from data_engineering_copilot.ui.streamlit_app import _get_latest_task_id
 
         exc = urllib.error.HTTPError(
             url="http://localhost:8000/api/v1/ingest/latest",
             code=500,
             msg="Internal Server Error",
-            hdrs=None,
+            hdrs=Message(),
             fp=MagicMock(),
         )
         with patch("data_engineering_copilot.ui.streamlit_app.urllib.request.urlopen", side_effect=exc):
