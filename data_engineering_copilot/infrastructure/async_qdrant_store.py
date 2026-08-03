@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Self
+from typing import Self, cast
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -79,6 +79,8 @@ class AsyncQdrantVectorStore:
 
         Must be called after construction and before first use.
         """
+        if self._client is None:
+            raise VectorStoreError("Qdrant client not initialized.")
         if not await self._client.collection_exists(self._collection_name):
             if self._hybrid_search:
                 vectors_config = {
@@ -107,7 +109,7 @@ class AsyncQdrantVectorStore:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
                 field_name="url",
-                field_schema="keyword",
+                field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception:
             logger.info("Payload index on 'url' already exists or could not be created.", exc_info=True)
@@ -115,7 +117,7 @@ class AsyncQdrantVectorStore:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
                 field_name="source_name",
-                field_schema="keyword",
+                field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception:
             logger.info("Payload index on 'source_name' already exists or could not be created.", exc_info=True)
@@ -123,7 +125,7 @@ class AsyncQdrantVectorStore:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
                 field_name="chunk_type",
-                field_schema="keyword",
+                field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception:
             logger.info("Payload index on 'chunk_type' already exists or could not be created.", exc_info=True)
@@ -131,7 +133,7 @@ class AsyncQdrantVectorStore:
             await self._client.create_payload_index(
                 collection_name=self._collection_name,
                 field_name="section_header",
-                field_schema="keyword",
+                field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception:
             logger.info("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
@@ -161,7 +163,7 @@ class AsyncQdrantVectorStore:
     async def upsert_chunks(
         self,
         chunks: Iterable[DocumentChunk],
-        embeddings: Iterable[Iterable[float]],
+        vectors: Iterable[list[float]],
         _sub_batch_size: int = 256,
     ) -> None:
         """Insert or update a batch of chunks asynchronously.
@@ -173,13 +175,13 @@ class AsyncQdrantVectorStore:
             logger.warning("Qdrant client not initialized. Cannot upsert chunks.")
             return
         chunks_list = list(chunks)
-        embeddings_list = list(embeddings)
+        vectors_list = list(vectors)
         if not chunks_list:
             return
 
         for i in range(0, len(chunks_list), _sub_batch_size):
             sub_chunks = chunks_list[i : i + _sub_batch_size]
-            sub_embeddings = embeddings_list[i : i + _sub_batch_size]
+            sub_embeddings = vectors_list[i : i + _sub_batch_size]
             try:
                 ids = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in sub_chunks]
                 vectors = [list(e) for e in sub_embeddings]
@@ -193,7 +195,7 @@ class AsyncQdrantVectorStore:
 
                 await self._client.upsert(
                     collection_name=self._collection_name,
-                    points=models.Batch(ids=ids, vectors=vectors_dict, payloads=payloads),
+                    points=models.Batch(ids=[str(i) for i in ids], vectors=vectors_dict, payloads=payloads),  # type: ignore[arg-type]  # qdrant ExtendedPointId union incompatible with pydantic-v1 models
                 )
             except Exception as exc:
                 logger.exception(
@@ -269,6 +271,7 @@ class AsyncQdrantVectorStore:
             )
 
             if use_hybrid:
+                assert self._bm25 is not None
                 sparse = self._last_query_sparse
                 if sparse is None and query_text is not None:
                     sparse = self._bm25.tokenize_query(query_text)
@@ -305,13 +308,13 @@ class AsyncQdrantVectorStore:
                 if query_filter is not None:
                     query_kwargs["query_filter"] = query_filter
 
-            results = await self._client.query_points(**query_kwargs)
+            raw_results = await self._client.query_points(**query_kwargs)
             retrieved: list[RetrievedChunk] = []
-            points_list = results.points if hasattr(results, "points") else results
+            points_list = cast(list[models.ScoredPoint], getattr(raw_results, "points", raw_results))
             for hit in points_list:
                 payload = hit.payload or {}
                 chunk = DocumentChunk(
-                    chunk_id=hit.id,
+                    chunk_id=str(hit.id),
                     source_name=payload.get("source_name", ""),
                     title=payload.get("title", ""),
                     url=payload.get("url", ""),
@@ -448,7 +451,7 @@ class AsyncQdrantVectorStore:
             return 0
         try:
             collection_info = await self._client.get_collection(collection_name=self._collection_name)
-            return collection_info.points_count
+            return collection_info.points_count or 0
         except Exception as exc:
             logger.exception("Failed to get async Qdrant collection count: %s", exc)
             raise
