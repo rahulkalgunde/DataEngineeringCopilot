@@ -84,7 +84,7 @@ class TestProtocolStructure:
         assert hasattr(ParserProtocol, "parse")
         hints = typing.get_type_hints(ParserProtocol.parse)
         assert "raw" in hints
-        assert hints["return"] == ParsedDocument
+        assert hints["return"] == ParsedDocument | None
 
     def test_chunker_protocol_has_chunk_method(self):
         assert hasattr(ChunkerProtocol, "chunk")
