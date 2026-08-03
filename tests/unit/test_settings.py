@@ -65,7 +65,7 @@ def test_code_llm_defaults_empty() -> None:
     settings = make_settings()
     assert settings.code_llm_provider == ""
     assert settings.code_llm_model == ""
-    assert settings.nvidia_rpm_limit == 40
+    assert settings.nvidia_rpm_limit == 36
     assert settings.nvidia_base_url == "https://integrate.api.nvidia.com/v1"
 
 
@@ -106,7 +106,7 @@ def test_get_embedding_dimension_unknown_model() -> None:
 
 def test_nvidia_nim_rpd_limit_default() -> None:
     settings = make_settings()
-    assert settings.nvidia_rpd_limit == 1000
+    assert settings.nvidia_rpd_limit == 10000
 
 
 def test_embedding_provider_nvidia_missing_api_key_raises() -> None:

@@ -143,7 +143,7 @@ class TestApiRoutesLogging:
     @patch("data_engineering_copilot.api.routes.async_ingest_task")
     def test_ingest_dispatch_logged(self, mock_task, mock_redis, caplog):
         """POST /api/v1/ingest should log the dispatch event."""
-        mock_task.delay.return_value = MagicMock(id="task-123", state="PENDING")
+        mock_task.apply_async.return_value = MagicMock(id="task-123", state="PENDING")
         mock_redis.return_value = AsyncMock()
 
         from fastapi.testclient import TestClient

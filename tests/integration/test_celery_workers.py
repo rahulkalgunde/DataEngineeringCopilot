@@ -25,7 +25,7 @@ class TestIngestionStatusRedis:
         mock_task.id = "test-structure-001"
         mock_task.state = "PENDING"
 
-        with patch("data_engineering_copilot.api.routes.async_ingest_task.delay", return_value=mock_task):
+        with patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async", return_value=mock_task):
             client = TestClient(app)
             resp = client.post("/api/v1/ingest", json={"source_names": ["Test"], "max_pages": 5})
             assert resp.status_code == 200
@@ -46,13 +46,20 @@ class TestIngestionStatusRedis:
 
         task_ids = iter(["task-seq-001", "task-seq-002"])
 
-        def delay(*args, **kwargs):
+        def dispatch(*args, **kwargs):
             mock = MagicMock()
             mock.id = next(task_ids)
             mock.state = "PENDING"
             return mock
 
-        with patch("data_engineering_copilot.api.routes.async_ingest_task.delay", side_effect=delay):
+        with (
+            patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async", side_effect=dispatch),
+            patch("data_engineering_copilot.api.routes.AsyncResult") as mock_ar,
+        ):
+            mock_celery = MagicMock()
+            mock_celery.state = "SUCCESS"
+            mock_ar.return_value = mock_celery
+
             client = TestClient(app)
             resp1 = client.post("/api/v1/ingest", json={"source_names": ["Spark"]})
             assert resp1.status_code == 200

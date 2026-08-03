@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import pathlib
+from contextlib import suppress
 
 import pytest
 
@@ -161,20 +162,34 @@ def routes_async_redis(redis_url):
 
     Routes now use the async redis API; the sync ``fresh_redis_client`` is
     only used to seed/assert state. Both point at the same Redis instance.
+
+    A fresh client is created lazily per event loop. The sync TestClient
+    spins up a new loop for every request, so a single shared client would be
+    used across loops and fail with "Future attached to a different loop".
     """
+    import asyncio
+
     import redis.asyncio as aioredis
 
     import data_engineering_copilot.api.routes as routes_mod
 
-    async_client = aioredis.from_url(redis_url, decode_responses=True)
+    clients_by_loop: dict[int, aioredis.Redis] = {}
     original_fn = routes_mod._get_async_redis
 
     async def _fake_get_async_redis():
-        return async_client
+        loop_id = id(asyncio.get_running_loop())
+        client = clients_by_loop.get(loop_id)
+        if client is None:
+            client = aioredis.from_url(redis_url, decode_responses=True)
+            clients_by_loop[loop_id] = client
+        return client
 
     routes_mod._get_async_redis = _fake_get_async_redis
-    yield async_client
+    yield
     routes_mod._get_async_redis = original_fn
+    for client in clients_by_loop.values():
+        with suppress(Exception):
+            asyncio.run(client.aclose())
 
 
 # ---------------------------------------------------------------------------
