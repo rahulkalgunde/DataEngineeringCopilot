@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from data_engineering_copilot.domain.models import Answer, DocumentChunk, RetrievedChunk
+from data_engineering_copilot.domain.protocols import LLMClientProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class GroundednessVerifier:
 
     def __init__(
         self,
-        llm_client: object | None,
+        llm_client: LLMClientProtocol | None,
         enabled: bool = True,
         min_support_score: float = 0.3,
         groundedness_threshold: float = 0.6,

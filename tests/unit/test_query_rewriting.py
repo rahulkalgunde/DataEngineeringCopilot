@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import Any
+
 import pytest
 
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
+
+
+class _LLMStubBase:
+    def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+        raise NotImplementedError
+
+    @property
+    def last_usage(self) -> Any:
+        return None
 
 
 class TestIntentClassification:
@@ -122,7 +134,7 @@ class TestHybridIntentClassification:
         assert result == "factual"
 
     def test_llm_fallback_success(self):
-        class FakeLLM:
+        class FakeLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 return '{"intent": "code_example"}'
 
@@ -131,7 +143,7 @@ class TestHybridIntentClassification:
         assert result == "code_example"
 
     def test_llm_fallback_failure_returns_factual(self):
-        class FailingLLM:
+        class FailingLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 raise RuntimeError("LLM unavailable")
 
@@ -140,7 +152,7 @@ class TestHybridIntentClassification:
         assert result == "factual"
 
     def test_llm_fallback_invalid_json_returns_factual(self):
-        class FakeLLM:
+        class FakeLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 return "not valid json"
 
@@ -149,7 +161,7 @@ class TestHybridIntentClassification:
         assert result == "factual"
 
     def test_llm_fallback_invalid_intent_returns_factual(self):
-        class FakeLLM:
+        class FakeLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 return '{"intent": "unknown_intent"}'
 
@@ -160,7 +172,7 @@ class TestHybridIntentClassification:
     def test_regex_fast_path_takes_priority(self):
         """Regex match should take priority over LLM fallback."""
 
-        class FakeLLM:
+        class FakeLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 return '{"intent": "factual"}'  # LLM would say factual
 
@@ -218,7 +230,7 @@ class TestRewrite:
         assert result.hyde_query == ""
 
     def test_hyde_enabled_with_client(self):
-        class FakeLLM:
+        class FakeLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 return "Spark SQL is a module for structured data."
 
@@ -231,7 +243,7 @@ class TestRewrite:
 class TestAsyncRewrite:
     @pytest.mark.asyncio
     async def test_async_rewrite_returns_rewritten_query(self):
-        class RecordingLLM:
+        class RecordingLLM(_LLMStubBase):
             def __init__(self) -> None:
                 self.calls: list[str] = []
 
@@ -263,7 +275,7 @@ class TestAsyncRewrite:
 
     @pytest.mark.asyncio
     async def test_async_rewrite_falls_back_to_rule_based_on_llm_error(self):
-        class FailingLLM:
+        class FailingLLM(_LLMStubBase):
             async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
                 raise RuntimeError("LLM unavailable")
 

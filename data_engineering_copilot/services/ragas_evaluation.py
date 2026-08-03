@@ -7,7 +7,9 @@ Metrics: context_recall, context_precision, faithfulness, answer_relevancy.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +31,16 @@ class RagasEvaluator:
     """
 
     def __init__(self) -> None:
-        self._evaluate = None
-        self._metrics = None
-        self._dataset_class = None
+        self._evaluate: Callable[..., Any] | None = None
+        self._metrics: list[Any] | None = None
+        self._dataset_class: Any = None
 
     def _lazy_init(self) -> bool:
         if self._evaluate is not None:
             return True
         try:
-            from ragas import evaluate
-            from ragas.metrics import (
+            from ragas import evaluate  # type: ignore[import-not-found]  # lazy optional dep
+            from ragas.metrics import (  # type: ignore[import-not-found]  # lazy optional dep
                 answer_relevancy,
                 context_precision,
                 context_recall,
@@ -71,7 +73,7 @@ class RagasEvaluator:
         if not self._lazy_init():
             return None
 
-        from datasets import Dataset
+        from datasets import Dataset  # type: ignore[import-not-found]  # lazy optional dep
 
         data: dict[str, list] = {
             "question": questions,
@@ -82,7 +84,9 @@ class RagasEvaluator:
             data["ground_truth"] = ground_truth
 
         dataset = Dataset.from_dict(data)
-        result = self._evaluate(dataset=dataset, metrics=self._metrics)
+        evaluate_fn = self._evaluate
+        assert evaluate_fn is not None
+        result = evaluate_fn(dataset=dataset, metrics=self._metrics)
 
         # RAGAS returns a dict-like; extract scores with safe defaults
         recall = float(result.get("context_recall", 0))

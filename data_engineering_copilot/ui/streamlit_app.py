@@ -1186,7 +1186,7 @@ def render_metrics_tab() -> None:
     if queries_with_answers:
         length_data = {
             "query_idx": list(range(1, len(queries_with_answers) + 1)),
-            "words": [q.answer_metrics.answer_length for q in queries_with_answers],
+            "words": [am.answer_length for q in queries_with_answers if (am := q.answer_metrics) is not None],
         }
         st.bar_chart(length_data, x="query_idx", y="words", height=200)
         st.caption("Answer length in words per query (in chronological order)")

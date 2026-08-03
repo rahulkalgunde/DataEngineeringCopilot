@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import re
 import time
 
 import numpy as np
 import redis.exceptions
+import structlog
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class RedisQueryCache:
@@ -62,9 +62,11 @@ class RedisQueryCache:
         try:
             key = self._exact_key(query)
             cached = await self._redis.get(key)
+            if isinstance(cached, bytes):
+                cached = cached.decode("utf-8")
             return cached if cached else None
         except redis.exceptions.RedisError as exc:
-            logger.warning(
+            log.warning(
                 "RedisQueryCache.get_exact failed",
                 error_type=type(exc).__name__,
                 error=str(exc),
@@ -76,7 +78,7 @@ class RedisQueryCache:
             key = self._exact_key(query)
             await self._redis.setex(key, self._exact_ttl, answer)
         except redis.exceptions.RedisError as exc:
-            logger.warning(
+            log.warning(
                 "RedisQueryCache.set_exact failed",
                 error_type=type(exc).__name__,
                 error=str(exc),
@@ -99,6 +101,8 @@ class RedisQueryCache:
                     data = await self._redis.hgetall(key)
                     if "embedding" not in data or "answer" not in data:
                         continue
+                    if isinstance(data["answer"], bytes):
+                        data["answer"] = data["answer"].decode("utf-8")
                     stored_vec = np.array(json.loads(data["embedding"]), dtype=np.float32)
                     stored_norm = np.linalg.norm(stored_vec)
                     if stored_norm == 0:
@@ -114,7 +118,7 @@ class RedisQueryCache:
                 return best_answer
             return None
         except redis.exceptions.RedisError as exc:
-            logger.warning(
+            log.warning(
                 "RedisQueryCache.get_semantic failed",
                 error_type=type(exc).__name__,
                 error=str(exc),
@@ -139,7 +143,7 @@ class RedisQueryCache:
             )
             await self._redis.expire(key, self._semantic_ttl)
         except redis.exceptions.RedisError as exc:
-            logger.warning(
+            log.warning(
                 "RedisQueryCache.set_semantic failed",
                 error_type=type(exc).__name__,
                 error=str(exc),
