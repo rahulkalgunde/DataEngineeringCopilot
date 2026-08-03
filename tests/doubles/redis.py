@@ -7,7 +7,9 @@ components can be tested offline.  Keys and fields are normalized to ``str``.
 
 from __future__ import annotations
 
-_Command = tuple[str, tuple[str | bytes, ...]]
+from typing import cast
+
+_Command = tuple[str, tuple[object, ...]]
 
 
 class _StubPipeline:
@@ -23,15 +25,27 @@ class _StubPipeline:
         self._commands.append(("hset", (key, field, value)))
         return self
 
+    def expire(self, key: str | bytes, time: int) -> _StubPipeline:
+        self._commands.append(("expire", (key, time)))
+        return self
+
     async def execute(self) -> list[bytes | None | int]:
         results: list[bytes | None | int] = []
         for cmd, args in self._commands:
             if cmd == "hget":
-                key, field = args
+                key = cast("str | bytes", args[0])
+                field = cast("str | bytes", args[1])
                 results.append(self._store.hget_sync(key, field))
             elif cmd == "hset":
-                key, field, value = args
+                key = cast("str | bytes", args[0])
+                field = cast("str | bytes", args[1])
+                value = cast("str | bytes", args[2])
                 self._store.hset_sync(key, field, value)
+                results.append(1)
+            elif cmd == "expire":
+                key = cast("str | bytes", args[0])
+                ttl = cast(int, args[1])
+                self._store.expire_sync(key, ttl)
                 results.append(1)
         return results
 
@@ -41,6 +55,7 @@ class _StubRedis:
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, bytes]] = {}
+        self._ttls: dict[str, int] = {}
 
     @staticmethod
     def _norm(value: str | bytes) -> str:
@@ -54,11 +69,19 @@ class _StubRedis:
             value.encode("utf-8") if isinstance(value, str) else value
         )
 
+    def expire_sync(self, key: str | bytes, ttl: int) -> None:
+        """No-op TTL tracking (in-memory store has no expiry)."""
+        self._ttls[self._norm(key)] = ttl
+
     async def hget(self, key: str | bytes, field: str | bytes) -> bytes | None:
         return self.hget_sync(key, field)
 
     async def hset(self, key: str | bytes, field: str | bytes, value: str | bytes) -> None:
         self.hset_sync(key, field, value)
+
+    async def expire(self, key: str | bytes, time: int) -> bool:
+        self.expire_sync(key, time)
+        return True
 
     async def delete(self, *keys: str | bytes) -> int:
         removed = 0

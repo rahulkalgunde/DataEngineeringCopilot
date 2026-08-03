@@ -68,7 +68,7 @@ class TestCrossEncoderReranker:
 
             reranker = CrossEncoderReranker()
 
-            assert reranker.model_name == "cross-encoder/qnli-distilroberta-base"
+            assert reranker.model_name == "cross-encoder/ms-marco-MiniLM-L-6-v2"
             assert reranker.model is None
 
             asyncio.run(reranker.initialize())

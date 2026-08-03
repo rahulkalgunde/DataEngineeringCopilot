@@ -357,7 +357,9 @@ class TestChunkIDGeneration:
     """Tests for chunk ID generation."""
 
     async def test_chunk_id_format_includes_semantic_marker(self):
-        """Test that semantic chunk IDs include 'semantic' marker."""
+        """Test that semantic chunk IDs are deterministic UUID v5 values."""
+        import uuid
+
         model = MockEmbeddingModel()
         chunker = SemanticChunker(
             chunk_size_words=100,
@@ -376,7 +378,10 @@ class TestChunkIDGeneration:
 
         document_chunks = await chunker.chunk(document)
         for chunk in document_chunks:
-            assert "semantic" in chunk.chunk_id
+            parsed = uuid.UUID(chunk.chunk_id)
+            assert parsed.version == 5
+            # UUID is the sole component of chunk_id, so no separator is present
+            assert "semantic" not in chunk.chunk_id
 
 
 class TestEdgeCases:
@@ -582,4 +587,5 @@ class TestIntegration:
             assert chunk.source_name == "Apache Spark Documentation"
             assert chunk.title == "Spark SQL"
             assert chunk.url == document.url
-            assert "semantic" in chunk.chunk_id
+            assert chunk.chunk_index >= 0
+            assert chunk.total_chunks == len(chunks)

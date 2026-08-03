@@ -1,6 +1,6 @@
 """Tests for AsyncDocumentationCrawler.
 
-Uses aresponses for transport-level aiohttp mocking and AsyncMock for
+Uses respx for transport-level httpx mocking and AsyncMock for
 internal method testing.
 """
 
@@ -10,6 +10,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import respx
+from httpx import Response
 
 from data_engineering_copilot.config.settings import DocumentationSource
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
@@ -43,13 +45,11 @@ def _make_source():
     )
 
 
-def _make_context_response(**attrs):
-    """Create a mock that works as `async with session.get(...) as resp:`."""
-    resp = AsyncMock()
+def _make_httpx_response(**attrs) -> MagicMock:
+    """Create a mock httpx.Response-like object with the given attributes."""
+    resp = MagicMock(spec=Response)
     for k, v in attrs.items():
         setattr(resp, k, v)
-    resp.__aenter__ = AsyncMock(return_value=resp)
-    resp.__aexit__ = AsyncMock(return_value=False)
     return resp
 
 
@@ -87,23 +87,16 @@ class TestAlwaysGet:
         assert not hasattr(crawler, "_phase1_head")
 
     @pytest.mark.asyncio
-    async def test_fetches_page_with_cached_headers(self, crawler, mock_frontier, mock_cache, aresponses):
+    @respx.mock
+    async def test_fetches_page_with_cached_headers(self, crawler, mock_frontier, mock_cache):
         """Even when cache headers exist, the page is fetched (never skipped on 304)."""
-        aresponses.add(
-            "example.com",
-            "/sitemap.xml",
-            "GET",
-            aresponses.Response(status=404, text="Not Found"),
-        )
-        aresponses.add(
-            "example.com",
-            "/",
-            "GET",
-            aresponses.Response(
-                status=200,
+        respx.get("https://example.com/sitemap.xml").mock(return_value=Response(404, text="Not Found"))
+        respx.get("https://example.com/").mock(
+            return_value=Response(
+                200,
                 headers={"Content-Type": "text/html", "ETag": '"v1"'},
                 text="<html><body><p>Hello world</p></body></html>",
-            ),
+            )
         )
 
         mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])
@@ -142,15 +135,13 @@ class TestPhase2Get:
         record = _make_record()
         mock_cache.set_headers = AsyncMock()
 
-        mock_resp = _make_context_response(
-            status=200,
+        mock_resp = _make_httpx_response(
+            status_code=200,
             headers={"Content-Type": "text/html", "ETag": '"v1"'},
-        )
-        mock_resp.text = AsyncMock(
-            return_value="<html><body>Hello world test content enough words here to pass the check easily.</body></html>"
+            text="<html><body>Hello world test content enough words here to pass the check easily.</body></html>",
         )
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
 
         result = await crawler._phase2_get(mock_session, record)
         assert result is not None
@@ -162,12 +153,13 @@ class TestPhase2Get:
     async def test_get_non_html_skips(self, crawler, mock_frontier, mock_cache):
         record = _make_record()
 
-        mock_resp = _make_context_response(
-            status=200,
+        mock_resp = _make_httpx_response(
+            status_code=200,
             headers={"Content-Type": "application/json"},
+            text="{}",
         )
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
 
         result = await crawler._phase2_get(mock_session, record)
         assert result is None
@@ -177,13 +169,13 @@ class TestPhase2Get:
         record = _make_record()
         mock_cache.set_headers = AsyncMock()
 
-        mock_resp = _make_context_response(
-            status=200,
+        mock_resp = _make_httpx_response(
+            status_code=200,
             headers={"Content-Type": "text/plain"},
+            text="Some plain text content here for RST document processing pipeline.",
         )
-        mock_resp.text = AsyncMock(return_value="Some plain text content here for RST document processing pipeline.")
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
 
         result = await crawler._phase2_get(mock_session, record)
         assert result is not None
@@ -194,12 +186,13 @@ class TestPhase2Get:
     async def test_get_http_error_returns_none(self, crawler, mock_frontier, mock_cache):
         record = _make_record()
 
-        mock_resp = _make_context_response(
-            status=500,
+        mock_resp = _make_httpx_response(
+            status_code=500,
             headers={"Content-Type": "text/html"},
+            text="error",
         )
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
 
         html = await crawler._phase2_get(mock_session, record)
         assert html is None
@@ -210,14 +203,14 @@ class TestPhase2Get:
         record = _make_record()
         mock_cache.set_headers = AsyncMock()
 
-        mock_resp = _make_context_response(
-            status=200,
+        mock_resp = _make_httpx_response(
+            status_code=200,
             headers={"Content-Type": "text/html", "ETag": '"v1"'},
+            text="<html><body>Success after retry.</body></html>",
         )
-        mock_resp.text = AsyncMock(return_value="<html><body>Success after retry.</body></html>")
 
         mock_session = MagicMock()
-        mock_session.get = MagicMock(side_effect=[Exception("timeout"), mock_resp])
+        mock_session.get = AsyncMock(side_effect=[Exception("timeout"), mock_resp])
 
         result = await crawler._phase2_get(mock_session, record)
         assert result is not None
@@ -225,6 +218,30 @@ class TestPhase2Get:
         assert "Success after retry" in html
         assert content_type == "text/html"
         assert mock_session.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_redirect_followed_manually(self, crawler, mock_frontier, mock_cache):
+        record = _make_record()
+        mock_cache.set_headers = AsyncMock()
+
+        redirect_resp = _make_httpx_response(
+            status_code=301,
+            headers={"Location": "https://example.com/final", "Content-Type": "text/html"},
+            text="",
+        )
+        final_resp = _make_httpx_response(
+            status_code=200,
+            headers={"Content-Type": "text/html"},
+            text="<html><body>Redirected content here.</body></html>",
+        )
+
+        mock_session = MagicMock()
+        mock_session.get = AsyncMock(side_effect=[redirect_resp, final_resp])
+
+        result = await crawler._phase2_get(mock_session, record)
+        assert result is not None
+        html, content_type = result
+        assert "Redirected content" in html
 
 
 class TestExtractAndDiscover:
@@ -235,7 +252,9 @@ class TestExtractAndDiscover:
         mock_frontier.add_edge = AsyncMock()
         source = _make_source()
         html = '<html><body><a href="/docs/new-page">link</a></body></html>'
-        await crawler._extract_and_discover(record, html, source)
+        mock_session = MagicMock()
+        crawler._get_robots_parser = AsyncMock(return_value=MagicMock(can_fetch=MagicMock(return_value=True)))
+        await crawler._extract_and_discover(mock_session, record, html, source)
         mock_frontier.discover.assert_awaited_once()
         mock_frontier.add_edge.assert_awaited_once()
 
@@ -245,7 +264,9 @@ class TestExtractAndDiscover:
         mock_frontier.discover = AsyncMock(return_value="child_hash")
         source = _make_source()
         html = '<html><body><a href="https://evil.com/malicious">bad link</a></body></html>'
-        await crawler._extract_and_discover(record, html, source)
+        mock_session = MagicMock()
+        crawler._get_robots_parser = AsyncMock(return_value=MagicMock(can_fetch=MagicMock(return_value=True)))
+        await crawler._extract_and_discover(mock_session, record, html, source)
         mock_frontier.discover.assert_not_awaited()
 
 
@@ -260,6 +281,24 @@ class TestDomainPoliteness:
         assert state.last_request_time > 0.0
 
 
+class TestCleanUrl:
+    def test_strips_fragment(self, crawler):
+        assert crawler._clean_url("https://example.com/page/#section") == "https://example.com/page"
+
+    def test_lowercases_scheme_and_host(self, crawler):
+        assert crawler._clean_url("HTTPS://Example.COM/path") == "https://example.com/path"
+
+    def test_strips_tracking_params(self, crawler):
+        url = "https://example.com/page?utm_source=twitter&utm_medium=social&real=1"
+        assert crawler._clean_url(url) == "https://example.com/page?real=1"
+
+    def test_strips_trailing_slash(self, crawler):
+        assert crawler._clean_url("https://example.com/page/") == "https://example.com/page"
+
+    def test_keeps_root_slash(self, crawler):
+        assert crawler._clean_url("https://example.com/") == "https://example.com/"
+
+
 class TestDedupeKey:
     def test_strips_index_html(self, crawler):
         assert crawler._dedupe_key("https://example.com/page/index.html") == "https://example.com/page"
@@ -271,26 +310,19 @@ class TestDedupeKey:
         assert crawler._dedupe_key("https://example.com/") == "https://example.com/"
 
 
-class TestCrawlWithAresponses:
-    """Integration-style tests using aresponses for transport-level mocking."""
+class TestCrawlWithRespx:
+    """Integration-style tests using respx for transport-level mocking."""
 
     @pytest.mark.asyncio
-    async def test_crawl_fetches_single_page(self, mock_frontier, mock_cache, aresponses):
-        aresponses.add(
-            "example.com",
-            "/sitemap.xml",
-            "GET",
-            aresponses.Response(status=404, text="Not Found"),
-        )
-        aresponses.add(
-            "example.com",
-            "/",
-            "GET",
-            aresponses.Response(
-                status=200,
+    @respx.mock
+    async def test_crawl_fetches_single_page(self, mock_frontier, mock_cache):
+        respx.get("https://example.com/sitemap.xml").mock(return_value=Response(404, text="Not Found"))
+        respx.get("https://example.com/").mock(
+            return_value=Response(
+                200,
                 headers={"Content-Type": "text/html", "ETag": '"v1"'},
                 text="<html><body><p>Hello world</p></body></html>",
-            ),
+            )
         )
 
         mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])
@@ -321,24 +353,17 @@ class TestCrawlWithAresponses:
         assert "Hello world" in docs[0].html
 
     @pytest.mark.asyncio
-    async def test_crawl_gets_page_even_if_server_would_304(self, mock_frontier, mock_cache, aresponses):
+    @respx.mock
+    async def test_crawl_gets_page_even_if_server_would_304(self, mock_frontier, mock_cache):
         """The crawler always issues a full GET; cached (304-eligible) pages are
         still fetched so the ingestion pipeline can verify against Qdrant."""
-        aresponses.add(
-            "example.com",
-            "/sitemap.xml",
-            "GET",
-            aresponses.Response(status=404, text="Not Found"),
-        )
-        aresponses.add(
-            "example.com",
-            "/",
-            "GET",
-            aresponses.Response(
-                status=200,
+        respx.get("https://example.com/sitemap.xml").mock(return_value=Response(404, text="Not Found"))
+        respx.get("https://example.com/").mock(
+            return_value=Response(
+                200,
                 headers={"Content-Type": "text/html", "ETag": '"v1"'},
                 text="<html><body><p>Still present</p></body></html>",
-            ),
+            )
         )
 
         mock_frontier.get_pending = AsyncMock(return_value=[_make_record("https://example.com/")])

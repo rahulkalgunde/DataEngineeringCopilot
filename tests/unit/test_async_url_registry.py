@@ -16,6 +16,7 @@ def mock_redis():
     m.hget = AsyncMock()
     m.hset = AsyncMock()
     m.delete = AsyncMock()
+    m.expire = AsyncMock()
     return m
 
 
