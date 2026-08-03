@@ -5,15 +5,17 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
 from ipaddress import ip_address
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import parse_qs, urldefrag, urlencode, urljoin, urlparse, urlunparse
+from urllib.robotparser import RobotFileParser
 
-import aiohttp
+import httpx
 import redis.exceptions
 import structlog
 from bs4 import BeautifulSoup
+from tenacity import retry, retry_if_exception, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from data_engineering_copilot.config.settings import DocumentationSource, settings
 from data_engineering_copilot.domain.models import IngestionEvent, RawDocument
@@ -32,6 +34,19 @@ FATAL_ERROR_TYPES = (
 
 # Maximum number of redirects to follow
 MAX_REDIRECTS = 5
+
+# Timeouts: connect 5.0s, read 15.0s per the architecture guidelines
+CONNECT_TIMEOUT_SECONDS = 5.0
+READ_TIMEOUT_SECONDS = 15.0
+
+# Retryable network errors — these should propagate to the @retry decorator
+_RETRYABLE_NETWORK_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
+
+
+def _is_transient_http(exc: BaseException) -> bool:
+    """Check if an HTTP error is transient (e.g. 503 overloaded)."""
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 503
+
 
 # Private/reserved IP ranges for SSRF protection
 _PRIVATE_IP_PREFIXES = (
@@ -58,8 +73,24 @@ _PRIVATE_IP_PREFIXES = (
     "169.254.",
 )
 
+# Tracking / referral query parameters stripped during URL canonicalization
+_TRACKING_PARAMS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+        "msclkid",
+        "ref",
+        "source",
+    }
+)
 
-@dataclass
+
+@dataclass(frozen=True)
 class CrawlMetrics:
     pages_discovered: int = 0
     pages_fetched: int = 0
@@ -114,7 +145,11 @@ class AsyncDocumentationCrawler:
     ) -> None:
         self.frontier = frontier
         self.cache = cache
-        self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self.timeout = httpx.Timeout(
+            timeout=timeout_seconds,
+            connect=CONNECT_TIMEOUT_SECONDS,
+            read=READ_TIMEOUT_SECONDS,
+        )
         self.delay_seconds = delay_seconds
         self.concurrency = concurrency
         self.max_concurrency = max_concurrency
@@ -129,6 +164,10 @@ class AsyncDocumentationCrawler:
         self._metrics = CrawlMetrics()
         self._executor = ThreadPoolExecutor(max_workers=thread_pool_size)
         self._fatal_error: BaseException | None = None
+        self._robots_cache: dict[str, RobotFileParser] = {}
+        self._http_limits = httpx.Limits(
+            max_connections=max_concurrency * 4, max_keepalive_connections=max_concurrency * 2
+        )
 
     def _get_domain_priority(self, domain: str) -> int:
         for pattern, priority in self.priority_domains.items():
@@ -184,7 +223,7 @@ class AsyncDocumentationCrawler:
         await self._seed_frontier(source, max_pages)
 
         # Single persistent network session context maximizes connection pooling efficiency
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False, limits=self._http_limits) as session:
             queue: asyncio.Queue[CrawlRecord] = asyncio.Queue()
             results_queue: asyncio.Queue[RawDocument | None] = asyncio.Queue()
 
@@ -268,12 +307,14 @@ class AsyncDocumentationCrawler:
             "crawler.completed",
             yielded=yielded_count,
             total_attempted=total_attempted,
-            metrics=self._metrics.__dict__,
+            pages_discovered=self._metrics.pages_discovered,
+            pages_fetched=self._metrics.pages_fetched,
+            pages_failed=self._metrics.pages_failed,
         )
 
     async def _process_url(
         self,
-        session: aiohttp.ClientSession,
+        session: httpx.AsyncClient,
         record: CrawlRecord,
         source: DocumentationSource,
         on_event: Callable[[IngestionEvent], None] | None,
@@ -288,8 +329,8 @@ class AsyncDocumentationCrawler:
 
             html, content_type = result
 
-            await self._extract_and_discover(record, html, source)
-            self._metrics.pages_fetched += 1
+            await self._extract_and_discover(session, record, html, source)
+            self._metrics = replace(self._metrics, pages_fetched=self._metrics.pages_fetched + 1)
 
             self._emit(
                 on_event,
@@ -323,14 +364,28 @@ class AsyncDocumentationCrawler:
             except ValueError:
                 # Not an IP address — check for common internal hostnames
                 return hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-        except Exception:
+        except (ValueError, TypeError, UnicodeError):
             return True
 
-    async def _phase2_get(self, session: aiohttp.ClientSession, record: CrawlRecord) -> tuple[str, str] | None:
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(_RETRYABLE_NETWORK_ERRORS) | retry_if_exception(_is_transient_http),
+        reraise=True,
+    )
+    async def _fetch_with_retry(self, session: httpx.AsyncClient, url: str) -> httpx.Response:
+        """Fetch a URL with tenacity exponential backoff on transient failures.
+
+        Only network errors and transient 503s are retried; HTTP-level errors
+        such as 4xx/5xx responses propagate to the caller for handling.
+        """
+        return await session.get(url, headers={"User-Agent": self.user_agent})
+
+    async def _phase2_get(self, session: httpx.AsyncClient, record: CrawlRecord) -> tuple[str, str] | None:
         # SSRF protection: reject private IPs
         if self._is_private_ip(record.url):
             await self.frontier.mark_failed(record.url_hash, "SSRF: private/reserved IP")
-            self._metrics.pages_failed += 1
+            self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
             return None
 
         redirect_count = 0
@@ -338,75 +393,72 @@ class AsyncDocumentationCrawler:
 
         for attempt in range(self.max_retries):
             try:
-                async with session.get(
-                    current_url,
-                    headers={"User-Agent": self.user_agent},
-                    max_redirects=MAX_REDIRECTS,
-                ) as resp:
-                    # Handle redirects manually to count them
-                    if resp.status in (301, 302, 303, 307, 308):
-                        redirect_count += 1
-                        if redirect_count > MAX_REDIRECTS:
-                            await self.frontier.mark_failed(record.url_hash, f"Too many redirects: {redirect_count}")
-                            self._metrics.pages_failed += 1
-                            return None
-                        location = resp.headers.get("Location", "")
-                        if location:
-                            current_url = urljoin(current_url, location)
-                            continue
-                        # No Location header — treat as error
-                        await self.frontier.mark_failed(record.url_hash, f"Redirect without Location: {resp.status}")
-                        self._metrics.pages_failed += 1
-                        return None
+                resp = await self._fetch_with_retry(session, current_url)
 
-                    # Handle 410 Gone
-                    if resp.status == 410:
-                        await self.frontier.mark_gone(record.url_hash)
-                        self._metrics.pages_failed += 1
+                # Handle redirects manually to count them (httpx follow_redirects=False)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    redirect_count += 1
+                    if redirect_count > MAX_REDIRECTS:
+                        await self.frontier.mark_failed(record.url_hash, f"Too many redirects: {redirect_count}")
+                        self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
                         return None
-
-                    # Handle 429 Too Many Requests with Retry-After
-                    if resp.status == 429:
-                        retry_after = resp.headers.get("Retry-After", "")
-                        try:
-                            wait_time = float(retry_after)
-                        except (ValueError, TypeError):
-                            wait_time = self.retry_backoff_base * (2**attempt)
-                        await asyncio.sleep(wait_time)
+                    location = resp.headers.get("Location", "")
+                    if location:
+                        current_url = urljoin(current_url, location)
                         continue
+                    # No Location header — treat as error
+                    await self.frontier.mark_failed(record.url_hash, f"Redirect without Location: {resp.status_code}")
+                    self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
+                    return None
 
-                    if resp.status != 200:
-                        await self.frontier.mark_failed(record.url_hash, f"HTTP {resp.status}")
-                        self._metrics.pages_failed += 1
-                        return None
+                # Handle 410 Gone
+                if resp.status_code == 410:
+                    await self.frontier.mark_gone(record.url_hash)
+                    self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
+                    return None
 
-                    content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
-                    if "text/html" not in content_type and "text/plain" not in content_type:
-                        await self.frontier.mark_failed(record.url_hash, f"Not HTML: {content_type}")
-                        self._metrics.pages_failed += 1
-                        return None
+                # Handle 429 Too Many Requests with Retry-After
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("Retry-After", "")
+                    try:
+                        wait_time = float(retry_after)
+                    except (ValueError, TypeError):
+                        wait_time = self.retry_backoff_base * (2**attempt)
+                    await asyncio.sleep(wait_time)
+                    continue
 
-                    html = await resp.text()
-                    await self.cache.set_headers(
-                        record.url_hash,
-                        status=resp.status,
-                        etag=resp.headers.get("ETag"),
-                        last_modified=resp.headers.get("Last-Modified"),
-                    )
-                    return (html, content_type)
+                if resp.status_code != 200:
+                    await self.frontier.mark_failed(record.url_hash, f"HTTP {resp.status_code}")
+                    self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
+                    return None
+
+                content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
+                if "text/html" not in content_type and "text/plain" not in content_type:
+                    await self.frontier.mark_failed(record.url_hash, f"Not HTML: {content_type}")
+                    self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
+                    return None
+
+                html = resp.text
+                await self.cache.set_headers(
+                    record.url_hash,
+                    status=resp.status_code,
+                    etag=resp.headers.get("ETag"),
+                    last_modified=resp.headers.get("Last-Modified"),
+                )
+                return (html, content_type)
             except Exception as exc:
                 if attempt < self.max_retries - 1:
                     backoff = self.retry_backoff_base * (2**attempt)
                     await asyncio.sleep(backoff)
                 else:
                     await self.frontier.mark_failed(record.url_hash, str(exc))
-                    self._metrics.pages_failed += 1
+                    self._metrics = replace(self._metrics, pages_failed=self._metrics.pages_failed + 1)
                     return None
         return None
 
     async def _seed_frontier(self, source: DocumentationSource, max_pages: int) -> None:
         seed_urls: list[str] = []
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False, limits=self._http_limits) as session:
             sitemap_urls = await self._try_sitemap(session, source)
         if sitemap_urls:
             seed_urls.extend(sitemap_urls)
@@ -422,14 +474,14 @@ class AsyncDocumentationCrawler:
                 depth=0,
             )
 
-    async def _try_sitemap(self, session: aiohttp.ClientSession, source: DocumentationSource) -> list[str] | None:
+    async def _try_sitemap(self, session: httpx.AsyncClient, source: DocumentationSource) -> list[str] | None:
         parsed_start = urlparse(source.start_urls[0])
         sitemap_url = f"{parsed_start.scheme}://{parsed_start.netloc}/sitemap.xml"
         try:
-            async with session.get(sitemap_url, headers={"User-Agent": self.user_agent}) as resp:
-                if resp.status != 200:
-                    return None
-                raw = await resp.text()
+            resp = await session.get(sitemap_url, headers={"User-Agent": self.user_agent})
+            if resp.status_code != 200:
+                return None
+            raw = resp.text
         except Exception:
             return None
         return self._parse_sitemap(raw, source)
@@ -458,13 +510,19 @@ class AsyncDocumentationCrawler:
         with_dates.sort(key=lambda x: x[0], reverse=True)
         return [loc for _, loc in with_dates] + [loc for _, loc in without_dates]
 
-    async def _extract_and_discover(self, record: CrawlRecord, html: str, source: DocumentationSource) -> None:
+    async def _extract_and_discover(
+        self,
+        session: httpx.AsyncClient,
+        record: CrawlRecord,
+        html: str,
+        source: DocumentationSource,
+    ) -> None:
         # Offload synchronous, CPU-heavy parser feed entirely to background threads
         loop = asyncio.get_running_loop()
         links = await loop.run_in_executor(self._executor, self._extract_links, html, record.url)
 
         for link_url in links:
-            if self._is_allowed(link_url, source):
+            if await self._is_allowed_async(link_url, source, session):
                 child_hash = await self.frontier.discover(
                     url=link_url,
                     source_name=record.source_name,
@@ -472,7 +530,7 @@ class AsyncDocumentationCrawler:
                     depth=record.depth + 1,
                 )
                 if child_hash:
-                    self._metrics.pages_discovered += 1
+                    self._metrics = replace(self._metrics, pages_discovered=self._metrics.pages_discovered + 1)
                     await self.frontier.add_edge(record.url_hash, child_hash)
 
     def _extract_links(self, html: str, base_url: str) -> list[str]:
@@ -505,7 +563,32 @@ class AsyncDocumentationCrawler:
         return links
 
     def _clean_url(self, url: str) -> str:
-        return urldefrag(url)[0]
+        """Canonicalize a URL per the architecture guidelines.
+
+        Strips fragments, lowercases scheme/host, removes tracking query
+        params (``utm_*``, etc.), and strips trailing slashes from the path
+        (preserving the root ``/``).
+        """
+        url = urldefrag(url)[0]
+        parsed = urlparse(url)
+
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+
+        # Strip tracking / referral query parameters
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            filtered = {k: v for k, v in params.items() if k not in _TRACKING_PARAMS}
+            query = urlencode(filtered, doseq=True)
+        else:
+            query = ""
+
+        # Strip trailing slash (but keep root "/")
+        path = parsed.path
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
+
+        return urlunparse((scheme, netloc, path, parsed.params, query, ""))
 
     def _dedupe_key(self, url: str) -> str:
         clean_url = self._clean_url(url)
@@ -526,6 +609,36 @@ class AsyncDocumentationCrawler:
         return not (
             source.url_prefixes and not any(url.startswith(prefix.rstrip("/")) for prefix in source.url_prefixes)
         )
+
+    async def _get_robots_parser(self, domain: str, session: httpx.AsyncClient) -> RobotFileParser:
+        """Fetch and cache a ``robots.txt`` parser for *domain* (fail-open)."""
+        if domain in self._robots_cache:
+            return self._robots_cache[domain]
+        rp = RobotFileParser()
+        robots_url = f"https://{domain}/robots.txt"
+        try:
+            resp = await session.get(robots_url, headers={"User-Agent": self.user_agent})
+            if resp.status_code == 200:
+                rp.parse(resp.text.splitlines())
+            else:
+                rp.parse([])
+        except Exception:
+            rp.parse([])
+        self._robots_cache[domain] = rp
+        return rp
+
+    async def _is_allowed_async(
+        self,
+        url: str,
+        source: DocumentationSource,
+        session: httpx.AsyncClient,
+    ) -> bool:
+        """Domain/prefix check + robots.txt compliance check."""
+        if not self._is_allowed(url, source):
+            return False
+        domain = urlparse(url).netloc
+        rp = await self._get_robots_parser(domain, session)
+        return rp.can_fetch(self.user_agent, url)
 
     @staticmethod
     def _emit(

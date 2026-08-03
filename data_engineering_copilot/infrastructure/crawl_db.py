@@ -61,6 +61,19 @@ class PostgresCrawlFrontierDB:
     def _db(self) -> asyncpg.Pool | None:
         return self._pool
 
+    def _require_pool(self) -> asyncpg.Pool:
+        """Return the connection pool, raising if not initialized.
+
+        Replaces ``assert self._pool is not None`` which is stripped under
+        ``python -O`` and would otherwise surface as a confusing
+        ``AttributeError`` instead of a clear, actionable error.
+        """
+        if self._pool is None:
+            from data_engineering_copilot.domain.exceptions import CrawlError
+
+            raise CrawlError("PostgresCrawlFrontierDB not initialized. Call initialize() before use.")
+        return self._pool
+
     async def initialize(self) -> None:
         self._pool = await asyncpg.create_pool(
             self._dsn,
@@ -91,10 +104,10 @@ class PostgresCrawlFrontierDB:
         depth: int,
         max_attempts: int = 3,
     ) -> str | None:
-        assert self._pool is not None
+        pool = self._require_pool()
         url_hash = self.hash_url(url)
         now = time.time()
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             result = await conn.fetchrow(
                 """INSERT INTO crawl_frontier
                    (url_hash, url, source_name, state, parent_hash, depth, created_at, updated_at)
@@ -145,8 +158,8 @@ class PostgresCrawlFrontierDB:
             return None
 
     async def claim(self, url_hash: str) -> CrawlRecord | None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             row = await conn.fetchrow(
                 "UPDATE crawl_frontier SET state = $1, updated_at = $2, attempts = attempts + 1 "
@@ -161,8 +174,8 @@ class PostgresCrawlFrontierDB:
             return _pg_row_to_record(row)
 
     async def mark_processed(self, url_hash: str) -> None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
@@ -172,8 +185,8 @@ class PostgresCrawlFrontierDB:
             )
 
     async def mark_failed(self, url_hash: str, error: str) -> None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, last_error = $2, updated_at = $3 WHERE url_hash = $4",
@@ -189,8 +202,8 @@ class PostgresCrawlFrontierDB:
         SKIPPED is terminal: the URL is never re-discovered.  This prevents
         pages with no indexable content from being re-fetched on every run.
         """
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
@@ -204,8 +217,8 @@ class PostgresCrawlFrontierDB:
 
         GONE is terminal: the URL is never re-discovered.
         """
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, updated_at = $2 WHERE url_hash = $3",
@@ -215,8 +228,8 @@ class PostgresCrawlFrontierDB:
             )
 
     async def get_pending(self, source_name: str, limit: int = 50) -> list[CrawlRecord]:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM crawl_frontier WHERE source_name = $1 AND state = $2 ORDER BY depth ASC, created_at ASC LIMIT $3",
                 source_name,
@@ -226,8 +239,8 @@ class PostgresCrawlFrontierDB:
             return [_pg_row_to_record(row) for row in rows]
 
     async def get_record(self, url_hash: str) -> CrawlRecord | None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM crawl_frontier WHERE url_hash = $1",
                 url_hash,
@@ -243,8 +256,8 @@ class PostgresCrawlFrontierDB:
         ``stale_after_seconds`` so a live concurrent run's in-flight claims are
         never clobbered.
         """
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             cutoff = time.time() - stale_after_seconds
             result = await conn.execute(
                 "UPDATE crawl_frontier SET state = $1 WHERE state = $2 AND updated_at < $3",
@@ -256,8 +269,8 @@ class PostgresCrawlFrontierDB:
 
     async def all_urls(self, source_name: str) -> list[str]:
         """Return every URL known to the frontier for a source (any state)."""
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT url FROM crawl_frontier WHERE source_name = $1",
                 source_name,
@@ -274,10 +287,10 @@ class PostgresCrawlFrontierDB:
         """
         if not urls:
             return 0
-        assert self._pool is not None
+        pool = self._require_pool()
         url_hashes = [self.hash_url(url) for url in urls]
         now = time.time()
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             result = await conn.execute(
                 "UPDATE crawl_frontier SET state = $1, attempts = 0, last_error = NULL, updated_at = $2 "
                 "WHERE url_hash = ANY($3::text[])",
@@ -300,8 +313,8 @@ class PostgresCrawlFrontierDB:
         to DISCOVERED so the next run re-fetches and re-indexes it.  SKIPPED
         pages and FAILED pages past their attempts budget stay terminal.
         """
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             now = time.time()
             rows = await conn.fetch(
                 "SELECT url_hash, url FROM crawl_frontier "
@@ -324,8 +337,8 @@ class PostgresCrawlFrontierDB:
             return len(missing)
 
     async def add_edge(self, parent_hash: str, child_hash: str) -> None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO sitemap_edges (parent_hash, child_hash) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 parent_hash,
@@ -333,8 +346,8 @@ class PostgresCrawlFrontierDB:
             )
 
     async def get_edges(self, parent_hash: str) -> list[str]:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT child_hash FROM sitemap_edges WHERE parent_hash = $1",
                 parent_hash,
@@ -343,8 +356,8 @@ class PostgresCrawlFrontierDB:
 
     async def rediscover_children(self, parent_hash: str, source_name: str, depth: int) -> int:
         """Re-discover children of a 304-cached page for BFS expansion."""
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT child_hash FROM sitemap_edges WHERE parent_hash = $1",
                 parent_hash,
@@ -371,8 +384,8 @@ class PostgresCrawlFrontierDB:
             return rediscovered
 
     async def stats(self, source_name: str | None = None) -> dict[str, int]:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             if source_name:
                 rows = await conn.fetch(
                     "SELECT state, COUNT(*)::int as cnt FROM crawl_frontier WHERE source_name = $1 GROUP BY state",
@@ -393,8 +406,8 @@ class PostgresCrawlFrontierDB:
         - 'upsert': Vector store failures
         - 'other': Everything else
         """
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             if category and category != "all":
                 rows = await conn.fetch(
                     "SELECT url FROM crawl_frontier "
@@ -434,8 +447,8 @@ class PostgresCrawlFrontierDB:
 
     async def get_skipped_urls(self, source_name: str) -> list[str]:
         """Return SKIPPED URLs for a source."""
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT url FROM crawl_frontier WHERE source_name = $1 AND state = $2 ORDER BY updated_at DESC",
                 source_name,
@@ -445,8 +458,8 @@ class PostgresCrawlFrontierDB:
 
     async def get_failed_by_category(self, source_name: str) -> dict[str, int]:
         """Count FAILED URLs grouped by error category."""
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT last_error FROM crawl_frontier "
                 "WHERE source_name = $1 AND state = $2 "
@@ -470,8 +483,8 @@ class PostgresCrawlFrontierDB:
             return categories
 
     async def drop_all(self) -> None:
-        assert self._pool is not None
-        async with self._pool.acquire() as conn:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
             await conn.execute("DROP TABLE IF EXISTS sitemap_edges CASCADE")
             await conn.execute("DROP TABLE IF EXISTS crawl_frontier CASCADE")
 

@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+from data_engineering_copilot.domain.exceptions import CoreDomainException, ProviderErrorCategory
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
@@ -24,7 +24,7 @@ from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRa
 logger = logging.getLogger(__name__)
 
 
-class LLMClientError(RuntimeError):
+class LLMClientError(CoreDomainException):
     """Raised when the LLM provider cannot return an answer.
 
     Carries optional structured metadata so the adaptive router can make

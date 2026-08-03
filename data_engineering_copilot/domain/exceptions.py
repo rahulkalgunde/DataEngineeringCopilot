@@ -64,7 +64,7 @@ class ProviderErrorCategory(Enum):
     QUOTA_EXCEEDED = "quota_exceeded"
 
 
-class ProviderError(Exception):
+class ProviderError(CoreDomainException):
     """An error from an LLM provider that includes a categorised reason.
 
     Attributes

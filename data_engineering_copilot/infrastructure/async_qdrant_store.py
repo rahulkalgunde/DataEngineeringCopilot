@@ -100,6 +100,8 @@ class AsyncQdrantVectorStore:
             create_kwargs: dict = dict(
                 collection_name=self._collection_name,
                 vectors_config=vectors_config,
+                on_disk_payload=True,
+                hnsw_config=models.HnswConfigDiff(m=16, ef_construct=150, full_scan_threshold=10000),
             )
             if sparse_vectors_config is not None:
                 create_kwargs["sparse_vectors_config"] = sparse_vectors_config
@@ -137,6 +139,14 @@ class AsyncQdrantVectorStore:
             )
         except Exception:
             logger.info("Payload index on 'section_header' already exists or could not be created.", exc_info=True)
+        try:
+            await self._client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="crawled_at",
+                field_schema=models.PayloadSchemaType.DATETIME,
+            )
+        except Exception:
+            logger.info("Payload index on 'crawled_at' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
         if self._embedding_dimension_override is not None:
@@ -155,6 +165,9 @@ class AsyncQdrantVectorStore:
             "chunk_type": chunk.chunk_type,
             "word_count": chunk.word_count,
             "heading_path": list(chunk.heading_path),
+            "chunk_index": chunk.chunk_index,
+            "total_chunks": chunk.total_chunks,
+            "crawled_at": chunk.crawled_at,
         }
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
@@ -324,6 +337,9 @@ class AsyncQdrantVectorStore:
                     chunk_type=payload.get("chunk_type", "text"),
                     word_count=payload.get("word_count", 0),
                     heading_path=tuple(payload.get("heading_path", [])),
+                    chunk_index=payload.get("chunk_index", 0),
+                    total_chunks=payload.get("total_chunks", 0),
+                    crawled_at=payload.get("crawled_at", ""),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
                 if rrf_confidence_scale is not None and score > 0.0:
