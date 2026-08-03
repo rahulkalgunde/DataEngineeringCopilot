@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from data_engineering_copilot.domain.protocols import EmbedderProtocol
+from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +90,11 @@ class QueryRewriter:
 
     def __init__(
         self,
-        llm_client: object | None,
+        llm_client: LLMClientProtocol | None,
         enabled: bool = True,
         hyde_enabled: bool = True,
         intent_llm_enabled: bool = False,
-        intent_llm_client: object | None = None,
+        intent_llm_client: LLMClientProtocol | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._intent_llm_client = intent_llm_client or llm_client
@@ -131,6 +131,9 @@ class QueryRewriter:
 
         Returns intent string or None on failure.
         """
+        client = self._intent_llm_client
+        if client is None:
+            return None
         try:
             import asyncio
 
@@ -146,7 +149,7 @@ class QueryRewriter:
             except RuntimeError:
                 pass
 
-            result = asyncio.run(self._intent_llm_client.generate(prompt))
+            result = asyncio.run(client.generate(prompt))
             if not result:
                 return None
 

@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
 from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig
@@ -18,9 +19,11 @@ from data_engineering_copilot.domain.protocols import (
     VectorStoreProtocol,
 )
 from data_engineering_copilot.infrastructure.pii_redactor import PiiRedactor
+from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
+from data_engineering_copilot.services.input_guardrails import InputGuardrails
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
@@ -60,12 +63,12 @@ class AsyncRagService:
         query_rewriter: QueryRewriter | None = None,
         groundedness_verifier: GroundednessVerifier | None = None,
         context_compressor: ContextCompressor | None = None,
-        token_tracker: object | None = None,
-        retrieval_tracker: object | None = None,
+        token_tracker: TokenTracker | None = None,
+        retrieval_tracker: RetrievalTracker | None = None,
         code_llm_client: LLMClientProtocol | None = None,
         evaluation_llm_client: LLMClientProtocol | None = None,
         pii_redactor: PiiRedactor | None = None,
-        input_guardrails: object | None = None,
+        input_guardrails: InputGuardrails | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -131,7 +134,7 @@ class AsyncRagService:
 
         trace = None
         if self.telemetry:
-            trace_kwargs: dict[str, str | None] = {
+            trace_kwargs: dict[str, Any] = {
                 "name": "rag-query-pipeline",
                 "input": _scrub_pii(question),
                 "as_type": "trace",
@@ -668,7 +671,7 @@ class AsyncRagService:
         # Create trace for streaming path
         trace = None
         if self.telemetry:
-            trace_kwargs: dict[str, str | None] = {
+            trace_kwargs: dict[str, Any] = {
                 "name": "rag-query-pipeline-stream",
                 "input": _scrub_pii(question),
                 "as_type": "trace",

@@ -29,6 +29,9 @@ class NoOpTelemetryTracer:
     def flush(self) -> None:
         pass
 
+    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs: Any) -> None:
+        return None
+
     async def flush_async(self, timeout: float = 2.0) -> None:
         return None
 
