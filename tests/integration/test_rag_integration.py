@@ -154,6 +154,7 @@ def _populated(_store, _settings):
     try:
         all_embs = loop.run_until_complete(embedder.embed_texts(texts))
         loop.run_until_complete(_store.upsert_chunks(chunks, all_embs))
+        _store.fit_bm25(texts)
     finally:
         loop.run_until_complete(embedder.close())
         loop.close()
@@ -348,27 +349,16 @@ class TestRAGWireMocked:
 class TestHybridSearch:
     """Integration tests for hybrid (dense + sparse BM25) search."""
 
-    async def test_hybrid_query_returns_results(self, fresh_qdrant_store, _populated):
+    async def test_hybrid_query_returns_results(self, _store, _populated):
         """Hybrid query with both dense and sparse vectors returns results."""
-        store = fresh_qdrant_store
+        store = _store
         assert store._bm25 is not None
 
         # BM25 should be fitted
         assert store._bm25.is_frozen
 
         # Query should use hybrid search (dense + sparse)
-        from data_engineering_copilot.infrastructure.async_embeddings import AsyncNvidiaEmbeddings
-        from tests.conftest import make_settings
-
-        settings = make_settings(embedding_provider="nvidia", embedding_model_name="nvidia/nemotron-3-embed-1b")
-        embedder = AsyncNvidiaEmbeddings(
-            api_key="test-key",
-            model_name=settings.embedding_model_name,
-        )
-
-        # Create a fake embedding for the query
-        dim = settings.get_embedding_dimension()
-        fake_emb = [0.01] * dim
+        fake_emb = [0.01] * 768
 
         results = await store.query(
             query_embedding=fake_emb,
@@ -378,5 +368,3 @@ class TestHybridSearch:
 
         assert len(results) > 0
         assert all(hasattr(r, "chunk") for r in results)
-
-        await embedder.close()

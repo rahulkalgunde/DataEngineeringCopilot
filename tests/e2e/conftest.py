@@ -6,8 +6,6 @@ FastAPI is tested in-process via ASGITransport (no live server needed).
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import pathlib
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
@@ -153,12 +151,61 @@ def e2e_ollama_url() -> str:
 
 
 # ---------------------------------------------------------------------------
+# PostgreSQL testcontainer (crawl frontier)
+# ---------------------------------------------------------------------------
+
+_pg_container = None
+_pg_dsn: str | None = None
+
+
+def _get_or_start_pg_container() -> str | None:
+    """Start a PostgreSQL testcontainer. Returns the DSN."""
+    global _pg_container, _pg_dsn
+
+    if _pg_dsn is not None:
+        return _pg_dsn
+
+    try:
+        from testcontainers.postgres import PostgresContainer
+
+        _pg_container = PostgresContainer(
+            "postgres:16-alpine",
+            username="copilot",
+            password="local_secure_password_123",
+            dbname="crawl_frontier",
+        )
+        _pg_container.start()
+        host = _pg_container.get_container_host_ip()
+        port = _pg_container.get_exposed_port(5432)
+        _pg_dsn = f"postgresql://copilot:local_secure_password_123@{host}:{port}/crawl_frontier"
+        return _pg_dsn
+    except Exception:
+        pass
+
+    return None
+
+
+@pytest.fixture(scope="session")
+def e2e_pg_dsn() -> str:
+    """Session-scoped PostgreSQL DSN from testcontainer."""
+    dsn = _get_or_start_pg_container()
+    if dsn is None:
+        infra_unavailable("PostgreSQL testcontainer could not be started")
+    return dsn
+
+
+# ---------------------------------------------------------------------------
 # Settings (Ollama provider, testcontainer URLs)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str, e2e_ollama_url: str) -> AppSettings:
+def e2e_settings(
+    e2e_qdrant_url: str,
+    e2e_redis_url: str,
+    e2e_ollama_url: str,
+    e2e_pg_dsn: str,
+) -> AppSettings:
     """AppSettings tuned for E2E testing with isolated testcontainer URLs."""
     import uuid
 
@@ -170,6 +217,7 @@ def e2e_settings(e2e_qdrant_url: str, e2e_redis_url: str, e2e_ollama_url: str) -
         qdrant_url=e2e_qdrant_url,
         redis_url=e2e_redis_url,
         collection_name=collection,
+        crawl_db_url=e2e_pg_dsn,
         ollama_base_url=e2e_ollama_url,
         llm_provider="ollama",
         embedding_provider="ollama",
@@ -224,9 +272,9 @@ async def e2e_redis(e2e_redis_url: str) -> AsyncGenerator:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def e2e_embedder(e2e_settings: AppSettings):
-    """Real Ollama embeddings provider from testcontainer (session-scoped)."""
+@pytest.fixture
+async def e2e_embedder(e2e_settings: AppSettings):
+    """Real Ollama embeddings provider from testcontainer (function-scoped)."""
     from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 
     embedder = AsyncOllamaEmbeddings(
@@ -234,13 +282,12 @@ def e2e_embedder(e2e_settings: AppSettings):
         base_url=e2e_settings.ollama_base_url,
     )
     yield embedder
-    with contextlib.suppress(RuntimeError):
-        asyncio.run(embedder.close())
+    await embedder.close()
 
 
-@pytest.fixture(scope="session")
-def e2e_llm(e2e_settings: AppSettings):
-    """Real Ollama LLM client from testcontainer (session-scoped)."""
+@pytest.fixture
+async def e2e_llm(e2e_settings: AppSettings):
+    """Real Ollama LLM client from testcontainer (function-scoped)."""
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     client = LLMClient(
@@ -255,8 +302,7 @@ def e2e_llm(e2e_settings: AppSettings):
         },
     )
     yield client
-    with contextlib.suppress(RuntimeError):
-        asyncio.run(client.close())
+    await client.close()
 
 
 # ---------------------------------------------------------------------------

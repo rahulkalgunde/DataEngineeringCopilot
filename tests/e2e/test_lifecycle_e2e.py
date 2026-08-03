@@ -18,14 +18,20 @@ class TestIngestLifecycle:
 
     @pytest.fixture(autouse=True)
     def _patch_redis(self, e2e_redis_url, e2e_redis, monkeypatch):
-        """Patch get_redis_client and flush Redis before each test."""
+        """Patch _get_async_redis and flush Redis before each test."""
         import redis
+        import redis.asyncio as aioredis
 
         sync_client = redis.from_url(e2e_redis_url, decode_responses=False)
         import data_engineering_copilot.api.routes as routes_mod
 
         sync_client.flushdb()
-        monkeypatch.setattr(routes_mod, "get_redis_client", lambda: sync_client)
+        routes_mod._async_redis = None
+
+        async def _factory() -> aioredis.Redis:
+            return aioredis.from_url(e2e_redis_url, decode_responses=True)
+
+        monkeypatch.setattr(routes_mod, "_get_async_redis", _factory)
         yield
 
     async def test_dispatch_creates_redis_status(self, e2e_api_client, e2e_redis):
