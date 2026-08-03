@@ -184,6 +184,8 @@ class TestApiRoutesWiring:
 
     def test_routes_module_imports(self):
         """All route dependencies can be imported."""
+        from typing import Any, cast
+
         from data_engineering_copilot.api.routes import (
             _get_async_redis,
             async_ingest_task,
@@ -192,7 +194,7 @@ class TestApiRoutesWiring:
         )
 
         assert router is not None
-        assert callable(async_ingest_task.delay)
+        assert callable(cast(Any, async_ingest_task).delay)
         assert celery_app is not None
         assert callable(_get_async_redis)
 

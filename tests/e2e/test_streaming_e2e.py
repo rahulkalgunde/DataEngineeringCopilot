@@ -77,7 +77,7 @@ class TestRagStreaming:
             assert isinstance(answer.sources, tuple)
         finally:
             if store is not None:
-                await store._client.close()
+                await store.close()
 
     async def test_rag_answer_cites_sources(self, e2e_settings, e2e_embedder, e2e_llm):
         """RAG answer should cite at least one source."""
@@ -98,6 +98,7 @@ class TestRagStreaming:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
+            assert parsed is not None
             chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
             chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
@@ -116,7 +117,7 @@ class TestRagStreaming:
             assert len(answer.sources) > 0, "Should cite at least one source"
         finally:
             if store is not None:
-                await store._client.close()
+                await store.close()
 
     async def test_unrelated_question_acknowledges_gap(self, e2e_settings, e2e_embedder, e2e_llm):
         """An unrelated question should acknowledge the docs don't cover it."""
@@ -137,6 +138,7 @@ class TestRagStreaming:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
+            assert parsed is not None
             chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
             chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
@@ -161,4 +163,4 @@ class TestRagStreaming:
             )
         finally:
             if store is not None:
-                await store._client.close()
+                await store.close()
