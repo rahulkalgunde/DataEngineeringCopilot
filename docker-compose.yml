@@ -7,6 +7,11 @@ services:
     image: redis:7-alpine
     container_name: de_copilot_broker
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local_secure_password_123}"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
     ports:
       - "6379:6379"
     networks:
@@ -22,6 +27,11 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.18.3
     container_name: de_copilot_vectorstore
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -41,6 +51,11 @@ services:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: de_copilot_minio
     command: server /data --console-address ":9001"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -52,6 +67,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   minio-init:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
@@ -70,6 +91,11 @@ services:
   ollama:
     image: ollama/ollama:0.32.4
     container_name: de_copilot_ollama
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "4.0"
     ports:
       - "11434:11434"
     volumes:
@@ -93,6 +119,11 @@ services:
     container_name: de_copilot_clickhouse
     cap_add:
       - SYS_NICE
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
     environment:
       CLICKHOUSE_DB: langfuse
       CLICKHOUSE_USER: langfuse
@@ -117,6 +148,11 @@ services:
   langfuse-postgres:
     image: postgres:16-alpine
     container_name: de_copilot_langfuse_db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:-local_secure_password_123}
@@ -128,6 +164,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   langfuse:
     image: langfuse/langfuse:3
@@ -147,7 +189,7 @@ services:
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-secret_string_minimum_32_characters_long}
       - NEXTAUTH_URL=http://localhost:3000
       - SALT=${LANGFUSE_SALT:-salt_string}
-      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      - "ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:?Set LANGFUSE_ENCRYPTION_KEY_64_hex_generate_with_openssl_rand_-hex_32}"
       - LANGFUSE_HOST=http://langfuse:3000
       - CLICKHOUSE_URL=http://clickhouse:8123
       - CLICKHOUSE_USER=langfuse
@@ -179,6 +221,11 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: de_copilot_postgres
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     environment:
       POSTGRES_USER: copilot
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_secure_password_123}
@@ -200,6 +247,11 @@ services:
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     container_name: de_copilot_langfuse_worker
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
     depends_on:
       - langfuse-postgres
       - clickhouse
@@ -213,7 +265,7 @@ services:
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-secret_string_minimum_32_characters_long}
       - NEXTAUTH_URL=http://localhost:3000
       - SALT=${LANGFUSE_SALT:-salt_string}
-      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      - "ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:?Set LANGFUSE_ENCRYPTION_KEY_64_hex_generate_with_openssl_rand_-hex_32}"
       - LANGFUSE_HOST=http://langfuse:3000
       - CLICKHOUSE_URL=http://clickhouse:8123
       - CLICKHOUSE_USER=langfuse
@@ -235,6 +287,12 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/public/health', r=>process.exit(r.statusCode===200?0:1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   backend-api:
     build:
@@ -242,6 +300,11 @@ services:
       dockerfile: Dockerfile
     image: de_copilot_base_image:${IMAGE_TAG:-latest}  # Git-SHA tagged via `make docker-dev`
     container_name: de_copilot_api
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
     # Profile-gated: start with `--profile app`, or by name (`docker compose up backend-api`).
     # CI (`-f docker-compose.yml -f docker-compose.ci.yml`) omits the profile and skips this.
     profiles: ["app"]
@@ -274,10 +337,21 @@ services:
     networks:
       - de_copilot_net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   celery_worker:
     image: de_copilot_base_image:${IMAGE_TAG:-latest}  # Reuses backend-api build instantly
     profiles: ["app"]  # See backend-api comment
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
     command: celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import redis; r=redis.Redis.from_url('redis://:${REDIS_PASSWORD:-local_secure_password_123}@redis:6379/0'); r.ping(); open('/proc/1/cmdline').read().find('celery') > -1 and exit(0) or exit(1)\""]

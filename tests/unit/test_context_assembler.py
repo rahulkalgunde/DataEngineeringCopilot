@@ -45,7 +45,10 @@ class TestContextAssembler:
 
         context, sources = assembler.assemble([retrieved])
 
-        expected_context = "[test_source] This is a single test chunk."
+        expected_context = (
+            '<context_doc id="1" url="http://example.com/chunkchunk1">'
+            "[test_source]\nThis is a single test chunk.\n</context_doc>"
+        )
         assert context == expected_context
         assert sources == ["test_source"]
 
@@ -62,9 +65,12 @@ class TestContextAssembler:
         context, sources = assembler.assemble([retrieved1, retrieved2, retrieved3])
 
         expected_context = (
-            "[test_source] First chunk of text.\n"
-            "[test_source] Second chunk of text.\n"
-            "[test_source] Third chunk of text."
+            '<context_doc id="1" url="http://example.com/chunkchunk1">'
+            "[test_source]\nFirst chunk of text.\n</context_doc>\n"
+            '<context_doc id="2" url="http://example.com/chunkchunk2">'
+            "[test_source]\nSecond chunk of text.\n</context_doc>\n"
+            '<context_doc id="3" url="http://example.com/chunkchunk3">'
+            "[test_source]\nThird chunk of text.\n</context_doc>"
         )
         assert context == expected_context
         assert sources == ["test_source", "test_source", "test_source"]
@@ -79,7 +85,12 @@ class TestContextAssembler:
 
         context, sources = assembler.assemble([retrieved1, retrieved2])
 
-        expected_context = "[source_a] First test chunk.\n[source_b] Second test chunk."
+        expected_context = (
+            '<context_doc id="1" url="http://example.com/chunkchunk1">'
+            "[source_a]\nFirst test chunk.\n</context_doc>\n"
+            '<context_doc id="2" url="http://example.com/chunkchunk2">'
+            "[source_b]\nSecond test chunk.\n</context_doc>"
+        )
         assert context == expected_context
         assert sources == ["source_a", "source_b"]
 
@@ -213,7 +224,7 @@ class TestContextAssembler:
 
         context, sources = assembler.assemble([retrieved1, retrieved2])
 
-        assert len(context) <= 60
+        assert len(context) <= 130
         assert sources == ["test_source"]
 
     def test_assemble_max_context_zero_only_two_chunks(self):
@@ -226,7 +237,7 @@ class TestContextAssembler:
 
         context, sources = assembler.assemble([retrieved1, retrieved2])
 
-        assert len(context) <= 30
+        assert len(context) <= 100
         assert "Short" in context
 
     def test_assemble_logging_deduplication(self):

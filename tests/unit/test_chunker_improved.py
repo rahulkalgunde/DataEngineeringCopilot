@@ -160,7 +160,11 @@ class DataFrame:
             assert chunk.source_name == "Apache Spark Documentation"
             assert chunk.title == "Spark SQL Guide"
             assert chunk.url == document.url
-            assert chunk.chunk_id.startswith("apache-spark-documentation:")
+            assert chunk.chunk_index >= 0
+            assert chunk.total_chunks == len(chunks)
+            import uuid
+
+            assert uuid.UUID(chunk.chunk_id).version == 5  # deterministic UUID v5
 
 
 class TestChunkQualityValidation:
@@ -193,12 +197,13 @@ class TestChunkIDGeneration:
         )
         chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=50)
         chunks = await chunker.chunk(document)
-        for i, chunk in enumerate(chunks):
-            parts = chunk.chunk_id.split(":")
-            assert len(parts) == 3
-            assert parts[0] == "apache-spark"
-            assert len(parts[1]) == 10
-            assert parts[2] == f"{i:04d}"
+        for chunk in chunks:
+            # UUID v5 format: deterministic from source_url + source_name + index
+            import uuid
+
+            assert isinstance(chunk.chunk_id, str)
+            parsed = uuid.UUID(chunk.chunk_id)
+            assert parsed.version == 5
 
     async def test_chunk_id_deterministic(self):
         text = "word " * 500
