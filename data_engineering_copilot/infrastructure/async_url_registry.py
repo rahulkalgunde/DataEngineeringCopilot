@@ -12,13 +12,15 @@ import time
 import redis.exceptions
 import structlog
 
+from data_engineering_copilot.domain.protocols import SyncRedisProtocol
+
 log = structlog.get_logger(__name__)
 
 
 class AsyncUrlRegistry:
     """Per-source URL state store backed by asyncio Redis hashes."""
 
-    def __init__(self, redis_client: object | None, source_name: str) -> None:
+    def __init__(self, redis_client: SyncRedisProtocol | None, source_name: str) -> None:
         if redis_client is not None and not hasattr(redis_client, "hset"):
             raise TypeError(f"redis_client must implement SyncRedisProtocol (got {type(redis_client).__name__})")
         self._redis = redis_client
@@ -29,7 +31,7 @@ class AsyncUrlRegistry:
         if self._redis is None:
             return None
         try:
-            raw = await self._redis.hget(self._key, url)  # type: ignore[union-attr]
+            raw = await self._redis.hget(self._key, url)
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "async_url_registry.get_html_hash failed",
@@ -58,7 +60,7 @@ class AsyncUrlRegistry:
             }
         )
         try:
-            await self._redis.hset(self._key, url, record)  # type: ignore[union-attr]
+            await self._redis.hset(self._key, url, record)
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "async_url_registry.set_html_hash failed",
@@ -124,7 +126,7 @@ class AsyncUrlRegistry:
         if self._redis is None:
             return
         try:
-            await self._redis.delete(self._key)  # type: ignore[union-attr]
+            await self._redis.delete(self._key)
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "async_url_registry.clear failed",

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
 
 
-def _is_transient_http(exc: Exception) -> bool:
+def _is_transient_http(exc: BaseException) -> bool:
     """Check if an HTTP error is transient (e.g., Ollama 503 overload)."""
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 503
 

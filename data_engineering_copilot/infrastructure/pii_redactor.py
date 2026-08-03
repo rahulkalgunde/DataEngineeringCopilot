@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from enum import Enum
 
 
@@ -58,7 +59,7 @@ _MASKERS: dict[str, re.Pattern[str]] = {
     "ip_address": _IP_RE,
 }
 
-_MASK_FUNCTIONS: dict[str, callable] = {
+_MASK_FUNCTIONS: dict[str, Callable[[re.Match[str]], str]] = {
     "email": _mask_email,
     "phone": _mask_phone,
     "ssn": _mask_generic,

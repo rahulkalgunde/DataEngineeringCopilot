@@ -16,9 +16,10 @@ class CrawlCache:
     Each URL is keyed by its SHA-256 hash. Fields stored: status, etag, last_modified.
     """
 
-    def __init__(self, redis_url: str, prefix: str = "crawl:", redis_client=None) -> None:
+    def __init__(self, redis_url: str, prefix: str = "crawl:", redis_client: aioredis.Redis | None = None) -> None:
         self.prefix = prefix
         self.redis_url = redis_url
+        self._redis: aioredis.Redis | None
         if redis_client is not None:
             self._redis = redis_client
             self._owns_client = False
@@ -38,6 +39,8 @@ class CrawlCache:
 
     async def ping(self) -> None:
         """Validate Redis connectivity. Raises on failure."""
+        if self._redis is None:
+            raise ConnectionError("Redis client not initialized for CrawlCache")
         try:
             await self._redis.ping()
         except redis.exceptions.RedisError as exc:
@@ -48,12 +51,14 @@ class CrawlCache:
 
     async def get_headers(self, url_hash: str) -> dict[str, str] | None:
         """Return cached headers {status, etag, last_modified} or None."""
+        if self._redis is None:
+            return None
         try:
             key = f"{self.prefix}{url_hash}"
             data = await self._redis.hgetall(key)
             if not data:
                 return None
-            return data
+            return {str(k): (v.decode() if isinstance(v, bytes) else v) for k, v in data.items()}
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "CrawlCache.get_headers failed",
@@ -69,6 +74,8 @@ class CrawlCache:
         last_modified: str | None = None,
     ) -> None:
         """Cache response headers for a URL."""
+        if self._redis is None:
+            return
         try:
             key = f"{self.prefix}{url_hash}"
             mapping: dict[str, str] = {"status": str(status)}
@@ -76,7 +83,7 @@ class CrawlCache:
                 mapping["etag"] = etag
             if last_modified:
                 mapping["last_modified"] = last_modified
-            await self._redis.hset(key, mapping=mapping)
+            await self._redis.hset(key, mapping=mapping)  # type: ignore[arg-type]  # aioredis stub FieldT invariance on injected client
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "CrawlCache.set_headers failed",

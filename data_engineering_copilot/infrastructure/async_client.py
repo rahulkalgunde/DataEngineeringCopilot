@@ -39,6 +39,9 @@ class SafeAsyncClientMixin:
             )
         return self._client
 
+    async def close(self) -> None:
+        """Close the underlying client. Overridden by subclasses."""
+
     async def __aenter__(self) -> Self:
         return self
 
