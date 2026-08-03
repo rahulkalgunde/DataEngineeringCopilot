@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 from data_engineering_copilot.config.settings import AppSettings
 from tests.conftest import make_settings
@@ -42,7 +43,7 @@ def _make_settings_empty_key(provider: str, key_type: str = "llm") -> AppSetting
         s = _make_settings(embedding_provider=provider, openrouter_api_key="sk-placeholder")
     else:
         s = _make_settings(llm_provider=provider, openrouter_api_key="sk-placeholder", llm_model="test")
-    object.__setattr__(s, "openrouter_api_key", AppSettings.model_fields["openrouter_api_key"].annotation(""))
+    object.__setattr__(s, "openrouter_api_key", SecretStr(""))
     return s
 
 
@@ -110,7 +111,7 @@ class TestBuildPurposeLLMClient:
         s = _make_settings(
             nvidia_api_key="nvapi-placeholder",
         )
-        object.__setattr__(s, "nvidia_api_key", AppSettings.model_fields["nvidia_api_key"].annotation(""))
+        object.__setattr__(s, "nvidia_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
             _build_purpose_llm_client(provider="nvidia", model="test", app_settings=s)
 
@@ -301,6 +302,6 @@ class TestBuildEmbedder:
             embedding_provider="nvidia",
             nvidia_api_key="nvapi-placeholder",
         )
-        object.__setattr__(s, "nvidia_api_key", AppSettings.model_fields["nvidia_api_key"].annotation(""))
+        object.__setattr__(s, "nvidia_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
             build_embedder(s)

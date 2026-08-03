@@ -52,7 +52,7 @@ class OutputGuardrails:
     min_citation_count: int = 0
 
     @classmethod
-    def verify(cls, raw: str, source_count: int) -> GuardrailedAnswer | None:
+    def verify(cls, raw: object, source_count: int) -> GuardrailedAnswer | None:
         """Verify LLM output against guardrail rules.
 
         Returns ``GuardrailedAnswer`` if valid, ``None`` if guardrails reject.

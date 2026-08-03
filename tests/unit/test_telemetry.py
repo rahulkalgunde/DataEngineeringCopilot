@@ -91,6 +91,9 @@ class TestRagTelemetryFlush:
             def start_observation(self, name: str, input: Any = None, as_type: str = "trace", model: str | None = None):
                 return _FakeSpan()
 
+            def score(self, trace_id: str, name: str, value: float, data_type: str = "numeric", **kwargs: Any) -> None:
+                return None
+
             async def flush_async(self, timeout: float = 2.0) -> None:
                 raise RuntimeError("exporter down")
 
