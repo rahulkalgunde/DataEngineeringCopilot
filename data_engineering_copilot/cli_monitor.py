@@ -167,7 +167,7 @@ def render_dashboard(
 
 
 def main(api_url: str = DEFAULT_API_URL, task_id: str | None = None, interval: int = DEFAULT_INTERVAL) -> None:
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # TextIO stub lacks reconfigure; present at runtime
     print("Connecting to ingestion API...")
 
     status = fetch_status(api_url, task_id)

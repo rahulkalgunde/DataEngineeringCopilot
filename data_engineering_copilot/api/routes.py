@@ -232,7 +232,7 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
         except Exception:
             pass
 
-        task = async_ingest_task.apply_async(
+        task = async_ingest_task.apply_async(  # type: ignore[attr-defined]  # Celery task wrapper not in FunctionType stub
             args=(effective_sources, request.max_pages),
             headers=trace_headers,
         )

@@ -103,7 +103,7 @@ def run_experiment(
     try:
         # Create experiment
         if hasattr(client._client, "create_experiment"):
-            experiment = client._client.create_experiment(
+            experiment = client._client.create_experiment(  # type: ignore[attr-defined]  # guarded by hasattr above; Langfuse stub lacks it
                 name=experiment_name,
                 dataset_name=dataset_name,
             )
