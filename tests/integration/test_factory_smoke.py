@@ -32,9 +32,15 @@ async def test_build_async_ingestion_service_creates_collection(qdrant_url):
     client.delete_collection("test_factory_smoke")
 
 
-async def test_build_rag_service_returns_valid_service(redis_url):
+async def test_build_rag_service_returns_valid_service(redis_url, qdrant_url):
     from data_engineering_copilot.factory import build_rag_service
     from data_engineering_copilot.services.async_rag import AsyncRagService
+    from tests.conftest import make_settings
 
-    rag_service = build_rag_service()
+    app_settings = make_settings(
+        qdrant_url=qdrant_url,
+        redis_url=redis_url,
+        reranker_enabled=False,
+    )
+    rag_service = build_rag_service(app_settings=app_settings)
     assert isinstance(rag_service, AsyncRagService)

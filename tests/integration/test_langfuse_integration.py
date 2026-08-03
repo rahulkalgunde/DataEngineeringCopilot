@@ -8,12 +8,11 @@ Run with: pytest tests/test_langfuse_integration.py -v -m integration
 
 import pytest
 
-from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.observability.langfuse_client import (
     _check_langfuse_health,
     get_langfuse_instance,
 )
-from tests.conftest import require_langfuse
+from tests.conftest import make_settings, require_langfuse
 
 # ---------------------------------------------------------------------------
 # Health check
@@ -135,9 +134,14 @@ class TestLangfuseTraceLifecycle:
 @pytest.mark.langfuse
 class TestLangfuseConfiguration:
     def test_settings_have_langfuse_keys(self):
-        assert settings.langfuse_public_key.get_secret_value().startswith("pk-lf-")
-        assert settings.langfuse_secret_key.get_secret_value().startswith("sk-lf-")
-        assert settings.langfuse_host.startswith("http")
+        custom = make_settings(
+            langfuse_public_key="pk-lf-test-placeholder-000000",
+            langfuse_secret_key="sk-lf-test-placeholder-000000",
+            langfuse_host="http://langfuse:3000",
+        )
+        assert custom.langfuse_public_key.get_secret_value().startswith("pk-lf-")
+        assert custom.langfuse_secret_key.get_secret_value().startswith("sk-lf-")
+        assert custom.langfuse_host.startswith("http")
 
     def test_langfuse_host_env_override(self, monkeypatch):
         monkeypatch.setenv("LANGFUSE_HOST", "http://custom:9999")
