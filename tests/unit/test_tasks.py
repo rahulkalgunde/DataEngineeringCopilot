@@ -118,8 +118,7 @@ class TestIngestInputValidation:
         [
             (["source-a", "source-b"], 10),
             (["source"], 1),
-            (["source"], 0),
-            (["source"], 20000),
+            (["source"], 100000),
         ],
     )
     def test_valid_inputs_pass(self, source_names, max_pages):
@@ -133,7 +132,8 @@ class TestIngestInputValidation:
             ([], 10),
             ([s for s in range(21)], 10),
             (["source"], -1),
-            (["source"], 20001),
+            (["source"], 0),
+            (["source"], 100001),
         ],
     )
     def test_invalid_inputs_raise(self, source_names, max_pages):

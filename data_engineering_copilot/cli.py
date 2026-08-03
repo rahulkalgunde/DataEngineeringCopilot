@@ -260,7 +260,7 @@ def reenrich(source: str, urls_file: str | None, category: str = "enrichment") -
         await frontier.close()
         print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
 
-        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+        return await service.ingest(source_names=[source], max_pages_per_source=settings.recovery_max_pages)
 
     total = asyncio.run(_run())
     print(f"Re-ingestion complete: {total} chunks indexed.")
@@ -324,7 +324,7 @@ def retry_failed(source: str, category: str | None) -> None:
         print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
 
         # Re-run ingestion
-        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+        return await service.ingest(source_names=[source], max_pages_per_source=settings.recovery_max_pages)
 
     total = asyncio.run(_run())
     print(f"Re-ingestion complete: {total} chunks indexed.")
@@ -388,7 +388,7 @@ def unskip(source: str) -> None:
         print(f"Requeued {requeued}/{len(url_set)} frontier rows to DISCOVERED")
 
         # Re-run ingestion
-        return await service.ingest(source_names=[source], max_pages_per_source=100000)
+        return await service.ingest(source_names=[source], max_pages_per_source=settings.recovery_max_pages)
 
     total = asyncio.run(_run())
     print(f"Re-ingestion complete: {total} chunks indexed.")
@@ -1132,10 +1132,22 @@ def inspect_db() -> None:
     indexed = result.get("indexed_vectors_count", 0)
     segments = result.get("segments_count", 0)
 
+    vectors_per_point = 0
+    if isinstance(vectors_config, dict):
+        if "size" in vectors_config:
+            vectors_per_point += 1
+        else:
+            vectors_per_point += len(vectors_config)
+    if isinstance(sparse_config, dict):
+        vectors_per_point += len(sparse_config)
+    total_vectors = points_count * vectors_per_point
+
     print(f"  Collection:     {collection_name}")
     print(f"  Status:         {status}")
     print(f"  Points:         {points_count:,}")
-    print(f"  Indexed:        {indexed:,} of {points_count:,}")
+    if vectors_per_point > 1:
+        print(f"  Vectors:        {total_vectors:,}  ({vectors_per_point} per point)")
+    print(f"  Indexed:        {indexed:,} of {total_vectors:,}" if total_vectors else f"  Indexed:        {indexed:,}")
     print(f"  Segments:       {segments}")
     print(f"  Mode:           {mode}")
     print(f"  Dense vector:   {dim}d ({distance})")

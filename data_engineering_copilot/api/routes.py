@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from data_engineering_copilot.config.settings import settings
-from data_engineering_copilot.domain.models import CacheScope
+from data_engineering_copilot.domain.models import CacheScope, IngestRequest
 from data_engineering_copilot.workers.celery_app import celery_app
 from data_engineering_copilot.workers.progress import (
     _LEASE_KEY_PREFIX,
@@ -173,11 +173,6 @@ async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict
             ex=_STATUS_KEY_TTL_SECONDS,
         )
     return state
-
-
-class IngestRequest(BaseModel):
-    source_names: list[str] | None = Field(default=None, max_length=20)
-    max_pages: int | None = Field(default=None, ge=1, le=20000)
 
 
 class TaskStatus(BaseModel):
