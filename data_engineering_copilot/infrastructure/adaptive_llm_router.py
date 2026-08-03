@@ -25,15 +25,15 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
+import structlog
 
 from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
-from data_engineering_copilot.observability.structured_logging import StructuredLogger
 
-logger = StructuredLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 EXTERNAL_PROVIDERS = {"openrouter", "nvidia", "groq", "cerebras", "gemini"}
 

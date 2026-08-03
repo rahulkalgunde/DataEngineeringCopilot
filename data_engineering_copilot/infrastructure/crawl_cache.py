@@ -16,6 +16,9 @@ class CrawlCache:
     Each URL is keyed by its SHA-256 hash. Fields stored: status, etag, last_modified.
     """
 
+    # Content-hash TTL: 30 days per the architecture guidelines (§5.1).
+    _TTL_SECONDS = 2592000
+
     def __init__(self, redis_url: str, prefix: str = "crawl:", redis_client: aioredis.Redis | None = None) -> None:
         self.prefix = prefix
         self.redis_url = redis_url
@@ -84,6 +87,7 @@ class CrawlCache:
             if last_modified:
                 mapping["last_modified"] = last_modified
             await self._redis.hset(key, mapping=mapping)  # type: ignore[arg-type]  # aioredis stub FieldT invariance on injected client
+            await self._redis.expire(key, self._TTL_SECONDS)
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "CrawlCache.set_headers failed",

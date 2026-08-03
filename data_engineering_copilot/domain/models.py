@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -98,6 +99,9 @@ class DocumentChunk:
     chunk_type: str = "text"  # one of: text, code, api, table
     word_count: int = 0
     heading_path: tuple[str, ...] = ()
+    chunk_index: int = 0
+    total_chunks: int = 0
+    crawled_at: str = ""  # ISO 8601 UTC timestamp when the page was crawled
 
 
 @dataclass(frozen=True)
@@ -135,7 +139,7 @@ class Answer:
     sources: tuple[DocumentChunk, ...]
     confidence: float
     groundedness_score: float = 1.0
-    stage_times: dict[str, float] = field(default_factory=dict)
+    stage_times: Mapping[str, float] = field(default_factory=dict)
     trace_id: str | None = None
 
 

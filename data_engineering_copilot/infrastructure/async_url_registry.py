@@ -20,6 +20,9 @@ log = structlog.get_logger(__name__)
 class AsyncUrlRegistry:
     """Per-source URL state store backed by asyncio Redis hashes."""
 
+    # Crawler-state TTL: 7 days per the architecture guidelines (§5.1).
+    _TTL_SECONDS = 604800
+
     def __init__(self, redis_client: SyncRedisProtocol | None, source_name: str) -> None:
         if redis_client is not None and not hasattr(redis_client, "hset"):
             raise TypeError(f"redis_client must implement SyncRedisProtocol (got {type(redis_client).__name__})")
@@ -61,6 +64,7 @@ class AsyncUrlRegistry:
         )
         try:
             await self._redis.hset(self._key, url, record)
+            await self._redis.expire(self._key, self._TTL_SECONDS)
         except redis.exceptions.RedisError as exc:
             log.warning(
                 "async_url_registry.set_html_hash failed",
@@ -113,6 +117,7 @@ class AsyncUrlRegistry:
             pipe = self._redis.pipeline(transaction=False)
             for url, record in records:
                 pipe.hset(self._key, url, record)
+            pipe.expire(self._key, self._TTL_SECONDS)
             await pipe.execute()
         except redis.exceptions.RedisError as exc:
             log.warning(
