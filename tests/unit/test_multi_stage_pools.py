@@ -8,7 +8,7 @@ embedding and storage.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -105,8 +105,8 @@ class TestMultiStagePools:
     def test_executor_sizes_match_settings(self):
         service = _make_service(parse_concurrency=3, chunk_concurrency=5, embed_concurrency=2, store_concurrency=1)
 
-        assert service._parse_executor._max_workers == 3
-        assert service._chunk_executor._max_workers == 5
+        assert cast(Any, service._parse_executor)._max_workers == 3
+        assert cast(Any, service._chunk_executor)._max_workers == 5
 
     @pytest.mark.asyncio
     async def test_process_raw_uses_parse_executor(self):

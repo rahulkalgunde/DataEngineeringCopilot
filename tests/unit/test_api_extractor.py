@@ -1,11 +1,13 @@
 """Unit tests for ApiDocExtractor."""
 
+from typing import Any
+
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 
 
 def _chunk(text: str, **kwargs) -> DocumentChunk:
-    defaults = dict(chunk_id="c1", source_name="Spark", title="API", url="http://x", text=text)
+    defaults: dict[str, Any] = dict(chunk_id="c1", source_name="Spark", title="API", url="http://x", text=text)
     defaults.update(kwargs)
     return DocumentChunk(**defaults)
 

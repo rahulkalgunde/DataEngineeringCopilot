@@ -69,5 +69,9 @@ async def test_async_url_registry_handles_none_redis():
 
 
 async def test_async_url_registry_rejects_bad_redis_client():
+    from typing import cast
+
+    from data_engineering_copilot.domain.protocols import SyncRedisProtocol
+
     with pytest.raises(TypeError, match="must implement SyncRedisProtocol"):
-        AsyncUrlRegistry("not_a_redis_client", "test_source")
+        AsyncUrlRegistry(cast(SyncRedisProtocol, "not_a_redis_client"), "test_source")

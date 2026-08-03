@@ -217,7 +217,7 @@ class TestProtocolUsage:
     """Test that protocol types work in function annotations."""
 
     def test_protocol_type_hint_works(self):
-        def process_document(chunker: ChunkerProtocol, document: Any) -> Any:
+        def process_document(chunker: ChunkerProtocol | None, document: Any) -> Any:
             return document
 
         result = process_document(None, create_parsed_document())
@@ -225,7 +225,7 @@ class TestProtocolUsage:
 
     def test_protocol_uninstantiable(self):
         with pytest.raises(TypeError):
-            CrawlerProtocol()
+            CrawlerProtocol()  # type: ignore[reportAbstractUsage]  # deliberate negative test
 
 
 if __name__ == "__main__":

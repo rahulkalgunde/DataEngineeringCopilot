@@ -1,11 +1,13 @@
 """Unit tests for CodeBlockParser."""
 
+from typing import Any
+
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 
 
 def _chunk(text: str, **kwargs) -> DocumentChunk:
-    defaults = dict(chunk_id="c1", source_name="Spark", title="Code", url="http://x", text=text)
+    defaults: dict[str, Any] = dict(chunk_id="c1", source_name="Spark", title="Code", url="http://x", text=text)
     defaults.update(kwargs)
     return DocumentChunk(**defaults)
 
