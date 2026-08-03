@@ -8,13 +8,11 @@ embedded code blocks.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
-from data_engineering_copilot.utils.text import slugify
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +239,14 @@ class HeaderAwareChunker:
             current_path = section.heading_path
 
         _flush()
+        return self._number_chunks(chunks)
+
+    def _number_chunks(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+        """Assign ``chunk_index`` / ``total_chunks`` to every chunk."""
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            if chunk.chunk_index != i or chunk.total_chunks != total:
+                chunks[i] = replace(chunk, chunk_index=i, total_chunks=total)
         return chunks
 
     # ------------------------------------------------------------------
@@ -249,6 +255,7 @@ class HeaderAwareChunker:
 
     @staticmethod
     def _chunk_id(document: ParsedDocument, index: int) -> str:
-        digest = hashlib.sha1(document.url.encode("utf-8")).hexdigest()[:10]
-        source = slugify(document.source_name)
-        return f"{source}:{digest}:hdr:{index:04d}"
+        import uuid
+
+        namespace = uuid.uuid5(uuid.NAMESPACE_DNS, document.url)
+        return str(uuid.uuid5(namespace, f"{document.source_name}:hdr:{index:04d}"))

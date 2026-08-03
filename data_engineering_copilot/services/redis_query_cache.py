@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import time
+from typing import Any
 
 import numpy as np
 import redis.exceptions
@@ -34,10 +35,17 @@ class RedisQueryCache:
         semantic_ttl: int = 7200,
         similarity_threshold: float = 0.92,
         max_semantic_entries: int = 10000,
+        redis_client: Any | None = None,
     ) -> None:
-        import redis.asyncio as aioredis
+        # Redis client is injected (dependency inversion); only self-create a
+        # client when none is provided so the service layer never constructs
+        # infrastructure directly.
+        if redis_client is not None:
+            self._redis = redis_client
+        else:
+            import redis.asyncio as aioredis
 
-        self._redis = aioredis.from_url(redis_url, decode_responses=True)
+            self._redis = aioredis.from_url(redis_url, decode_responses=True)
         self._exact_ttl = exact_ttl
         self._semantic_ttl = semantic_ttl
         self._similarity_threshold = similarity_threshold
@@ -101,8 +109,9 @@ class RedisQueryCache:
                     data = await self._redis.hgetall(key)
                     if "embedding" not in data or "answer" not in data:
                         continue
-                    if isinstance(data["answer"], bytes):
-                        data["answer"] = data["answer"].decode("utf-8")
+                    answer_raw = data["answer"]
+                    if isinstance(answer_raw, bytes):
+                        answer_raw = answer_raw.decode("utf-8")
                     stored_vec = np.array(json.loads(data["embedding"]), dtype=np.float32)
                     stored_norm = np.linalg.norm(stored_vec)
                     if stored_norm == 0:
@@ -110,7 +119,7 @@ class RedisQueryCache:
                     score = float(np.dot(query_vec, stored_vec) / (query_norm * stored_norm))
                     if score > best_score:
                         best_score = score
-                        best_answer = data["answer"]
+                        best_answer = answer_raw
                 if cursor == 0:
                     break
 
