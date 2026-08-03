@@ -288,6 +288,82 @@ class TestGetRedisClient:
 
 
 # ---------------------------------------------------------------------------
+# _reconcile_ingestion_status tests
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileIngestionStatus:
+    """Tests for the async reconcile helper in api/routes.py.
+
+    Verifies the hot path is async-only (a live lease short-circuits without
+    touching the blocking Celery backend) and that the Celery backstop still
+    repairs terminal/stale states.
+    """
+
+    async def test_processing_with_live_lease_skips_celery(self):
+        from data_engineering_copilot.api.routes import _reconcile_ingestion_status
+
+        client = AsyncMock()
+        client.exists.return_value = 1
+        with patch("data_engineering_copilot.api.routes.AsyncResult") as mock_ar:
+            result = await _reconcile_ingestion_status(
+                client, "task-lease", {"task_id": "task-lease", "status": "PROCESSING"}
+            )
+
+        mock_ar.assert_not_called()
+        assert result["status"] == "PROCESSING"
+
+    async def test_processing_without_lease_reconciles_terminal_celery_state(self):
+        from data_engineering_copilot.api.routes import _reconcile_ingestion_status
+
+        client = AsyncMock()
+        client.exists.return_value = 0
+        mock_celery = MagicMock()
+        mock_celery.state = "FAILURE"
+        with patch("data_engineering_copilot.api.routes.AsyncResult") as mock_ar:
+            mock_ar.return_value = mock_celery
+            result = await _reconcile_ingestion_status(
+                client, "task-fail", {"task_id": "task-fail", "status": "PROCESSING"}
+            )
+
+        mock_ar.assert_called_once()
+        assert result["status"] == "FAILED"
+        assert "Celery reported" in result["error"]
+
+    async def test_processing_without_lease_marks_failed_when_celery_pending(self):
+        from data_engineering_copilot.api.routes import _reconcile_ingestion_status
+
+        client = AsyncMock()
+        client.exists.return_value = 0
+        mock_celery = MagicMock()
+        mock_celery.state = "PENDING"
+        with patch("data_engineering_copilot.api.routes.AsyncResult") as mock_ar:
+            mock_ar.return_value = mock_celery
+            result = await _reconcile_ingestion_status(
+                client, "task-lost", {"task_id": "task-lost", "status": "PROCESSING"}
+            )
+
+        assert result["status"] == "FAILED"
+        assert "heartbeat expired" in result["error"].lower()
+        client.set.assert_called()
+
+    async def test_dispatched_not_stale_stays_dispatched(self):
+        from data_engineering_copilot.api.routes import _reconcile_ingestion_status
+
+        client = AsyncMock()
+        client.exists.return_value = 0
+        mock_celery = MagicMock()
+        mock_celery.state = "PENDING"
+        with patch("data_engineering_copilot.api.routes.AsyncResult") as mock_ar:
+            mock_ar.return_value = mock_celery
+            result = await _reconcile_ingestion_status(
+                client, "task-new", {"task_id": "task-new", "status": "DISPATCHED", "dispatched_at": 0}
+            )
+
+        assert result["status"] == "DISPATCHED"
+
+
+# ---------------------------------------------------------------------------
 # API endpoint tests
 # ---------------------------------------------------------------------------
 

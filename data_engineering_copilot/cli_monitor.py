@@ -24,17 +24,31 @@ W = 160
 
 
 def fetch_status(api_url: str, task_id: str | None = None) -> dict | None:
+    """Fetch the latest status, tolerating transient API/network failures.
+
+    Retries a few times with short backoff; only returns ``None`` (treated as
+    "lost connection") after the retries are exhausted.
+    """
     url = f"{api_url}/api/v1/ingest/status/{task_id}" if task_id else f"{api_url}/api/v1/ingest/latest"
-    try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        return None
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            if exc.code >= 500:
+                last_exc = exc
+            else:
+                raise
+        except (ConnectionRefusedError, TimeoutError, OSError) as exc:
+            last_exc = exc
+        time.sleep(2 * (attempt + 1))
+    if isinstance(last_exc, urllib.error.HTTPError):
+        raise last_exc
+    return None
 
 
 def _fmt_delta(value: int) -> str:

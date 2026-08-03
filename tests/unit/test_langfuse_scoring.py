@@ -79,7 +79,7 @@ def test_telemetry_tracer_score_calls_langfuse(telemetry_tracer, mock_langfuse):
         value=0.85,
         data_type="NUMERIC",
     )
-    
+
     assert len(mock_langfuse.scores) == 1
     assert mock_langfuse.scores[0]["trace_id"] == "test-trace-123"
     assert mock_langfuse.scores[0]["name"] == "confidence"
@@ -92,7 +92,7 @@ def test_telemetry_tracer_score_multiple_metrics(telemetry_tracer, mock_langfuse
     telemetry_tracer.score(trace_id="trace-1", name="confidence", value=0.9)
     telemetry_tracer.score(trace_id="trace-1", name="groundedness", value=0.8)
     telemetry_tracer.score(trace_id="trace-1", name="intent_confidence", value=0.7)
-    
+
     assert len(mock_langfuse.scores) == 3
     assert mock_langfuse.scores[0]["name"] == "confidence"
     assert mock_langfuse.scores[1]["name"] == "groundedness"
