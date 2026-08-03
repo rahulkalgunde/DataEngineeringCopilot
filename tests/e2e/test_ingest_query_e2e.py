@@ -68,8 +68,8 @@ class TestIngestQueryPipeline:
             parsed = MarkdownParser().parse(raw)
             assert parsed is not None, "Parser should return parsed doc"
 
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             assert len(chunks) >= 1, "Should produce at least one chunk"
 
             texts = [c.text for c in chunks]
@@ -100,8 +100,8 @@ class TestIngestQueryPipeline:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
 
             embeddings = await service.embeddings.embed_texts(texts)
@@ -119,8 +119,17 @@ class TestIngestQueryPipeline:
     @pytest.mark.serial
     async def test_query_before_ingest_returns_low_confidence(self, e2e_settings):
         """Querying an empty collection should return low confidence."""
-        rag = _build_rag_service(e2e_settings)
-        answer = await rag.answer("What is Apache Spark?")
+        import uuid
+
+        isolated = e2e_settings.model_copy(
+            update={
+                "collection_name": f"e2e_empty_{uuid.uuid4().hex[:8]}",
+                "redis_url": e2e_settings.redis_url.rsplit("/", 1)[0] + "/15",
+            }
+        )
+        rag = _build_rag_service(isolated)
+        await rag.vector_store.initialize()
+        answer = await rag.answer(f"What is the capital of Atlantida {uuid.uuid4().hex[:6]}?")
         assert answer.confidence == 0.0
 
     async def test_content_hash_persisted(self, e2e_settings):
@@ -134,8 +143,8 @@ class TestIngestQueryPipeline:
             parsed = MarkdownParser().parse(raw)
             content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
 
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             chunks = [dataclasses.replace(c, content_hash=content_hash) for c in chunks]
             texts = [c.text for c in chunks]
             embeddings = await service.embeddings.embed_texts(texts)
@@ -155,8 +164,8 @@ class TestIngestQueryPipeline:
             url = "https://spark.apache.org/docs/latest/"
             raw = RawDocument(source_name="test", url=url, html=SAMPLE_HTML)
             parsed = MarkdownParser().parse(raw)
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
             embeddings = await service.embeddings.embed_texts(texts)
             await service.vector_store.upsert_chunks(chunks, embeddings)

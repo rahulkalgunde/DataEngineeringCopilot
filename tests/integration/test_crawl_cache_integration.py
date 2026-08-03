@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 
 import pytest
 
@@ -16,7 +17,7 @@ pytestmark = [
 
 @pytest.fixture
 def url_hash():
-    return hashlib.sha256(b"https://example.com/test").hexdigest()[:16]
+    return hashlib.sha256(f"https://example.com/test-{uuid.uuid4().hex}".encode()).hexdigest()[:16]
 
 
 async def test_crawl_cache_set_and_get_with_real_redis(redis_url, url_hash):

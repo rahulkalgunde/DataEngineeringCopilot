@@ -23,6 +23,7 @@ def _async_redis_mock():
     mock_client.set = AsyncMock()
     mock_client.setex = AsyncMock()
     mock_client.delete = AsyncMock()
+    mock_client.exists = AsyncMock(return_value=True)
 
     async def _factory():
         return mock_client
@@ -73,7 +74,7 @@ class TestLatestEndpoint:
             patch("data_engineering_copilot.api.routes._get_async_redis", factory),
             patch("data_engineering_copilot.api.routes.async_ingest_task") as mock_task,
         ):
-            mock_task.delay.return_value = MagicMock(id="new-task-id", state="PENDING")
+            mock_task.apply_async.return_value = MagicMock(id="new-task-id", state="PENDING")
 
             response = client.post(
                 "/api/v1/ingest",

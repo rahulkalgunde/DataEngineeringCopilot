@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from typing import cast
 
 import redis.asyncio as aioredis
 import structlog
@@ -120,12 +121,23 @@ async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict
     if state.get("status") == "PROCESSING" and await client.exists(f"{_LEASE_KEY_PREFIX}:{task_id}"):
         return state
 
-    celery_state = await asyncio.to_thread(lambda: AsyncResult(task_id).state)
-    terminal_state = {
-        "SUCCESS": ("COMPLETED", None),
-        "FAILURE": ("FAILED", "Celery reported task failure."),
-        "REVOKED": ("CANCELLED", "Task was revoked."),
-    }.get(celery_state)
+    try:
+        celery_state = cast(
+            str | None,
+            await asyncio.to_thread(lambda: AsyncResult(task_id).state),
+        )
+    except Exception:
+        # Celery backend/broker unavailable (e.g. DisabledBackend when no broker
+        # is configured, or broker down). Fall back to the Redis-only snapshot.
+        log.warning("ingest.reconcile.celery_unavailable", task_id=task_id)
+        celery_state = None
+    terminal_state = None
+    if celery_state is not None:
+        terminal_state = {
+            "SUCCESS": ("COMPLETED", None),
+            "FAILURE": ("FAILED", "Celery reported task failure."),
+            "REVOKED": ("CANCELLED", "Task was revoked."),
+        }.get(celery_state)
     if terminal_state is not None:
         state["status"], default_error = terminal_state
         if default_error and not state.get("error"):
@@ -209,7 +221,7 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
         raw_task_id = await client.get("ingestion:latest_task_id")
         if raw_task_id:
             try:
-                latest_task_id = str(raw_task_id)
+                latest_task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else raw_task_id
                 raw = await client.get(f"{REDIS_KEY_PREFIX}:{latest_task_id}")
                 if raw:
                     existing_data = json.loads(raw)
@@ -298,7 +310,7 @@ async def get_latest_ingestion() -> dict:
     raw_task_id = await client.get("ingestion:latest_task_id")
     if not raw_task_id:
         raise HTTPException(status_code=404, detail="No ingestion task found.")
-    task_id = str(raw_task_id)
+    task_id = raw_task_id.decode() if isinstance(raw_task_id, bytes) else raw_task_id
     raw = await client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
     if not raw:
         raise HTTPException(status_code=404, detail="Task status expired.")

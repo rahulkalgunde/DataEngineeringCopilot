@@ -54,8 +54,8 @@ class TestRagStreaming:
             parsed = MarkdownParser().parse(raw)
             assert parsed is not None
 
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             assert len(chunks) >= 1
 
             texts = [c.text for c in chunks]
@@ -98,8 +98,8 @@ class TestRagStreaming:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
             embeddings = await e2e_embedder.embed_texts(texts)
             await store.upsert_chunks(chunks, embeddings)
@@ -137,8 +137,8 @@ class TestRagStreaming:
                 html=SAMPLE_HTML,
             )
             parsed = MarkdownParser().parse(raw)
-            chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-            chunks = chunker.chunk(parsed)
+            chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+            chunks = await chunker.chunk(parsed)
             texts = [c.text for c in chunks]
             embeddings = await e2e_embedder.embed_texts(texts)
             await store.upsert_chunks(chunks, embeddings)

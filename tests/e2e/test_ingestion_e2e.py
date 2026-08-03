@@ -8,7 +8,6 @@ Requires Qdrant (testcontainer) and Ollama (Docker Compose).
 Run with: ``dec_venv/bin/python -m pytest tests/e2e/ -v -m ingestion``
 """
 
-import asyncio
 import dataclasses
 import hashlib
 import time
@@ -59,13 +58,15 @@ df.show()</code></pre>
 
 
 @pytest.fixture
-def embedder(e2e_settings):
+async def embedder(e2e_settings):
     require_qdrant_and_ollama(e2e_settings.qdrant_url)
-    return AsyncOllamaEmbeddings(model_name=e2e_settings.embedding_model_name)
+    emb = AsyncOllamaEmbeddings(model_name=e2e_settings.embedding_model_name)
+    yield emb
+    await emb.close()
 
 
 @pytest.fixture
-def vector_store(e2e_settings):
+async def vector_store(e2e_settings):
     require_qdrant_and_ollama(e2e_settings.qdrant_url)
     from qdrant_client import QdrantClient
 
@@ -75,8 +76,9 @@ def vector_store(e2e_settings):
         collection_name=coll,
         embedding_dimension=768,
     )
-    asyncio.run(store.initialize())
+    await store.initialize()
     yield store
+    await store.close()
     try:
         c = QdrantClient(url=e2e_settings.qdrant_url, prefer_grpc=False)
         c.delete_collection(collection_name=coll)
@@ -89,7 +91,7 @@ def vector_store(e2e_settings):
 class TestIngestionPipelineE2E:
     """End-to-end test: parse HTML → chunk → embed → upsert → query."""
 
-    def _ingest_sample(self, vector_store, embedder) -> int:
+    async def _ingest_sample(self, vector_store, embedder) -> int:
         raw = RawDocument(
             source_name="Apache Spark Documentation",
             url="https://spark.apache.org/docs/latest/",
@@ -98,35 +100,35 @@ class TestIngestionPipelineE2E:
         parsed = MarkdownParser().parse(raw)
         assert parsed is not None
 
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-        chunks = chunker.chunk(parsed)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+        chunks = await chunker.chunk(parsed)
         assert len(chunks) >= 2
 
         texts = [c.text for c in chunks]
-        embeddings = asyncio.run(embedder.embed_texts(texts))
-        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
+        embeddings = await embedder.embed_texts(texts)
+        await vector_store.upsert_chunks(chunks, embeddings)
         return len(chunks)
 
-    def test_parse_chunk_embed_upsert(self, vector_store, embedder):
-        n = self._ingest_sample(vector_store, embedder)
-        assert asyncio.run(vector_store.count()) == n
+    async def test_parse_chunk_embed_upsert(self, vector_store, embedder):
+        n = await self._ingest_sample(vector_store, embedder)
+        assert await vector_store.count() == n
 
-    def test_ingested_data_queryable(self, vector_store, embedder):
-        self._ingest_sample(vector_store, embedder)
+    async def test_ingested_data_queryable(self, vector_store, embedder):
+        await self._ingest_sample(vector_store, embedder)
 
         query = "What is Apache Spark used for?"
-        query_emb = asyncio.run(embedder.embed_query(query))
-        results = asyncio.run(vector_store.query(query_emb, top_k=5))
+        query_emb = await embedder.embed_query(query)
+        results = await vector_store.query(query_emb, top_k=5)
 
         assert len(results) > 0
         assert any("unified analytics engine" in r.chunk.text.lower() for r in results), "Should find Spark content"
 
-    def test_ingestion_idempotent(self, vector_store, embedder):
-        n = self._ingest_sample(vector_store, embedder)
-        self._ingest_sample(vector_store, embedder)
-        assert asyncio.run(vector_store.count()) == n
+    async def test_ingestion_idempotent(self, vector_store, embedder):
+        n = await self._ingest_sample(vector_store, embedder)
+        await self._ingest_sample(vector_store, embedder)
+        assert await vector_store.count() == n
 
-    def test_content_hash_persisted(self, vector_store, embedder):
+    async def test_content_hash_persisted(self, vector_store, embedder):
         url = "https://spark.apache.org/docs/latest/"
         raw = RawDocument(
             source_name="Apache Spark Documentation",
@@ -135,17 +137,17 @@ class TestIngestionPipelineE2E:
         )
         parsed = MarkdownParser().parse(raw)
         content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-        chunks = chunker.chunk(parsed)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+        chunks = await chunker.chunk(parsed)
         chunks = [dataclasses.replace(c, content_hash=content_hash) for c in chunks]
         texts = [c.text for c in chunks]
-        embeddings = asyncio.run(embedder.embed_texts(texts))
-        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
+        embeddings = await embedder.embed_texts(texts)
+        await vector_store.upsert_chunks(chunks, embeddings)
 
-        stored = asyncio.run(vector_store.get_content_hash_for_url(url))
+        stored = await vector_store.get_content_hash_for_url(url)
         assert stored == content_hash
 
-    def test_delete_by_url_removes_chunks(self, vector_store, embedder):
+    async def test_delete_by_url_removes_chunks(self, vector_store, embedder):
         url = "https://spark.apache.org/docs/latest/"
         raw = RawDocument(
             source_name="Apache Spark Documentation",
@@ -153,18 +155,18 @@ class TestIngestionPipelineE2E:
             html=SAMPLE_HTML,
         )
         parsed = MarkdownParser().parse(raw)
-        chunker = DocumentChunker(chunk_size=500, chunk_overlap=100)
-        chunks = chunker.chunk(parsed)
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+        chunks = await chunker.chunk(parsed)
         texts = [c.text for c in chunks]
-        embeddings = asyncio.run(embedder.embed_texts(texts))
-        asyncio.run(vector_store.upsert_chunks(chunks, embeddings))
+        embeddings = await embedder.embed_texts(texts)
+        await vector_store.upsert_chunks(chunks, embeddings)
 
-        count_before = asyncio.run(vector_store.count())
+        count_before = await vector_store.count()
         assert count_before > 0
 
-        asyncio.run(vector_store.delete_by_url(url))
+        await vector_store.delete_by_url(url)
         time.sleep(0.3)
-        assert asyncio.run(vector_store.count()) == 0
+        assert await vector_store.count() == 0
 
 
 class TestParserAndChunker:
