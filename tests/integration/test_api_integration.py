@@ -52,19 +52,19 @@ def client():
 @pytest.mark.integration
 @pytest.mark.api
 class TestIngestEndpoint:
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_returns_task_id(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_returns_task_id(self, mock_dispatch, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-abc-123"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"], "max_pages": 10})
         assert resp.status_code == 200
         body = resp.json()
         assert body["task_id"] == "task-abc-123"
         assert body["state"] == "PENDING"
-        mock_delay.assert_called_once_with(["Test"], 10)
+        assert mock_dispatch.call_args.kwargs["args"] == (["Test"], 10)
 
         raw = redis_test_client.get("ingestion:latest_task_id")
         assert raw is not None
@@ -75,30 +75,30 @@ class TestIngestEndpoint:
         assert status["status"] == "DISPATCHED"
         assert status["source_names"] == ["Test"]
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_with_no_sources(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_with_no_sources(self, mock_dispatch, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-null-sources"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         resp = client.post("/api/v1/ingest", json={})
         assert resp.status_code == 200
-        mock_delay.assert_called_once_with(None, 0)
+        assert mock_dispatch.call_args.kwargs["args"] == (None, None)
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_with_multiple_sources(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_with_multiple_sources(self, mock_dispatch, redis_test_client, client):
         mock_task = MagicMock()
         mock_task.id = "task-multi"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         resp = client.post(
             "/api/v1/ingest",
             json={"source_names": ["Spark", "Airflow"], "max_pages": 5},
         )
         assert resp.status_code == 200
-        mock_delay.assert_called_once_with(["Spark", "Airflow"], 5)
+        assert mock_dispatch.call_args.kwargs["args"] == (["Spark", "Airflow"], 5)
 
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
     def test_ingest_invalid_body(self, mock_delay, redis_test_client, client):
@@ -146,8 +146,8 @@ class TestIngestEndpoint:
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 409
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_allowed_when_previous_task_completed(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_allowed_when_previous_task_completed(self, mock_dispatch, redis_test_client, client):
         """POST /api/v1/ingest should succeed if previous task is COMPLETED."""
         existing_task_id = "task-completed-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
@@ -157,14 +157,14 @@ class TestIngestEndpoint:
         mock_task = MagicMock()
         mock_task.id = "task-new-001"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 200
-        mock_delay.assert_called_once()
+        mock_dispatch.assert_called_once()
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_allowed_when_latest_task_status_corrupt(self, mock_delay, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_allowed_when_latest_task_status_corrupt(self, mock_dispatch, redis_test_client, client):
         """POST /api/v1/ingest should succeed even if the stored status JSON is corrupt."""
         existing_task_id = "task-corrupt-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
@@ -173,15 +173,15 @@ class TestIngestEndpoint:
         mock_task = MagicMock()
         mock_task.id = "task-new-002"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 200
-        mock_delay.assert_called_once()
+        mock_dispatch.assert_called_once()
 
     @patch("data_engineering_copilot.api.routes.AsyncResult")
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_allowed_when_stale_zombie(self, mock_delay, mock_ar, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_allowed_when_stale_zombie(self, mock_dispatch, mock_ar, redis_test_client, client):
         """Allow dispatch when Redis says PROCESSING but Celery says FAILURE."""
         existing_task_id = "task-zombie-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
@@ -195,15 +195,15 @@ class TestIngestEndpoint:
         mock_new_task = MagicMock()
         mock_new_task.id = "task-new-zombie"
         mock_new_task.state = "PENDING"
-        mock_delay.return_value = mock_new_task
+        mock_dispatch.return_value = mock_new_task
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 200
-        mock_delay.assert_called_once()
+        mock_dispatch.assert_called_once()
 
     @patch("data_engineering_copilot.api.routes.AsyncResult")
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_ingest_allowed_when_stale_revoked(self, mock_delay, mock_ar, redis_test_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_ingest_allowed_when_stale_revoked(self, mock_dispatch, mock_ar, redis_test_client, client):
         """Allow dispatch when Redis says DISPATCHED but Celery says REVOKED."""
         existing_task_id = "task-revoked-001"
         redis_test_client.set("ingestion:latest_task_id", existing_task_id, ex=86400)
@@ -217,11 +217,11 @@ class TestIngestEndpoint:
         mock_new_task = MagicMock()
         mock_new_task.id = "task-new-revoked"
         mock_new_task.state = "PENDING"
-        mock_delay.return_value = mock_new_task
+        mock_dispatch.return_value = mock_new_task
 
         resp = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp.status_code == 200
-        mock_delay.assert_called_once()
+        mock_dispatch.assert_called_once()
 
     @patch("data_engineering_copilot.api.routes.AsyncResult")
     @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
@@ -390,38 +390,42 @@ class TestDispatchLock:
         with patch("data_engineering_copilot.services.rate_limiter._redis_client", return_value=fresh_redis_client):
             yield
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_concurrent_dispatches_second_gets_409(self, mock_delay, fresh_redis_client, client):
+    @patch("data_engineering_copilot.api.routes.AsyncResult")
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_concurrent_dispatches_second_gets_409(self, mock_dispatch, mock_ar, fresh_redis_client, client):
         """Two rapid POST /api/v1/ingest calls: second returns 409."""
 
         task_ids = iter(["task-first", "task-second"])
 
-        def delay(*args, **kwargs):
+        def dispatch(*args, **kwargs):
             mock = MagicMock()
             mock.id = next(task_ids)
             mock.state = "PENDING"
             return mock
 
-        mock_delay.side_effect = delay
+        mock_dispatch.side_effect = dispatch
+        mock_celery = MagicMock()
+        mock_celery.state = "PENDING"
+        mock_ar.return_value = mock_celery
 
         resp1 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp1.status_code == 200
 
         resp2 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
-        assert resp2.status_code == 200
+        assert resp2.status_code == 409
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_second_dispatch_without_latest_task(self, mock_delay, fresh_redis_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_second_dispatch_without_latest_task(self, mock_dispatch, fresh_redis_client, client):
         """Second dispatch succeeds when previous task status is cleared."""
         task_ids = iter(["task-clear-001", "task-clear-002"])
 
-        def delay(*args, **kwargs):
+        def dispatch(*args, **kwargs):
             mock = MagicMock()
             mock.id = next(task_ids)
             mock.state = "PENDING"
             return mock
 
-        mock_delay.side_effect = delay
+        mock_dispatch.side_effect = dispatch
 
         resp1 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp1.status_code == 200
@@ -433,26 +437,26 @@ class TestDispatchLock:
         resp2 = client.post("/api/v1/ingest", json={"source_names": ["Test"]})
         assert resp2.status_code == 200
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_dispatch_lock_released_after_success(self, mock_delay, fresh_redis_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_dispatch_lock_released_after_success(self, mock_dispatch, fresh_redis_client, client):
         """After successful dispatch, lock key should be deleted."""
         mock_task = MagicMock()
         mock_task.id = "task-lock-test"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         client.post("/api/v1/ingest", json={"source_names": ["Test"]})
 
         lock_exists = fresh_redis_client.get("ingestion:dispatch_lock")
         assert lock_exists is None, "Lock should be deleted after dispatch"
 
-    @patch("data_engineering_copilot.api.routes.async_ingest_task.delay")
-    def test_dispatch_lock_auto_expires(self, mock_delay, fresh_redis_client, client):
+    @patch("data_engineering_copilot.api.routes.async_ingest_task.apply_async")
+    def test_dispatch_lock_auto_expires(self, mock_dispatch, fresh_redis_client, client):
         """Lock key should have TTL set so it auto-expires if process crashes."""
         mock_task = MagicMock()
         mock_task.id = "task-lock-ttl"
         mock_task.state = "PENDING"
-        mock_delay.return_value = mock_task
+        mock_dispatch.return_value = mock_task
 
         client.post("/api/v1/ingest", json={"source_names": ["Test"]})
 

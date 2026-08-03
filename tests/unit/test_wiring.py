@@ -213,7 +213,7 @@ class TestApiRoutesWiring:
             mock_client = AsyncMock()
             mock_client.get.return_value = None
             mock_get_client.return_value = mock_client
-            mock_task.delay.return_value = MagicMock(id="new-task-id", state="PENDING")
+            mock_task.apply_async.return_value = MagicMock(id="new-task-id", state="PENDING")
 
             client = TestClient(app)
             response = client.post(

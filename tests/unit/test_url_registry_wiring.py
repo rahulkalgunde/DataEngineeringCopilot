@@ -46,6 +46,7 @@ class TestResetIndexClearsRegistry:
                 b"crawl:url_registry:Source B",
             ],
             [b"crawl:header:abc", b"crawl:header:def"],
+            [],
         ]
         no_pg_settings = cli_mod.settings.model_copy(update={"crawl_db_url": ""})
 
@@ -59,9 +60,10 @@ class TestResetIndexClearsRegistry:
             ):
                 reset_index()
 
-        assert mock_redis.scan_iter.call_count == 2
+        assert mock_redis.scan_iter.call_count == 3
         mock_redis.scan_iter.assert_any_call("crawl:url_registry:*")
         mock_redis.scan_iter.assert_any_call("crawl:*")
+        mock_redis.scan_iter.assert_any_call("rag:cache:*")
 
     def test_reset_index_handles_no_registry_keys(self) -> None:
         import data_engineering_copilot.cli as cli_mod
@@ -81,9 +83,10 @@ class TestResetIndexClearsRegistry:
             ):
                 reset_index()
 
-        assert mock_redis.scan_iter.call_count == 2
+        assert mock_redis.scan_iter.call_count == 3
         mock_redis.scan_iter.assert_any_call("crawl:url_registry:*")
         mock_redis.scan_iter.assert_any_call("crawl:*")
+        mock_redis.scan_iter.assert_any_call("rag:cache:*")
         mock_redis.delete.assert_not_called()
 
 
