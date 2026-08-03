@@ -91,6 +91,7 @@ class TestGetIngestStatus:
         result = _get_ingest_status("task-abc")
 
         data, error = result
+        assert data is not None
         assert data["status"] == "PROCESSING"
         assert data["pages_fetched"] == 5
         assert error is None
@@ -98,8 +99,9 @@ class TestGetIngestStatus:
     @patch("data_engineering_copilot.ui.streamlit_app.urllib.request.urlopen")
     def test_returns_none_on_404(self, mock_urlopen):
         import urllib.error
+        from email.message import Message
 
-        mock_urlopen.side_effect = urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
+        mock_urlopen.side_effect = urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=Message(), fp=None)
 
         result = _get_ingest_status("nonexistent")
 

@@ -22,6 +22,7 @@ class TestResetIndexClearsRegistry:
     def _make_urlopen_side_effect(self):
         """Return a side_effect list: first call returns 404 (DELETE), second call succeeds (PUT)."""
         import urllib.error
+        from email.message import Message
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = b'{"result": true}'
@@ -30,7 +31,7 @@ class TestResetIndexClearsRegistry:
 
         def _urlopen(req, timeout=10):
             if req.get_method() == "DELETE":
-                raise urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
+                raise urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=Message(), fp=None)
             return mock_resp
 
         return _urlopen

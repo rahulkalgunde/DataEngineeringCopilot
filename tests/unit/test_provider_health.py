@@ -71,6 +71,7 @@ def test_register_provider_twice_is_idempotent():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.register_provider("openrouter", ["openrouter/smart"])
     ph = reg.get_provider_health("openrouter")
+    assert ph is not None
     assert "openrouter/free" in ph.models
     assert "openrouter/smart" in ph.models
 
@@ -80,6 +81,7 @@ def test_track_success():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_success("openrouter", "openrouter/free", 2.5)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.total_success == 1
     assert mh.consecutive_failures == 0
     assert mh.last_error_category is None
@@ -92,6 +94,7 @@ def test_track_success_resets_consecutive_failures():
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.TEMPORARY_UNAVAILABLE)
     reg.track_success("openrouter", "openrouter/free", 1.0)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.consecutive_failures == 0
 
 
@@ -100,6 +103,7 @@ def test_track_failure_temporary_unavailable_sets_cooldown():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.TEMPORARY_UNAVAILABLE)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.total_failures == 1
     assert mh.consecutive_failures == 1
     assert mh.last_error_category == ProviderErrorCategory.TEMPORARY_UNAVAILABLE
@@ -111,6 +115,7 @@ def test_track_failure_rate_limited_sets_cooldown():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED, retry_after=10.0)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.cooldown_until > time.monotonic()
 
 
@@ -119,6 +124,7 @@ def test_track_failure_rate_limited_without_retry_after_uses_short_initial_coold
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.cooldown_until > time.monotonic()
     assert mh.cooldown_until - time.monotonic() <= 10.1
 
@@ -130,6 +136,7 @@ def test_track_failure_rate_limited_without_retry_after_escalates_on_repeats():
     for _ in range(4):
         reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
         mh = reg.get_model_health("openrouter", "openrouter/free")
+        assert mh is not None
         durations.append(round(mh.cooldown_until - time.monotonic(), 1))
     assert durations == [10.0, 20.0, 40.0, 60.0]
 
@@ -140,6 +147,7 @@ def test_track_failure_rate_limited_without_retry_after_caps_at_default():
     for _ in range(10):
         reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.cooldown_until - time.monotonic() <= 60.1
 
 
@@ -148,6 +156,7 @@ def test_track_failure_rate_limited_with_retry_after_honored():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RATE_LIMITED, retry_after=25.0)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert round(mh.cooldown_until - time.monotonic(), 1) == 25.0
 
 
@@ -156,6 +165,7 @@ def test_track_failure_retryable_uses_short_cooldown():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.RETRYABLE)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert 0 < mh.cooldown_until - time.monotonic() <= 10.0
 
 
@@ -164,6 +174,7 @@ def test_track_failure_permanent_error_sets_cooldown():
     reg.register_provider("openrouter", ["openrouter/free"])
     reg.track_failure("openrouter", "openrouter/free", ProviderErrorCategory.PERMANENT_ERROR)
     mh = reg.get_model_health("openrouter", "openrouter/free")
+    assert mh is not None
     assert mh.cooldown_until > time.monotonic()
 
 
@@ -221,6 +232,7 @@ def test_mark_provider_cooldown_sets_all_models():
     reg.mark_provider_cooldown("openrouter", duration=9999)
     for name in ("model-a", "model-b"):
         mh = reg.get_model_health("openrouter", name)
+        assert mh is not None
         assert mh.cooldown_until > time.monotonic()
 
 

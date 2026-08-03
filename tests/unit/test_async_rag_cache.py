@@ -69,7 +69,9 @@ class TestQueryCacheConcurrency:
         for _ in range(50):
             cache.set("same_key", Answer(text="updated", sources=(), confidence=0.9))
         assert cache.size() == 1
-        assert cache.get("same_key").text == "updated"
+        result = cache.get("same_key")
+        assert result is not None
+        assert result.text == "updated"
 
 
 class TestQueryCacheSizeLimit:

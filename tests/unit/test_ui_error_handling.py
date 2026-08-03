@@ -42,13 +42,15 @@ class TestGetIngestStatusErrorHandling:
 
     def test_404_returns_not_found_tuple(self):
         """Returns (None, None) specifically for HTTP 404 (task not found in Redis)."""
+        from email.message import Message
+
         from data_engineering_copilot.ui.streamlit_app import _get_ingest_status
 
         exc = urllib.error.HTTPError(
             url="http://localhost:8000/api/v1/ingest/status/t1",
             code=404,
             msg="Not Found",
-            hdrs=None,
+            hdrs=Message(),
             fp=MagicMock(),
         )
 
@@ -63,13 +65,15 @@ class TestGetIngestStatusErrorHandling:
 
     def test_500_returns_error_tuple(self):
         """Returns (None, error_msg) for HTTP 500 (API internal error)."""
+        from email.message import Message
+
         from data_engineering_copilot.ui.streamlit_app import _get_ingest_status
 
         exc = urllib.error.HTTPError(
             url="http://localhost:8000/api/v1/ingest/status/t1",
             code=500,
             msg="Internal Server Error",
-            hdrs=None,
+            hdrs=Message(),
             fp=MagicMock(),
         )
 

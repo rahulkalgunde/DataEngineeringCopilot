@@ -234,6 +234,7 @@ class TestMetricsCollector:
             chunks = create_test_retrieved_chunks(count=i + 1)
             answer = create_test_answer() if i % 2 == 0 else None
             qm = collector.record_query(f"query {i}", chunks, answer, was_answered=answer is not None)
+            assert qm.retrieval_metrics is not None
             assert qm.retrieval_metrics.retrieved_count == i + 1
         assert len(collector.queries) == 5
 
