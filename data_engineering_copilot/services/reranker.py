@@ -52,7 +52,7 @@ class CrossEncoderReranker:
     via sentence-transformers for local inference.
     """
 
-    def __init__(self, model_name: str = "cross-encoder/qnli-distilroberta-base"):
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
         """Initialize the cross-encoder reranker.
 
         Model loading is deferred — call ``await initialize()`` before first use

@@ -77,13 +77,19 @@ class ContextAssembler:
         source_names = []
         current_length = 0
 
-        for chunk in deduped:
+        for i, chunk in enumerate(deduped, start=1):
             source = chunk.chunk.source_name
             text = chunk.chunk.text
             section_header = chunk.chunk.section_header
 
-            # Format: "Source: [Title > Section] [Text]" when section header exists
-            formatted = f"[{source} > {section_header}] {text}" if section_header else f"[{source}] {text}"
+            # XML-style isolation tag with per-document id and url so the LLM can
+            # never confuse retrieved content with instructions, and each source
+            # is attributable. Format:
+            #   <context_doc id="1" url="..."><source_name>...</context_doc>
+            section_suffix = f" [{section_header}]" if section_header else ""
+            formatted = (
+                f'<context_doc id="{i}" url="{chunk.chunk.url}">[{source}{section_suffix}]\n{text}\n</context_doc>'
+            )
 
             # Check if adding this chunk would exceed limit
             new_length = current_length + len(formatted) + 2  # +2 for newlines

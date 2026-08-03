@@ -12,3 +12,17 @@ AGENTS.md
 *.md
 .env
 .env.*
+tests/
+Makefile
+docker-compose*.yml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+logs/
+.github/
+plans/
+docs/
+profiling/
+*.log

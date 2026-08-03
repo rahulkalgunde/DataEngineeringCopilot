@@ -7,6 +7,7 @@ import hashlib
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -19,6 +20,7 @@ from data_engineering_copilot.domain.protocols import (
     EmbedderProtocol,
     ParserProtocol,
     SyncRedisProtocol,
+    TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
@@ -63,6 +65,7 @@ class AsyncIngestionService:
         api_extractor: ApiDocExtractor | None = None,
         code_block_parser: CodeBlockParser | None = None,
         chunk_filter: ChunkFilter | None = None,
+        telemetry: TelemetryTracerProtocol | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -78,6 +81,7 @@ class AsyncIngestionService:
         self._api_extractor = api_extractor
         self._code_block_parser = code_block_parser
         self._chunk_filter = chunk_filter
+        self._telemetry = telemetry
 
         if parse_executor is not None:
             self._parse_executor = parse_executor
@@ -148,7 +152,8 @@ class AsyncIngestionService:
             chunks = await self.chunker.chunk(parsed, embeddings)
         else:
             chunks = await self.chunker.chunk(parsed)
-        chunks = [dataclasses.replace(chunk, content_hash=content_hash) for chunk in chunks]
+        crawled_at = datetime.now(UTC).isoformat()
+        chunks = [dataclasses.replace(chunk, content_hash=content_hash, crawled_at=crawled_at) for chunk in chunks]
 
         if self._contextual_enricher is not None:
             if enrichment_semaphore is not None:
@@ -527,12 +532,22 @@ class AsyncIngestionService:
             )
 
         crawl_succeeded = False
+        crawl_span = None
+        if self._telemetry is not None:
+            crawl_span = self._telemetry.start_observation(
+                name="ingestion-crawl",
+                input={"source": source.name, "page_limit": page_limit},
+                as_type="span",
+            )
         try:
             async for raw_document in self.crawler.crawl(source, max_pages=page_limit, on_event=on_event):
                 await queue.put(raw_document)
             log.info("async_ingestion._ingest_source.crawl_done source=%s", source.name)
             crawl_succeeded = True
         except Exception:
+            if crawl_span is not None:
+                crawl_span.update(output="CrawlError", level="ERROR")
+                crawl_span.end()
             # Crawler failed mid-stream: drain unconsumed items so sentinel puts
             # cannot block, then surface the failure to the caller.
             while not queue.empty():
@@ -542,6 +557,10 @@ class AsyncIngestionService:
                 except asyncio.QueueEmpty:
                     break
             raise
+        else:
+            if crawl_span is not None:
+                crawl_span.update(output=f"crawl_complete pages={source_pages}")
+                crawl_span.end()
         finally:
             for _ in range(self._processing_concurrency):
                 await queue.put(None)
@@ -730,13 +749,26 @@ class AsyncIngestionService:
         if not batch_chunks:
             return
         urls = {chunk.url for chunk in batch_chunks if chunk.url}
+        span = None
+        if self._telemetry is not None:
+            span = self._telemetry.start_observation(
+                name="ingestion-embed-upsert",
+                input={"batch_size": len(batch_chunks), "urls": len(urls)},
+                as_type="span",
+            )
         try:
             await self._flush_batch(loop, batch_chunks, on_event, make_event)
             shared["total_chunks"] += len(batch_chunks)
             shared["global_pages_fetched"] += len(urls)
             for url in urls:
                 await self._mark_url_state(url, "processed")
+            if span is not None:
+                span.update(output=f"flushed chunks={len(batch_chunks)}")
+                span.end()
         except Exception as exc:
+            if span is not None:
+                span.update(output=f"flush_failed: {exc}", level="ERROR")
+                span.end()
             log.error(
                 "async_ingestion.flush_failed",
                 batch_size=len(batch_chunks),

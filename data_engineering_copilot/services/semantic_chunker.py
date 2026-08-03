@@ -12,7 +12,6 @@ Strategy:
 from __future__ import annotations
 
 import functools
-import hashlib
 import logging
 import pathlib
 
@@ -21,7 +20,6 @@ import numpy as np
 from nltk.tokenize import sent_tokenize
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
-from data_engineering_copilot.utils.text import slugify
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +327,17 @@ class SemanticChunker:
                     )
                 )
 
+        return self._number_chunks(chunks)
+
+    @staticmethod
+    def _number_chunks(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+        """Assign ``chunk_index`` / ``total_chunks`` to every chunk."""
+        from dataclasses import replace
+
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            if chunk.chunk_index != i or chunk.total_chunks != total:
+                chunks[i] = replace(chunk, chunk_index=i, total_chunks=total)
         return chunks
 
     def _is_valid_chunk(self, text: str) -> bool:
@@ -362,7 +371,7 @@ class SemanticChunker:
         """
         Generate deterministic chunk ID.
 
-        Format: {source_slug}:{url_digest}:{index:04d}
+        Format: UUID v5 derived from ``source_url`` + ``source_name`` + index.
 
         Args:
             document: Source document
@@ -371,6 +380,7 @@ class SemanticChunker:
         Returns:
             Unique chunk identifier
         """
-        digest = hashlib.sha1(document.url.encode("utf-8")).hexdigest()[:10]
-        source = slugify(document.source_name)
-        return f"{source}:{digest}:semantic:{index:04d}"
+        import uuid
+
+        namespace = uuid.uuid5(uuid.NAMESPACE_DNS, document.url)
+        return str(uuid.uuid5(namespace, f"{document.source_name}:semantic:{index:04d}"))

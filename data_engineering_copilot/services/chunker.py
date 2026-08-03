@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from typing import TYPE_CHECKING
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
-from data_engineering_copilot.utils.text import slugify
 
 if TYPE_CHECKING:
     from langchain_text_splitters import Language
@@ -89,6 +87,7 @@ class DocumentChunker:
         texts = splitter.split_text(document.text)
 
         chunks: list[DocumentChunk] = []
+        total_chunks = len(texts)
         for i, text in enumerate(texts):
             chunk = DocumentChunk(
                 chunk_id=self._chunk_id(document, i),
@@ -96,6 +95,8 @@ class DocumentChunker:
                 title=document.title,
                 url=document.url,
                 text=text,
+                chunk_index=i,
+                total_chunks=total_chunks,
             )
             chunks.append(chunk)
 
@@ -116,6 +117,7 @@ class DocumentChunker:
         return any(c.isalnum() for c in text)
 
     def _chunk_id(self, document: ParsedDocument, index: int) -> str:
-        digest = hashlib.sha1(document.url.encode("utf-8")).hexdigest()[:10]
-        source = slugify(document.source_name)
-        return f"{source}:{digest}:{index:04d}"
+        import uuid
+
+        namespace = uuid.uuid5(uuid.NAMESPACE_DNS, document.url)
+        return str(uuid.uuid5(namespace, f"{document.source_name}:{index:04d}"))

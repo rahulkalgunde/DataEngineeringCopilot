@@ -4,6 +4,7 @@ from typing import cast
 
 import redis.asyncio as aioredis
 import redis.exceptions
+import structlog
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
@@ -20,7 +21,6 @@ from data_engineering_copilot.infrastructure.llm_client import LLMClient
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.infrastructure.rst_parser import RstParser
-from data_engineering_copilot.observability.structured_logging import StructuredLogger
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
@@ -31,7 +31,7 @@ from data_engineering_copilot.services.header_aware_chunker import HeaderAwareCh
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from data_engineering_copilot.services.text_filter import ChunkFilter
 
-logger = StructuredLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Shared async Redis client so all components (ingestion URL registry, crawl
 # cache, query cache) reuse one connection pool instead of each opening its own.
@@ -605,6 +605,7 @@ def _build_content_aware_parser() -> MarkdownParser:
 
 
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.contextual_chunk_enricher import (
         ContextualChunkEnricher,
         LLMContextSummarizer,
@@ -670,6 +671,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
         code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
         chunk_filter=ChunkFilter(enabled=getattr(app_settings, "chunk_filtering_enabled", True)),
+        telemetry=build_telemetry_tracer(),
     )
 
 
