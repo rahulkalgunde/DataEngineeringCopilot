@@ -121,6 +121,7 @@ class TestMultiStagePools:
 
         service.chunker = MagicMock(spec=DocumentChunker)
         service.chunker.chunk = _chunk_fn
+        service.chunker.extract_sentences = None
 
         raw_doc = RawDocument(source_name="test", url="http://example.com", html="<p>test</p>")
 

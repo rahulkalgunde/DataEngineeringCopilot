@@ -213,6 +213,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -243,6 +244,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = MagicMock(side_effect=RuntimeError("boom"))
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -272,6 +274,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -304,6 +307,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
@@ -332,6 +336,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
@@ -364,6 +369,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -405,6 +411,7 @@ class TestAsyncIngestionServiceWorkerPool:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
 
         service = _make_svc(
@@ -453,6 +460,7 @@ class TestDedupAuthority:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -489,6 +497,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -515,6 +524,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -543,6 +553,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
@@ -572,6 +583,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
@@ -609,6 +621,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -638,6 +651,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -672,6 +686,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -705,6 +720,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -733,6 +749,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
