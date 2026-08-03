@@ -159,14 +159,17 @@ class CodeBlockParser:
 
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.lineno is None:
+                    continue
                 start = node.lineno - 1  # 0-indexed
                 # Find end: use next sibling's start or end of file
                 end = len(lines)
                 for sibling in ast.iter_child_nodes(tree):
                     if sibling is node:
                         continue
-                    if hasattr(sibling, "lineno") and sibling.lineno > node.lineno:
-                        end = min(end, sibling.lineno - 1)
+                    sibling_lineno = getattr(sibling, "lineno", None)
+                    if sibling_lineno is not None and sibling_lineno > node.lineno:
+                        end = min(end, sibling_lineno - 1)
                         break
                 part = "".join(lines[start:end]).strip()
                 if part:

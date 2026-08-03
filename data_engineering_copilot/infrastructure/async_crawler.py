@@ -496,9 +496,10 @@ class AsyncDocumentationCrawler:
         # Phase 3: Clean and filter scheme anomalies
         links: list[str] = []
         for href in raw_hrefs:
-            if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+            href_str = str(href)
+            if href_str.startswith(("mailto:", "tel:", "javascript:", "#")):
                 continue
-            links.append(self._clean_url(urljoin(base_url, href)))
+            links.append(self._clean_url(urljoin(base_url, href_str)))
         return links
 
     def _clean_url(self, url: str) -> str:
@@ -535,3 +536,7 @@ class AsyncDocumentationCrawler:
     def shutdown(self) -> None:
         """Gracefully terminates thread executor allocations."""
         self._executor.shutdown(wait=False)
+
+    async def close(self) -> None:
+        """Close the crawler, releasing thread executor allocations."""
+        self.shutdown()

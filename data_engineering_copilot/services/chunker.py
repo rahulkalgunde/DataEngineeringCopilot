@@ -78,6 +78,10 @@ class DocumentChunker:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._sync_chunk, document)
 
+    def extract_sentences(self, text: str) -> list[str] | None:
+        """Sentence pre-extraction is not supported by this chunker."""
+        return None
+
     def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
         lang = self._detect_language(document.url)
         splitter = self._language_splitters[lang] if lang is not None else self._default_splitter
