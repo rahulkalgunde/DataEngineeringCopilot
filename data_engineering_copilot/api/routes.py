@@ -104,11 +104,23 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
 
 
 async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict:
-    """Repair progress state when Celery or the worker disappeared."""
+    """Repair progress state when Celery or the worker disappeared.
+
+    Hot path is async-only: for a PROCESSING task a live worker lease means the
+    task is healthy, so we return immediately without touching the Celery
+    backend. The synchronous ``AsyncResult`` query (which blocks the event
+    loop) is only run as a backstop — via ``asyncio.to_thread`` — when the
+    lease is missing.
+    """
     if state.get("status") not in ("PROCESSING", "DISPATCHED"):
         return state
 
-    celery_state = AsyncResult(task_id).state
+    # A live lease means the worker is healthy; trust Redis progress and skip
+    # the (blocking) Celery backend round-trip entirely.
+    if state.get("status") == "PROCESSING" and await client.exists(f"{_LEASE_KEY_PREFIX}:{task_id}"):
+        return state
+
+    celery_state = await asyncio.to_thread(lambda: AsyncResult(task_id).state)
     terminal_state = {
         "SUCCESS": ("COMPLETED", None),
         "FAILURE": ("FAILED", "Celery reported task failure."),

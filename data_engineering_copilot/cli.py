@@ -34,6 +34,22 @@ def _check_deps_before_dispatch(api_url: str = "http://localhost:8000") -> None:
         pass  # API unreachable — let the dispatch fail naturally
 
 
+def _poll_gave_up(task_id: str, cancel_url: str) -> None:
+    """Print guidance after the status poll retries are exhausted.
+
+    The ingestion task keeps running server-side; the CLI just cannot reach
+    the API. Point the user at the monitor and cancel endpoints instead of
+    failing with a traceback.
+    """
+    print(f"\n{'=' * 60}")
+    print("Could not reach the ingestion API after several attempts.")
+    print("The ingestion task is still running server-side.")
+    print(f"  - Watch progress:  dec ingestion-monitor --task-id {task_id}")
+    print(f"  - Cancel task:     dec cancel {task_id}")
+    print(f"  - Direct cancel:   curl -X POST {cancel_url}")
+    print(f"{'=' * 60}\n")
+
+
 def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
     import time
 
@@ -76,20 +92,38 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
     print(f"Dispatched ingestion task {task_id}")
     print(f"Polling status (Ctrl-C to stop; cancel via: dec cancel {task_id})")
 
-    # Poll progress until completion
+    # Poll progress until completion. Transient failures (timeouts, network
+    # errors, 5xx) are retried with backoff so a single slow status response
+    # does not kill the CLI while the ingestion task keeps running.
     last_status = None
     cancel_url = f"{API_BASE_URL}/api/v1/ingest/{task_id}/cancel"
+    consecutive_failures = 0
     try:
         while True:
             status_req = urllib.request.Request(f"{API_BASE_URL}/api/v1/ingest/status/{task_id}")
             try:
-                with urllib.request.urlopen(status_req, timeout=5) as resp:
+                with urllib.request.urlopen(status_req, timeout=15) as resp:
                     progress = json.loads(resp.read().decode())
+                consecutive_failures = 0
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
                     progress = None
+                elif exc.code >= 500:
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        _poll_gave_up(task_id, cancel_url)
+                        return
+                    time.sleep(2 * consecutive_failures)
+                    continue
                 else:
                     raise
+            except (TimeoutError, OSError):
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    _poll_gave_up(task_id, cancel_url)
+                    return
+                time.sleep(2 * consecutive_failures)
+                continue
 
             if progress is not None:
                 status = progress.get("status")
@@ -106,7 +140,7 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
                         print(f"Ingestion finished with error: {err}")
                     else:
                         print(f"Ingestion completed: {progress.get('chunks_indexed', 0)} chunks indexed.")
-                    break
+                    return
             time.sleep(2)
     except KeyboardInterrupt:
         print("\nCancelling ingestion task...")
@@ -551,11 +585,11 @@ def reset_crawler_db() -> None:
         print("  Skipped PostgreSQL reset (CRAWL_DB_URL not set)")
 
     # Summary
-    print(f"\nCrawler DB reset complete.")
+    print("\nCrawler DB reset complete.")
     print(f"  Redis: {redis_cleared} keys cleared")
     print(f"  PostgreSQL: {'reset' if pg_cleared else 'skipped'}")
-    print(f"  Qdrant: preserved (dedup still works)")
-    print(f"\nNext step: run 'dec ingest --source <name>' to re-crawl.")
+    print("  Qdrant: preserved (dedup still works)")
+    print("\nNext step: run 'dec ingest --source <name>' to re-crawl.")
 
 
 def health() -> None:
