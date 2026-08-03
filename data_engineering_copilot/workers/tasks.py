@@ -86,16 +86,16 @@ def _validate_ingest_inputs(source_names: list[str] | None, max_pages: int | Non
     bypass API validation. This guard rejects malformed inputs up-front with a
     clear error instead of failing deep inside the pipeline.
     """
-    from pydantic import BaseModel, Field, ValidationError
+    from pydantic import ValidationError
 
-    class _IngestTaskInput(BaseModel):
-        source_names: list[str] = Field(min_length=1, max_length=20)
-        max_pages: int | None = Field(default=None, ge=0, le=20000)
+    from data_engineering_copilot.domain.models import IngestRequest
 
     try:
-        _IngestTaskInput(source_names=source_names or [], max_pages=max_pages)
+        IngestRequest(source_names=source_names, max_pages=max_pages)
     except ValidationError as exc:
         raise ValueError(f"Invalid ingestion task inputs: {exc}") from exc
+    if not source_names:
+        raise ValueError("Invalid ingestion task inputs: source_names must be non-empty")
 
 
 @celery_app.task(

@@ -302,7 +302,11 @@ class AppSettings(BaseSettings):
     ollama_retry_extra_num_predict: int = 512
     ollama_retry_max_num_predict: int = 1024
     crawl_delay_seconds: float = 0.5
-    max_pages_per_source: int = 80
+    max_pages_per_source: int = 100000
+    max_pages_hard_cap: int = 100000
+    recovery_max_pages: int = 100000
+    crawl_attempt_multiplier: int = 3
+    crawl_min_attempts: int = 200
     crawl_thread_pool_size: int = 4
     ingestion_batch_chunk_size: int = 256
     processing_concurrency: int = 2
@@ -438,6 +442,12 @@ class AppSettings(BaseSettings):
             )
         if self.max_pages_per_source < 0:
             errors.append(f"max_pages_per_source ({self.max_pages_per_source}) must be >= 0")
+        if self.max_pages_hard_cap < 1:
+            errors.append(f"max_pages_hard_cap ({self.max_pages_hard_cap}) must be >= 1")
+        if self.crawl_attempt_multiplier < 1:
+            errors.append(f"crawl_attempt_multiplier ({self.crawl_attempt_multiplier}) must be >= 1")
+        if self.recovery_max_pages < 1:
+            errors.append(f"recovery_max_pages ({self.recovery_max_pages}) must be >= 1")
 
         configured_providers = {
             p

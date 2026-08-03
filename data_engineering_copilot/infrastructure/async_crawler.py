@@ -15,7 +15,7 @@ import redis.exceptions
 import structlog
 from bs4 import BeautifulSoup
 
-from data_engineering_copilot.config.settings import DocumentationSource
+from data_engineering_copilot.config.settings import DocumentationSource, settings
 from data_engineering_copilot.domain.models import IngestionEvent, RawDocument
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import CrawlRecord, PostgresCrawlFrontierDB
@@ -174,9 +174,11 @@ class AsyncDocumentationCrawler:
     async def crawl(
         self,
         source: DocumentationSource,
-        max_pages: int = 80,
+        max_pages: int | None = None,
         on_event: Callable[[IngestionEvent], None] | None = None,
     ) -> AsyncIterator[RawDocument]:
+        if max_pages is None:
+            max_pages = settings.max_pages_per_source
         if self.frontier._db is None:
             await self.frontier.initialize()
         await self._seed_frontier(source, max_pages)
@@ -188,7 +190,7 @@ class AsyncDocumentationCrawler:
 
             yielded_count = 0
             total_attempted = 0
-            max_attempted = max(max_pages * 3, 200)
+            max_attempted = max(max_pages * settings.crawl_attempt_multiplier, settings.crawl_min_attempts)
             in_flight = 0
 
             async def worker() -> None:

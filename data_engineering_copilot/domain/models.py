@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel, Field
+
+from data_engineering_copilot.config.settings import settings
+
 
 @dataclass(frozen=True)
 class CacheScope:
@@ -142,3 +146,15 @@ class UserPermissions:
     api_key_prefix: str
     allowed_sources: tuple[str, ...] = ()
     role: str = "reader"  # reader | admin
+
+
+class IngestRequest(BaseModel):
+    """Shared ingestion request validated at both API and broker trust boundaries.
+
+    ``max_pages`` is clamped to ``settings.max_pages_hard_cap`` so the contract
+    value has a single source of truth across the API route, the Celery broker,
+    and the CLI.
+    """
+
+    source_names: list[str] | None = Field(default=None, max_length=20)
+    max_pages: int | None = Field(default=None, ge=1, le=settings.max_pages_hard_cap)

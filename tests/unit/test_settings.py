@@ -193,6 +193,18 @@ def test_validate_all_detects_conflicts() -> None:
     with pytest.raises(ValidationError, match="max_pages_per_source"):
         negative.validate_all()
 
+    no_hard_cap = _make_bad(max_pages_hard_cap=0)
+    with pytest.raises(ValidationError, match="max_pages_hard_cap"):
+        no_hard_cap.validate_all()
+
+    no_multiplier = _make_bad(crawl_attempt_multiplier=0)
+    with pytest.raises(ValidationError, match="crawl_attempt_multiplier"):
+        no_multiplier.validate_all()
+
+    no_recovery = _make_bad(recovery_max_pages=0)
+    with pytest.raises(ValidationError, match="recovery_max_pages"):
+        no_recovery.validate_all()
+
     no_provider = _make_bad(llm_provider="", embedding_provider="")
     with pytest.raises(ValidationError, match="provider"):
         no_provider.validate_all()
