@@ -6,7 +6,7 @@ import logging
 import math
 import re
 
-from data_engineering_copilot.domain.models import DocumentChunk
+from data_engineering_copilot.domain.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,9 @@ class ContextCompressor:
 
     def compress(
         self,
-        chunks: list[DocumentChunk],
+        chunks: list[RetrievedChunk],
         query: str,
-    ) -> list[DocumentChunk]:
+    ) -> list[RetrievedChunk]:
         """Deduplicate and re-rank chunks for the given query."""
         if not self._enabled or not chunks:
             return chunks
@@ -62,9 +62,9 @@ class ContextCompressor:
         if not query_tokens:
             return deduped[: self._max_chunks]
 
-        scored: list[tuple[float, int, DocumentChunk]] = []
+        scored: list[tuple[float, int, RetrievedChunk]] = []
         for idx, chunk in enumerate(deduped):
-            chunk_tokens = _tokenize(chunk.text)
+            chunk_tokens = _tokenize(chunk.chunk.text)
             # Combine cosine similarity with simple overlap ratio
             cos_sim = _cosine(query_tokens, chunk_tokens)
             overlap = len(query_tokens & chunk_tokens) / len(query_tokens)
@@ -84,13 +84,13 @@ class ContextCompressor:
 
         return [chunk for _, _, chunk in scored[:effective_limit]]
 
-    def _deduplicate(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+    def _deduplicate(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Remove near-duplicate chunks using Jaccard similarity."""
-        result: list[DocumentChunk] = []
+        result: list[RetrievedChunk] = []
         seen_tokens: list[set[str]] = []
 
         for chunk in chunks:
-            tokens = _tokenize(chunk.text)
+            tokens = _tokenize(chunk.chunk.text)
             is_dup = False
             for seen in seen_tokens:
                 if _jaccard(tokens, seen) >= self._similarity_threshold:

@@ -7,6 +7,7 @@ import hashlib
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
+from typing import Any
 
 import structlog
 
@@ -17,10 +18,15 @@ from data_engineering_copilot.domain.protocols import (
     ChunkerProtocol,
     EmbedderProtocol,
     ParserProtocol,
+    SyncRedisProtocol,
     VectorStoreProtocol,
 )
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
+from data_engineering_copilot.services.api_extractor import ApiDocExtractor
+from data_engineering_copilot.services.code_block_parser import CodeBlockParser
+from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
+from data_engineering_copilot.services.text_filter import ChunkFilter
 
 log = structlog.get_logger(__name__)
 
@@ -50,13 +56,13 @@ class AsyncIngestionService:
         chunker: ChunkerProtocol,
         embeddings: EmbedderProtocol,
         vector_store: VectorStoreProtocol,
-        redis_client: object | None = None,
+        redis_client: SyncRedisProtocol | None = None,
         parse_executor: Executor | None = None,
         chunk_executor: Executor | None = None,
-        contextual_enricher: object | None = None,
-        api_extractor: object | None = None,
-        code_block_parser: object | None = None,
-        chunk_filter: object | None = None,
+        contextual_enricher: ContextualChunkEnricher | None = None,
+        api_extractor: ApiDocExtractor | None = None,
+        code_block_parser: CodeBlockParser | None = None,
+        chunk_filter: ChunkFilter | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -133,8 +139,9 @@ class AsyncIngestionService:
             log.info("async_ingestion.content_changed", url=parsed.url)
             await self._delete_chunks_for_url(parsed.url)
 
-        if hasattr(self.chunker, "extract_sentences"):
-            sentences = self.chunker.extract_sentences(parsed.text)
+        extract_sentences = getattr(self.chunker, "extract_sentences", None)
+        if extract_sentences is not None:
+            sentences = extract_sentences(parsed.text)
             if not sentences:
                 return _ProcessedResult(disposition="no_content", parsed=parsed)
             embeddings = await self.embeddings.embed_texts(sentences)
@@ -372,7 +379,7 @@ class AsyncIngestionService:
             source_name: str,
             message: str,
             _shared=shared,
-            **kwargs: object,
+            **kwargs: Any,
         ) -> IngestionEvent:
             elapsed = time.time() - start_time
             return IngestionEvent(

@@ -72,6 +72,10 @@ class HeaderAwareChunker:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._sync_chunk, document)
 
+    def extract_sentences(self, text: str) -> list[str] | None:
+        """Sentence pre-extraction is not supported by this chunker."""
+        return None
+
     def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
         sections = self._split_into_sections(document.text)
         if not sections:

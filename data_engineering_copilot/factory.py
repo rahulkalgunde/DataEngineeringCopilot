@@ -533,6 +533,7 @@ def _validate_redis(redis_url: str, component: str) -> None:
 
 def _validate_qdrant(qdrant_url: str) -> None:
     """Synchronous Qdrant health check. Fails fast with clear message."""
+    import urllib.error
     import urllib.request
 
     try:
@@ -664,7 +665,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
             embedding_dimension=app_settings.get_embedding_dimension(),
         ),
-        redis_client=redis_client,
+        redis_client=redis_client,  # type: ignore[arg-type]  # aioredis stubs return Awaitable not Coroutine; runtime-conformant
         contextual_enricher=contextual_enricher,
         api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
         code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
