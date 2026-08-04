@@ -834,8 +834,13 @@ def status() -> None:
         print(f"  ❌ Error: {e}")
 
 
-def evaluate(verbose: bool = False) -> None:
-    """Run RAG evaluation on golden dataset."""
+def evaluate(verbose: bool = False, dataset: str | None = None, source: str | None = None) -> None:
+    """Run RAG evaluation on golden dataset.
+
+    ``dataset`` selects a JSONL dataset file (default ``tests/evaluation/eval_dataset.jsonl``,
+    or a per-source file like ``tests/evaluation/eval_dataset_airflow.jsonl``). ``source``
+    filters the loaded rows by their ``source_name`` field.
+    """
     import asyncio
 
     from data_engineering_copilot.factory import build_rag_service
@@ -843,7 +848,11 @@ def evaluate(verbose: bool = False) -> None:
     print("Running RAG Evaluation...\n")
 
     # Load golden dataset
-    eval_path = pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset.jsonl"
+    eval_path = (
+        pathlib.Path(dataset)
+        if dataset
+        else (pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset.jsonl")
+    )
     if not eval_path.exists():
         print(f"❌ Evaluation dataset not found at {eval_path}")
         sys.exit(1)
@@ -854,7 +863,13 @@ def evaluate(verbose: bool = False) -> None:
             if line.strip():
                 queries.append(json.loads(line))
 
-    print(f"Loaded {len(queries)} evaluation queries\n")
+    if source:
+        queries = [q for q in queries if q.get("source_name") == source]
+        if not queries:
+            print(f"❌ No queries with source_name={source!r} in {eval_path}")
+            sys.exit(1)
+
+    print(f"Loaded {len(queries)} evaluation queries (dataset: {eval_path.name})\n")
 
     # Run evaluation
     service = build_rag_service()
@@ -929,7 +944,8 @@ def evaluate(verbose: bool = False) -> None:
             contexts=[r["contexts"] for r in results],
             ground_truth=[r["ground_truth"] for r in results] if any(r["ground_truth"] for r in results) else None,
         )
-    except Exception:
+    except Exception as e:
+        print(f"\n⚠️  RAGAS evaluation failed: {e}")
         ragas_report = None
 
     if ragas_report is not None:
@@ -1388,8 +1404,20 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="Show ingestion and system status.")
 
     # Evaluate
-    eval_parser = subparsers.add_parser("evaluate", help="Run RAG evaluation on golden dataset.")
+    eval_parser = subparsers.add_parser("evaluate", help="Run RAG evaluation on a golden dataset.")
     eval_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed per-query output")
+    eval_parser.add_argument(
+        "--dataset",
+        help=(
+            "Path to a JSONL evaluation dataset "
+            "(default: tests/evaluation/eval_dataset.jsonl; "
+            "per-source files: tests/evaluation/eval_dataset_{source}.jsonl)."
+        ),
+    )
+    eval_parser.add_argument(
+        "--source",
+        help="Only evaluate queries whose `source_name` matches this value.",
+    )
 
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
@@ -1500,7 +1528,11 @@ def main() -> None:
         elif args.command == "status":
             status()
         elif args.command == "evaluate":
-            evaluate(verbose=getattr(args, "verbose", False))
+            evaluate(
+                verbose=getattr(args, "verbose", False),
+                dataset=getattr(args, "dataset", None),
+                source=getattr(args, "source", None),
+            )
         elif args.command == "config":
             config()
         elif args.command == "inspect-db":
