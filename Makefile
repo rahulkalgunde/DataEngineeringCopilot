@@ -28,6 +28,7 @@ up:
 
 # Stop everything
 down:
+	$(call confirm_destructive,⚠️ This will stop and remove all running containers.)
 	@$(COMPOSE) down
 	@echo "✅ Services stopped"
 
@@ -82,15 +83,29 @@ config:
 	@$(COMPOSE) config --quiet && docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
 	@echo "✅ Compose config OK (dev + CI)"
 
-# ─── Destructive Targets (require FORCE=1) ──────────────────────────────────
+# ─── Destructive Targets (require interactive confirmation or FORCE=1) ───────
+
+# Interactive confirmation for destructive targets. Prompts [y/N] on a TTY;
+# aborts unless answered 'y'. Non-interactive shells (CI) and scripts must set
+# FORCE=1 to bypass the prompt.
+define confirm_destructive
+	@if [ "$${FORCE:-}" != "1" ]; then \
+		if [ ! -t 0 ]; then \
+			echo "Refusing to run: this operation is destructive. Set FORCE=1 to bypass confirmation."; \
+			exit 1; \
+		fi; \
+		printf '%s [y/N] ' "$(1)"; \
+		read -r answer; \
+		case "$$answer" in \
+			y|Y) ;; \
+			*) echo "Aborted."; exit 1 ;; \
+		esac; \
+	fi
+endef
 
 # Full rebuild: stop everything, remove containers + images + build cache
 prune:
-ifneq ($(FORCE),1)
-	@echo "⚠️  This will remove all project containers, images, and build cache."
-	@echo "   Data volumes are preserved. Use FORCE=1 to proceed."
-	@exit 1
-endif
+	$(call confirm_destructive,⚠️ This will remove ALL project containers images and build cache. Data volumes are preserved.)
 	@$(COMPOSE) down --rmi all
 	@docker builder prune -f
 	@rm -f $(DOCKER_TAG_FILE)
@@ -98,6 +113,7 @@ endif
 
 # Remove only stale unused project images
 prune-stale:
+	$(call confirm_destructive,⚠️ This will permanently remove unused de_copilot_base_image images.)
 	@images=$$(docker images --filter "reference=de_copilot_base_image:*" --format "{{.Repository}}:{{.Tag}}"); \
 	if [ -z "$$images" ]; then \
 		echo "No stale project images to prune."; \
@@ -120,6 +136,7 @@ ci-up:
 	docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait
 
 ci-down:
+	$(call confirm_destructive,⚠️ This will tear down the CI stack INCLUDING volumes. Container data will be deleted.)
 	docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
 
 # ─── Legacy Aliases (deprecated — use the targets above) ────────────────────
@@ -131,6 +148,7 @@ docker-setup: dev
 docker-status: status
 docker-health: health
 docker-rebuild:
+	$(call confirm_destructive,⚠️ This rebuilds ALL images with --no-cache, discarding the build cache.)
 	@echo "⚠️  'make docker-rebuild' rebuilds ALL images. Use 'make rebuild' for app-only."
 	$(COMPOSE) build --no-cache
 	$(COMPOSE) up -d
@@ -150,6 +168,7 @@ docker-restart:
 	@echo "All services restarted"
 docker-shell: shell
 docker-cleanup:
+	$(call confirm_destructive,⚠️ This will stop and remove all running containers.)
 	@$(COMPOSE) down
 	@echo "Docker cleanup complete"
 docker-prune: prune
@@ -214,6 +233,7 @@ format:
 	$(PYTHON) -m ruff format data_engineering_copilot/ tests/
 
 clean:
+	$(call confirm_destructive,⚠️ This will delete all __pycache__ .pytest_cache *.egg-info directories and *.pyc files.)
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
