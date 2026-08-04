@@ -174,7 +174,7 @@ class TestBuildPurposeLLMClient:
 
 class TestBuildFallbackChain:
     def test_enrichment_empty_model_resolves_provider_default(self):
-        from data_engineering_copilot.factory import _build_fallback_chain
+        from data_engineering_copilot.factory import build_llm_fallback_chain
 
         s = _make_settings(
             llm_provider="ollama",
@@ -182,17 +182,17 @@ class TestBuildFallbackChain:
             enrichment_llm_provider="gemini",
             gemini_api_key="sk-gemini-test",
         )
-        client = _build_fallback_chain(
+        client = build_llm_fallback_chain(
+            purpose="enrichment",
+            app_settings=s,
             purpose_provider="gemini",
             purpose_model="",
-            app_settings=s,
-            purpose="enrichment",
         )
         assert client is not None
         assert client.model == "gemini-2.5-flash"
 
     def test_answer_purpose_explicit_model(self):
-        from data_engineering_copilot.factory import _build_fallback_chain
+        from data_engineering_copilot.factory import build_llm_fallback_chain
 
         s = _make_settings(
             llm_provider="ollama",
@@ -201,17 +201,17 @@ class TestBuildFallbackChain:
             answer_llm_model="llama-3.3-70b-versatile",
             groq_api_key="gsk-test",
         )
-        client = _build_fallback_chain(
+        client = build_llm_fallback_chain(
+            purpose="answer",
+            app_settings=s,
             purpose_provider="groq",
             purpose_model="llama-3.3-70b-versatile",
-            app_settings=s,
-            purpose="answer",
         )
         assert client is not None
         assert client.model == "llama-3.3-70b-versatile"
 
     def test_evaluation_empty_model_resolves_provider_default(self):
-        from data_engineering_copilot.factory import _build_fallback_chain
+        from data_engineering_copilot.factory import build_llm_fallback_chain
 
         s = _make_settings(
             llm_provider="ollama",
@@ -219,26 +219,28 @@ class TestBuildFallbackChain:
             evaluation_llm_provider="groq",
             groq_api_key="gsk-test",
         )
-        client = _build_fallback_chain(
+        client = build_llm_fallback_chain(
+            purpose="evaluation",
+            app_settings=s,
             purpose_provider="groq",
             purpose_model="",
-            app_settings=s,
-            purpose="evaluation",
         )
         assert client is not None
         assert client.model == "llama-3.1-8b-instant"
 
-    def test_empty_purpose_provider_returns_none(self):
-        from data_engineering_copilot.factory import _build_fallback_chain
+    def test_empty_purpose_provider_uses_fallback_order(self):
+        from data_engineering_copilot.factory import build_llm_fallback_chain
 
         s = _make_settings(llm_provider="ollama", llm_model="llama3.2:3b")
-        client = _build_fallback_chain(
+        # When purpose_provider is empty, it uses llm_fallback_order (adaptive)
+        client = build_llm_fallback_chain(
+            purpose="answer",
+            app_settings=s,
             purpose_provider="",
             purpose_model="",
-            app_settings=s,
-            purpose="answer",
         )
-        assert client is None
+        assert client is not None  # Returns adaptive chain from llm_fallback_order
+        assert hasattr(client, "model")
 
 
 class TestBuildEmbedder:

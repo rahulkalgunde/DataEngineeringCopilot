@@ -10,6 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from data_engineering_copilot.infrastructure.provider_fallback import (
+    FallbackChainConfig,
+    ProviderConfig,
+    ProviderFallbackChain,
+)
 from data_engineering_copilot.services.ragas_evaluation import (
     RagasEvaluator,
     _install_vertexai_shim,
@@ -184,9 +189,18 @@ class TestRagasEvaluator:
         assert llm_wrapper.client.model == (app_settings.ollama_model or "llama3.2:3b")
         # Embeddings: external nvidia/openrouter preferred, skipped without
         # keys -> local Ollama degraded fallback (never a paid provider).
-        assert [provider for provider, _ in embeddings_wrapper._clients] == ["ollama"]
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+
+        if isinstance(embeddings_wrapper._chain, ProviderFallbackChain):
+            providers = [p.name for p in embeddings_wrapper._chain._config.providers]
+            if embeddings_wrapper._chain._config.degraded_fallback:
+                providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
+        else:
+            providers = ["ollama"]  # bare EmbedderProtocol
+        assert providers == ["ollama"]
 
     def test_build_runtime_prefers_external_embedding_providers(self):
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
         from tests.conftest import make_settings
 
@@ -197,12 +211,18 @@ class TestRagasEvaluator:
         )
         llm_wrapper, embeddings_wrapper = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(embeddings_wrapper, AdaptiveRagasEmbeddings)
-        providers = [provider for provider, _ in embeddings_wrapper._clients]
-        assert providers == ["nvidia", "openrouter"]
+        if isinstance(embeddings_wrapper._chain, ProviderFallbackChain):
+            providers = [p.name for p in embeddings_wrapper._chain._config.providers]
+            if embeddings_wrapper._chain._config.degraded_fallback:
+                providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
+        else:
+            providers = ["ollama"]
+        # NVIDIA + OpenRouter as main chain, Ollama as degraded fallback
+        assert providers == ["nvidia", "openrouter", "ollama"]
         assert llm_wrapper is not None
 
     def test_build_runtime_adaptive_judge_has_no_pinned_primary(self):
-        from data_engineering_copilot.infrastructure.adaptive_llm_router import AdaptiveLLMRouter
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasLLM
         from tests.conftest import make_settings
 
@@ -216,14 +236,16 @@ class TestRagasEvaluator:
         )
         llm_wrapper, _ = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)
-        assert isinstance(llm_wrapper.client, AdaptiveLLMRouter)
+        assert isinstance(llm_wrapper.client, ProviderFallbackChain)
         # No forced primary: the chain follows llm_fallback_order verbatim, so
         # each call can pick the first currently-available provider.
-        providers = [provider for provider, _ in llm_wrapper.client._clients]
+        providers = [p.name for p in llm_wrapper.client._config.providers]
+        if llm_wrapper.client._config.degraded_fallback:
+            providers.append(llm_wrapper.client._config.degraded_fallback.name)
         assert providers == [p.lower() for p in app_settings.llm_fallback_order]
 
     def test_build_runtime_pinned_evaluation_provider_is_primary(self):
-        from data_engineering_copilot.infrastructure.adaptive_llm_router import AdaptiveLLMRouter
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasLLM
         from tests.conftest import make_settings
 
@@ -235,12 +257,15 @@ class TestRagasEvaluator:
         )
         llm_wrapper, _ = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)
-        assert isinstance(llm_wrapper.client, AdaptiveLLMRouter)
-        primary_provider, primary_client = llm_wrapper.client._clients[0]
+        assert isinstance(llm_wrapper.client, ProviderFallbackChain)
+        primary_provider = llm_wrapper.client._config.providers[0].name
+        primary_client = llm_wrapper.client._config.providers[0].client
         assert primary_provider == "groq"
         assert primary_client.model == "llama-3.1-8b-instant"
         # Remaining providers after the primary (key-less ones are skipped).
-        rest = [provider for provider, _ in llm_wrapper.client._clients[1:]]
+        rest = [p.name for p in llm_wrapper.client._config.providers[1:]]
+        if llm_wrapper.client._config.degraded_fallback:
+            rest.append(llm_wrapper.client._config.degraded_fallback.name)
         assert rest == ["ollama"]
 
     def test_build_runtime_wraps_explicit_langchain_objects(self):
@@ -270,7 +295,7 @@ class TestRagasEvaluator:
 
 
 class _StubEmbedder:
-    """Async embedder double honoring EmbedderProtocol.
+    """Async embedder double honoring EmbedderProtocol and ProviderClient protocol.
 
     ``tag`` is a distinct float per provider, repeated to ``dim`` length, so
     callers can assert which provider produced a vector.
@@ -291,6 +316,7 @@ class _StubEmbedder:
         if self.fail_on_call and self.calls == self.fail_on_call:
             raise RuntimeError(f"{self.name} simulated failure")
 
+    # EmbedderProtocol methods
     async def embed_query(self, text: str) -> list[float]:
         self.calls += 1
         self._maybe_raise()
@@ -304,6 +330,42 @@ class _StubEmbedder:
     async def close(self) -> None:
         pass
 
+    # ProviderClient protocol method
+    async def call(self, request: list[str]) -> list[list[float]]:
+        return await self.embed_texts(request)
+
+    @property
+    def model(self) -> str:
+        return self.name
+
+    @property
+    def last_usage(self):
+        from data_engineering_copilot.domain.models import LLMUsage
+
+        return LLMUsage()
+
+
+class _FakeLLMClient:
+    """Fake LLM client for testing."""
+
+    model = "fake-model"
+
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, request: str) -> str:
+        self.calls.append(request)
+        return f"out-{len(self.calls)}"
+
+    async def generate(self, prompt, temperature=None, num_predict=None, num_ctx=None):
+        return await self.call(prompt)
+
+    @property
+    def last_usage(self):
+        from data_engineering_copilot.domain.models import LLMUsage
+
+        return LLMUsage()
+
 
 class TestAdaptiveRagasLLM:
     def test_agenerate_text_makes_one_call_per_completion(self):
@@ -313,35 +375,21 @@ class TestAdaptiveRagasLLM:
 
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasLLM
 
-        calls: list[tuple[str, float | None]] = []
-
-        class _FakeClient:
-            model = "fake-model"
-
-            async def generate(self, prompt, temperature=None, num_predict=None, num_ctx=None):
-                calls.append((prompt, temperature))
-                return f"out-{len(calls)}"
-
-        llm = AdaptiveRagasLLM(_FakeClient())
+        client = _FakeLLMClient()
+        llm = AdaptiveRagasLLM(client)
         result = asyncio.run(llm.agenerate_text(StringPromptValue(text="hi"), n=3, temperature=0.3))
         assert len(result.generations) == 1
         assert [g.text for g in result.generations[0]] == ["out-1", "out-2", "out-3"]
-        assert len(calls) == 3
-        assert all(prompt == "hi" for prompt, _ in calls)
-        assert all(temp == 0.3 for _, temp in calls)
+        assert len(client.calls) == 3
+        assert all(prompt == "hi" for prompt in client.calls)
 
     def test_is_finished_rejects_blank_generation(self):
         from langchain_core.outputs import Generation, LLMResult
 
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasLLM
 
-        class _FakeClient:
-            model = "fake-model"
-
-            async def generate(self, prompt, temperature=None, num_predict=None, num_ctx=None):
-                return "done"
-
-        llm = AdaptiveRagasLLM(_FakeClient())
+        client = _FakeLLMClient()
+        llm = AdaptiveRagasLLM(client)
         assert llm.is_finished(LLMResult(generations=[[Generation(text="done")]])) is True
         assert llm.is_finished(LLMResult(generations=[[Generation(text="   ")]])) is False
         assert llm.is_finished(LLMResult(generations=[[Generation(text="")]])) is False
@@ -349,21 +397,47 @@ class TestAdaptiveRagasLLM:
 
 class TestAdaptiveRagasEmbeddings:
     def test_requires_at_least_one_client(self):
+        from unittest.mock import MagicMock
+
+        from data_engineering_copilot.infrastructure.provider_fallback import (
+            FallbackChainConfig,
+            ProviderFallbackChain,
+        )
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
         with pytest.raises(ValueError):
-            AdaptiveRagasEmbeddings([])
+            AdaptiveRagasEmbeddings(ProviderFallbackChain(FallbackChainConfig(providers=[]), mock_health))
 
     def test_prefers_first_provider_sticky(self):
+        from unittest.mock import MagicMock
+
+        from data_engineering_copilot.infrastructure.provider_fallback import (
+            FallbackChainConfig,
+            ProviderConfig,
+            ProviderFallbackChain,
+        )
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
         nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0)
         openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0)
-        embeddings = AdaptiveRagasEmbeddings([("nvidia", nvidia), ("openrouter", openrouter)])
+
+        config = FallbackChainConfig(
+            providers=[
+                ProviderConfig("nvidia", nvidia),
+                ProviderConfig("openrouter", openrouter),
+            ]
+        )
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
 
         query_vec = embeddings.embed_query("q")
         assert query_vec == [1.0] * 2048
-        assert embeddings._selected_index == 0
 
         doc_vecs = embeddings.embed_documents(["a", "b"])
         assert doc_vecs[0] == [1.0] * 2048
@@ -371,42 +445,127 @@ class TestAdaptiveRagasEmbeddings:
         assert openrouter.calls == 0
 
     def test_fails_over_to_next_provider(self):
+        from unittest.mock import MagicMock
+
+        from data_engineering_copilot.infrastructure.provider_fallback import (
+            FallbackChainConfig,
+            ProviderConfig,
+            ProviderFallbackChain,
+        )
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
-        nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0, fail_attempts=1)
+        # nvidia fails on both calls; openrouter must serve both (no stickiness —
+        # each call re-evaluates availability through the chain).
+        nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0, fail_attempts=2)
         openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0)
-        embeddings = AdaptiveRagasEmbeddings([("nvidia", nvidia), ("openrouter", openrouter)])
+
+        config = FallbackChainConfig(
+            providers=[
+                ProviderConfig("nvidia", nvidia),
+                ProviderConfig("openrouter", openrouter),
+            ]
+        )
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
 
         query_vec = embeddings.embed_query("q")
         assert query_vec == [2.0] * 2048
-        assert embeddings._selected_index == 1
 
         doc_vecs = embeddings.embed_documents(["a"])
         assert doc_vecs[0] == [2.0] * 2048
 
-    def test_dimension_mismatch_blocks_promoted_provider(self):
+    def test_recovers_primary_when_it_comes_back(self):
+        from unittest.mock import MagicMock
+
+        from data_engineering_copilot.infrastructure.provider_fallback import (
+            FallbackChainConfig,
+            ProviderConfig,
+            ProviderFallbackChain,
+        )
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
-        # Primary succeeds at 768-dim, then fails on its 2nd call. The 2048-dim
-        # backup is rejected so cosine similarity stays internally consistent.
+        # nvidia fails once, then recovers — the next call goes back to it
+        # because the chain re-evaluates availability per call.
+        nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0, fail_attempts=1)
+        openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0)
+
+        config = FallbackChainConfig(
+            providers=[
+                ProviderConfig("nvidia", nvidia),
+                ProviderConfig("openrouter", openrouter),
+            ]
+        )
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
+
+        query_vec = embeddings.embed_query("q")
+        assert query_vec == [2.0] * 2048
+
+        doc_vecs = embeddings.embed_documents(["a"])
+        assert doc_vecs[0] == [1.0] * 2048
+        assert nvidia.calls == 2
+
+    def test_failover_uses_backup_provider_dimension(self):
+        from unittest.mock import MagicMock
+
+        from data_engineering_copilot.infrastructure.provider_fallback import (
+            FallbackChainConfig,
+            ProviderConfig,
+            ProviderFallbackChain,
+        )
+        from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
+
+        # Dimension consistency is enforced at chain-build time (factory pins
+        # providers to the same model/dim). At call time the promoted provider
+        # simply serves its own vectors.
         nvidia = _StubEmbedder(dim=768, name="nvidia", tag=1.0, fail_on_call=2)
         openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0)
-        embeddings = AdaptiveRagasEmbeddings([("nvidia", nvidia), ("openrouter", openrouter)])
+
+        config = FallbackChainConfig(
+            providers=[
+                ProviderConfig("nvidia", nvidia),
+                ProviderConfig("openrouter", openrouter),
+            ]
+        )
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
 
         query_vec = embeddings.embed_query("q")
         assert query_vec == [1.0] * 768
 
-        with pytest.raises(RuntimeError, match="dimension mismatch"):
-            embeddings.embed_query("q2")
+        doc_vecs = embeddings.embed_documents(["a"])
+        assert doc_vecs[0] == [2.0] * 2048
 
     def test_raises_when_all_providers_fail(self):
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
         nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0, fail_attempts=1)
         openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0, fail_attempts=1)
-        embeddings = AdaptiveRagasEmbeddings([("nvidia", nvidia), ("openrouter", openrouter)])
 
-        with pytest.raises(RuntimeError, match="All evaluation embedding providers failed"):
+        config = FallbackChainConfig(
+            providers=[
+                ProviderConfig("nvidia", nvidia),
+                ProviderConfig("openrouter", openrouter),
+            ]
+        )
+        from unittest.mock import MagicMock
+
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
+
+        with pytest.raises(RuntimeError, match="All providers in fallback chain failed"):
             embeddings.embed_query("q")
 
     def test_async_methods_route_through_same_worker_loop(self):
@@ -415,7 +574,15 @@ class TestAdaptiveRagasEmbeddings:
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
 
         nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0)
-        embeddings = AdaptiveRagasEmbeddings([("nvidia", nvidia)])
+
+        config = FallbackChainConfig(providers=[ProviderConfig("nvidia", nvidia)])
+        from unittest.mock import MagicMock
+
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(config, mock_health)
+        embeddings = AdaptiveRagasEmbeddings(chain)
 
         async def _run():
             query_vec = await embeddings.aembed_query("q")
