@@ -192,9 +192,9 @@ class AppSettings(BaseSettings):
 
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(
-        default_factory=lambda: ["cloudflare", "groq", "openrouter", "gemini", "cerebras", "ollama"]
+        default_factory=lambda: ["cloudflare", "groq", "nvidia", "gemini", "cerebras", "ollama"]
     )
-    llm_fallback_call_timeout: int = 120  # per-attempt timeout for non-primary fallback providers
+    llm_fallback_call_timeout: int = 30  # per-attempt timeout for non-primary fallback providers
 
     # Provider cooldown / routing
     provider_cooldown_seconds: int = 60

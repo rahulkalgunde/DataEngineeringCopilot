@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np  # noqa: F401 — import early prevents fork-related ImportError
 import pytest
@@ -11,11 +12,23 @@ def _mock_sentence_transformers():
     Without this, the first test that triggers ``from sentence_transformers
     import CrossEncoder`` pays a 3-5s penalty for importing torch and
     transformers wheel metadata.
+
+    NOTE: must NOT use ``patch.dict("sys.modules", ...)`` here — on exit it
+    clears ``sys.modules`` and restores the enter-time snapshot, which erases
+    any module first imported during the test (e.g. ``datasets``/``pyarrow``
+    via ragas). Patch only the single key instead.
     """
     mock_module = MagicMock()
     mock_module.CrossEncoder = MagicMock(return_value=MagicMock())
-    with patch.dict("sys.modules", {"sentence_transformers": mock_module}):
+    original = sys.modules.get("sentence_transformers")
+    sys.modules["sentence_transformers"] = mock_module
+    try:
         yield
+    finally:
+        if original is None:
+            sys.modules.pop("sentence_transformers", None)
+        else:
+            sys.modules["sentence_transformers"] = original
 
 
 @pytest.fixture
