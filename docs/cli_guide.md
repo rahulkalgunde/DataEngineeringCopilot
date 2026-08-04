@@ -472,14 +472,16 @@ dec status
 
 ### `dec evaluate`
 
-Runs RAG evaluation over the golden dataset at `tests/evaluation/eval_dataset.jsonl`.
+Runs RAG evaluation over a golden dataset (default `tests/evaluation/eval_dataset.jsonl`).
 
 ```
-usage: dec evaluate [-h]
+usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
 ```
 
 **Behavior**
-- Loads evaluation queries (`question`/`query`), runs each through the RAG service.
+- Loads evaluation queries (`question`/`query`) from the dataset file, runs each through the RAG service.
+- `--dataset <path>` points at any JSONL dataset. The repo ships per-source datasets: `eval_dataset.jsonl` (Apache Spark, 12 queries), `eval_dataset_airflow.jsonl` (3), `eval_dataset_databricks.jsonl` (2), `eval_dataset_delta_lake.jsonl` (3).
+- `--source <name>` filters loaded rows by their `source_name` field (e.g. `dec evaluate --source "Apache Airflow Documentation"`). Exit code 1 if no rows match.
 - Prints per-query `Answer` snippet, `Confidence`, and retrieved-context count.
 - Prints summary: total queries, average confidence.
 - **RAGAS metrics** (if the `ragas` package is installed): `context_recall`, `context_precision`, `faithfulness`, `answer_relevancy`, `overall`. Otherwise prints "RAGAS evaluation skipped".
@@ -489,13 +491,19 @@ usage: dec evaluate [-h]
 
 ```bash
 dec evaluate
+dec evaluate --source "Apache Spark Documentation"
+dec evaluate --dataset tests/evaluation/eval_dataset_airflow.jsonl
 ```
 
-**Exit codes**: `0` on completion; `1` if the evaluation dataset is missing.
+**Exit codes**: `0` on completion; `1` if the evaluation dataset is missing or `--source` matches no rows.
 
 **Gotchas**
 - Runs the real RAG pipeline (Qdrant + embedder + LLM) — build the index first with `dec ingest`.
-- The eval harness (mocked embedder, no infra) is available separately via `make test-eval`.
+- Use a per-source dataset (or `--source`) that matches what you've actually ingested — evaluating Airflow queries against a Spark-only index yields meaningless ~0 scores for every metric.
+- RAGAS metrics route through the repo's **adaptive provider routing** (no fixed local model):
+  - **LLM**: no provider is pinned as judge. If `EVALUATION_LLM_PROVIDER` is set it becomes the primary of the purpose-`evaluation` chain; when empty (default) every call routes through `llm_fallback_order` and picks the first provider that is currently available (has an API key, not cooling down, inside its rate window) — local Ollama only as the degraded last resort (skipped after consecutive failures). Each ragas metric/query makes one LLM call per requested generation (`answer_relevancy` requests `n=3`, so it makes 3). High-volume runs (RAGAS makes ~20 LLM calls/query) can exhaust a provider's per-minute rate window; the judge then adaptively shifts to the next available provider, so don't pin a low-limit provider.
+  - **Embeddings**: NVIDIA then OpenRouter — both default to `nvidia/nemotron-3-embed-1b` (2048-dim), so a mid-run failover keeps the dimension constant (required for ragas cosine similarity). Providers without API keys are skipped; local Ollama (`nomic-embed-text`) is used only when no external key is configured. These eval embeddings never touch Qdrant and are independent of the production index embedder.
+  - This uses the same paid providers as the app; a full-dataset run costs real LLM calls (≈18 calls/query on the 12-query Spark set). The eval harness (mocked embedder, no infra) is available separately via `make test-eval`.
 
 ---
 

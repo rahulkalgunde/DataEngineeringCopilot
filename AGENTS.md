@@ -34,7 +34,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
 | `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
 | `dec reset-crawler-db` | Clears crawler state (Redis `crawl:*` + PostgreSQL frontier) without touching Qdrant. Dedup still works via Qdrant content hashes. |
-| `dec evaluate` | RAG eval on `tests/evaluation/eval_dataset.jsonl` |
+| `dec evaluate` | RAG eval on JSONL golden dataset (default `tests/evaluation/eval_dataset.jsonl`, per-source files `eval_dataset_{source}.jsonl`; `--dataset <path>` / `--source <name>` to select/filter) |
 | `dec inspect-db` | Scrolls Qdrant points, shows source/chunk-type/URL distribution |
 | `dec cancel <task-id>` | Cancels running ingestion via API |
 | `dec profile` | Ingestion concurrency profiler |
@@ -120,7 +120,7 @@ make status   # Check health
 - **Factory DI**: `build_rag_service()`, `build_async_ingestion_service()` in `factory.py`. Never instantiate manually.
 - **Async only**: `SafeAsyncClientMixin` (uses `httpx.AsyncClient`; `aiohttp` is crawler-only).
 - **Providers**: LLM → ollama, openrouter, nvidia, groq, cerebras, gemini. Embeddings → ollama, openrouter, nvidia, gemini. Switching providers requires `dec reset-qdrant` (dimension change).
-- **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global.
+- **Per-purpose LLM overrides**: Each pipeline stage (answer, rewrite, groundedness, intent, enrichment, evaluation, code) can use `{purpose}_llm_provider` / `{purpose}_llm_model`. Empty = fallback to global. **Exception — evaluation**: an empty `evaluation_llm_provider` does NOT pin the global primary; `build_evaluation_llm_chain` (`factory.py`) builds the RAGAS judge from `llm_fallback_order` with no forced primary, so each call uses the first currently-available provider.
 - **Adaptive fallback chain**: `AdaptiveLLMRouter` is fail-fast and failover-first — no same-provider retries, no circuit breaker. Every provider (incl. purpose-assigned) passes a non-blocking gate (cooldown + rate-limiter window) before a single attempt; failures set a category-based cooldown and it moves to the next provider in `llm_fallback_order`, ending at Ollama (degraded mode). `Retry-After` propagates into cooldowns. The degraded Ollama fallback is skipped (fail-fast) once a local model hits `ollama_degraded_max_consecutive_failures` consecutive failures (default 3); one success resets the counter. Streaming failures skip health bookkeeping (they fall back to non-streaming `generate()`). 429s without `Retry-After` escalate their cooldown geometrically (`10s → 20s → 40s → 60s` cap) per consecutive failure.
 - **Embedding dimension**: Model-dependent lookup in `embedding_model_dimensions` dict (`settings.py:124`).
 - **Chunking** (`chunking_strategy`): `"sentence_preserving"` (default, `chunk_size_words * 5` chars), `"semantic"`, `"header_aware"`, `"fixed_size"`.
