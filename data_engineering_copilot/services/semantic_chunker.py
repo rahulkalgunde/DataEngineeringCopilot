@@ -118,6 +118,8 @@ class SemanticChunker:
         precomputed_embeddings: list[list[float]] | None = None,
     ) -> list[DocumentChunk]:
         sentences = self.extract_sentences(document.text)
+        if sentences is None:
+            raise RuntimeError(f"Sentence tokenization failed for url={document.url}; cannot perform semantic chunking")
         if not sentences:
             logger.warning("No sentences found in document url=%s", document.url)
             return []

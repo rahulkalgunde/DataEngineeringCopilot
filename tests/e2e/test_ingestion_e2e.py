@@ -11,6 +11,7 @@ Run with: ``dec_venv/bin/python -m pytest tests/e2e/ -v -m ingestion``
 import dataclasses
 import hashlib
 import time
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -20,6 +21,22 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.services.chunker import DocumentChunker
 from tests.conftest import require_qdrant_and_ollama
+
+
+class _AsyncListIterator:
+    """Async iterator wrapper for a plain list, usable with ``async for``."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._items:
+            raise StopAsyncIteration
+        return self._items.pop(0)
+
 
 SAMPLE_HTML = """<html><head><title>Apache Spark Overview</title></head><body>
 <nav>Navigation sidebar</nav>
@@ -112,6 +129,155 @@ class TestIngestionPipelineE2E:
     async def test_parse_chunk_embed_upsert(self, vector_store, embedder):
         n = await self._ingest_sample(vector_store, embedder)
         assert await vector_store.count() == n
+
+    async def test_service_ingest_real_chunker_indexes(self, e2e_settings, vector_store, embedder):
+        """Run the real AsyncIngestionService.ingest() with a real DocumentChunker.
+
+        This crosses the exact service↔real-chunker seam in _process_raw that the
+        hand-wired tests bypass. Guards the d7e595d regression where every page
+        was silently marked SKIPPED (0 chunks indexed) under the default
+        sentence_preserving strategy. Asserts chunks_indexed > 0 (CI invariant).
+        """
+        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+
+        crawler = MagicMock()
+        crawler.crawl = MagicMock(
+            return_value=_AsyncListIterator(
+                [
+                    RawDocument(
+                        source_name="Apache Spark Documentation",
+                        url="https://spark.apache.org/docs/latest/",
+                        html=SAMPLE_HTML,
+                    )
+                ]
+            )
+        )
+        frontier = MagicMock()
+        frontier.stats = AsyncMock(return_value={"DISCOVERED": 1})
+        frontier.all_urls = AsyncMock(return_value=[])
+        frontier.reactivate_missing = AsyncMock(return_value=0)
+        frontier.mark_processed = AsyncMock()
+        frontier.mark_failed = AsyncMock()
+        frontier.mark_skipped = AsyncMock()
+        frontier.close = AsyncMock()
+        crawler.frontier = frontier
+
+        from data_engineering_copilot.config.settings import DocumentationSource
+
+        source = DocumentationSource(
+            name="Apache Spark Documentation",
+            start_urls=("https://spark.apache.org/docs/latest/",),
+            allowed_domains=("spark.apache.org",),
+            url_prefixes=("https://spark.apache.org/docs/latest/",),
+        )
+        crawler.crawl.return_value = _AsyncListIterator(
+            [
+                RawDocument(
+                    source_name=source.name,
+                    url="https://spark.apache.org/docs/latest/",
+                    html=SAMPLE_HTML,
+                )
+            ]
+        )
+
+        service = AsyncIngestionService(
+            settings=e2e_settings,
+            crawler=crawler,
+            parser=MarkdownParser(),
+            chunker=DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100),
+            embeddings=embedder,
+            vector_store=vector_store,
+        )
+        try:
+            total = await service.ingest(
+                max_pages_per_source=1,
+                source_names=["Apache Spark Documentation"],
+            )
+        finally:
+            service.stop()
+
+        assert total > 0, "Service must index at least one chunk (was silently skipping every page)"
+        assert frontier.mark_skipped.await_count == 0, "No page should have been silently skipped"
+        assert frontier.mark_processed.await_count >= 1
+
+        # ingest() closes the shared vector_store client internally; use a fresh
+        # client over the same collection to assert points were persisted.
+        verify_store = AsyncQdrantVectorStore(
+            url=e2e_settings.qdrant_url,
+            collection_name=vector_store._collection_name,
+            embedding_dimension=768,
+        )
+        try:
+            assert await verify_store.count() > 0, "Qdrant must contain indexed chunks"
+        finally:
+            await verify_store.close()
+
+    async def test_service_ingest_real_semantic_chunker_indexes(self, e2e_settings, vector_store, embedder):
+        """Real SemanticChunker through AsyncIngestionService.ingest().
+
+        Crosses the service↔real-SemanticChunker seam including the list branch
+        of _process_raw (extract_sentences -> embed_texts -> chunk(parsed,
+        embeddings)), which had zero coverage at any level while the None/[] bug
+        was live. Asserts chunks were indexed and no page was silently skipped.
+        """
+        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+        from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+
+        crawler = MagicMock()
+        frontier = MagicMock()
+        frontier.stats = AsyncMock(return_value={"DISCOVERED": 1})
+        frontier.all_urls = AsyncMock(return_value=[])
+        frontier.reactivate_missing = AsyncMock(return_value=0)
+        frontier.mark_processed = AsyncMock()
+        frontier.mark_failed = AsyncMock()
+        frontier.mark_skipped = AsyncMock()
+        frontier.close = AsyncMock()
+        crawler.frontier = frontier
+
+        crawler.crawl.return_value = _AsyncListIterator(
+            [
+                RawDocument(
+                    source_name="Apache Spark Documentation",
+                    url="https://spark.apache.org/docs/latest/",
+                    html=SAMPLE_HTML,
+                )
+            ]
+        )
+
+        service = AsyncIngestionService(
+            settings=e2e_settings,
+            crawler=crawler,
+            parser=MarkdownParser(),
+            chunker=SemanticChunker(
+                chunk_size_words=80,
+                overlap_words=10,
+                embedding_model=embedder,
+                min_chunk_words=15,
+            ),
+            embeddings=embedder,
+            vector_store=vector_store,
+        )
+        try:
+            total = await service.ingest(
+                max_pages_per_source=1,
+                source_names=["Apache Spark Documentation"],
+            )
+        finally:
+            service.stop()
+
+        assert total > 0, "SemanticChunker must index at least one chunk"
+        assert frontier.mark_skipped.await_count == 0, "No page should have been silently skipped"
+        assert frontier.mark_processed.await_count >= 1
+
+        verify_store = AsyncQdrantVectorStore(
+            url=e2e_settings.qdrant_url,
+            collection_name=vector_store._collection_name,
+            embedding_dimension=768,
+        )
+        try:
+            assert await verify_store.count() > 0, "Qdrant must contain semantically chunked points"
+        finally:
+            await verify_store.close()
 
     async def test_ingested_data_queryable(self, vector_store, embedder):
         await self._ingest_sample(vector_store, embedder)

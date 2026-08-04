@@ -4,7 +4,9 @@ import asyncio
 import contextlib
 import dataclasses
 import hashlib
+import pickle
 import time
+import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -83,6 +85,11 @@ class AsyncIngestionService:
         self._chunk_filter = chunk_filter
         self._telemetry = telemetry
 
+        # Enrichment queue for decoupling enrichment from main pipeline
+        self._enrichment_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        self._enrichment_worker_task: asyncio.Task | None = None
+        self._task_id: str | None = None
+
         if parse_executor is not None:
             self._parse_executor = parse_executor
         else:
@@ -146,23 +153,121 @@ class AsyncIngestionService:
         extract_sentences = getattr(self.chunker, "extract_sentences", None)
         if extract_sentences is not None:
             sentences = extract_sentences(parsed.text)
-            if not sentences:
+            if sentences is None:
+                chunks = await self.chunker.chunk(parsed)
+            elif not sentences:
+                log.info(
+                    "async_ingestion.page_skipped_no_sentences",
+                    source=parsed.source_name,
+                    url=parsed.url,
+                )
+                self._emit(
+                    on_event,
+                    make_event(
+                        "page_skipped",
+                        source_name=parsed.source_name,
+                        url=parsed.url,
+                        title=parsed.title,
+                        message=f"Skipped page with no extractable sentences: {parsed.url}",
+                    ),
+                )
                 return _ProcessedResult(disposition="no_content", parsed=parsed)
-            embeddings = await self.embeddings.embed_texts(sentences)
-            chunks = await self.chunker.chunk(parsed, embeddings)
+            else:
+                embeddings = await self.embeddings.embed_texts(sentences)
+                chunks = await self.chunker.chunk(parsed, embeddings)
         else:
             chunks = await self.chunker.chunk(parsed)
         crawled_at = datetime.now(UTC).isoformat()
         chunks = [dataclasses.replace(chunk, content_hash=content_hash, crawled_at=crawled_at) for chunk in chunks]
 
-        if self._contextual_enricher is not None:
-            if enrichment_semaphore is not None:
-                async with enrichment_semaphore:
-                    chunks = await self._contextual_enricher.enrich(parsed, chunks)
-            else:
+        # Queue enrichment to Redis for background worker (if enricher configured)
+        if self._contextual_enricher is not None and self._task_id_explicit:
+            from data_engineering_copilot.factory import get_shared_redis_client
+
+            redis = get_shared_redis_client(self.settings.redis_url)
+            queue_key = f"ingestion:{self._task_id}:enrichment_queue"
+            depth_key = f"{queue_key}:depth"
+            item = pickle.dumps((parsed, chunks))
+            await redis.rpush(queue_key, item)
+            await redis.incr(depth_key)
+            await redis.expire(queue_key, 86400)
+            await redis.expire(depth_key, 86400)
+            # Return chunks WITHOUT enrichment; enrichment applied later in _flush_batch_tracked
+        elif self._contextual_enricher is not None and enrichment_semaphore is not None:
+            # Fallback for direct calls without task_id
+            async with enrichment_semaphore:
                 chunks = await self._contextual_enricher.enrich(parsed, chunks)
+        elif self._contextual_enricher is not None:
+            chunks = await self._contextual_enricher.enrich(parsed, chunks)
 
         return _ProcessedResult(disposition="indexed", chunks=chunks, content_hash=content_hash, parsed=parsed)
+
+    async def _enrichment_worker(self, task_id: str) -> None:
+        """Background worker that processes enrichment tasks from Redis queue."""
+        if self._contextual_enricher is None:
+            log.warning("enrichment_worker.no_enricher", task_id=task_id)
+            return
+
+        from data_engineering_copilot.factory import get_shared_redis_client
+
+        redis = get_shared_redis_client(self.settings.redis_url)
+        queue_key = f"ingestion:{task_id}:enrichment_queue"
+        results_key = f"ingestion:{task_id}:enrichment_results"
+        heartbeat_key = f"ingestion:{task_id}:enrichment_worker:heartbeat"
+        depth_key = f"{queue_key}:depth"
+        ttl = 86400  # 24h
+
+        log.info("enrichment_worker.started", task_id=task_id)
+        try:
+            while True:
+                # Heartbeat for monitor liveness check
+                await redis.set(heartbeat_key, "alive", ex=10)
+
+                # Blocking pop from Redis list (with timeout for shutdown check)
+                item = await redis.blpop(queue_key, timeout=1)
+                if item is None:
+                    continue
+                _, payload = item
+                if payload == b"SHUTDOWN":
+                    log.info("enrichment_worker.shutdown_received", task_id=task_id)
+                    break
+
+                try:
+                    # Deserialize (pickle) - handle both bytes and str from Redis
+                    payload_bytes = payload if isinstance(payload, bytes) else payload.encode()
+                    parsed, chunks = pickle.loads(payload_bytes)
+
+                    # Acquire semaphore locally in worker
+                    async with asyncio.Semaphore(self.settings.enrichment_concurrency):
+                        enriched = await self._contextual_enricher.enrich(parsed, chunks)
+
+                    # Store result in Redis hash with TTL
+                    await redis.hset(results_key, parsed.url, pickle.dumps(enriched))
+                    await redis.expire(results_key, ttl)
+
+                    # Track queue depth for monitor
+                    await redis.decr(depth_key)
+                except Exception as exc:
+                    log.error(
+                        "enrichment_worker.item_failed",
+                        task_id=task_id,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    # Don't fail the worker, just log and continue
+                    await redis.decr(depth_key)
+        except asyncio.CancelledError:
+            log.info("enrichment_worker.cancelled", task_id=task_id)
+            raise
+        except Exception as exc:
+            log.error(
+                "enrichment_worker.fatal_error",
+                task_id=task_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        finally:
+            log.info("enrichment_worker.stopped", task_id=task_id)
 
     async def _flush_batch(
         self,
@@ -244,7 +349,17 @@ class AsyncIngestionService:
         max_pages_per_source: int | None = None,
         source_names: Iterable[str] | None = None,
         on_event: Callable[[IngestionEvent], None] | None = None,
+        task_id: str | None = None,
     ) -> int:
+        # Generate task_id if not provided
+        self._task_id = task_id or f"ingest-{uuid.uuid4().hex[:8]}"
+        self._task_id_explicit = task_id is not None
+
+        # Start enrichment worker only if task_id explicitly provided (for Celery integration)
+        if self._contextual_enricher is not None and self._task_id_explicit:
+            self._enrichment_worker_task = asyncio.create_task(self._enrichment_worker(self._task_id))
+            log.info("enrichment_worker.started", task_id=self._task_id)
+
         if hasattr(self.vector_store, "initialize") and asyncio.iscoroutinefunction(self.vector_store.initialize):
             await self.vector_store.initialize()
         start_time = time.time()
@@ -254,6 +369,7 @@ class AsyncIngestionService:
             "async_ingestion.started",
             page_limit=page_limit,
             sources=[source.name for source in selected_sources],
+            task_id=self._task_id,
         )
 
         if not selected_sources:
@@ -315,6 +431,33 @@ class AsyncIngestionService:
 
     async def close(self) -> None:
         """Close underlying clients and shut down thread pools."""
+        # Shutdown enrichment worker
+        if self._enrichment_worker_task is not None and self._task_id_explicit:
+            from data_engineering_copilot.factory import get_shared_redis_client
+
+            redis = get_shared_redis_client(self.settings.redis_url)
+            queue_key = f"ingestion:{self._task_id}:enrichment_queue"
+            await redis.rpush(queue_key, b"SHUTDOWN")
+            try:
+                await asyncio.wait_for(self._enrichment_worker_task, timeout=30.0)
+            except TimeoutError:
+                log.warning("enrichment_worker.shutdown_timeout", task_id=self._task_id)
+                self._enrichment_worker_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._enrichment_worker_task
+            except Exception as exc:
+                log.warning("enrichment_worker.shutdown_error", task_id=self._task_id, error=str(exc))
+            finally:
+                # Cleanup Redis keys
+                for key in [
+                    queue_key,
+                    f"{queue_key}:depth",
+                    f"ingestion:{self._task_id}:enrichment_results",
+                    f"ingestion:{self._task_id}:enrichment_worker:heartbeat",
+                ]:
+                    with contextlib.suppress(Exception):
+                        await redis.delete(key)
+
         for component in (self.vector_store, self.embeddings, self.crawler):
             if not hasattr(component, "close"):
                 continue
@@ -748,6 +891,24 @@ class AsyncIngestionService:
         """
         if not batch_chunks:
             return
+
+        # Pull enriched chunks from Redis if task_id explicitly provided
+        if self._task_id_explicit:
+            from data_engineering_copilot.factory import get_shared_redis_client
+
+            redis = get_shared_redis_client(self.settings.redis_url)
+            results_key = f"ingestion:{self._task_id}:enrichment_results"
+            enriched_chunks = []
+            for chunk in batch_chunks:
+                enriched_data = await redis.hget(results_key, chunk.url)
+                if enriched_data:
+                    # Handle both bytes and str from Redis
+                    enriched_bytes = enriched_data if isinstance(enriched_data, bytes) else enriched_data.encode()
+                    enriched_chunks.append(pickle.loads(enriched_bytes))
+                else:
+                    enriched_chunks.append(chunk)  # fallback to non-enriched
+            batch_chunks = enriched_chunks
+
         urls = {chunk.url for chunk in batch_chunks if chunk.url}
         span = None
         if self._telemetry is not None:

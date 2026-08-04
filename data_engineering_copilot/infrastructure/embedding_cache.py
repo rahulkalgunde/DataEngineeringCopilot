@@ -6,6 +6,8 @@ import logging
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+from data_engineering_copilot.domain.exceptions import EmbeddingError
+
 if TYPE_CHECKING:
     from data_engineering_copilot.domain.protocols import EmbedderProtocol
 
@@ -128,12 +130,21 @@ class CachedEmbedder:
         if uncached_indices:
             uncached_texts = [texts[i] for i in uncached_indices]
             fresh_embeddings = await self._inner.embed_texts(uncached_texts)
+            if len(fresh_embeddings) != len(uncached_indices):
+                raise EmbeddingError(
+                    f"Embedder returned {len(fresh_embeddings)} vectors for {len(uncached_indices)} texts"
+                )
             for idx, emb in zip(uncached_indices, fresh_embeddings, strict=False):
                 results[idx] = emb
                 self._cache.set(texts[idx], emb)
                 await self._set_to_redis(texts[idx], emb)
 
-        return [r if r is not None else [] for r in results]
+        filled: list[list[float]] = []
+        for r in results:
+            if r is None:
+                raise EmbeddingError("Embedder returned fewer vectors than texts")
+            filled.append(r)
+        return filled
 
     async def close(self) -> None:
         if hasattr(self._inner, "close"):

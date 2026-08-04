@@ -15,10 +15,14 @@ import inspect
 import pytest
 
 from data_engineering_copilot.domain.protocols import (
+    ChunkerProtocol,
     EmbedderProtocol,
     LLMClientProtocol,
     VectorStoreProtocol,
 )
+from data_engineering_copilot.services.chunker import DocumentChunker
+from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 from tests.doubles.embedder import StubEmbedder
 from tests.doubles.frontier import InMemoryFrontierDB
 from tests.doubles.llm import STUB_ANSWER, STUB_GAP_ANSWER, StaticLLM, StubLLM
@@ -32,8 +36,19 @@ _DOUBLE_PROTOCOL_PAIRS = [
     (InMemoryVectorStore, VectorStoreProtocol),
 ]
 
+# Real production implementations pinned to their protocol so a refactor that
+# renames/removes/re-shapes a protocol member is caught at test time.
+_REAL_PROTOCOL_PAIRS = [
+    (DocumentChunker, ChunkerProtocol),
+    (SemanticChunker, ChunkerProtocol),
+    (HeaderAwareChunker, ChunkerProtocol),
+]
 
-@pytest.mark.parametrize("double_cls,protocol", _DOUBLE_PROTOCOL_PAIRS)
+
+@pytest.mark.parametrize(
+    "double_cls,protocol",
+    _DOUBLE_PROTOCOL_PAIRS + _REAL_PROTOCOL_PAIRS,
+)
 def test_double_structurally_satisfies_protocol(double_cls, protocol):
     for name in dir(protocol):
         if name.startswith("_"):
@@ -48,6 +63,34 @@ def test_double_structurally_satisfies_protocol(double_cls, protocol):
             double_params = set(inspect.signature(double_attr).parameters) - {"self"}
             missing = proto_params - double_params
             assert not missing, f"{double_cls.__name__}.{name} lacks protocol params {sorted(missing)}"
+
+
+def test_extract_sentences_sentinel_contract():
+    """Pin the sentence-extraction contract that was violated by commit d7e595d.
+
+    ``extract_sentences`` returns ``None`` to mean "sentence pre-extraction not
+    supported by this chunker" (callers must fall through to plain ``chunk()``),
+    and a (possibly empty) list to mean "sentences were extracted".  A chunker
+    that returns a sentinel the caller misreads as "no content" silently skips
+    every page, so this contract is pinned explicitly.
+    """
+    sample_text = (
+        "Apache Spark is a unified analytics engine for large-scale data processing. "
+        "It provides high-level APIs in Scala, Java, Python, and R."
+    )
+
+    # DocumentChunker / HeaderAwareChunker: "not supported" -> None sentinel.
+    for chunker in [
+        DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100),
+        HeaderAwareChunker(chunk_size_words=75, overlap_words=15),
+    ]:
+        assert hasattr(chunker, "extract_sentences")
+        assert chunker.extract_sentences(sample_text) is None
+
+    # SemanticChunker: real text yields an actual sentence list (never None).
+    sentences = SemanticChunker.extract_sentences(sample_text)
+    assert isinstance(sentences, list)
+    assert len(sentences) >= 1
 
 
 @pytest.mark.asyncio
