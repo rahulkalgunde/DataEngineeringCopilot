@@ -9,7 +9,6 @@ import structlog
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
-from data_engineering_copilot.infrastructure.adaptive_llm_router import AdaptiveLLMRouter
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
@@ -18,6 +17,11 @@ from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.llm_client import LLMClient
+from data_engineering_copilot.infrastructure.provider_fallback import (
+    FallbackChainConfig,
+    ProviderConfig,
+    ProviderFallbackChain,
+)
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.infrastructure.rst_parser import RstParser
@@ -125,9 +129,56 @@ def _build_provider_health_registry(app_settings: AppSettings = settings) -> Pro
     )
 
 
+def _categorize_embedding_error(exc: Exception, provider: str, model: str):
+    """Categorize embedding provider errors for the unified fallback chain."""
+    import httpx
+
+    from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+    from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
+
+    def _status_category(status: int) -> ProviderErrorCategory:
+        if status == 429:
+            return ProviderErrorCategory.RATE_LIMITED
+        if status in (401, 403):
+            return ProviderErrorCategory.AUTHENTICATION_ERROR
+        if status in (400, 422):
+            return ProviderErrorCategory.INVALID_REQUEST
+        if status >= 500:
+            return ProviderErrorCategory.TEMPORARY_UNAVAILABLE
+        return ProviderErrorCategory.PERMANENT_ERROR
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
+        return ProviderError(
+            _status_category(status),
+            provider,
+            model,
+            retry_after=retry_after if status == 429 else None,
+            original=exc,
+        )
+
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+
+    lower_msg = str(exc).lower()
+    if "rate limit" in lower_msg or "429" in lower_msg or "too many requests" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
+    if "quota" in lower_msg or "exceeded" in lower_msg:
+        return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
+    if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
+        return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
+    if "timed out" in lower_msg or "timeout" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+    if "could not reach" in lower_msg or "connection" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+
+    return ProviderError(ProviderErrorCategory.PERMANENT_ERROR, provider, model, original=exc)
+
+
 def _build_purpose_llm_client(
     provider: str,
-    model: str,
+    model: str | None = None,
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     timeout_seconds: int | None = None,
@@ -308,139 +359,328 @@ def _build_chain_clients(
     return clients
 
 
-def _build_fallback_chain(
-    purpose_provider: str,
-    purpose_model: str,
+def _build_llm_chain_config(
+    purpose: str,
+    app_settings: AppSettings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None,
+    health_registry: ProviderHealthRegistry,
+    purpose_provider: str | None = None,
+    purpose_model: str | None = None,
+) -> FallbackChainConfig:
+    """Build FallbackChainConfig for LLM providers based on purpose."""
+    from data_engineering_copilot.infrastructure.provider_fallback import ProviderConfig
+
+    limiters = provider_rate_limiters or {}
+
+    # Determine primary provider and fallback order
+    if purpose_provider and purpose_provider.strip():
+        primary = purpose_provider.strip().lower()
+        # Build ordered list: primary first, then rest from llm_fallback_order
+        ordered = [primary]
+        for p in app_settings.llm_fallback_order:
+            p_lower = p.lower()
+            if p_lower not in ordered:
+                ordered.append(p_lower)
+    else:
+        # No pinned primary — use llm_fallback_order as-is
+        ordered = [p.lower() for p in app_settings.llm_fallback_order]
+
+    # Build ProviderConfig for each
+    providers_config: list[ProviderConfig] = []
+    for idx, provider_name in enumerate(ordered):
+        try:
+            model_arg = purpose_model if idx == 0 else ""
+            timeout = (
+                None
+                if idx == 0
+                else (
+                    app_settings.ollama_timeout_seconds
+                    if provider_name == "ollama"
+                    else app_settings.llm_fallback_call_timeout
+                )
+            )
+            client = _build_purpose_llm_client(
+                provider=provider_name,
+                model=model_arg,
+                app_settings=app_settings,
+                provider_rate_limiters=limiters,
+                timeout_seconds=timeout,
+                purpose=purpose,
+            )
+            if client is not None:
+                providers_config.append(
+                    ProviderConfig(
+                        name=provider_name,
+                        client=client,
+                        rate_limiter=limiters.get(provider_name),
+                    )
+                )
+                health_registry.register_provider(provider_name, [client.model])
+        except Exception as exc:
+            logger.warning(
+                "Skipping provider in LLM fallback chain",
+                provider=provider_name,
+                error=str(exc),
+            )
+
+    # Separate Ollama as degraded fallback
+    main_providers = [p for p in providers_config if p.name.lower() != "ollama"]
+    degraded = next((p for p in providers_config if p.name.lower() == "ollama"), None)
+
+    return FallbackChainConfig(
+        providers=main_providers,
+        degraded_fallback=degraded,
+        max_degraded_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
+    )
+
+
+def build_llm_fallback_chain(
+    purpose: str,
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
-    purpose: str | None = None,
     health_registry: ProviderHealthRegistry | None = None,
-) -> AdaptiveLLMRouter | LLMClient | None:
-    """Build a health-aware adaptive fallback chain of LLM providers.
+    purpose_provider: str | None = None,
+    purpose_model: str | None = None,
+) -> ProviderFallbackChain[str, str] | LLMClient:
+    """Build unified LLM fallback chain for a purpose.
 
-    The *purpose_provider* (or the global ``llm_provider`` if empty) is
-    tried first.  If it fails, remaining providers from
-    ``llm_fallback_order`` are tried in sequence, with Ollama as the last
-    resort.
+    Args:
+        purpose: Purpose name (e.g., "answer", "rewrite", "evaluation", "enrichment", "global")
+        app_settings: Application settings
+        provider_rate_limiters: Pre-built rate limiters (optional)
+        health_registry: Shared health registry (optional)
+        purpose_provider: Optional pinned primary provider (empty = adaptive from llm_fallback_order)
+        purpose_model: Optional pinned primary model (empty = resolve via priority)
 
-    Returns ``None`` when *purpose_provider* is empty (caller intends to
-    reuse the global chain).  Returns a bare ``LLMClient`` when only one
-    provider is available.  Returns ``AdaptiveLLMRouter`` when ≥2 providers
-    are configured.
+    Returns:
+        ProviderFallbackChain when ≥2 providers, or single LLMClient when only 1 available.
     """
-    eff_provider = (purpose_provider or "").strip().lower()
-    if not eff_provider:
-        return None
-
-    fallback_order = [p.lower() for p in app_settings.llm_fallback_order]
-
-    # Deduplicated ordered list: primary first, then remaining from fallback order
-    ordered: list[str] = [eff_provider]
-    for p in fallback_order:
-        if p not in ordered:
-            ordered.append(p)
-
     health = health_registry or _build_provider_health_registry(app_settings)
+    limiters = provider_rate_limiters or _build_provider_rate_limiters(app_settings)
 
-    clients = _build_chain_clients(
-        ordered=ordered,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
+    config = _build_llm_chain_config(
         purpose=purpose,
+        app_settings=app_settings,
+        provider_rate_limiters=limiters,
         health_registry=health,
+        purpose_provider=purpose_provider,
         purpose_model=purpose_model,
     )
 
-    if not clients:
+    if not config.providers and not config.degraded_fallback:
         raise ValueError(
-            f"No LLM client could be built for provider {eff_provider!r}. Check API keys and provider configuration."
+            f"No LLM client could be built for purpose '{purpose}'. Check API keys and LLM_FALLBACK_ORDER configuration."
         )
 
-    chain_info = [(p, c.model) for p, c in clients]
+    if len(config.providers) + (1 if config.degraded_fallback else 0) == 1:
+        # At this point we know exactly one of providers or degraded_fallback exists
+        if config.providers:
+            client = config.providers[0].client
+        else:
+            assert config.degraded_fallback is not None
+            client = config.degraded_fallback.client
+        logger.info("llm_fallback_chain_built", purpose=purpose, chain="single", provider=client.model)
+        return client  # type: ignore[return-value]
+
+    chain = ProviderFallbackChain(config, health)
     logger.info(
-        "fallback_chain_built",
-        purpose=purpose or "global",
-        primary=eff_provider,
-        chain=str(chain_info),
+        "llm_fallback_chain_built",
+        purpose=purpose,
+        chain=str([(p.name, p.client.model) for p in config.providers]),
+        degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
     )
-    if len(clients) == 1:
-        return clients[0][1]
-    return AdaptiveLLMRouter(
-        clients=clients,
-        health=health,
-        rate_limiters=provider_rate_limiters,
-        ollama_max_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
-    )
-
-
-def build_evaluation_llm_chain(
-    app_settings: AppSettings = settings,
-    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
-    health_registry: ProviderHealthRegistry | None = None,
-) -> AdaptiveLLMRouter | LLMClient:
-    """Build the adaptive RAGAS judge chain — no provider is forced primary.
-
-    The judge is deliberately not pinned to a specific model: every evaluation
-    LLM call routes through ``llm_fallback_order`` and picks the first provider
-    that is currently available (has an API key, is not cooling down, and is
-    inside its rate window). Local Ollama remains the degraded last resort.
-
-    Returns a bare ``LLMClient`` when only one provider is available, else an
-    ``AdaptiveLLMRouter``.
-    """
-    ordered = [p.lower() for p in app_settings.llm_fallback_order]
-    health = health_registry or _build_provider_health_registry(app_settings)
-
-    clients = _build_chain_clients(
-        ordered=ordered,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
-        purpose="evaluation",
-        health_registry=health,
-    )
-    if not clients:
-        raise ValueError(
-            "No LLM client could be built for RAGAS evaluation. Check API keys and LLM_FALLBACK_ORDER configuration."
-        )
-
-    logger.info(
-        "evaluation_judge_chain_built",
-        chain=str([(p, c.model) for p, c in clients]),
-    )
-    if len(clients) == 1:
-        return clients[0][1]
-    return AdaptiveLLMRouter(
-        clients=clients,
-        health=health,
-        rate_limiters=provider_rate_limiters,
-        ollama_max_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
-    )
+    return chain
 
 
 def build_global_llm_client(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     health_registry: ProviderHealthRegistry | None = None,
-) -> LLMClient | AdaptiveLLMRouter:
-    """Build the global LLM client with adaptive fallback chain.
+) -> LLMClient | ProviderFallbackChain[str, str]:
+    """Build the global LLM client with adaptive fallback chain (backward-compatible wrapper).
 
-    The global ``llm_model`` is NOT passed as ``purpose_model`` here — doing so
-    would short-circuit model resolution at priority 1 (explicit override) and
-    force that model onto whatever provider is primary, even if the provider
-    has its own default model (e.g. ``openrouter_model = "openrouter/free"``).
-    Instead, ``llm_model`` stays as the fallback at priority 4 in
-    ``_build_purpose_llm_client``.
+    Uses the global ``llm_provider`` as the primary if set, otherwise builds an
+    adaptive chain from ``llm_fallback_order``.
     """
-    client = _build_fallback_chain(
-        purpose_provider=app_settings.llm_provider,
-        purpose_model="",
+    return build_llm_fallback_chain(
+        purpose="global",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         health_registry=health_registry,
+        purpose_provider=app_settings.llm_provider,
+        purpose_model="",
     )
-    if client is None:
-        raise ValueError("Global llm_provider and llm_model must be set")
-    return client
+
+
+def _build_embedding_chain_config(
+    purpose: str,
+    app_settings: AppSettings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None,
+    health_registry: ProviderHealthRegistry,
+) -> FallbackChainConfig:
+    """Build FallbackChainConfig for embedding providers."""
+    from data_engineering_copilot.infrastructure.provider_fallback import ProviderConfig
+
+    limiters = provider_rate_limiters or {}
+
+    # Determine fallback order from purpose-specific or global
+    if purpose == "enrichment" and app_settings.enrichment_embedding_provider:
+        ordered = [app_settings.enrichment_embedding_provider.lower()]
+    elif purpose == "evaluation" and app_settings.evaluation_embedding_provider:
+        ordered = [app_settings.evaluation_embedding_provider.lower()]
+    else:
+        ordered = [p.lower() for p in app_settings.embedding_fallback_order]
+
+    providers_config: list[ProviderConfig] = []
+    for provider_name in ordered:
+        try:
+            client = None
+            if provider_name == "nvidia":
+                api_key = app_settings.nvidia_api_key.get_secret_value()
+                if api_key:
+                    dimension = app_settings.embedding_model_dimensions.get(
+                        app_settings.nvidia_embedding_model, app_settings.default_embedding_dimension
+                    )
+                    client = OpenAICompatibleEmbeddings(
+                        api_key=api_key,
+                        model_name=app_settings.nvidia_embedding_model,
+                        base_url=app_settings.nvidia_base_url,
+                        embedding_dimension=dimension,
+                        batch_size=app_settings.embedding_batch_size,
+                        rate_limiter=limiters.get("nvidia"),
+                        include_provider_param=False,
+                    )
+            elif provider_name == "openrouter":
+                api_key = app_settings.openrouter_api_key.get_secret_value()
+                if api_key:
+                    dimension = app_settings.embedding_model_dimensions.get(
+                        app_settings.openrouter_embedding_model, app_settings.default_embedding_dimension
+                    )
+                    client = OpenAICompatibleEmbeddings(
+                        api_key=api_key,
+                        model_name=app_settings.openrouter_embedding_model,
+                        base_url=app_settings.openrouter_base_url,
+                        embedding_dimension=dimension,
+                        batch_size=app_settings.embedding_batch_size,
+                        rate_limiter=limiters.get("openrouter"),
+                        include_provider_param=True,
+                    )
+            elif provider_name == "gemini":
+                api_key = app_settings.gemini_api_key.get_secret_value()
+                if api_key:
+                    dimension = app_settings.embedding_model_dimensions.get(
+                        app_settings.gemini_embedding_model, app_settings.default_embedding_dimension
+                    )
+                    client = OpenAICompatibleEmbeddings(
+                        api_key=api_key,
+                        model_name=app_settings.gemini_embedding_model,
+                        base_url=app_settings.gemini_base_url,
+                        embedding_dimension=dimension,
+                        batch_size=app_settings.embedding_batch_size,
+                        rate_limiter=limiters.get("gemini"),
+                        include_provider_param=False,
+                    )
+            elif provider_name in ("ollama", "local"):
+                embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
+                client = AsyncOllamaEmbeddings(
+                    model_name=app_settings.embedding_model_name,
+                    base_url=embed_base,
+                    batch_size=app_settings.embedding_batch_size,
+                    timeout_seconds=app_settings.ollama_timeout_seconds,
+                    max_concurrency=app_settings.embed_concurrency,
+                    keep_alive=app_settings.ollama_keep_alive,
+                    connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+                    pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
+                )
+
+            if client is not None:
+                providers_config.append(
+                    ProviderConfig(
+                        name=provider_name,
+                        client=client,
+                        rate_limiter=limiters.get(provider_name),
+                    )
+                )
+                health_registry.register_provider(
+                    provider_name, [getattr(client, "model_name", getattr(client, "model", "unknown"))]
+                )
+        except Exception as exc:
+            logger.warning(
+                "Skipping provider in embedding fallback chain",
+                provider=provider_name,
+                error=str(exc),
+            )
+
+    # Separate Ollama as degraded fallback
+    main_providers = [p for p in providers_config if p.name.lower() != "ollama"]
+    degraded = next((p for p in providers_config if p.name.lower() == "ollama"), None)
+
+    return FallbackChainConfig(
+        providers=main_providers,
+        degraded_fallback=degraded,
+        max_degraded_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
+        error_categorizer=_categorize_embedding_error,
+    )
+
+
+def build_embedding_fallback_chain(
+    purpose: str = "global",
+    app_settings: AppSettings = settings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+    health_registry: ProviderHealthRegistry | None = None,
+) -> ProviderFallbackChain[list[str], list[list[float]]] | EmbedderProtocol:
+    """Build unified embedding fallback chain.
+
+    Args:
+        purpose: Purpose name (e.g., "global", "evaluation", "enrichment")
+        app_settings: Application settings
+        provider_rate_limiters: Pre-built rate limiters (optional)
+        health_registry: Shared health registry (optional)
+
+    Returns:
+        ProviderFallbackChain when ≥2 providers, or single EmbedderProtocol when only 1 available.
+    """
+    health = health_registry or _build_provider_health_registry(app_settings)
+    limiters = provider_rate_limiters or _build_provider_rate_limiters(app_settings)
+
+    config = _build_embedding_chain_config(
+        purpose=purpose,
+        app_settings=app_settings,
+        provider_rate_limiters=limiters,
+        health_registry=health,
+    )
+
+    if not config.providers and not config.degraded_fallback:
+        raise ValueError(
+            f"No embedding client could be built for purpose '{purpose}'. Check API keys and EMBEDDING_FALLBACK_ORDER configuration."
+        )
+
+    if len(config.providers) + (1 if config.degraded_fallback else 0) == 1:
+        if config.providers:
+            client = config.providers[0].client
+            name = config.providers[0].name
+        else:
+            assert config.degraded_fallback is not None
+            client = config.degraded_fallback.client
+            name = config.degraded_fallback.name
+        logger.info(
+            "embedding_fallback_chain_built",
+            purpose=purpose,
+            chain="single",
+            provider=name,
+        )
+        return client  # type: ignore[return-value]
+
+    chain = ProviderFallbackChain(config, health)
+    logger.info(
+        "embedding_fallback_chain_built",
+        purpose=purpose,
+        chain=str(
+            [(p.name, getattr(p.client, "model_name", getattr(p.client, "model", "unknown"))) for p in config.providers]
+        ),
+        degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
+    )
+    return chain
 
 
 def build_embedder(
@@ -518,61 +758,29 @@ def build_evaluation_embeddings(
     app_settings: AppSettings = settings,
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
 ) -> list[tuple[str, EmbedderProtocol]]:
-    """Build the adaptive embedding chain used by RAGAS evaluation.
+    """Build the adaptive embedding chain used by RAGAS evaluation (legacy wrapper).
 
-    Prefers external providers in priority order — NVIDIA, then OpenRouter —
-    and skips any provider without an API key. Both default to the same
-    2048-dim ``nvidia/nemotron-3-embed-1b`` model, so a mid-run failover keeps
-    the embedding dimension constant (required for ragas cosine similarity).
-    When no external provider is configured, falls back to local Ollama
-    embeddings so ``dec evaluate`` still runs without paid API keys.
+    DEPRECATED: Use build_embedding_fallback_chain("evaluation", ...) instead.
+    This function maintains backward compatibility by returning the old tuple format.
     """
-    limiters = provider_rate_limiters or _build_provider_rate_limiters(app_settings)
-    clients: list[tuple[str, EmbedderProtocol]] = []
-    for provider, model_name, base_url_attr, include_provider_param in (
-        ("nvidia", app_settings.nvidia_embedding_model, "nvidia_base_url", False),
-        ("openrouter", app_settings.openrouter_embedding_model, "openrouter_base_url", True),
-    ):
-        api_key = getattr(app_settings, f"{provider}_api_key").get_secret_value()
-        if not api_key:
-            logger.warning("skipping evaluation embedding provider (no API key)", provider=provider)
-            continue
-        dimension = app_settings.embedding_model_dimensions.get(model_name, app_settings.default_embedding_dimension)
-        clients.append(
-            (
-                provider,
-                OpenAICompatibleEmbeddings(
-                    api_key=api_key,
-                    model_name=model_name,
-                    base_url=getattr(app_settings, base_url_attr),
-                    embedding_dimension=dimension,
-                    batch_size=app_settings.embedding_batch_size,
-                    rate_limiter=limiters.get(provider),
-                    include_provider_param=include_provider_param,
-                ),
-            )
+    from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+
+    chain = build_embedding_fallback_chain(
+        purpose="evaluation",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+    )
+
+    # Convert unified chain back to legacy tuple format for backward compatibility
+    if isinstance(chain, ProviderFallbackChain):
+        return [(p.name, p.client) for p in chain._config.providers] + (  # type: ignore[return-value]
+            [(chain._config.degraded_fallback.name, chain._config.degraded_fallback.client)]
+            if chain._config.degraded_fallback
+            else []
         )
-    if not clients:
-        logger.warning(
-            "no external evaluation embedding provider configured — falling back to local Ollama embeddings",
-        )
-        embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
-        clients.append(
-            (
-                "ollama",
-                AsyncOllamaEmbeddings(
-                    model_name=app_settings.embedding_model_name,
-                    base_url=embed_base,
-                    batch_size=app_settings.embedding_batch_size,
-                    timeout_seconds=app_settings.ollama_timeout_seconds,
-                    max_concurrency=app_settings.embed_concurrency,
-                    keep_alive=app_settings.ollama_keep_alive,
-                    connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
-                    pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
-                ),
-            )
-        )
-    return clients
+    else:
+        # Single embedder
+        return [("primary", chain)]
 
 
 def build_chunker(app_settings: AppSettings = settings):
@@ -750,13 +958,13 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
     health_registry = _build_provider_health_registry(app_settings)
 
-    enrichment_client = _build_fallback_chain(
+    enrichment_client = build_llm_fallback_chain(
+        purpose="enrichment",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
         purpose_provider=app_settings.enrichment_llm_provider or "ollama",
         purpose_model=app_settings.enrichment_llm_model,
-        app_settings=app_settings,
-        health_registry=health_registry,
-        provider_rate_limiters=provider_rate_limiters,
-        purpose="enrichment",
     )
 
     async def _record_enrichment_failure(document) -> None:
@@ -834,57 +1042,62 @@ def build_rag_service(
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
     health_registry = _build_provider_health_registry(app_settings)
 
-    llm_client = build_global_llm_client(app_settings, provider_rate_limiters, health_registry)
+    llm_client = build_llm_fallback_chain(
+        purpose="global",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
 
-    answer_client = _build_fallback_chain(
+    answer_client = build_llm_fallback_chain(
+        purpose="answer",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
         purpose_provider=app_settings.answer_llm_provider,
         purpose_model=app_settings.answer_llm_model,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
-        purpose="answer",
-        health_registry=health_registry,
     )
 
-    code_llm_client = _build_fallback_chain(
+    code_llm_client = build_llm_fallback_chain(
+        purpose="code",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
         purpose_provider=app_settings.code_llm_provider,
         purpose_model=app_settings.code_llm_model,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
-        purpose="code",
-        health_registry=health_registry,
     )
 
-    rewrite_client = _build_fallback_chain(
+    rewrite_client = build_llm_fallback_chain(
+        purpose="rewrite",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
         purpose_provider=app_settings.rewrite_llm_provider,
         purpose_model=app_settings.rewrite_llm_model,
+    )
+    groundedness_client = build_llm_fallback_chain(
+        purpose="groundedness",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
-        purpose="rewrite",
         health_registry=health_registry,
-    )
-    groundedness_client = _build_fallback_chain(
         purpose_provider=app_settings.groundedness_llm_provider,
         purpose_model=app_settings.groundedness_llm_model,
+    )
+    intent_client = build_llm_fallback_chain(
+        purpose="intent",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
-        purpose="groundedness",
         health_registry=health_registry,
-    )
-    intent_client = _build_fallback_chain(
         purpose_provider=app_settings.intent_llm_provider,
         purpose_model=app_settings.intent_llm_model,
+    )
+    evaluation_client = build_llm_fallback_chain(
+        purpose="evaluation",
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
-        purpose="intent",
         health_registry=health_registry,
-    )
-    evaluation_client = _build_fallback_chain(
         purpose_provider=app_settings.evaluation_llm_provider,
         purpose_model=app_settings.evaluation_llm_model,
-        app_settings=app_settings,
-        provider_rate_limiters=provider_rate_limiters,
-        purpose="evaluation",
-        health_registry=health_registry,
     )
 
     logger.info(
