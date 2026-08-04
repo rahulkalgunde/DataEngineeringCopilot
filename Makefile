@@ -12,7 +12,7 @@ DOCKER_TAG_FILE := .docker-tag
 dev:
 	@IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) build --build-arg GIT_SHA=$(GIT_SHA) backend-api
 	@echo "$(IMAGE_TAG)" > $(DOCKER_TAG_FILE)
-	@IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) up -d --wait
+	@IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) up -d --wait || true
 	@echo "Pulling Ollama models (this may take a few minutes)..."
 	@$(COMPOSE) exec -T ollama ollama pull nomic-embed-text || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
 	@$(COMPOSE) exec -T ollama ollama pull llama3.2:3b || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
