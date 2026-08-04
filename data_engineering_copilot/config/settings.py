@@ -196,6 +196,9 @@ class AppSettings(BaseSettings):
     )
     llm_fallback_call_timeout: int = 30  # per-attempt timeout for non-primary fallback providers
 
+    # Embedding fallback chain: ordered list of embedding providers to try on failure
+    embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia", "openrouter", "ollama"])
+
     # Provider cooldown / routing
     provider_cooldown_seconds: int = 60
     health_success_rate_weight: float = 0.6
@@ -224,6 +227,10 @@ class AppSettings(BaseSettings):
     # Code-specific LLM override (optional, for code_example/api_lookup intents)
     code_llm_provider: str = ""
     code_llm_model: str = ""
+
+    # Per-purpose embedding overrides (empty = use global embedding_provider / embedding_fallback_order)
+    enrichment_embedding_provider: str = ""
+    evaluation_embedding_provider: str = ""
 
     # Per-provider purpose model overrides (override model per-provider per-purpose)
     # When set, these take priority over the generic {purpose}_llm_model above when
