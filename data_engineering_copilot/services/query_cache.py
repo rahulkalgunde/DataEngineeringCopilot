@@ -164,6 +164,13 @@ class QueryCache:
         if not valid:
             return None
 
+        # A vector with a different dimension than the query (e.g. a cached
+        # embedding from a previous embedding model) is meaningless and would
+        # crash np.vstack/np.dot — skip it.
+        valid = [e for e in valid if len(e[1]) == q_vec.shape[0]]
+        if not valid:
+            return None
+
         matrix = np.vstack([entry[1] for entry in valid])
         similarities = np.dot(matrix, q_unit)
         best_idx = int(np.argmax(similarities))
@@ -243,6 +250,10 @@ class QueryCache:
                         stored = np.array(
                             json.loads(emb_raw if isinstance(emb_raw, str) else emb_raw.decode()), dtype=np.float32
                         )
+                        if stored.shape[0] != query_vec.shape[0]:
+                            # Stale entry from a different-dimension embedding
+                            # model; cosine across dims is undefined.
+                            continue
                         s_norm = np.linalg.norm(stored)
                         if s_norm == 0:
                             continue

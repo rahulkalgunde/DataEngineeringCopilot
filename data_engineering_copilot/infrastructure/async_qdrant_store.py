@@ -54,10 +54,12 @@ class AsyncQdrantVectorStore:
         self._hybrid_rrf_k = hybrid_rrf_k
         self._bm25_persist_path = bm25_persist_path or (PROJECT_ROOT / ".bm25_cache" / f"{collection_name}.json")
         self._bm25 = None
+        self._bm25_loaded_from_disk = False
         if hybrid_search:
             if self._bm25_persist_path.exists():
                 try:
                     self._bm25 = BM25Tokenizer.load(self._bm25_persist_path)
+                    self._bm25_loaded_from_disk = True
                     logger.info("Loaded persisted BM25 tokenizer from %s", self._bm25_persist_path)
                 except Exception:
                     logger.warning("Failed to load BM25 from %s, creating fresh", self._bm25_persist_path)
@@ -67,6 +69,7 @@ class AsyncQdrantVectorStore:
         self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         self._last_query_sparse = None
         self._embedding_dimension_override = embedding_dimension
+        self._bm25_desync_warned = False
 
     async def __aenter__(self) -> Self:
         return self
@@ -201,6 +204,7 @@ class AsyncQdrantVectorStore:
                 payloads = [self._chunk_to_payload(chunk) for chunk in sub_chunks]
 
                 if self._hybrid_search and self._bm25 is not None:
+                    await self._warn_unfrozen_bm25_desync()
                     sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in sub_chunks]
                     vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
                 else:
@@ -276,9 +280,14 @@ class AsyncQdrantVectorStore:
 
         rrf_confidence_scale: float | None = None
         try:
+            # Return a deeper fused pool than the requested top_k: RRF rank
+            # fusion suppresses single-modality hits (a chunk only in the BM25
+            # list ranks far below the dense head), so the cross-encoder
+            # reranker must see a wider candidate pool to rescue them.
+            fused_limit = max(top_k * 4, 40) if use_hybrid else top_k
             query_kwargs: dict = dict(
                 collection_name=self._collection_name,
-                limit=top_k,
+                limit=fused_limit,
                 with_payload=True,
                 score_threshold=None,
             )
@@ -293,17 +302,23 @@ class AsyncQdrantVectorStore:
                     # sparse prefetches (2). Normalize to the same 0..1 scale as
                     # cosine similarity so downstream confidence thresholds hold.
                     rrf_confidence_scale = (self._hybrid_rrf_k + 1) / 2
+                    # Pull a deeper candidate pool than the final top_k: RRF is a
+                    # rank-fusion, not a relevance scorer, and BM25 often places
+                    # the truly relevant chunk well below the dense head.  A
+                    # cross-encoder reranker (when enabled) then does the precise
+                    # selection from this larger pool.
+                    prefetch_limit = max(top_k * 4, 40)
                     query_kwargs["prefetch"] = [
                         models.Prefetch(
                             query=query_embedding,
                             using="dense",
-                            limit=top_k * 2,
+                            limit=prefetch_limit,
                             filter=query_filter,
                         ),
                         models.Prefetch(
                             query=sparse,
                             using="sparse",
-                            limit=top_k * 2,
+                            limit=prefetch_limit,
                             filter=query_filter,
                         ),
                     ]
@@ -373,18 +388,64 @@ class AsyncQdrantVectorStore:
         """Clear the sparse vector set by ``set_query_sparse``."""
         self._last_query_sparse = None
 
+    async def _warn_unfrozen_bm25_desync(self) -> None:
+        """Warn once if sparse vectors are written with an unfrozen tokenizer
+        into a collection that already contains points.
+
+        An unfrozen tokenizer assigns vocabulary ids as it first sees them, so a
+        partial ingestion into a populated collection produces sparse vectors
+        whose ids will not match the tokenizer fitted and persisted at the end of
+        that run.  This silently breaks hybrid search for the whole collection.
+        """
+        if self._bm25_desync_warned or self._bm25 is None or self._bm25_loaded_from_disk:
+            return
+        if self._bm25._frozen:
+            return
+        try:
+            if self._client is None:
+                return
+            count = await self._client.count(collection_name=self._collection_name, exact=False)
+            if count.count > 0:
+                logger.warning(
+                    "Writing sparse vectors with an UNFROZEN BM25 tokenizer into %s which "
+                    "already contains %d points. The fitted tokenizer persisted at the end of "
+                    "this run will desynchronize from the stored sparse vectors, breaking hybrid "
+                    "search. Re-ingest from a clean index (`dec reset-index`) instead of "
+                    "incrementally with a missing/empty BM25 cache.",
+                    self._collection_name,
+                    count.count,
+                )
+        except Exception:
+            logger.debug("Could not check Qdrant point count for BM25 desync warning", exc_info=True)
+        self._bm25_desync_warned = True
+
     def fit_bm25(self, texts: list[str]) -> None:
         """Fit the BM25 tokenizer on a corpus of chunk texts.
 
         Must be called once after ingestion completes and before any hybrid
         queries are made.  No-op when ``hybrid_search=False``.
+
+        A tokenizer that was loaded from the persisted cache is already in sync
+        with the sparse vectors stored in Qdrant, so it is never re-fitted or
+        re-persisted here.  Re-fitting on a partial corpus (e.g. a ``reenrich``
+        or ``retry-failed`` run) would assign a different vocabulary id space and
+        silently desynchronize every stored sparse vector from the query-side
+        tokenizer, breaking hybrid search.  Only a fresh build (no persisted
+        tokenizer) fits and persists.
         """
         if self._bm25 is None:
+            return
+        if self._bm25_loaded_from_disk:
+            logger.info(
+                "Skipping BM25 refit: loaded persisted tokenizer (%s) already consistent with stored sparse vectors",
+                self._bm25_persist_path,
+            )
             return
         self._bm25.fit(texts)
         try:
             self._bm25.save(self._bm25_persist_path)
             logger.info("Persisted BM25 tokenizer to %s", self._bm25_persist_path)
+            self._bm25_loaded_from_disk = True
         except Exception:
             logger.warning("Failed to persist BM25 tokenizer to %s", self._bm25_persist_path)
         logger.info(

@@ -57,13 +57,20 @@ class CachedEmbedder:
         embedder: EmbedderProtocol,
         max_size: int = 1024,
         redis_client=None,
+        embedding_dimension: int | None = None,
     ) -> None:
         self._inner = embedder
         self._cache = EmbeddingCache(max_size=max_size)
         self._redis = redis_client
+        self._embedding_dimension = embedding_dimension
 
     def _redis_key(self, text: str) -> str:
         key = self._cache._key(text)
+        # Namespace by embedding dimension so vectors cached under a previous
+        # model are never served after a provider/dimension switch (e.g. a
+        # 768-dim ollama vector handed to a 2048-dim NVIDIA collection).
+        if self._embedding_dimension is not None:
+            return f"embed:cache:d{self._embedding_dimension}:{key}"
         return f"embed:cache:{key}"
 
     async def _get_from_redis(self, text: str) -> list[float] | None:

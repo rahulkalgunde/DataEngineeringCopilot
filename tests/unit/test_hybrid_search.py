@@ -171,6 +171,37 @@ async def test_hybrid_query_uses_prefetch(mock_async_qdrant):
     assert len(results) == 1
 
 
+async def test_hybrid_query_returns_deep_fused_pool(mock_async_qdrant):
+    """RRF fusion suppresses single-modality hits (e.g. a chunk ranked well by
+    BM25 but poorly by dense cosine). The fused pool must be deeper than the
+    requested top_k so a reranker can rescue those chunks."""
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_response = MagicMock()
+    mock_response.points = []
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="test",
+        hybrid_search=True,
+    )
+    store.fit_bm25(["Apache Spark SQL structured data", "Delta Lake ACID"])
+    from qdrant_client.http.models import SparseVector
+
+    store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
+
+    await store.query([0.1] * 768, top_k=5)
+
+    call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
+    assert call_kwargs["limit"] == 40
+    # Each prefetch pulls the same deep pool
+    for prefetch in call_kwargs["prefetch"]:
+        assert prefetch.limit == 40
+
+
 async def test_dense_only_query_no_prefetch(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
