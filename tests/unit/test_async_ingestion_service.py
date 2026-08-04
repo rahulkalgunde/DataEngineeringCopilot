@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from data_engineering_copilot.config.settings import DocumentationSource
-from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument, RawDocument
+from data_engineering_copilot.domain.models import DocumentChunk, IngestionEvent, ParsedDocument, RawDocument
 from data_engineering_copilot.services.chunker import DocumentChunker
 
 
@@ -214,7 +214,9 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        # Mirrors the real DocumentChunker contract: extract_sentences exists but
+        # returns None ("not supported") -> _process_raw falls through to chunk().
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -245,7 +247,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = MagicMock(side_effect=RuntimeError("boom"))
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -275,7 +277,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -308,7 +310,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
@@ -337,7 +339,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
@@ -370,7 +372,7 @@ class TestAsyncIngestionServiceIngest:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -412,7 +414,7 @@ class TestAsyncIngestionServiceWorkerPool:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
 
         service = _make_svc(
@@ -461,7 +463,7 @@ class TestDedupAuthority:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -498,7 +500,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -525,7 +527,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -554,7 +556,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse_skip
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
         vector_store_mock = MagicMock()
@@ -584,7 +586,7 @@ class TestFrontierStateTransitions:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock()
@@ -613,6 +615,194 @@ class TestFrontierStateTransitions:
             AsyncIngestionService._compute_content_hash = original_hash
 
 
+_REAL_CONTENT_HTML = """
+<html><body><main>
+<h1>Real content page</h1>
+<p>This page has plenty of real readable content for the parser to extract.
+It is long enough to pass the minimum word threshold used by the markdown
+converter, so the parser should return a valid document instead of skipping.
+Adding more words here ensures we stay comfortably above the cutoff and the
+chunking step has something meaningful to work with.</p>
+</main></body></html>
+"""
+
+
+class TestRealChunkerThroughProcessRaw:
+    """Regression tests: real chunkers must index content through _process_raw.
+
+    Guards the regression from commit d7e595d where DocumentChunker gained an
+    ``extract_sentences`` stub returning ``None`` (meaning "not supported") but
+    ``_process_raw`` treated ``None`` as "no content", silently skipping every
+    page under the default ``sentence_preserving`` strategy.
+    """
+
+    @staticmethod
+    def _real_parser():
+        from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
+
+        return MarkdownParser()
+
+    async def _process(self, service, raw):
+        loop = asyncio.get_running_loop()
+        return await service._process_raw(
+            loop,
+            raw,
+            None,
+            lambda *a, **kw: IngestionEvent(event_type="test", source_name="", message=""),
+        )
+
+    @pytest.mark.asyncio
+    async def test_document_chunker_indexes_content(self, mock_settings, mock_crawler):
+        """Default DocumentChunker (extract_sentences -> None) must fall through
+        to chunk() and index content, not skip it."""
+        from data_engineering_copilot.services.chunker import DocumentChunker
+
+        chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._real_parser(),
+            chunker=chunker,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = RawDocument(
+            source_name="test",
+            url="https://example.com/real",
+            html=_REAL_CONTENT_HTML,
+        )
+        result = await self._process(service, raw)
+        assert result.disposition == "indexed"
+        assert result.parsed is not None
+        assert len(result.chunks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_header_aware_chunker_indexes_content(self, mock_settings, mock_crawler):
+        """HeaderAwareChunker (extract_sentences -> None) must index content."""
+        from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+
+        chunker = HeaderAwareChunker(chunk_size_words=75, overlap_words=15)
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._real_parser(),
+            chunker=chunker,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = RawDocument(
+            source_name="test",
+            url="https://example.com/real",
+            html=_REAL_CONTENT_HTML,
+        )
+        result = await self._process(service, raw)
+        assert result.disposition == "indexed"
+        assert result.parsed is not None
+        assert len(result.chunks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_empty_sentences_skips_with_log_event(self, mock_settings, mock_crawler):
+        """A chunker whose extract_sentences returns [] must skip AND emit a
+        page_skipped event (observable, not silent)."""
+        chunker_mock = MagicMock(spec=DocumentChunker)
+        chunker_mock.extract_sentences = lambda text: []
+        chunker_mock.chunk = _picklable_chunk
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        events: list[IngestionEvent] = []
+
+        def on_event(event: IngestionEvent) -> None:
+            events.append(event)
+
+        from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
+
+        service = AsyncIngestionService(
+            settings=mock_settings,
+            crawler=mock_crawler,
+            parser=MagicMock(parse=_picklable_parse),
+            chunker=chunker_mock,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+            parse_executor=ThreadPoolExecutor(max_workers=2),
+            chunk_executor=ThreadPoolExecutor(max_workers=2),
+        )
+        raw = _make_raw(html=_REAL_CONTENT_HTML)
+        loop = asyncio.get_running_loop()
+        result = await service._process_raw(
+            loop,
+            raw,
+            on_event,
+            lambda event_type, *a, **kw: IngestionEvent(event_type=event_type, **kw),
+        )
+        assert result.disposition == "no_content"
+        assert any(e.event_type == "page_skipped" for e in events)
+        service.stop()
+
+    @pytest.mark.asyncio
+    async def test_semantic_chunker_list_branch_indexes_content(self, mock_settings, mock_crawler):
+        """Real SemanticChunker must exercise the list branch of _process_raw:
+        extract_sentences() -> embed_texts(sentences) -> chunk(parsed, embeddings).
+
+        This pins the else-branch that had zero coverage while the None/[] bug
+        was live: SemanticChunker.extract_sentences returns a real list (never
+        None for valid text), so the page must be indexed with chunks.
+        """
+        from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+
+        class _Embedder:
+            def embed_texts(self, texts: list[str]) -> list[list[float]]:
+                dim = 8
+                return [[0.1] * dim for _ in texts]
+
+        chunker = SemanticChunker(
+            chunk_size_words=50,
+            overlap_words=5,
+            embedding_model=_Embedder(),
+            min_chunk_words=5,
+            min_semantic_similarity=0.1,
+        )
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(side_effect=lambda texts: [[0.1] * 8 for _ in texts])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+        vector_store_mock.upsert_chunks = AsyncMock()
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._real_parser(),
+            chunker=chunker,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+        )
+        raw = RawDocument(
+            source_name="test",
+            url="https://example.com/real",
+            html=_REAL_CONTENT_HTML,
+        )
+        result = await self._process(service, raw)
+        assert result.disposition == "indexed"
+        assert result.parsed is not None
+        assert len(result.chunks) >= 1
+        # The list branch must have called embed_texts with the extracted sentences.
+        embeddings_mock.embed_texts.assert_awaited_once()
+
+
 class TestReactivation:
     @pytest.mark.asyncio
     async def test_reactivates_missing_urls_after_full_crawl(self, mock_settings, mock_crawler, mock_vector_store):
@@ -622,7 +812,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -654,7 +844,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -689,7 +879,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -723,7 +913,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
@@ -752,7 +942,7 @@ class TestReactivation:
         parser_mock = MagicMock()
         parser_mock.parse = _picklable_parse
         chunker_mock = MagicMock(spec=DocumentChunker)
-        chunker_mock.extract_sentences = None
+        chunker_mock.extract_sentences = lambda text: None
         chunker_mock.chunk = _picklable_chunk
         embeddings_mock = MagicMock()
         embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])

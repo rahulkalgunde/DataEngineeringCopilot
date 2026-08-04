@@ -475,6 +475,61 @@ class TestEdgeCases:
         chunks = await chunker.chunk(document)
         assert chunks == []
 
+    async def test_tokenizer_failure_raises_not_silent_empty(self, monkeypatch):
+        """Sentence-tokenizer failure must raise, not silently return [].
+
+        ``SemanticChunker.extract_sentences`` returns ``None`` when ``sent_tokenize``
+        raises (e.g. missing ``punkt_tab``). Previously ``chunk()`` conflated that
+        ``None`` with an empty ``[]`` and silently dropped the page from the index
+        with a misleading "No sentences found" log. It must now surface the failure
+        instead.
+        """
+        import data_engineering_copilot.services.semantic_chunker as sc
+
+        def _boom(text: str) -> list[str]:
+            raise LookupError("punkt_tab not downloaded")
+
+        monkeypatch.setattr(sc, "_ensure_punkt_tab", lambda: None)
+        monkeypatch.setattr(sc, "sent_tokenize", _boom)
+
+        model = MockEmbeddingModel()
+        chunker = SemanticChunker(
+            chunk_size_words=100,
+            overlap_words=10,
+            embedding_model=model,
+            min_chunk_words=10,
+        )
+
+        document = ParsedDocument(
+            source_name="Test",
+            title="Test",
+            url="https://example.com/test",
+            text="This is a test document.",
+        )
+
+        with pytest.raises(RuntimeError, match="Sentence tokenization failed"):
+            await chunker.chunk(document)
+
+    async def test_extract_sentences_returns_none_on_tokenizer_failure(self, monkeypatch):
+        """Pin the three-valued extract_sentences contract: None on failure, not []."""
+        import data_engineering_copilot.services.semantic_chunker as sc
+
+        def _boom(text: str) -> list[str]:
+            raise LookupError("punkt_tab not downloaded")
+
+        monkeypatch.setattr(sc, "_ensure_punkt_tab", lambda: None)
+        monkeypatch.setattr(sc, "sent_tokenize", _boom)
+
+        assert SemanticChunker.extract_sentences("Some text here.") is None
+
+    async def test_extract_sentences_returns_empty_list_for_empty_text(self, monkeypatch):
+        """Empty text yields [] (genuinely no sentences), distinct from None."""
+        import data_engineering_copilot.services.semantic_chunker as sc
+
+        monkeypatch.setattr(sc, "_ensure_punkt_tab", lambda: None)
+        monkeypatch.setattr(sc, "sent_tokenize", lambda text: [])
+        assert SemanticChunker.extract_sentences("") == []
+
 
 class TestIntegration:
     """Integration tests with realistic documents."""
