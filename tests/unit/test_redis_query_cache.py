@@ -116,6 +116,11 @@ class TestSemanticCache:
         result = await cache.get_semantic([0.0] * 768)
         assert result is None
 
+    async def test_wrong_dim_stored_vector_skipped(self, cache):
+        await cache.set_semantic("q", [1.0] * 768, "answer")
+        result = await cache.get_semantic([0.99] * 2048)
+        assert result is None
+
 
 class TestCombined:
     async def test_exact_hit_skips_semantic(self, cache):

@@ -113,6 +113,10 @@ class RedisQueryCache:
                     if isinstance(answer_raw, bytes):
                         answer_raw = answer_raw.decode("utf-8")
                     stored_vec = np.array(json.loads(data["embedding"]), dtype=np.float32)
+                    if stored_vec.shape[0] != query_vec.shape[0]:
+                        # Stale entry from a different-dimension embedding
+                        # model; cosine across dims is undefined.
+                        continue
                     stored_norm = np.linalg.norm(stored_vec)
                     if stored_norm == 0:
                         continue

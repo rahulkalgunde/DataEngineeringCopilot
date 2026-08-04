@@ -80,6 +80,26 @@ class TestSemanticCache:
         assert cache.get_semantic("q", [1.0] * 768) is None
 
 
+class TestSemanticDimensionGuard:
+    """A vector cached under a different embedding dimension (e.g. from a
+    previous embedding model) must be skipped, never crash the lookup."""
+
+    def test_wrong_dim_entry_skipped_not_crashed(self):
+        cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
+        cache.set_semantic("stale", [0.5] * 768, _answer("stale 768"))
+        result = cache.get_semantic("What is Spark?", [0.25] * 2048)
+        assert result is None
+
+    def test_wrong_dim_entry_does_not_hide_same_dim_hits(self):
+        cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
+        cache.set_semantic("stale", [0.5] * 768, _answer("stale 768"))
+        vec = [0.5] + [0.0] * 2047
+        cache.set_semantic("fresh", vec, _answer("fresh 2048"))
+        result = cache.get_semantic("fresh", vec)
+        assert result is not None
+        assert result.text == "fresh 2048"
+
+
 class TestCombined:
     def test_exact_hit_skips_semantic(self):
         cache = QueryCache(exact_enabled=True, semantic_enabled=True, similarity_threshold=0.9)

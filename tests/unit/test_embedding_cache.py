@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -104,6 +105,42 @@ async def test_redis_get_failure_falls_back_to_inner():
     redis_client.get.side_effect = RuntimeError("redis down")
     inner = _StubEmbedder([[0.5, 0.5]])
     cached = CachedEmbedder(inner, redis_client=redis_client)
+
+    result = await cached.embed_texts(["text"])
+
+    assert result == [[0.5, 0.5]]
+    assert inner.embed_texts_calls == [["text"]]
+
+
+async def test_redis_embed_cache_key_namespaced_by_dimension():
+    redis_client = AsyncMock()
+    redis_client.get.side_effect = [None]
+    inner = _StubEmbedder([[0.5, 0.5]])
+    cached = CachedEmbedder(inner, redis_client=redis_client, embedding_dimension=2048)
+
+    await cached.embed_texts(["text"])
+
+    key = redis_client.set.call_args.args[0]
+    assert key.startswith("embed:cache:d2048:")
+
+
+async def test_legacy_same_text_vector_not_served_after_dim_switch():
+    """Regression: embedding_cache keyed by text hash only, so after a model
+    switch a stale 768-dim vector for the same text was served to a 2048-dim
+    pipeline (crashing the semantic cache lookup). The dimension namespace
+    must make legacy entries unreachable."""
+
+    async def fake_get(key):
+        if isinstance(key, bytes):
+            key = key.decode()
+        if key.startswith("embed:cache:d"):
+            return None
+        return json.dumps([0.1] * 768)
+
+    redis_client = AsyncMock()
+    redis_client.get.side_effect = fake_get
+    inner = _StubEmbedder([[0.5, 0.5]])
+    cached = CachedEmbedder(inner, redis_client=redis_client, embedding_dimension=2048)
 
     result = await cached.embed_texts(["text"])
 
