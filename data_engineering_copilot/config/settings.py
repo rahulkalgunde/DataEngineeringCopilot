@@ -206,7 +206,7 @@ class AppSettings(BaseSettings):
     # After this many consecutive failures the degraded Ollama fallback is
     # skipped (fail fast) instead of stalling the request on a broken local
     # model. A single success resets the counter.
-    ollama_degraded_max_consecutive_failures: int = 3
+    ollama_degraded_max_consecutive_failures: int = 2
 
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = "openrouter"
@@ -301,15 +301,15 @@ class AppSettings(BaseSettings):
     ollama_retry_context_ratio: float = 0.5
     ollama_retry_extra_num_predict: int = 512
     ollama_retry_max_num_predict: int = 1024
-    crawl_delay_seconds: float = 0.5
+    crawl_delay_seconds: float = 0.3
     max_pages_per_source: int = 100000
     max_pages_hard_cap: int = 100000
     recovery_max_pages: int = 100000
     crawl_attempt_multiplier: int = 3
     crawl_min_attempts: int = 200
     crawl_thread_pool_size: int = 4
-    ingestion_batch_chunk_size: int = 256
-    processing_concurrency: int = 2
+    ingestion_batch_chunk_size: int = 512
+    processing_concurrency: int = 4  # ROLLBACK: If Ollama overloads at 4, change to 3
     enrichment_concurrency: int = 1
     # Multi-stage pipeline concurrency (isolated executor pools)
     parse_concurrency: int = 4
@@ -317,9 +317,9 @@ class AppSettings(BaseSettings):
     store_concurrency: int = 2
     # Async crawler settings
     crawl_db_url: str = ""
-    crawl_async_concurrency: int = 5
+    crawl_async_concurrency: int = 10
     crawl_async_max_concurrency: int = 40
-    crawl_async_per_domain_concurrency: int = 1
+    crawl_async_per_domain_concurrency: int = 2
     crawl_async_conditional_get: bool = True
     crawl_async_cache_url: str = ""
     crawl_async_thread_pool_size: int = 4

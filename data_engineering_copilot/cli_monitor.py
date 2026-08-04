@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+
+import redis.asyncio as aioredis
 
 DEFAULT_API_URL = "http://localhost:8000"
 DEFAULT_INTERVAL = 30
@@ -21,6 +25,20 @@ STATUS_ICONS = {
 }
 
 W = 160
+
+
+async def fetch_enrichment_info(redis_url: str, task_id: str) -> dict:
+    """Fetch enrichment queue depth and worker status from Redis."""
+    client = aioredis.from_url(redis_url, decode_responses=True)
+    try:
+        queue_depth = await client.get(f"ingestion:{task_id}:enrichment_queue:depth") or "0"
+        worker_alive = await client.exists(f"ingestion:{task_id}:enrichment_worker:heartbeat")
+        return {
+            "queue_depth": int(queue_depth),
+            "worker_alive": bool(worker_alive),
+        }
+    finally:
+        await client.aclose()
 
 
 def fetch_status(api_url: str, task_id: str | None = None) -> dict | None:
@@ -67,6 +85,7 @@ def render_dashboard(
     prev: dict | None,
     poll_ts: float,
     first_poll_ts: float,
+    enrichment_info: dict | None = None,
 ) -> None:
     os.system("clear" if os.name != "nt" else "cls")
 
@@ -103,12 +122,19 @@ def render_dashboard(
         print(f"  Sources: {sources}")
     print()
 
-    print("  Metric          Count       Delta (30s)    Rate")
+    print("  Metric              Count       Delta (30s)    Rate")
     print("  " + "-" * (W - 4))
-    print(f"  Pages fetched   {pages:>10,}   {_fmt_delta(dp):>10}   {pages_per_s:>7.1f} p/s")
-    print(f"  Chunks indexed  {chunks:>10,}   {_fmt_delta(dc):>10}   {chunks_per_s:>7.1f} c/s")
-    print(f"  Pages skipped   {skipped:>10,}   {_fmt_delta(ds):>10}")
-    print(f"  Errors          {error_count:>10,}")
+    print(f"  Pages fetched       {pages:>10,}   {_fmt_delta(dp):>10}   {pages_per_s:>7.1f} p/s")
+    print(f"  Chunks indexed      {chunks:>10,}   {_fmt_delta(dc):>10}   {chunks_per_s:>7.1f} c/s")
+    print(f"  Pages skipped       {skipped:>10,}   {_fmt_delta(ds):>10}")
+    print(f"  Errors              {error_count:>10,}")
+
+    # Enrichment queue info
+    if enrichment_info is not None:
+        qd = enrichment_info.get("queue_depth", 0)
+        wa = enrichment_info.get("worker_alive", False)
+        worker_status = "🟢" if wa else "🔴"
+        print(f"  Enrichment Queue    {qd:>10,}   {'':>10}   {worker_status} worker")
     print()
 
     if current_url:
@@ -167,6 +193,7 @@ def render_dashboard(
 
 
 def main(api_url: str = DEFAULT_API_URL, task_id: str | None = None, interval: int = DEFAULT_INTERVAL) -> None:
+
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # TextIO stub lacks reconfigure; present at runtime
     print("Connecting to ingestion API...")
 
@@ -175,13 +202,23 @@ def main(api_url: str = DEFAULT_API_URL, task_id: str | None = None, interval: i
         print(f"No ingestion task found at {api_url}")
         sys.exit(0)
 
+    # Get Redis URL from API config or use default
+    redis_url = "redis://:local_secure_password_123@localhost:6379/0"
+
     first_poll_ts = time.time()
     prev = None
 
     try:
         while True:
             status["_poll_ts"] = time.time()
-            render_dashboard(status, prev, status["_poll_ts"], first_poll_ts)
+
+            # Fetch enrichment info from Redis
+            enrichment_info = None
+            if task_id:
+                with contextlib.suppress(Exception):
+                    enrichment_info = asyncio.run(fetch_enrichment_info(redis_url, task_id))
+
+            render_dashboard(status, prev, status["_poll_ts"], first_poll_ts, enrichment_info)
 
             if status.get("status") in TERMINAL_STATES:
                 sys.exit(0)
