@@ -198,11 +198,8 @@ class AsyncRagService:
 
         # Determine chunk type filter based on intent
         chunk_type_filter = None
-        if rewritten is not None:
-            if rewritten.intent == "api_lookup":
-                chunk_type_filter = "api"
-            elif rewritten.intent == "code_example":
-                chunk_type_filter = "code"
+        if rewritten is not None and rewritten.intent == "api_lookup":
+            chunk_type_filter = "api"
 
         # Embed the HyDE hypothesis once and reuse the vector across all sub-queries,
         # instead of regenerating the hypothetical text via the LLM for every query.
