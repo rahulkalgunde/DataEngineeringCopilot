@@ -224,6 +224,10 @@ class AdaptiveLLMRouter:
         for position, (name, client) in enumerate(main_candidates, start=1):
             available, reason, available_in = self._provider_gate(name)
             if not available:
+                # Propagate rate-limiter cooldown to health registry so provider
+                # is skipped on subsequent requests without re-checking the limiter
+                if available_in > 0:
+                    self._health.mark_provider_cooldown(name, available_in)
                 logger.info(
                     "llm_provider_skipped",
                     provider=name,

@@ -147,6 +147,7 @@ def async_ingest_task(self, source_names: list[str], max_pages: int | None):
                 source_names=source_names,
                 max_pages_per_source=max_pages,
                 on_event=tracker.on_event,
+                task_id=task_id,  # Pass Celery task_id for enrichment queue
             )
 
         run_async(_run_ingest())

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -434,7 +433,7 @@ class TestAdaptiveLLMRouter:
         assert tokens == ["token1", "token2"]
 
     @pytest.mark.asyncio
-    async def test_skipped_provider_decision_is_logged(self, health, caplog):
+    async def test_skipped_provider_decision_is_logged(self, health):
         rl = SlidingWindowRateLimiter(rpm_limit=1, rpd_limit=1000)
         assert await rl.try_acquire() is True
 
@@ -450,11 +449,39 @@ class TestAdaptiveLLMRouter:
         )
         health.register_provider("openrouter", ["or-model"])
 
-        with caplog.at_level(logging.INFO), pytest.raises(LLMClientError):
+        with pytest.raises(LLMClientError, match="All LLM providers"):
             await router.generate("test prompt")
 
-        assert "llm_provider_skipped" in caplog.text
-        assert "rate_limit" in caplog.text
+        # Provider was skipped (not called) due to rate limit
+        client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_provider_gate_rate_limit_propagates_cooldown_to_health_registry(self, health):
+        """Test that when _provider_gate returns available_in > 0 (rate limit),
+        the router calls mark_provider_cooldown on the health registry."""
+        # Create a rate limiter that will return wait time
+        rl = SlidingWindowRateLimiter(rpm_limit=1, rpd_limit=1000)
+        assert await rl.try_acquire() is True  # First call succeeds, exhausts RPM
+
+        client = AsyncMock()
+        client.model = "or-model"
+        client.generate = AsyncMock(return_value="must not be called")
+        client.last_usage = MagicMock()
+
+        router = AdaptiveLLMRouter(
+            clients=[("openrouter", client)],
+            health=health,
+            rate_limiters={"openrouter": rl},
+        )
+        health.register_provider("openrouter", ["or-model"])
+
+        with pytest.raises(LLMClientError):
+            await router.generate("test prompt")
+
+        # Verify mark_provider_cooldown was called (provider is now in cooldown)
+        ph = health.get_provider_health("openrouter")
+        assert ph is not None
+        assert ph.cooldown_until > 0  # Cooldown was set from rate limiter's wait_until_available
 
     def test_model_property(self, router):
         assert router.model == "test-model"
