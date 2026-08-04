@@ -14,6 +14,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
+from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
@@ -190,6 +191,19 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         if not results or results[0] is None:
             raise EmbeddingError(f"Embedding returned empty result for query: {text[:80]!r}")
         return results[0]
+
+    # ProviderClient protocol method
+    async def call(self, request: list[str]) -> list[list[float]]:
+        """Unified call interface for ProviderFallbackChain."""
+        return await self.embed_texts(request)
+
+    @property
+    def model(self) -> str:
+        return self.model_name
+
+    @property
+    def last_usage(self) -> LLMUsage:
+        return LLMUsage()
 
     async def close(self) -> None:
         if self._client is not None:

@@ -119,6 +119,11 @@ class LLMClient(SafeAsyncClientMixin):
     def last_usage(self) -> LLMUsage:
         return self._usage
 
+    # ProviderClient protocol method
+    async def call(self, request: str) -> str:
+        """Unified call interface for ProviderFallbackChain."""
+        return await self.generate(prompt=request)
+
     def _make_client_kwargs(self) -> dict:
         headers = {}
         if self.api_key:
