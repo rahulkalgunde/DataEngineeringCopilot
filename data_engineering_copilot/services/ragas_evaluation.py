@@ -119,11 +119,11 @@ class RagasEvaluator:
 
         - LLM: when ``evaluation_llm_provider`` is explicitly set it is the
           pinned primary of the purpose-``evaluation`` adaptive fallback chain
-          (``_build_fallback_chain``). When it is empty (the default), no
-          provider is forced: ``build_evaluation_llm_chain`` routes every call
+          (``build_llm_fallback_chain``). When it is empty (the default), no
+          provider is forced: the chain routes every call
           through ``llm_fallback_order`` and picks the first currently
           available provider, with local Ollama as the degraded last resort.
-        - Embeddings: ``build_evaluation_embeddings`` — NVIDIA then OpenRouter
+        - Embeddings: ``build_embedding_fallback_chain`` — NVIDIA then OpenRouter
           (both 2048-dim ``nemotron-3-embed-1b``), local Ollama only when no
           external provider has an API key.
 
@@ -138,52 +138,52 @@ class RagasEvaluator:
         app_settings = app_settings or live_settings
 
         from ragas.embeddings import BaseRagasEmbeddings, LangchainEmbeddingsWrapper
-        from ragas.llms import BaseRagasLLM, LangchainLLMWrapper
 
+        from data_engineering_copilot.factory import (
+            _build_provider_health_registry,
+            _build_provider_rate_limiters,
+            build_embedding_fallback_chain,
+            build_llm_fallback_chain,
+        )
         from data_engineering_copilot.services.ragas_adapters import (
             AdaptiveRagasEmbeddings,
             AdaptiveRagasLLM,
         )
 
-        if llm is None:
-            from data_engineering_copilot.factory import (
-                _build_fallback_chain,
-                _build_provider_health_registry,
-                _build_provider_rate_limiters,
-                build_evaluation_llm_chain,
-            )
+        provider_rate_limiters = _build_provider_rate_limiters(app_settings)
+        health_registry = _build_provider_health_registry(app_settings)
 
-            provider_rate_limiters = _build_provider_rate_limiters(app_settings)
-            health_registry = _build_provider_health_registry(app_settings)
-            if app_settings.evaluation_llm_provider:
-                client = _build_fallback_chain(
-                    purpose_provider=app_settings.evaluation_llm_provider,
-                    purpose_model=app_settings.evaluation_llm_model,
-                    app_settings=app_settings,
-                    provider_rate_limiters=provider_rate_limiters,
-                    purpose="evaluation",
-                    health_registry=health_registry,
-                )
-            else:
-                client = build_evaluation_llm_chain(
-                    app_settings=app_settings,
-                    provider_rate_limiters=provider_rate_limiters,
-                    health_registry=health_registry,
-                )
+        if llm is None:
+            # Build unified LLM fallback chain for evaluation
+            client = build_llm_fallback_chain(
+                purpose="evaluation",
+                app_settings=app_settings,
+                provider_rate_limiters=provider_rate_limiters,
+                health_registry=health_registry,
+                purpose_provider=app_settings.evaluation_llm_provider,
+                purpose_model=app_settings.evaluation_llm_model,
+            )
             if client is None:
                 raise ValueError(
                     "No LLM client could be built for RAGAS evaluation. "
                     "Check evaluation_llm_provider / llm_provider configuration."
                 )
             llm = AdaptiveRagasLLM(client)
-        elif not isinstance(llm, BaseRagasLLM):
+
+        from ragas.llms import BaseRagasLLM, LangchainLLMWrapper
+
+        if not isinstance(llm, BaseRagasLLM):
             llm = LangchainLLMWrapper(llm)
 
         if embeddings is None:
-            from data_engineering_copilot.factory import build_evaluation_embeddings
-
-            embedders = build_evaluation_embeddings(app_settings)
-            embeddings = AdaptiveRagasEmbeddings(embedders)
+            # Build unified embedding fallback chain for evaluation
+            embedding_chain = build_embedding_fallback_chain(
+                purpose="evaluation",
+                app_settings=app_settings,
+                provider_rate_limiters=provider_rate_limiters,
+                health_registry=health_registry,
+            )
+            embeddings = AdaptiveRagasEmbeddings(embedding_chain)
         elif not isinstance(embeddings, BaseRagasEmbeddings):
             embeddings = LangchainEmbeddingsWrapper(embeddings)
 
