@@ -346,6 +346,7 @@ services:
 
   celery_worker:
     image: de_copilot_base_image:${IMAGE_TAG:-latest}  # Reuses backend-api build instantly
+    container_name: de_copilot_celery_worker
     profiles: ["app"]  # See backend-api comment
     deploy:
       resources:
