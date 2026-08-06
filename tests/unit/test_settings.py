@@ -4,8 +4,36 @@ import os
 import pytest
 from pydantic import SecretStr
 
-from data_engineering_copilot.config.settings import AppSettings, load_documentation_sources
+from data_engineering_copilot.config.settings import (
+    AppSettings,
+    load_documentation_sources,
+    resolve_active_generation,
+)
 from tests.conftest import make_settings
+
+
+def test_resolve_active_generation_from_state_file(tmp_path, monkeypatch) -> None:
+    from data_engineering_copilot.config import settings as settings_module
+
+    state_dir = tmp_path / ".index_state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "active.json").write_text(
+        json.dumps({"generation": "spark-4.0.0-fa33ea00-test", "collection": "docs__gen"})
+    )
+    monkeypatch.setattr(settings_module, "PROJECT_ROOT", tmp_path)
+    assert resolve_active_generation() == "spark-4.0.0-fa33ea00-test"
+
+
+def test_resolve_active_generation_falls_back_to_settings(tmp_path, monkeypatch) -> None:
+    from data_engineering_copilot.config import settings as settings_module
+
+    monkeypatch.setattr(settings_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        settings_module,
+        "settings",
+        make_settings(active_index_generation="legacy-gen"),
+    )
+    assert resolve_active_generation() == "legacy-gen"
 
 
 def test_load_documentation_sources_from_json(tmp_path):
@@ -46,6 +74,31 @@ def test_app_settings_hybrid_search_defaults() -> None:
     assert settings.max_context_tokens == 4096
     assert settings.query_rewrite_enabled is True
     assert settings.groundedness_enabled is True
+
+
+def test_active_generation_defaults_empty() -> None:
+    settings = make_settings()
+    assert settings.active_index_generation == ""
+    assert settings.active_collection_name == ""
+    assert settings.active_collection_alias == "data_engineering_docs"
+
+
+def test_active_generation_overridable() -> None:
+    settings = make_settings(
+        active_index_generation="spark-4.0.0-fa33ea00-abc",
+        active_collection_name="data_engineering_docs__spark-4.0.0-fa33ea00-abc",
+    )
+    assert settings.active_index_generation == "spark-4.0.0-fa33ea00-abc"
+    assert settings.active_collection_name == "data_engineering_docs__spark-4.0.0-fa33ea00-abc"
+
+
+def test_active_generation_rejects_invalid() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_settings(active_index_generation="spark 4.0.0")
+    with pytest.raises(ValidationError):
+        make_settings(active_collection_name="bad/name")
 
 
 def test_app_settings_hybrid_search_overridable() -> None:

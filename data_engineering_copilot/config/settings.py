@@ -10,6 +10,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def resolve_active_generation() -> str:
+    """Resolve the currently active Spark index generation.
+
+    Prefers the runtime state file ``.index_state/active.json`` (written by
+    ``dec spark-activate``) so cache scoping and collection routing reflect an
+    activated generation without requiring environment changes or restarts.
+    Falls back to ``settings.active_index_generation`` when no state file
+    exists (legacy operation).
+    """
+    try:
+        state_path = PROJECT_ROOT / ".index_state" / "active.json"
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            generation = state.get("generation", "")
+            if generation:
+                return generation
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return settings.active_index_generation
+
+
 @dataclass(frozen=True)
 class DocumentationSource:
     name: str
@@ -71,6 +92,246 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
     return tuple(item.strip() for item in value)
 
 
+# ---------------------------------------------------------------------------
+# Spark source configuration (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SparkStreamConfig:
+    """One controlled ingestion stream for a pinned Spark release."""
+
+    name: str
+    doc_type: str
+    include: tuple[str, ...]
+    exclude: tuple[str, ...]
+    language: str
+    chunking: str
+    content_requires: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SparkSourceConfig:
+    """An immutable Spark release pinned by repository ref and commit."""
+
+    name: str
+    repository: str
+    ref: str
+    commit: str
+    license: str
+    streams: tuple[SparkStreamConfig, ...]
+
+
+_VALID_DOC_TYPES = frozenset({"guide", "api_reference", "code_example", "sql_function_ref"})
+_VALID_CHUNKING = frozenset({"header_aware", "api", "code"})
+
+
+def load_spark_source_config(path: Path) -> SparkSourceConfig:
+    """Load and validate a Spark source configuration from a JSON file.
+
+    Raises ``ValueError`` with a field path in the message on any invalid value.
+    """
+    import re
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("spark source config must be a JSON object")
+
+    def _require_str(obj: dict, field: str) -> str:
+        value = obj.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"spark source config `{field}` must be a non-empty string")
+        return value.strip()
+
+    name = _require_str(raw, "name")
+    repository = _require_str(raw, "repository")
+    ref = _require_str(raw, "ref")
+    commit = _require_str(raw, "commit")
+    license_name = _require_str(raw, "license")
+
+    if not (repository.startswith("https://") and (repository.endswith(".git") or "github.com" in repository)):
+        raise ValueError("spark source config `repository` must be an HTTPS GitHub repository")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise ValueError("spark source config `commit` must be a 40-character hexadecimal SHA")
+
+    raw_streams = raw.get("streams")
+    if not isinstance(raw_streams, list) or not raw_streams:
+        raise ValueError("spark source config `streams` must be a non-empty list")
+
+    streams: list[SparkStreamConfig] = []
+    seen_names: set[str] = set()
+    for idx, raw_stream in enumerate(raw_streams):
+        if not isinstance(raw_stream, dict):
+            raise ValueError(f"spark source config `streams[{idx}]` must be an object")
+        stream_name = _require_str(raw_stream, "name")
+        if stream_name in seen_names:
+            raise ValueError(f"spark source config `streams[{idx}].name` must be unique: {stream_name!r}")
+        seen_names.add(stream_name)
+
+        doc_type = _require_str(raw_stream, "doc_type")
+        if doc_type not in _VALID_DOC_TYPES:
+            raise ValueError(f"spark source config `streams[{idx}].doc_type` must be one of {sorted(_VALID_DOC_TYPES)}")
+
+        chunking = _require_str(raw_stream, "chunking")
+        if chunking not in _VALID_CHUNKING:
+            raise ValueError(f"spark source config `streams[{idx}].chunking` must be one of {sorted(_VALID_CHUNKING)}")
+
+        language = _require_str(raw_stream, "language")
+        include = _optional_string_tuple(raw_stream, "include", idx)
+        exclude = _optional_string_tuple(raw_stream, "exclude", idx)
+        content_requires = _optional_string_tuple(raw_stream, "content_requires", idx)
+        streams.append(
+            SparkStreamConfig(
+                name=stream_name,
+                doc_type=doc_type,
+                include=include,
+                exclude=exclude,
+                language=language,
+                chunking=chunking,
+                content_requires=content_requires,
+            )
+        )
+
+    return SparkSourceConfig(
+        name=name,
+        repository=repository,
+        ref=ref,
+        commit=commit,
+        license=license_name,
+        streams=tuple(streams),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Spark rendered documentation configuration (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SparkRenderedBuildConfig:
+    """One locally rendered Spark documentation build."""
+
+    name: str
+    doc_type: str
+    language: str
+    working_dir: str
+    command: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    output_root: str
+    include: tuple[str, ...]
+    exclude: tuple[str, ...]
+    content_root_selector: str
+    excluded_selectors: tuple[str, ...]
+    canonical_url: str
+    renderer: str
+
+
+@dataclass(frozen=True)
+class SparkRenderedSourceConfig:
+    """An immutable Spark rendered documentation configuration.
+
+    Shares the pinned release identity with ``SparkSourceConfig`` so native and
+    rendered builds always come from the same commit.
+    """
+
+    name: str
+    repository: str
+    ref: str
+    commit: str
+    license: str
+    builds: tuple[SparkRenderedBuildConfig, ...]
+
+
+def load_spark_rendered_source_config(path: Path) -> SparkRenderedSourceConfig:
+    """Load and validate a Spark rendered documentation configuration.
+
+    Raises ``ValueError`` with a field path in the message on any invalid value.
+    """
+    import re
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("spark rendered config must be a JSON object")
+
+    def _require_str(obj: dict, field: str) -> str:
+        value = obj.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"spark rendered config `{field}` must be a non-empty string")
+        return value.strip()
+
+    name = _require_str(raw, "name")
+    repository = _require_str(raw, "repository")
+    ref = _require_str(raw, "ref")
+    commit = _require_str(raw, "commit")
+    license_name = _require_str(raw, "license")
+
+    if not (repository.startswith("https://") and (repository.endswith(".git") or "github.com" in repository)):
+        raise ValueError("spark rendered config `repository` must be an HTTPS GitHub repository")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise ValueError("spark rendered config `commit` must be a 40-character hexadecimal SHA")
+
+    raw_builds = raw.get("builds")
+    if not isinstance(raw_builds, list) or not raw_builds:
+        raise ValueError("spark rendered config `builds` must be a non-empty list")
+
+    builds: list[SparkRenderedBuildConfig] = []
+    seen_names: set[str] = set()
+    for idx, raw_build in enumerate(raw_builds):
+        if not isinstance(raw_build, dict):
+            raise ValueError(f"spark rendered config `builds[{idx}]` must be an object")
+        build_name = _require_str(raw_build, "name")
+        if build_name in seen_names:
+            raise ValueError(f"spark rendered config `builds[{idx}].name` must be unique: {build_name!r}")
+        seen_names.add(build_name)
+
+        doc_type = _require_str(raw_build, "doc_type")
+        if doc_type not in _VALID_DOC_TYPES:
+            raise ValueError(
+                f"spark rendered config `builds[{idx}].doc_type` must be one of {sorted(_VALID_DOC_TYPES)}"
+            )
+
+        command = _optional_string_tuple(raw_build, "command", idx)
+        if not command:
+            raise ValueError(f"spark rendered config `builds[{idx}].command` must be a non-empty list")
+        env_raw = raw_build.get("env", {})
+        if not isinstance(env_raw, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env_raw.items()
+        ):
+            raise ValueError(f"spark rendered config `builds[{idx}].env` must be a dict of strings")
+        include = _optional_string_tuple(raw_build, "include", idx)
+        exclude = _optional_string_tuple(raw_build, "exclude", idx)
+        excluded_selectors = _optional_string_tuple(raw_build, "excluded_selectors", idx)
+        if not include:
+            raise ValueError(f"spark rendered config `builds[{idx}].include` must be a non-empty list")
+
+        builds.append(
+            SparkRenderedBuildConfig(
+                name=build_name,
+                doc_type=doc_type,
+                language=_require_str(raw_build, "language"),
+                working_dir=_require_str(raw_build, "working_dir"),
+                command=command,
+                env=tuple(sorted(env_raw.items())),
+                output_root=_require_str(raw_build, "output_root"),
+                include=include,
+                exclude=exclude,
+                content_root_selector=_require_str(raw_build, "content_root_selector"),
+                excluded_selectors=excluded_selectors,
+                canonical_url=_require_str(raw_build, "canonical_url"),
+                renderer=_require_str(raw_build, "renderer"),
+            )
+        )
+
+    return SparkRenderedSourceConfig(
+        name=name,
+        repository=repository,
+        ref=ref,
+        commit=commit,
+        license=license_name,
+        builds=tuple(builds),
+    )
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         frozen=True,
@@ -88,7 +349,19 @@ class AppSettings(BaseSettings):
     documentation_sources_path: Path = (
         PROJECT_ROOT / "data_engineering_copilot" / "config" / "documentation_sources.json"
     )
+    spark_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "spark_sources.json"
+    spark_rendered_sources_path: Path = (
+        PROJECT_ROOT / "data_engineering_copilot" / "config" / "spark_rendered_sources.json"
+    )
+    spark_cache_dir: Path = PROJECT_ROOT / "data" / "spark_src"
+    spark_corpus_dir: Path = PROJECT_ROOT / "data" / "spark_corpus"
+    index_state_dir: Path = PROJECT_ROOT / ".index_state"
+    active_collection_alias: str = "data_engineering_docs"
     collection_name: str = "data_engineering_docs"
+    # Active generation/collection for Spark-built indexes. When empty, the
+    # legacy `collection_name` is used. Validated against Qdrant-safe chars.
+    active_index_generation: str = ""
+    active_collection_name: str = ""
 
     # URLs accessed from localhost
     qdrant_url: str = "http://localhost:6333"
@@ -289,11 +562,13 @@ class AppSettings(BaseSettings):
     max_chunk_words: int | None = None  # Auto: 1.5x chunk_size_words if None
     # Feature flags
     enable_semantic_chunking: bool = True  # Enable semantic chunker (requires embedding model)
-    retrieval_top_k: int = 15
+    # Retrieve a broad candidate pool per query variant; reranking narrows it
+    # to the final context set after dense+sparse rank fusion.
+    retrieval_top_k: int = 30
     reranker_enabled: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranker_top_k: int = 5
-    max_context_chars: int = 4000
+    reranker_top_k: int = 20
+    max_context_chars: int = 8000
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
@@ -340,6 +615,11 @@ class AppSettings(BaseSettings):
     # Semantic cache
     semantic_cache_threshold: float = 0.95
     semantic_cache_ttl: int = 3600
+    # Index generation identity and validation. `index_generation` is empty for
+    # legacy operation; when set it identifies a reproducible corpus build.
+    index_generation: str = ""
+    index_require_hybrid: bool = True
+    index_validation_min_points: int = 1
     # Query rewriting / grounding
     query_rewrite_enabled: bool = True
     groundedness_enabled: bool = True
@@ -370,6 +650,31 @@ class AppSettings(BaseSettings):
     def _load_sources_from_json(self) -> AppSettings:
         if not self.sources:
             object.__setattr__(self, "sources", load_documentation_sources(self.documentation_sources_path))
+        return self
+
+    @model_validator(mode="after")
+    def _validate_index_generation(self) -> AppSettings:
+        import re
+
+        generation = (self.index_generation or "").strip()
+        object.__setattr__(self, "index_generation", generation)
+        if generation and not re.fullmatch(r"[A-Za-z0-9_.:-]+", generation):
+            raise ValueError(
+                "index_generation must match [A-Za-z0-9_.:-]+ and must not contain whitespace or path separators"
+            )
+        if self.index_validation_min_points < 0:
+            raise ValueError("index_validation_min_points must be >= 0")
+
+        active_generation = (self.active_index_generation or "").strip()
+        object.__setattr__(self, "active_index_generation", active_generation)
+        if active_generation and not re.fullmatch(r"[A-Za-z0-9_.:-]+", active_generation):
+            raise ValueError(
+                "active_index_generation must match [A-Za-z0-9_.:-]+ and must not contain whitespace or path separators"
+            )
+        active_collection = (self.active_collection_name or "").strip()
+        object.__setattr__(self, "active_collection_name", active_collection)
+        if active_collection and not re.fullmatch(r"[A-Za-z0-9_.:-]+", active_collection):
+            raise ValueError("active_collection_name must match [A-Za-z0-9_.:-]+ and must not contain whitespace")
         return self
 
     @model_validator(mode="after")

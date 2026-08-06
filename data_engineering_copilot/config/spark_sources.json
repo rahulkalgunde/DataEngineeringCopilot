@@ -1,0 +1,61 @@
+{
+  "name": "Apache Spark 4.0.0",
+  "repository": "https://github.com/apache/spark.git",
+  "ref": "v4.0.0",
+  "commit": "fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4",
+  "license": "Apache-2.0",
+  "streams": [
+    {
+      "name": "guides",
+      "doc_type": "guide",
+      "include": ["docs/**/*.md", "docs/**/*.rst"],
+      "exclude": ["docs/api/**", "docs/vendor/**"],
+      "language": "conceptual",
+      "chunking": "header_aware"
+    },
+    {
+      "name": "api",
+      "doc_type": "api_reference",
+      "include": ["python/pyspark/**/*.py"],
+      "exclude": [
+        "**/tests/**",
+        "**/*_test.py",
+        "**/test_*.py",
+        "**/testing/**",
+        "python/pyspark/sql/connect/proto/**",
+        "**/worker/**",
+        "**/cloudpickle/**",
+        "**/errors/exceptions/**",
+        "**/logger/tests/**",
+        "python/pyspark/sql/pandas/**",
+        "**/missing/**",
+        "**/data_type_ops/**"
+      ],
+      "language": "python",
+      "chunking": "api"
+    },
+    {
+      "name": "examples",
+      "doc_type": "code_example",
+      "include": [
+        "examples/src/main/**/*.py",
+        "examples/src/main/**/*.scala",
+        "examples/src/main/**/*.sql",
+        "examples/src/main/**/*.java",
+        "examples/src/main/**/*.R"
+      ],
+      "exclude": ["**/data/**"],
+      "language": "mixed",
+      "chunking": "code"
+    },
+    {
+      "name": "sql_functions",
+      "doc_type": "sql_function_ref",
+      "include": ["sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/**/*.scala"],
+      "exclude": ["**/codegen/**", "**/test/**"],
+      "language": "scala",
+      "chunking": "code",
+      "content_requires": ["ExpressionDescription"]
+    }
+  ]
+}
