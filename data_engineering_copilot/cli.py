@@ -1631,7 +1631,7 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
                 # Evaluation must measure actual retrieval/answer quality, never
                 # cached answers from earlier runs (which could be stale across
                 # generations). Bypass the cache entirely.
-                answer = await service.answer(query, provenance=prov, bypass_cache=True)
+                answer = await service.answer(query, provenance=prov, bypass_cache=True, expected_urls=item.get("expected_urls", []))
             except Exception as exc:
                 print(f"[{i}/{len(queries)}] {item.get('id', '')}: ERROR {exc}")
                 results.append({"id": item.get("id", f"q{i}"), "question": query, "error": str(exc)})
@@ -1643,7 +1643,7 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
                 deduplicate=False,
             )
 
-            prov_record = prov[0] if prov else {}
+            prov_record = prov[-1] if prov else {}
             provenance_records.append(prov_record)
             result = _compute_spark_eval_result(item, query, answer, context, prov_record)
             results.append(result)
