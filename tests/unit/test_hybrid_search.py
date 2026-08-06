@@ -202,6 +202,69 @@ async def test_hybrid_query_returns_deep_fused_pool(mock_async_qdrant):
         assert prefetch.limit == 40
 
 
+async def test_hybrid_query_honors_fused_limit(mock_async_qdrant):
+    """A caller-supplied fused_limit (the rerank pool) replaces the default so
+    the fused pool exposed by Qdrant matches the reranker's candidate pool."""
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_response = MagicMock()
+    mock_response.points = []
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="test",
+        hybrid_search=True,
+    )
+    store.fit_bm25(["Apache Spark SQL structured data", "Delta Lake ACID"])
+    from qdrant_client.http.models import SparseVector
+
+    store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
+
+    # retrieval_top_k=5, reranker_top_k=20 -> max(5*8, 20*5) = 100
+    await store.query([0.1] * 768, top_k=5, fused_limit=100)
+
+    call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
+    assert call_kwargs["limit"] == 100
+    for prefetch in call_kwargs["prefetch"]:
+        assert prefetch.limit == 100
+
+
+async def test_hybrid_query_fused_limit_meets_rerank_pool(mock_async_qdrant):
+    """Task 11 gate: the fused candidate limit must be at least the rerank
+    pool (max(retrieval_top_k*8, reranker_top_k*5))."""
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_response = MagicMock()
+    mock_response.points = []
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="test",
+        hybrid_search=True,
+    )
+    store.fit_bm25(["Apache Spark SQL structured data", "Delta Lake ACID"])
+    from qdrant_client.http.models import SparseVector
+
+    store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
+
+    retrieval_top_k, reranker_top_k = 5, 20
+    rerank_pool = max(retrieval_top_k * 8, reranker_top_k * 5)
+    assert rerank_pool == 100
+
+    await store.query([0.1] * 768, top_k=retrieval_top_k, fused_limit=rerank_pool)
+
+    call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
+    assert call_kwargs["limit"] >= rerank_pool
+    for prefetch in call_kwargs["prefetch"]:
+        assert prefetch.limit >= rerank_pool
+
+
 async def test_dense_only_query_no_prefetch(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -276,3 +339,60 @@ async def test_default_constructor_enables_hybrid(mock_async_qdrant):
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
     assert store._hybrid_search is True
     assert store._bm25 is not None
+
+
+# ------------------------------------------------------------------
+# Alias -> generation BM25 cache resolution
+# ------------------------------------------------------------------
+
+
+def test_resolve_bm25_cache_uses_generation_when_active(tmp_path, monkeypatch) -> None:
+    from data_engineering_copilot.infrastructure import async_qdrant_store as store_module
+
+    gen = "spark-4.0.0-fa33ea00-test"
+    monkeypatch.setattr(store_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        store_module,
+        "resolve_active_generation",
+        lambda: gen,
+    )
+    cache_dir = tmp_path / ".bm25_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    # Generation cache exists -> resolved to it.
+    gen_cache = cache_dir / f"data_engineering_docs__{gen}.json"
+    gen_cache.write_text("{}")
+    resolved = store_module._resolve_bm25_cache_path("data_engineering_docs")
+    assert resolved == gen_cache
+
+
+def test_resolve_bm25_cache_falls_back_when_no_generation(tmp_path, monkeypatch) -> None:
+    from data_engineering_copilot.infrastructure import async_qdrant_store as store_module
+
+    monkeypatch.setattr(store_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(store_module, "resolve_active_generation", lambda: "")
+    resolved = store_module._resolve_bm25_cache_path("data_engineering_docs")
+    assert resolved == tmp_path / ".bm25_cache" / "data_engineering_docs.json"
+
+
+def test_store_loads_generation_bm25_for_alias(tmp_path, monkeypatch) -> None:
+    from data_engineering_copilot.infrastructure import async_qdrant_store as store_module
+
+    gen = "spark-4.0.0-fa33ea00-test"
+    monkeypatch.setattr(store_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(store_module, "resolve_active_generation", lambda: gen)
+
+    cache_dir = tmp_path / ".bm25_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tok = store_module.BM25Tokenizer()
+    tok.fit(["spark sql filter transform aggregate"])
+    tok.save(cache_dir / f"data_engineering_docs__{gen}.json")
+
+    with patch("data_engineering_copilot.infrastructure.async_qdrant_store.AsyncQdrantClient"):
+        store = store_module.AsyncQdrantVectorStore(
+            url="http://localhost:6333",
+            collection_name="data_engineering_docs",
+            hybrid_search=True,
+        )
+    assert store._bm25_loaded_from_disk is True
+    assert store._bm25 is not None and store._bm25._frozen is True
+    assert store.is_hybrid_ready() is True

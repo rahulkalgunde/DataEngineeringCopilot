@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 # become unreachable without an explicit flush.
 CACHE_SCHEMA_VERSION = "v2"
 
+# Confidence below which an answer is considered too weak to cache (avoids
+# poisoning the cache with low-quality responses).
+MIN_CACHE_CONFIDENCE = 0.5
+
 
 def _normalize_query(query: str) -> str:
     q = query.lower().strip()
@@ -37,15 +41,33 @@ def _normalize_query(query: str) -> str:
     return q
 
 
+# Boilerplate / scope / refusal markers. An answer containing any of these is
+# safety-only or an explicit "cannot answer" and must never be cached.
+_NON_ANSWER_MARKERS: tuple[re.Pattern, ...] = (
+    re.compile(r"i cannot answer", re.IGNORECASE),
+    re.compile(r"outside my knowledge", re.IGNORECASE),
+    re.compile(r"outside my knowledge repository", re.IGNORECASE),
+    re.compile(r"missing information:", re.IGNORECASE),
+    re.compile(r"insufficient context", re.IGNORECASE),
+    re.compile(r"no relevant (documents|sources)", re.IGNORECASE),
+    re.compile(r"as an ai (language )?model", re.IGNORECASE),
+    re.compile(r"i don't have (enough|sufficient|access)", re.IGNORECASE),
+)
+
+
 def scope_fingerprint(scope: CacheScope | None) -> str:
     """16-hex fingerprint of a scope's canonical JSON + schema version."""
-    scope = scope or CacheScope()
+    if scope is None:
+        from data_engineering_copilot.config.settings import resolve_active_generation
+
+        scope = CacheScope(index_generation=resolve_active_generation())
     payload = {
         "tenant_id": scope.tenant_id,
         "role": scope.role,
         "source_filter": sorted(scope.source_filter),
         "embedding_model": scope.embedding_model,
         "collection_name": scope.collection_name,
+        "index_generation": scope.index_generation,
         "schema": CACHE_SCHEMA_VERSION,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -110,6 +132,27 @@ class QueryCache:
         total = self._hits + self._misses
         return self._hits / total if total > 0 else 0.0
 
+    @staticmethod
+    def is_cacheable(answer: CachedAnswer, min_confidence: float = MIN_CACHE_CONFIDENCE) -> bool:
+        """Return True only when *answer* is safe to cache.
+
+        Rejects empty / malformed / safety-only / insufficient-context /
+        low-confidence answers so a bad response can never be served from
+        cache (Task 12). Applied at every ``set_*`` / ``aset_*`` entry point.
+        """
+        if not isinstance(answer, CachedAnswer):
+            return False
+        text = answer.text
+        if not isinstance(text, str) or not text.strip():
+            return False
+        if answer.confidence < min_confidence:
+            return False
+        if any(pattern.search(text) for pattern in _NON_ANSWER_MARKERS):
+            return False
+        # A "good" answer must carry at least one cited source. Answers with
+        # zero sources are either ungrounded or fabricated.
+        return bool(answer.sources)
+
     @property
     def stats(self) -> dict[str, int | float]:
         """Return cache statistics."""
@@ -133,6 +176,9 @@ class QueryCache:
 
     def set_exact(self, query: str, answer: CachedAnswer, scope: CacheScope | None = None) -> None:
         if not self._exact_enabled:
+            return
+        if not self.is_cacheable(answer):
+            logger.info("Not caching exact answer (not cacheable): %r", (answer.text or "")[:60])
             return
         key = self._exact_key(query, scope)
         self._exact_cache[key] = answer
@@ -184,6 +230,9 @@ class QueryCache:
         self, query: str, query_embedding: list[float], answer: CachedAnswer, scope: CacheScope | None = None
     ) -> None:
         if not self._semantic_enabled or not query_embedding:
+            return
+        if not self.is_cacheable(answer):
+            logger.info("Not caching semantic answer (not cacheable): %r", (answer.text or "")[:60])
             return
 
         fp = scope_fingerprint(scope)
@@ -276,6 +325,8 @@ class QueryCache:
     async def aset_exact(self, query: str, answer: CachedAnswer, scope: CacheScope | None = None) -> None:
         self.set_exact(query, answer, scope)
         if self._redis is not None:
+            if not self.is_cacheable(answer):
+                return
             try:
                 await self._redis.setex(
                     self._redis_exact_key(query, scope),
@@ -294,6 +345,8 @@ class QueryCache:
     ) -> None:
         self.set_semantic(query, query_embedding, answer, scope)
         if self._redis is not None:
+            if not self.is_cacheable(answer):
+                return
             try:
                 idx = await self._redis.incr("rag:cache:semantic:counter")
                 namespace = self._redis_semantic_namespace(scope)
