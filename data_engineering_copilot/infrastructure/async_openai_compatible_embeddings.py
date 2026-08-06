@@ -28,17 +28,8 @@ _TOKENIZER = tiktoken.get_encoding("cl100k_base")
 MAX_SAFE_TOKENS = 3800  # Safe buffer below OpenRouter's 4096 model limit
 
 
-def _truncate_to_safe_tokens(text: str, max_tokens: int = MAX_SAFE_TOKENS) -> str:
-    """Truncates text to stay safely under the provider's token limit."""
-    tokens = _TOKENIZER.encode(text)
-    if len(tokens) > max_tokens:
-        logger.warning(
-            "Text length (%d tokens) exceeds max limit (%d). Truncating.",
-            len(tokens),
-            max_tokens,
-        )
-        return _TOKENIZER.decode(tokens[:max_tokens])
-    return text
+def _count_tokens(text: str) -> int:
+    return len(_TOKENIZER.encode(text))
 
 
 class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
@@ -58,6 +49,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         rate_limiter: SlidingWindowRateLimiter | None = None,
         include_provider_param: bool = True,
         retry_wait: wait_base | None = None,
+        max_tokens_per_input: int = MAX_SAFE_TOKENS,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -67,6 +59,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self.timeout_seconds = timeout_seconds
         self._rate_limiter = rate_limiter
         self._include_provider_param = include_provider_param
+        self._max_tokens_per_input = max_tokens_per_input
         logger.info("Using embedding model %s at %s", model_name, self.base_url)
         self._request_embeddings = retry(
             stop=stop_after_attempt(5),
@@ -90,20 +83,37 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         return [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
+    def _reject_over_budget(self, texts: list[str]) -> None:
+        """Raise ``EmbeddingError`` when any input exceeds the token budget.
+
+        Over-budget input is a caller bug (chunks must be split losslessly
+        before embedding). Failing loudly beats silently losing content.
+        """
+        for text in texts:
+            token_count = _count_tokens(text)
+            if token_count > self._max_tokens_per_input:
+                raise EmbeddingError(
+                    f"Embedding input exceeds budget: model={self.model_name} "
+                    f"provider={self.base_url} tokens={token_count} "
+                    f"allowed={self._max_tokens_per_input}. "
+                    "Split the text losslessly before embedding."
+                )
+
     async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
         # Acquire rate limiter slot before making the request
         if self._rate_limiter is not None:
             await self._rate_limiter.acquire()
 
-        # Pre-emptively truncate all texts to ensure no text exceeds 3800 tokens
-        safe_texts = [_truncate_to_safe_tokens(t) for t in texts]
+        # Never truncate input to fit the provider limit — reject over-budget
+        # text so silent content loss can never corrupt the index.
+        self._reject_over_budget(texts)
 
         payload: dict = {
             "model": self.model_name,
-            "input": safe_texts,
+            "input": texts,
         }
         if self._include_provider_param:
-            payload["provider"] = {"truncate": "END"}
+            payload["provider"] = {}
 
         response = await (await self._get_client()).post(
             "/embeddings",
@@ -146,10 +156,10 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
 
         embeddings = [item["embedding"] for item in sorted(data_list, key=lambda x: x.get("index", 0))]
 
-        if len(embeddings) != len(safe_texts):
-            raise EmbeddingError(f"Provider returned {len(embeddings)} embeddings for {len(safe_texts)} input texts.")
+        if len(embeddings) != len(texts):
+            raise EmbeddingError(f"Provider returned {len(embeddings)} embeddings for {len(texts)} input texts.")
 
-        self._validate_embedding_dimensions(embeddings, safe_texts)
+        self._validate_embedding_dimensions(embeddings, texts)
         return embeddings
 
     async def _embed_with_batching(self, texts: list[str]) -> list[list[float]]:
