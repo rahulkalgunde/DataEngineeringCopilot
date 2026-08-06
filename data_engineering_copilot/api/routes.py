@@ -95,12 +95,16 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
     perms = getattr(getattr(request, "state", None), "user_permissions", None)
     tenant_id = request.headers.get("X-Tenant-ID", "default")
     role = perms.role if perms is not None else "anonymous"
+    from data_engineering_copilot.config.settings import resolve_active_generation
+
+    active_generation = resolve_active_generation()
     return CacheScope(
         tenant_id=tenant_id,
         role=role,
         source_filter=tuple(source_filter or ()),
         embedding_model=settings.embedding_model_name,
-        collection_name=settings.collection_name,
+        collection_name=settings.active_collection_name or settings.collection_name,
+        index_generation=active_generation,
     )
 
 
@@ -356,6 +360,7 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     source_filter: list[str] | None = None
     rerank: bool = True
+    bypass_cache: bool = False
 
 
 class SourceRef(BaseModel):
@@ -398,6 +403,7 @@ async def ask(request: AskRequest, fastapi_request: Request):
                 cache_scope=cache_scope,
                 user_id=user_id,
                 session_id=session_id,
+                bypass_cache=request.bypass_cache,
             ),
             timeout=max(120.0, float(settings.ollama_timeout_seconds)),
         )

@@ -13,7 +13,9 @@ from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.profiler import cli as profiler_cli
+from data_engineering_copilot.services.spark_index_builder import CoverageRecord
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +441,623 @@ def _bm25_cache_path() -> pathlib.Path:
     return PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
 
 
+def validate_spark_source_config() -> int:
+    """Validate the pinned Spark source configuration without network access.
+
+    Returns ``0`` on success and ``1`` on validation failure. Never downloads
+    or mutates anything.
+    """
+    from data_engineering_copilot.config.settings import load_spark_source_config
+
+    config_path = settings.spark_sources_path
+    try:
+        config = load_spark_source_config(config_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid Spark source config: {exc}")
+        return 1
+    print(f"Spark source: {config.name}")
+    print(f"  ref:      {config.ref}")
+    print(f"  commit:   {config.commit}")
+    print(f"  license:  {config.license}")
+    print(f"  streams:  {len(config.streams)}")
+    for stream in config.streams:
+        print(f"    - {stream.name}: doc_type={stream.doc_type} language={stream.language} chunking={stream.chunking}")
+    print("✅ Spark source config valid")
+    return 0
+
+
+def validate_spark_rendered_config() -> int:
+    """Validate the pinned Spark rendered config and its commit alignment."""
+    from data_engineering_copilot.config.settings import (
+        load_spark_rendered_source_config,
+        load_spark_source_config,
+    )
+
+    try:
+        rendered_config = load_spark_rendered_source_config(settings.spark_rendered_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid Spark rendered config: {exc}")
+        return 1
+    try:
+        native_config = load_spark_source_config(settings.spark_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid Spark source config: {exc}")
+        return 1
+    print(f"Spark rendered: {rendered_config.name}")
+    print(f"  commit:   {rendered_config.commit}")
+    print(f"  builds:   {len(rendered_config.builds)}")
+    for build in rendered_config.builds:
+        print(f"    - {build.name}: renderer={build.renderer} doc_type={build.doc_type} language={build.language}")
+    if native_config.commit != rendered_config.commit:
+        print(f"❌ Native commit {native_config.commit!r} != rendered commit {rendered_config.commit!r}")
+        return 1
+    print("✅ Spark rendered config valid")
+    return 0
+
+
+def _spark_generation_collection(generation: str) -> str:
+    return f"data_engineering_docs__{generation}"
+
+
+def _spark_commit_short(commit: str) -> str:
+    return commit[:8]
+
+
+def _resolve_spark_embedding_name() -> str:
+    model = settings.embedding_model_name
+    if settings.embedding_provider == "nvidia":
+        model = settings.nvidia_embedding_model
+    elif settings.embedding_provider == "openrouter":
+        model = settings.openrouter_embedding_model
+    return model or "unknown-embedder"
+
+
+def _default_spark_generation() -> str:
+    import hashlib
+    from dataclasses import asdict
+
+    config = _load_spark_source_config_or_exit()
+    embedding = _resolve_spark_embedding_name()
+    identity = json.dumps(
+        {"embedding": embedding, "config": asdict(config)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return f"spark-{config.ref}-{_spark_commit_short(config.commit)}-{digest}"
+
+
+def _load_spark_source_config_or_exit():
+    from data_engineering_copilot.config.settings import load_spark_source_config
+
+    try:
+        return load_spark_source_config(settings.spark_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid Spark source config: {exc}")
+        raise SystemExit(2) from exc
+
+
+def _load_active_state() -> dict:
+    active_path = settings.index_state_dir / "active.json"
+    if active_path.exists():
+        try:
+            return json.loads(active_path.read_text())
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _write_active_state(state: dict) -> None:
+    settings.index_state_dir.mkdir(parents=True, exist_ok=True)
+    (settings.index_state_dir / "active.json").write_text(json.dumps(state, indent=2))
+    history_path = settings.index_state_dir / "history.jsonl"
+    with history_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(state) + "\n")
+
+
+def spark_manifest(output: str | None = None) -> int:
+    """Materialize the pinned Spark source and write a manifest file."""
+    from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
+
+    config = _load_spark_source_config_or_exit()
+    resolver = SparkSourceResolver(config, settings.spark_cache_dir)
+    try:
+        manifest = resolver.resolve()
+    except RuntimeError as exc:
+        print(f"❌ Failed to materialize Spark source: {exc}")
+        return 5
+
+    generation = _default_spark_generation()
+    output_path = pathlib.Path(output) if output else settings.spark_corpus_dir / generation / "manifest.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_data = {
+        "source_name": manifest.source_name,
+        "ref": manifest.ref,
+        "commit": manifest.commit,
+        "manifest_hash": manifest.manifest_hash,
+        "files": [
+            {
+                "stream": f.stream,
+                "relative_path": f.relative_path,
+                "doc_type": f.doc_type,
+                "language": f.language,
+                "source_url": f.source_url,
+            }
+            for f in manifest.files
+        ],
+    }
+    output_path.write_text(json.dumps(manifest_data, indent=2))
+    print(f"✅ Manifest written: {output_path}")
+    print(f"  Files: {len(manifest.files)}  Manifest hash: {manifest.manifest_hash[:12]}")
+    return 0
+
+
+def _load_spark_rendered_source_config_or_exit():
+    from data_engineering_copilot.config.settings import load_spark_rendered_source_config
+
+    try:
+        return load_spark_rendered_source_config(settings.spark_rendered_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid Spark rendered config: {exc}")
+        raise SystemExit(2) from exc
+
+
+def spark_render(generation: str | None = None) -> int:
+    """Build pinned rendered Spark docs and write a rendered manifest."""
+    from data_engineering_copilot.infrastructure.spark_rendered_builder import SparkRenderedBuilder
+    from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
+
+    config = _load_spark_source_config_or_exit()
+    rendered_config = _load_spark_rendered_source_config_or_exit()
+    if config.commit != rendered_config.commit:
+        print(
+            f"❌ Native commit {config.commit!r} != rendered commit {rendered_config.commit!r}; configs are out of sync"
+        )
+        return 5
+
+    gen = generation or _default_spark_generation()
+    artifact_root = settings.spark_corpus_dir / gen
+    artifact_root.mkdir(parents=True, exist_ok=True)
+
+    resolver = SparkSourceResolver(config, settings.spark_cache_dir)
+    try:
+        source_root = resolver.materialize()
+    except RuntimeError as exc:
+        print(f"❌ Failed to materialize Spark source: {exc}")
+        return 5
+
+    builder = SparkRenderedBuilder(
+        config=rendered_config,
+        source_root=source_root,
+        artifact_root=artifact_root,
+        python_executable=_spark_pydocs_python(),
+    )
+    try:
+        manifest = builder.render(log_name="render_build.log")
+    except RuntimeError as exc:
+        print(f"❌ Spark render failed: {exc}")
+        return 5
+
+    manifest_path = artifact_root / "rendered_manifest.json"
+    manifest_data = {
+        "source_name": manifest.source_name,
+        "ref": manifest.ref,
+        "commit": manifest.commit,
+        "manifest_hash": manifest.manifest_hash,
+        "files": [
+            {
+                "build": f.build,
+                "relative_path": f.relative_path,
+                "doc_type": f.doc_type,
+                "language": f.language,
+                "canonical_url": f.canonical_url,
+            }
+            for f in manifest.files
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest_data, indent=2))
+    print(f"✅ Rendered manifest written: {manifest_path}")
+    print(f"  Rendered files: {len(manifest.files)}  Manifest hash: {manifest.manifest_hash[:12]}")
+    print(f"  Build log: {artifact_root / 'render_build.log'}")
+    return 0
+
+
+def _spark_pydocs_python() -> pathlib.Path | None:
+    """Return the PyDocs Sphinx interpreter, or None to let the builder decide."""
+    candidate = settings.project_root / "dec_pydocs_venv" / "bin" / "python"
+    return candidate if candidate.is_file() else None
+
+
+def spark_build(generation: str | None = None) -> int:
+    """Build a Spark generation collection without activating it."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.native_document_parser import NativeDocumentParser
+    from data_engineering_copilot.infrastructure.spark_rendered_builder import load_rendered_manifest
+    from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
+    from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+    from data_engineering_copilot.services.spark_chunker import SparkChunker
+    from data_engineering_copilot.services.spark_index_builder import SparkIndexBuilder
+
+    config = _load_spark_source_config_or_exit()
+    gen = generation or _default_spark_generation()
+    collection = _spark_generation_collection(gen)
+    artifact_root = settings.spark_corpus_dir / gen
+
+    rendered_config = _load_spark_rendered_source_config_or_exit()
+    rendered_manifest = None
+    manifest_path = artifact_root / "rendered_manifest.json"
+    if manifest_path.is_file():
+        try:
+            rendered_manifest = load_rendered_manifest(manifest_path, artifact_root, rendered_config)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            print(f"❌ Invalid rendered manifest {manifest_path}: {exc}")
+            return 5
+        print(f"  Rendered manifest: {len(rendered_manifest.files)} files")
+    else:
+        print(f"  No rendered manifest at {manifest_path}; native-only build")
+
+    store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=collection,
+        hybrid_search=settings.hybrid_search_enabled,
+        hybrid_rrf_k=settings.hybrid_rrf_k,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
+    resolver = SparkSourceResolver(config, settings.spark_cache_dir)
+    parser = NativeDocumentParser()
+    header_chunker = HeaderAwareChunker(
+        chunk_size_words=settings.chunk_size_words,
+        overlap_words=settings.chunk_overlap_words,
+    )
+    chunker = SparkChunker(header_chunker=header_chunker)
+
+    # Use the unified embedding fallback chain (e.g. NVIDIA -> OpenRouter per
+    # EMBEDDING_FALLBACK_ORDER) so a 429/network failure on one provider fails
+    # over to the next instead of aborting the whole build.
+    from data_engineering_copilot.domain.protocols import EmbedderProtocol
+    from data_engineering_copilot.factory import (
+        _build_provider_health_registry,
+        _build_provider_rate_limiters,
+        build_embedding_fallback_chain,
+    )
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+
+    provider_rate_limiters = _build_provider_rate_limiters(settings)
+    health_registry = _build_provider_health_registry(settings)
+    embedding_chain = build_embedding_fallback_chain(
+        purpose="global",
+        app_settings=settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
+    embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+    builder = SparkIndexBuilder(
+        config=config,
+        resolver=resolver,
+        parser=parser,
+        chunker=chunker,
+        store=store,
+        generation=gen,
+        embedder=embedder,
+        rendered_config=rendered_config,
+        rendered_manifest=rendered_manifest,
+        chunks_path=artifact_root / "chunks.jsonl",
+    )
+    try:
+        report = asyncio.run(builder.build())
+    except Exception as exc:
+        print(f"❌ Spark build failed: {exc}")
+        return 5
+    print(f"✅ Spark build complete: generation={report.generation}")
+    print(f"  Chunks: {report.chunk_count}  Files: {report.source_file_count}")
+    print(f"  BM25 vocab: {report.bm25_vocabulary_size}  Validation: {report.validation_passed}")
+    print(f"  Collection: {report.qdrant_collection} (not activated)")
+    return 0
+
+
+def _validation_report_path(generation: str) -> pathlib.Path:
+    return settings.index_state_dir / f"validation-{generation}.json"
+
+
+def spark_validate(generation: str) -> int:
+    """Validate a built Spark generation collection without mutation.
+
+    Runs the strict artifact checks (coverage records, manifest path
+    uniqueness, chunk IDs, per-chunk generation/commit metadata, point count
+    vs ``chunks.jsonl``) plus the store-level checks (dense/sparse config,
+    BM25 state, metadata presence). Writes a validation report that
+    ``spark-activate`` requires.
+    """
+    import asyncio
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
+
+    if not generation or not re_fullmatch_identifier(generation):
+        print("❌ Invalid generation identifier")
+        return 2
+
+    config = _load_spark_source_config_or_exit()
+    collection = _spark_generation_collection(generation)
+    artifact_root = settings.spark_corpus_dir / generation
+
+    chunks, coverage, native_paths, rendered_paths = _load_generation_artifacts(generation, artifact_root)
+    if chunks is None:
+        return 3
+
+    store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=collection,
+        hybrid_search=settings.hybrid_search_enabled,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
+
+    async def _validate_store() -> dict[str, object]:
+        await store.initialize()
+        report = await store.validate_index_generation(expected_points=len(chunks))
+        report["metadata_complete"] = await _collection_has_metadata(store)
+        report["payload_text_mismatches"] = await store.verify_payload_texts(
+            {chunk.chunk_id: chunk.text for chunk in chunks}
+        )
+        return report
+
+    try:
+        store_report = asyncio.run(_validate_store())
+    except Exception as exc:
+        print(f"❌ Spark validation failed: {exc}")
+        return 5
+    if store_report.get("error"):
+        print(f"❌ Validation failed: {store_report['error']}")
+        return 3
+
+    point_count_value = store_report.get("point_count")
+    failures = validate_generation_artifacts(
+        generation=generation,
+        expected_commit=config.commit,
+        chunks=chunks,
+        coverage=coverage,
+        native_manifest_paths=native_paths,
+        rendered_manifest_paths=rendered_paths,
+        qdrant_point_count=int(point_count_value) if isinstance(point_count_value, int) else None,
+        bm25_ready=bool(store_report.get("bm25_ready")),
+        sparse_configured=bool(store_report.get("sparse_configured")),
+    )
+    if not store_report.get("metadata_complete", False):
+        failures.append("collection lacks doc_type metadata")
+    payload_mismatches = store_report.get("payload_text_mismatches", [])
+    if isinstance(payload_mismatches, list):
+        failures.extend(str(item) for item in payload_mismatches)
+
+    if failures:
+        print("❌ Generation validation failed:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 3
+
+    print(f"✅ Generation {generation} validated")
+    print(f"  Collection: {store_report.get('collection')}  Points: {store_report.get('point_count')}")
+    print(f"  Sparse: {store_report.get('sparse_configured')}  BM25 ready: {store_report.get('bm25_ready')}")
+    print(f"  Chunks (chunks.jsonl): {len(chunks)}  Coverage records: {len(coverage)}")
+
+    # Write validation report required by spark-activate.
+    try:
+        settings.index_state_dir.mkdir(parents=True, exist_ok=True)
+        _validation_report_path(generation).write_text(
+            json.dumps({"generation": generation, "collection": collection, "passed": True})
+        )
+    except OSError as exc:
+        print(f"⚠️  Could not write validation report: {exc}")
+    return 0
+
+
+def _load_generation_artifacts(
+    generation: str,
+    artifact_root: pathlib.Path,
+) -> tuple[list[DocumentChunk] | None, list[CoverageRecord], list[str], list[str] | None]:
+    """Load chunks.jsonl + coverage.json + manifest paths for a generation.
+
+    Returns ``(None, [], [], None)`` when ``chunks.jsonl`` is missing.
+    """
+    from data_engineering_copilot.infrastructure.spark_rendered_builder import load_rendered_manifest
+
+    chunks_path = artifact_root / "chunks.jsonl"
+    if not chunks_path.is_file():
+        print(f"❌ Missing chunks.jsonl at {chunks_path}")
+        return None, [], [], None
+
+    chunks: list[DocumentChunk] = []
+    with chunks_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            chunks.append(DocumentChunk(**data))
+
+    coverage_path = artifact_root / "coverage.json"
+    coverage: list[CoverageRecord] = []
+    if coverage_path.is_file():
+        coverage = [CoverageRecord(**entry) for entry in json.loads(coverage_path.read_text(encoding="utf-8"))]
+
+    native_paths: list[str] = []
+    native_manifest_path = artifact_root / "native_manifest.json"
+    if not native_manifest_path.is_file():
+        native_manifest_path = artifact_root / "manifest.json"
+    if native_manifest_path.is_file():
+        native_paths = [
+            entry["relative_path"] for entry in json.loads(native_manifest_path.read_text(encoding="utf-8"))["files"]
+        ]
+
+    rendered_paths: list[str] | None = None
+    rendered_manifest_path = artifact_root / "rendered_manifest.json"
+    if rendered_manifest_path.is_file():
+        rendered_config = _load_spark_rendered_source_config_or_exit()
+        rendered_manifest = load_rendered_manifest(rendered_manifest_path, artifact_root, rendered_config)
+        rendered_paths = [record.relative_path for record in rendered_manifest.files]
+
+    return chunks, coverage, native_paths, rendered_paths
+
+
+async def _collection_has_metadata(store) -> bool:
+    """Check that at least one point in the collection carries doc_type."""
+    try:
+        points, _ = await store._client.scroll(
+            collection_name=store._collection_name,
+            limit=1,
+            with_payload=["doc_type"],
+            with_vectors=False,
+        )
+        return bool(points and points[0].payload and points[0].payload.get("doc_type"))
+    except Exception:
+        return False
+
+
+def re_fullmatch_identifier(value: str) -> bool:
+    """Return True when ``value`` matches the safe generation identifier regex."""
+    import re
+
+    return bool(re.fullmatch(r"[A-Za-z0-9_.:-]+", value))
+
+
+def _confirm_required(action: str) -> bool:
+    import os
+
+    if os.environ.get("FORCE") == "1":
+        return True
+    try:
+        answer = input(f"{action} [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _qdrant_change_alias(generation: str) -> None:
+    """Atomically repoint the logical alias to a generation collection."""
+    collection = _spark_generation_collection(generation)
+    changes = [{"delete_alias": {"alias_name": settings.active_collection_alias}}]
+    changes.append({"create_alias": {"alias_name": settings.active_collection_alias, "collection_name": collection}})
+    payload = {"actions": changes}
+    req = urllib.request.Request(
+        f"{settings.qdrant_url}/collections/aliases",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+        if body.get("status") != "ok":
+            raise RuntimeError(f"Qdrant alias change failed: {body}")
+
+
+def spark_activate(generation: str) -> int:
+    """Activate a validated generation by repointing the logical alias.
+
+    Refuses to activate unless ``spark-validate`` has written a passing
+    validation report for the generation. Requires interactive confirmation
+    (or ``FORCE=1`` in non-interactive shells).
+    """
+    report_path = _validation_report_path(generation)
+    if not report_path.exists():
+        print(f"❌ No validation report for generation {generation}; run `dec spark-validate` first")
+        return 3
+    try:
+        report = json.loads(report_path.read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        print(f"❌ Validation report for {generation} is corrupt; re-run `dec spark-validate`")
+        return 3
+    if not report.get("passed"):
+        print(f"❌ Validation report for {generation} did not pass; re-run `dec spark-validate`")
+        return 3
+
+    if not _confirm_required(f"Activate generation {generation}? This changes the live index"):
+        print("Aborted.")
+        return 0
+    try:
+        _qdrant_change_alias(generation)
+    except Exception as exc:
+        print(f"❌ Activation failed: {exc}")
+        return 5
+    _write_active_state({"generation": generation, "collection": _spark_generation_collection(generation)})
+    print(f"✅ Activated generation {generation} -> {settings.active_collection_alias}")
+    return 0
+
+
+def spark_rollback(generation: str) -> int:
+    """Roll back the logical alias to a previously recorded generation."""
+    state = _load_active_state()
+    if state.get("generation") != generation:
+        print(f"❌ Generation {generation} is not the active generation")
+        return 4
+    history = []
+    history_path = settings.index_state_dir / "history.jsonl"
+    if history_path.exists():
+        for line in history_path.read_text().splitlines():
+            try:
+                history.append(json.loads(line))
+            except (ValueError, json.JSONDecodeError):
+                continue
+    previous = None
+    for entry in history:
+        if entry.get("generation") == generation:
+            break
+        previous = entry
+    if previous is None:
+        print("❌ No previous generation recorded for rollback")
+        return 4
+    if not _confirm_required(f"Roll back to generation {previous['generation']}?"):
+        print("Aborted.")
+        return 0
+    try:
+        _qdrant_change_alias(previous["generation"])
+    except Exception as exc:
+        print(f"❌ Rollback failed: {exc}")
+        return 5
+    _write_active_state(previous)
+    print(f"✅ Rolled back to generation {previous['generation']}")
+    return 0
+
+
+def _get_bm25_status() -> dict[str, object]:
+    """Report BM25/hybrid state for the current collection.
+
+    Reads the persisted BM25 cache file metadata (without loading the vector
+    collection) and queries the Qdrant collection configuration for sparse
+    vector support. Never mutates Qdrant/Redis/PostgreSQL. Network failures
+    are reported as a JSON-safe status dictionary, not raised.
+    """
+    status_info: dict[str, object] = {
+        "cache_exists": False,
+        "cache_fitted": False,
+        "sparse_configured": False,
+        "hybrid_active": False,
+    }
+    try:
+        bm25_path = _bm25_cache_path()
+        status_info["cache_path"] = str(bm25_path)
+        status_info["cache_exists"] = bm25_path.exists()
+        if status_info["cache_exists"]:
+            try:
+                with bm25_path.open("r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                status_info["cache_fitted"] = bool(payload.get("frozen", False) and payload.get("corpus_size", 0) > 0)
+            except (OSError, ValueError, json.JSONDecodeError):
+                status_info["cache_fitted"] = False
+
+        req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        result = data.get("result", {}) if isinstance(data, dict) else {}
+        params = result.get("config", {}).get("params", {}) if isinstance(result, dict) else {}
+        sparse_vectors = params.get("sparse_vectors", None) if isinstance(params, dict) else None
+        status_info["sparse_configured"] = bool(sparse_vectors)
+        status_info["hybrid_active"] = bool(status_info["cache_fitted"] and status_info["sparse_configured"])
+    except urllib.error.HTTPError as exc:
+        status_info["error"] = f"Qdrant HTTP {exc.code}"
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        status_info["error"] = str(exc)
+    return status_info
+
+
 def _delete_bm25_cache() -> None:
     """Best-effort removal of the persisted BM25 tokenizer for the current collection."""
     path = _bm25_cache_path()
@@ -751,11 +1370,18 @@ def status() -> None:
         print(f"  ❌ Error: {e}")
 
     # BM25 tokenizer status
-    from data_engineering_copilot.config.settings import PROJECT_ROOT
-
-    bm25_cache = PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
-    if bm25_cache.exists():
-        print(f"  BM25: fitted (cached at {bm25_cache.name})")
+    bm25_status = _get_bm25_status()
+    if bm25_status.get("error"):
+        print(f"  BM25: unknown ({bm25_status['error']})")
+    elif bm25_status.get("hybrid_active"):
+        print("  Hybrid search: active")
+        print("  BM25: fitted")
+        print(f"  BM25 cache: {bm25_status.get('cache_path', 'unknown')}")
+    elif bm25_status.get("cache_fitted") and not bm25_status.get("sparse_configured"):
+        print("  BM25: fitted but collection has no sparse vectors")
+    elif bm25_status.get("sparse_configured") and not bm25_status.get("cache_fitted"):
+        print("  ⚠️  Sparse vectors present but BM25 cache missing — hybrid search inactive")
+        print("  BM25: not fitted (run `dec ingest` to fit)")
     else:
         print("  BM25: not fitted (run `dec ingest` to fit)")
 
@@ -832,6 +1458,255 @@ def status() -> None:
         redis_client.close()
     except Exception as e:
         print(f"  ❌ Error: {e}")
+
+
+def _percentile(values: list[float], p: float) -> float | None:
+    """Linear-interpolated percentile of a list (sorted internally)."""
+    if not values:
+        return None
+    values = sorted(values)
+    pos = (len(values) - 1) * p
+    lo = int(pos)
+    hi = min(lo + 1, len(values) - 1)
+    weight = pos - lo
+    return values[lo] * (1.0 - weight) + values[hi] * weight
+
+
+def _compute_spark_eval_result(
+    item: dict,
+    query: str,
+    answer,
+    context: str,
+    prov_record: dict,
+) -> dict:
+    """Per-query Spark eval metrics, fusing answer-based recall with retrieval
+    provenance (candidate vs final context, per-expected-source fused rank).
+
+    Out-of-scope rows (``out_of_scope: true``) expect a scope refusal: the
+    answer must declare the topic is outside the Spark corpus. Their recall
+    metrics are not counted toward the Spark thresholds.
+    """
+    out_of_scope = bool(item.get("out_of_scope", False))
+    expected_terms = set(item.get("expected_terms", []))
+    expected_urls = set(item.get("expected_urls", []))
+    forbidden_terms = [t.lower() for t in item.get("forbidden_terms", [])]
+
+    context_lower = context.lower()
+    term_recall = sum(1 for t in expected_terms if t.lower() in context_lower) / max(1, len(expected_terms))
+    text_lower = (answer.text or "").lower()
+    # A forbidden term (non-Spark tech like Delta Lake / Airflow) surfacing in
+    # the final ANSWER is a scope violation: the model recommended out-of-scope
+    # tooling instead of answering from the Spark corpus. Incidental mentions
+    # in retrieved evidence are not failures.
+    forbidden_hits = [t for t in forbidden_terms if t in text_lower]
+
+    retrieved_urls = {c.url for c in answer.sources}
+    source_recall = sum(1 for u in expected_urls if u in retrieved_urls) / max(1, len(expected_urls))
+
+    fused_urls = [c["url"] for c in prov_record.get("fused", [])] if prov_record else []
+    final_urls = [c["url"] for c in prov_record.get("final_context", [])] if prov_record else []
+    candidate_source_recall = sum(1 for u in expected_urls if u in fused_urls) / max(1, len(expected_urls))
+    expected_fused_ranks = {u: fused_urls.index(u) for u in expected_urls if u in fused_urls}
+    dropped_expected = sorted(u for u in expected_urls if u in fused_urls and u not in final_urls)
+
+    stage = (prov_record or {}).get("stage_times")
+    stage = stage if isinstance(stage, dict) else dict(answer.stage_times)
+    rerank = (prov_record or {}).get("rerank")
+    rerank = rerank if isinstance(rerank, dict) else {}
+    text_lower = (answer.text or "").lower()
+    insufficient_context = (
+        "cannot answer" in text_lower
+        or "missing information:" in text_lower
+        or '"insufficient_context"' in text_lower
+        or "outside my knowledge" in text_lower
+    )
+
+    return {
+        "id": item.get("id", ""),
+        "question": query,
+        "out_of_scope": out_of_scope,
+        "term_recall": term_recall,
+        "source_recall": source_recall,
+        "candidate_source_recall": candidate_source_recall,
+        "source_count": len(answer.sources),
+        "context_chars": len(context),
+        "forbidden_term_hits": forbidden_hits,
+        "candidate_pool_size": (prov_record or {}).get("candidate_pool_size", 0),
+        "rerank_enabled": bool(rerank.get("enabled", False)),
+        "rerank_pool_size": rerank.get("pool_size"),
+        "cache_hit": bool((prov_record or {}).get("cache_hit", False)),
+        "insufficient_context": insufficient_context,
+        "expected_fused_ranks": expected_fused_ranks,
+        "dropped_expected_urls": dropped_expected,
+        "retrieval_ms": stage.get("retrieval"),
+        "rerank_ms": stage.get("rerank"),
+        "total_ms": stage.get("total"),
+        "stage_times": dict(stage),
+    }
+
+
+def _compute_spark_eval_metrics(results: list[dict]) -> dict:
+    """Aggregate retrieval-stage metrics across evaluation rows.
+
+    Out-of-scope rows are excluded from the Spark recall thresholds but their
+    refusal rate is reported separately. Forbidden-term hits are summed so an
+    evidence-quality regression is visible.
+    """
+    n = len(results)
+    in_scope = [r for r in results if not r.get("out_of_scope")]
+    m = len(in_scope)
+
+    def avg(key: str, rows: list[dict]) -> float:
+        return sum(float(r.get(key) or 0.0) for r in rows) / len(rows) if rows else 0.0
+
+    retrieval_ms = sorted(float(r["retrieval_ms"]) for r in results if r.get("retrieval_ms") is not None)
+    return {
+        "query_count": n,
+        "in_scope_query_count": m,
+        "out_of_scope_query_count": n - m,
+        "avg_term_recall": avg("term_recall", in_scope),
+        "avg_source_recall": avg("source_recall", in_scope),
+        "avg_candidate_source_recall": avg("candidate_source_recall", in_scope),
+        "insufficient_context_rate": (sum(1 for r in in_scope if r.get("insufficient_context")) / m if m else 0.0),
+        "out_of_scope_refusal_rate": (
+            sum(1 for r in results if r.get("out_of_scope") and r.get("insufficient_context")) / (n - m)
+            if n - m
+            else 0.0
+        ),
+        "queries_dropping_expected_sources": sum(1 for r in in_scope if r.get("dropped_expected_urls")),
+        "queries_with_forbidden_term_hits": sum(1 for r in in_scope if r.get("forbidden_term_hits")),
+        "queries_with_cache_hit": sum(1 for r in results if r.get("cache_hit")),
+        "median_retrieval_ms": _percentile(retrieval_ms, 0.5),
+        "p95_retrieval_ms": _percentile(retrieval_ms, 0.95),
+    }
+
+
+def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path | None = None) -> int:
+    """Run retrieval-recall evaluation against the Spark golden dataset.
+
+    Measures expected-term recall, expected-source recall, candidate-source
+    recall, and assembled-context recall. When ``output_dir`` is given, writes
+    machine-readable retrieval provenance and aggregate metrics as JSON. Fails
+    (exit 1) when the expected-source or expected-term recall thresholds are not
+    met. Returns ``0`` on pass, ``2`` on bad input, ``5`` on operational failure.
+    """
+    import asyncio
+
+    from data_engineering_copilot.domain.models import RetrievedChunk
+    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.context_assembler import ContextAssembler
+
+    if not dataset_path.exists():
+        print(f"❌ Evaluation dataset not found at {dataset_path}")
+        return 2
+
+    queries = []
+    with open(dataset_path) as f:
+        for line in f:
+            if line.strip():
+                try:
+                    queries.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    print(f"❌ Invalid JSONL row in {dataset_path}: {exc}")
+                    return 2
+    if not queries:
+        print("❌ No queries loaded from dataset")
+        return 2
+
+    print(f"Loaded {len(queries)} Spark evaluation queries (dataset: {dataset_path.name})\n")
+    service = build_rag_service()
+
+    provenance_records: list[dict] = []
+
+    async def run_eval() -> list[dict]:
+        if service.reranker is not None:
+            await service.reranker.initialize()
+        results = []
+        for i, item in enumerate(queries, 1):
+            query = item.get("question") or ""
+            if not query:
+                continue
+            prov: list[dict] = []
+            try:
+                # Evaluation must measure actual retrieval/answer quality, never
+                # cached answers from earlier runs (which could be stale across
+                # generations). Bypass the cache entirely.
+                answer = await service.answer(query, provenance=prov, bypass_cache=True)
+            except Exception as exc:
+                print(f"[{i}/{len(queries)}] {item.get('id', '')}: ERROR {exc}")
+                results.append({"id": item.get("id", f"q{i}"), "question": query, "error": str(exc)})
+                continue
+            sources = answer.sources
+            assembled = ContextAssembler(max_context_chars=settings.max_context_chars)
+            context, _, _ = assembled.assemble(
+                [RetrievedChunk(chunk=c, distance=0.1, confidence=0.5) for c in sources],
+                deduplicate=False,
+            )
+
+            prov_record = prov[0] if prov else {}
+            provenance_records.append(prov_record)
+            result = _compute_spark_eval_result(item, query, answer, context, prov_record)
+            results.append(result)
+            print(
+                f"[{i}/{len(queries)}] {item.get('id', '')}: "
+                f"term_recall={result['term_recall']:.2f} "
+                f"source_recall={result['source_recall']:.2f} "
+                f"candidate_recall={result['candidate_source_recall']:.2f} "
+                f"(sources={len(sources)})"
+            )
+        return results
+
+    results = asyncio.run(run_eval())
+
+    if not results:
+        print("❌ No evaluation results produced")
+        return 5
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "retrieval_provenance.json").write_text(
+            json.dumps(provenance_records, indent=2, default=str), encoding="utf-8"
+        )
+        metrics = _compute_spark_eval_metrics(results)
+        (output_dir / "retrieval_metrics.json").write_text(json.dumps(metrics, indent=2, default=str), encoding="utf-8")
+        print(f"\nRetrieval diagnostics written to {output_dir}")
+
+    # Out-of-scope rows are excluded from the Spark recall thresholds; they
+    # must instead produce a scope refusal (insufficient context).
+    in_scope = [r for r in results if not r.get("out_of_scope")]
+    out_of_scope = [r for r in results if r.get("out_of_scope")]
+    avg_term = (
+        sum(r.get("term_recall", 0.0) for r in in_scope if "term_recall" in r) / len(in_scope) if in_scope else 0.0
+    )
+    avg_source = (
+        sum(r.get("source_recall", 0.0) for r in in_scope if "source_recall" in r) / len(in_scope) if in_scope else 0.0
+    )
+    forbidden_hits = sum(len(r.get("forbidden_term_hits", [])) for r in in_scope)
+    refused = sum(1 for r in out_of_scope if r.get("insufficient_context"))
+
+    print("\n" + "=" * 40)
+    print("Spark Evaluation Summary")
+    print(f"Queries: {len(results)} (in-scope: {len(in_scope)}, out-of-scope: {len(out_of_scope)})")
+    print(f"Expected-term recall (assembled context): {avg_term:.3f}")
+    print(f"Expected-source recall: {avg_source:.3f}")
+    print(f"Forbidden-term hits: {forbidden_hits}")
+    print(f"Out-of-scope refusals: {refused}/{len(out_of_scope)}")
+
+    term_threshold = 0.9
+    source_threshold = 0.9
+    ok = avg_term >= term_threshold and avg_source >= source_threshold
+    if forbidden_hits:
+        print(f"❌ Evaluation failed: {forbidden_hits} forbidden-term hit(s) in evidence")
+        return 1
+    if out_of_scope and refused != len(out_of_scope):
+        print(f"❌ Evaluation failed: {len(out_of_scope) - refused} out-of-scope row(s) were not refused")
+        return 1
+    if not ok:
+        print("❌ Evaluation failed: recall below threshold")
+        print(f"  term_recall < {term_threshold} or source_recall < {source_threshold}")
+        return 1
+    print("✅ Evaluation passed")
+    return 0
 
 
 def evaluate(verbose: bool = False, dataset: str | None = None, source: str | None = None) -> None:
@@ -1301,6 +2176,12 @@ def cancel(task_id: str) -> None:
         sys.exit(1)
 
 
+def _get_plan_phases() -> tuple:
+    from data_engineering_copilot.plan_executor import PLAN_PHASES
+
+    return PLAN_PHASES
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1378,6 +2259,28 @@ def build_parser() -> argparse.ArgumentParser:
         "reset-crawler-db",
         help="Clear crawler state (Redis crawl:* + PostgreSQL frontier) without touching Qdrant.",
     )
+    subparsers.add_parser(
+        "spark-config-check",
+        help="Validate the pinned Spark source configuration without network access.",
+    )
+    spark_manifest_parser = subparsers.add_parser(
+        "spark-manifest",
+        help="Materialize the pinned Spark source and write a file manifest.",
+    )
+    spark_manifest_parser.add_argument("--output", type=str, default=None, help="Output manifest path.")
+    spark_render_parser = subparsers.add_parser(
+        "spark-render",
+        help="Build pinned rendered Spark docs (Jekyll + PySpark Sphinx) and write a rendered manifest.",
+    )
+    spark_render_parser.add_argument("--generation", type=str, default=None, help="Generation identifier.")
+    spark_build_parser = subparsers.add_parser(
+        "spark-build",
+        help="Build a Spark generation collection without activating it.",
+    )
+    spark_build_parser.add_argument("--generation", type=str, default=None, help="Generation identifier.")
+    for _cmd in ("spark-validate", "spark-activate", "spark-rollback"):
+        _parser = subparsers.add_parser(_cmd, help=f"Manage Spark generation: {_cmd}.")
+        _parser.add_argument("--generation", type=str, required=True, help="Generation identifier.")
     subparsers.add_parser("ui", help="Print the Streamlit command.")
 
     profile_parser = subparsers.add_parser("profile", help="Profile ingestion pipeline with concurrency sweep.")
@@ -1417,6 +2320,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument(
         "--source",
         help="Only evaluate queries whose `source_name` matches this value.",
+    )
+    eval_parser.add_argument(
+        "--spark",
+        action="store_true",
+        help="Run Spark retrieval-recall evaluation (expected terms/sources).",
+    )
+    eval_parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Write machine-readable retrieval diagnostics (provenance + metrics JSON) to this directory.",
     )
 
     # Config
@@ -1480,6 +2394,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the embedding provider probe (LLM providers only).",
     )
 
+    # FLASH-executor driver for the general RAG improvement plan
+    rag_plan_parser = subparsers.add_parser(
+        "rag-plan",
+        help="FLASH-executor driver for the general RAG improvement plan (phases 0-7).",
+    )
+    rag_plan_parser.add_argument(
+        "--phase",
+        type=int,
+        choices=sorted(p.id for p in (_get_plan_phases())),
+        default=None,
+        help="Run only this phase (default: all remaining phases).",
+    )
+    rag_plan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned commands without executing anything.",
+    )
+    rag_plan_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run already-checkpointed phases and allow destructive rollout.",
+    )
+    rag_plan_parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Reuse an existing run directory (resume from checkpoint).",
+    )
+    rag_plan_parser.add_argument(
+        "--candidate-generation",
+        type=str,
+        default=None,
+        help="Generation identifier for phases 3 and 7.",
+    )
+    rag_plan_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the final summary as JSON (machine-readable).",
+    )
+
     return parser
 
 
@@ -1510,6 +2464,20 @@ def main() -> None:
             reset_qdrant()
         elif args.command == "reset-crawler-db":
             reset_crawler_db()
+        elif args.command == "spark-config-check":
+            sys.exit(validate_spark_source_config() or validate_spark_rendered_config())
+        elif args.command == "spark-manifest":
+            sys.exit(spark_manifest(output=args.output))
+        elif args.command == "spark-render":
+            sys.exit(spark_render(generation=args.generation))
+        elif args.command == "spark-build":
+            sys.exit(spark_build(generation=args.generation))
+        elif args.command == "spark-validate":
+            sys.exit(spark_validate(generation=args.generation))
+        elif args.command == "spark-activate":
+            sys.exit(spark_activate(generation=args.generation))
+        elif args.command == "spark-rollback":
+            sys.exit(spark_rollback(generation=args.generation))
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
@@ -1528,6 +2496,12 @@ def main() -> None:
         elif args.command == "status":
             status()
         elif args.command == "evaluate":
+            if getattr(args, "spark", False):
+                dataset = getattr(args, "dataset", None) or str(
+                    pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset_spark.jsonl"
+                )
+                output_dir = pathlib.Path(args.output_dir) if getattr(args, "output_dir", None) else None
+                sys.exit(evaluate_spark_dataset(pathlib.Path(dataset), output_dir=output_dir))
             evaluate(
                 verbose=getattr(args, "verbose", False),
                 dataset=getattr(args, "dataset", None),
@@ -1555,6 +2529,18 @@ def main() -> None:
                 verbose=args.verbose,
                 no_embeddings=args.no_embeddings,
             )
+        elif args.command == "rag-plan":
+            from data_engineering_copilot.plan_executor import PlanOptions, run_plan
+
+            options = PlanOptions(
+                run_id=args.run_id,
+                phase=args.phase,
+                dry_run=args.dry_run,
+                force=args.force,
+                candidate_generation=args.candidate_generation,
+                json_output=args.json,
+            )
+            sys.exit(run_plan(options))
     except SystemExit:
         raise
     except Exception as exc:

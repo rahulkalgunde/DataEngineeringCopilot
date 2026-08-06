@@ -351,6 +351,7 @@ def integration_settings(ollama_url):
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
         retrieval_top_k=5,
+        reranker_top_k=3,
         max_context_chars=2000,
         confidence_threshold=0.10,
         reranker_enabled=True,

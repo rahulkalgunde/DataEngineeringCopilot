@@ -451,6 +451,7 @@ def integration_settings():
         embedding_model_name="nomic-embed-text",
         embedding_batch_size=32,
         retrieval_top_k=5,
+        reranker_top_k=3,
         max_context_chars=2000,
         confidence_threshold=0.10,
         reranker_enabled=True,
