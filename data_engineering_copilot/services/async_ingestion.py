@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -31,6 +31,10 @@ from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
 from data_engineering_copilot.services.text_filter import ChunkFilter
+
+if TYPE_CHECKING:
+    from data_engineering_copilot.services.spark_chunker import SparkChunker
+    from data_engineering_copilot.services.spark_metadata import SparkMetadata
 
 log = structlog.get_logger(__name__)
 
@@ -68,6 +72,7 @@ class AsyncIngestionService:
         code_block_parser: CodeBlockParser | None = None,
         chunk_filter: ChunkFilter | None = None,
         telemetry: TelemetryTracerProtocol | None = None,
+        spark_chunker: SparkChunker | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -84,6 +89,7 @@ class AsyncIngestionService:
         self._code_block_parser = code_block_parser
         self._chunk_filter = chunk_filter
         self._telemetry = telemetry
+        self._spark_chunker = spark_chunker
 
         # Enrichment queue for decoupling enrichment from main pipeline
         self._enrichment_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -98,6 +104,21 @@ class AsyncIngestionService:
             self._chunk_executor = chunk_executor
         else:
             self._chunk_executor = ThreadPoolExecutor(max_workers=settings.chunk_concurrency)
+
+    @staticmethod
+    def _spark_metadata(parsed: ParsedDocument) -> SparkMetadata:
+        """Build SparkMetadata from a parsed document's provenance fields."""
+        from data_engineering_copilot.services.spark_metadata import SparkMetadata
+
+        return SparkMetadata(
+            doc_type=parsed.doc_type,
+            language=parsed.language,
+            spark_version=parsed.spark_version,
+            module=parsed.module,
+            source_commit=parsed.source_commit,
+            file_path=parsed.file_path,
+            license=parsed.license,
+        )
 
     async def _process_raw(
         self,
@@ -151,7 +172,9 @@ class AsyncIngestionService:
             await self._delete_chunks_for_url(parsed.url)
 
         extract_sentences = getattr(self.chunker, "extract_sentences", None)
-        if extract_sentences is not None:
+        if self._spark_chunker is not None and parsed.doc_type:
+            chunks = await self._spark_chunker.chunk(parsed, self._spark_metadata(parsed))
+        elif extract_sentences is not None:
             sentences = extract_sentences(parsed.text)
             if sentences is None:
                 chunks = await self.chunker.chunk(parsed)
