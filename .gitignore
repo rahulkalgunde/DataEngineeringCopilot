@@ -43,5 +43,6 @@ profil*
 profil*/
 .ollama_cache/
 .bm25_cache/
+.index_state/
 memory-bank/
 .docker-tag

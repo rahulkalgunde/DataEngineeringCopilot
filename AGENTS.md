@@ -34,7 +34,14 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec reset-index` | Full clean rebuild: recreates Qdrant collection + BM25 cache, clears Redis `crawl:*` keys, drops PG frontier tables |
 | `dec reset-qdrant` | Deletes + recreates Qdrant collection w/ correct dimension + hybrid config, removes persisted BM25 cache |
 | `dec reset-crawler-db` | Clears crawler state (Redis `crawl:*` + PostgreSQL frontier) without touching Qdrant. Dedup still works via Qdrant content hashes. |
-| `dec evaluate` | RAG eval on JSONL golden dataset (default `tests/evaluation/eval_dataset.jsonl`, per-source files `eval_dataset_{source}.jsonl`; `--dataset <path>` / `--source <name>` to select/filter) |
+| `dec spark-config-check` | Validates pinned Spark source config (`config/spark_sources.json`) without network access |
+| `dec spark-manifest` | Materializes pinned Spark source tarball + writes file manifest (no indexing) |
+| `dec spark-render` | Builds pinned rendered docs (Jekyll guides + PySpark Sphinx API) + writes `rendered_manifest.json` |
+| `dec spark-build --generation <g>` | Builds a Spark generation collection (dense+sparse) without activating; fits BM25 on complete corpus first |
+| `dec spark-validate --generation <g>` | Validates a generation (coverage records, manifest/chunk-ID uniqueness, per-chunk generation/commit metadata, token/char budgets, segment index/total consistency + lossless reconstruction, points vs `chunks.jsonl`, payload text vs embedded, sparse config, BM25, doc_type); writes report required by activate |
+| `dec spark-activate --generation <g>` | Atomically repoints alias `data_engineering_docs` to a validated generation (requires report + `[y/N]`/`FORCE=1`) |
+| `dec spark-rollback --generation <g>` | Points alias back to previously recorded generation (requires `[y/N]`/`FORCE=1`) |
+| `dec evaluate` | RAG eval on JSONL golden dataset (default `tests/evaluation/eval_dataset.jsonl`, per-source files `eval_dataset_{source}.jsonl`; `--dataset <path>` / `--source <name>` to select/filter; `--spark` runs Spark retrieval-recall eval, 18 rows incl. out-of-scope Delta/Airflow refusal + forbidden-term checks) |
 | `dec inspect-db` | Scrolls Qdrant points, shows source/chunk-type/URL distribution |
 | `dec cancel <task-id>` | Cancels running ingestion via API |
 | `dec profile` | Ingestion concurrency profiler |
@@ -45,7 +52,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 ## API Routes (`api/routes.py`)
 - `POST /api/v1/ingest` — Celery task dispatch via `SETNX` lock (60s TTL). Checks existing running task.
 - `GET /api/v1/ingest/status/{task_id}` — polls Redis progress.
-- `POST /api/v1/ask` — uses `get_rag_service()` (singleton from `services/rag_service_singleton.py`, not `factory.py`). 120s timeout.
+- `POST /api/v1/ask` — uses `get_rag_service()` (singleton from `services/rag_service_singleton.py`, not `factory.py`). 120s timeout. `bypass_cache` request field skips cache read+write (diagnostic).
 - `POST /api/v1/ask/stream` — SSE streaming.
 - `GET /api/v1/version` — git SHA + image build time + `deps_fingerprint_ok` (detects stale images).
 - Middleware: `RateLimitMiddleware`, optional `ApiKeyAuthMiddleware`, CORS for `localhost:8501`.
