@@ -16,11 +16,19 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec reset-index](#dec-reset-index)
   - [dec reset-qdrant](#dec-reset-qdrant)
   - [dec reset-crawler-db](#dec-reset-crawler-db)
+  - [dec spark-config-check](#dec-spark-config-check)
+  - [dec spark-manifest](#dec-spark-manifest)
+  - [dec spark-render](#dec-spark-render)
+  - [dec spark-build](#dec-spark-build)
+  - [dec spark-validate](#dec-spark-validate)
+  - [dec spark-activate](#dec-spark-activate)
+  - [dec spark-rollback](#dec-spark-rollback)
   - [dec ui](#dec-ui)
   - [dec profile](#dec-profile)
   - [dec health](#dec-health)
   - [dec status](#dec-status)
   - [dec evaluate](#dec-evaluate)
+  - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
   - [dec inspect-db](#dec-inspect-db)
   - [dec cancel](#dec-cancel)
@@ -52,6 +60,12 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `reenrich`, `retry-failed`, `unskip` | No (in-process, direct ingestion) | Yes | Yes | Yes | Yes |
 | `reset-index` | No | Yes | Yes | If set | No |
 | `reset-qdrant` | No | Yes | No | No | No |
+| `spark-config-check` | No | No | No | No | No |
+| `spark-manifest` | No | No | No | No | No |
+| `spark-render` | No | No | No | No | No |
+| `spark-build` | No | Yes | No | No | Yes (embedder) |
+| `spark-validate` | No | Yes | No | No | No |
+| `spark-activate` / `spark-rollback` | No | Yes | No | No | No |
 | `health`, `status`, `config`, `inspect-db` | `status` checks workers | Yes (except health/config degrade gracefully) | Yes | Yes (status) | Yes (health) |
 
 > `dec ingest`, `dec cancel`, and `dec ingestion-monitor` talk to the FastAPI server at `http://localhost:8000`. Start it with `make dev` (first time) or `make up` (subsequent).
@@ -347,6 +361,146 @@ dec reset-crawler-db
 
 ---
 
+### `dec spark-config-check`
+
+Validates the pinned Spark source configuration (`data_engineering_copilot/config/spark_sources.json`) without network access. Does not download or mutate anything.
+
+```
+usage: dec spark-config-check [-h]
+```
+
+**Example**
+
+```bash
+dec spark-config-check
+```
+
+**Exit codes**: `0` valid, `1` invalid configuration.
+
+---
+
+### `dec spark-manifest`
+
+Downloads/materializes the pinned Spark source (from the configured Git commit tarball) and writes a file manifest. Does not index.
+
+```
+usage: dec spark-manifest [-h] [--output OUTPUT]
+```
+
+**Options**
+- `--output`: Manifest output path (default `data/spark_corpus/<generation>/manifest.json`).
+
+**Example**
+
+```bash
+dec spark-manifest
+```
+
+**Exit codes**: `0` success, `2` invalid config, `5` operational failure (download/extract).
+
+---
+
+### `dec spark-render`
+
+Builds the pinned rendered Spark documentation (Jekyll guides + PySpark Sphinx API docs) and writes `rendered_manifest.json` into `data/spark_corpus/<gen>/`. Requires the pinned native source to be materialized first and the `dec_pydocs_venv` Sphinx toolchain for the PySpark API build.
+
+```
+usage: dec spark-render [-h] [--generation GENERATION]
+```
+
+**Options**
+- `--generation`: Generation identifier (default derived from `spark-<ref>-<commit8>-<embedder-sha12>`).
+
+**Example**
+
+```bash
+dec spark-render --generation spark-4.0.0-fa33ea00-abc123
+```
+
+**Exit codes**: `0` success, `5` operational failure (missing materialized source, build command exits non-zero, expected output root missing, or timeout).
+
+---
+
+### `dec spark-build`
+
+Builds a Spark generation collection in Qdrant (dense + sparse vectors) without activating it. Fits BM25 on the complete corpus before writing sparse vectors.
+
+When a rendered manifest exists at `data/spark_corpus/<gen>/rendered_manifest.json`, the build runs the hybrid merge (rendered pages preferred over native counterparts, native-only records retained) and writes the exact losslessly-split segment list to `data/spark_corpus/<gen>/chunks.jsonl` before embedding. The build also writes per-file `coverage.json` (status, representation, source path, canonical URL, chunk count) and a `build_report.json` (commit, manifest hashes, chunk/point counts, BM25 size, embedding dimension, validation result).
+
+```
+usage: dec spark-build [-h] [--generation GENERATION]
+```
+
+**Options**
+- `--generation`: Generation identifier (default derived from `spark-<ref>-<commit8>-<embedder-sha12>`).
+
+**Example**
+
+```bash
+dec spark-build --generation spark-4.0.0-fa33ea00-abc123
+```
+
+**Exit codes**: `0` success, `2` invalid config, `5` operational failure.
+
+---
+
+### `dec spark-validate`
+
+Validates a built generation collection without mutating it. Runs the strict artifact checks (`coverage.json` zero-chunk files, missing rendered outputs, manifest-path and chunk-ID uniqueness, per-chunk generation/commit metadata, Qdrant point count vs `chunks.jsonl`, per-segment token/char budgets ≤ 3800/6000, contiguous segment indices, consistent `segment_total`, lossless reconstruction vs parent hash) plus the store-level checks (dense/sparse vector configuration, BM25 readiness, doc_type metadata presence, payload text == persisted/embedded text). Writes a validation report that `dec spark-activate` requires.
+
+```
+usage: dec spark-validate [-h] --generation GENERATION
+```
+
+**Options**
+- `--generation`: Generation identifier (required).
+
+**Example**
+
+```bash
+dec spark-validate --generation spark-4.0.0-fa33ea00-abc123
+```
+
+**Exit codes**: `0` success, `2` invalid config/args, `3` validation failure, `5` operational failure.
+
+---
+
+### `dec spark-activate`
+
+Atomically repoints the logical Qdrant alias `data_engineering_docs` to a validated generation collection. Requires a passing validation report from `dec spark-validate`, and interactive confirmation (or `FORCE=1`).
+
+```
+usage: dec spark-activate [-h] --generation GENERATION
+```
+
+**Options**
+- `--generation`: Generation identifier (required).
+
+**Behavior**
+- Refuses to activate if the generation has no passing validation report.
+- Prompts `[y/N]` on a TTY; non-interactive execution requires `FORCE=1`.
+- Atomically switches the alias via Qdrant `ChangeAliases` (delete + create in one request).
+- Records active state to `.index_state/active.json` and appends to `.index_state/history.jsonl`.
+
+**Exit codes**: `0` success/aborted, `3` missing/failed validation, `5` operational failure.
+
+---
+
+### `dec spark-rollback`
+
+Points the logical alias back to the previously recorded generation in `.index_state/history.jsonl`. Requires the requested generation to be the current active generation, and interactive confirmation (or `FORCE=1`).
+
+```
+usage: dec spark-rollback [-h] --generation GENERATION
+```
+
+**Options**
+- `--generation`: Generation identifier (required).
+
+**Exit codes**: `0` success/aborted, `4` not the active generation / no previous generation, `5` operational failure.
+
+---
+
 ### `dec ui`
 
 Prints the command to launch the Streamlit UI (does not launch it).
@@ -476,6 +630,7 @@ Runs RAG evaluation over a golden dataset (default `tests/evaluation/eval_datase
 
 ```
 usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
+                    [--spark] [--output-dir OUTPUT_DIR]
 ```
 
 **Behavior**
@@ -487,15 +642,38 @@ usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
 - **RAGAS metrics** (if the `ragas` package is installed): `context_recall`, `context_precision`, `faithfulness`, `answer_relevancy`, `overall`. Otherwise prints "RAGAS evaluation skipped".
 - **Drift detection** (if `DRIFT_DETECTION_ENABLED`): records a snapshot into `data/eval_history.jsonl`, compares against the trailing window (`DRIFT_WINDOW_DAYS`, default 7), and prints per-metric deltas, `DRIFT DETECTED`, `No drift detected`, or "First eval recorded".
 
+**`dec evaluate --spark`** runs the Spark retrieval-recall evaluation
+(`tests/evaluation/eval_dataset_spark.jsonl`, 18 queries) and additionally
+measures retrieval-stage diagnostics:
+
+- `term_recall` — expected terms present in the assembled context.
+- `source_recall` — expected URLs present in the final context.
+- `candidate_source_recall` — expected URLs present in the **fused candidate pool** (pre-rerank). The gap between candidate and final recall is the rerank/truncation diagnostic.
+- `expected_fused_ranks` / `dropped_expected_urls` — per-query, which expected sources were retrieved but dropped from the final context.
+- `forbidden_term_hits` — terms that must never surface in the evidence (e.g. Delta/Airflow in a Spark row); any hit fails the eval.
+- `out_of_scope` / `insufficient_context` — Delta Lake and Airflow rows are explicitly out of scope and must produce a scope refusal ("cannot answer"); a non-refusal fails the eval.
+- `insufficient_context` — answer flagged as missing information.
+- Stage latency (`retrieval_ms`, `rerank_ms`, `total_ms`) from provenance stage times.
+- `--output-dir <dir>` writes machine-readable JSON: `retrieval_provenance.json`
+  (per-query per-variant/fused/final candidate records from the opt-in
+  provenance capture in `AsyncRagService.answer(..., provenance=...)`) and
+  `retrieval_metrics.json` (aggregates: avg recalls over in-scope rows,
+  insufficient-context rate, out-of-scope refusal rate, queries dropping
+  expected sources or hitting forbidden terms, median/p95 retrieval latency).
+- Spark eval exits `1` when avg term or source recall over **in-scope** rows is
+  below `0.9`, when any forbidden term surfaces in evidence, or when any
+  out-of-scope row is not refused.
+
 **Example**
 
 ```bash
 dec evaluate
 dec evaluate --source "Apache Spark Documentation"
 dec evaluate --dataset tests/evaluation/eval_dataset_airflow.jsonl
+dec evaluate --spark --output-dir .rag_eval/baseline-01
 ```
 
-**Exit codes**: `0` on completion; `1` if the evaluation dataset is missing or `--source` matches no rows.
+**Exit codes**: `0` on completion; `1` if the evaluation dataset is missing, `--source` matches no rows, or (Spark mode) recall is below threshold.
 
 **Gotchas**
 - Runs the real RAG pipeline (Qdrant + embedder + LLM) — build the index first with `dec ingest`.
@@ -504,6 +682,71 @@ dec evaluate --dataset tests/evaluation/eval_dataset_airflow.jsonl
   - **LLM**: no provider is pinned as judge. If `EVALUATION_LLM_PROVIDER` is set it becomes the primary of the purpose-`evaluation` chain; when empty (default) every call routes through `llm_fallback_order` and picks the first provider that is currently available (has an API key, not cooling down, inside its rate window) — local Ollama only as the degraded last resort (skipped after consecutive failures). Each ragas metric/query makes one LLM call per requested generation (`answer_relevancy` requests `n=3`, so it makes 3). High-volume runs (RAGAS makes ~20 LLM calls/query) can exhaust a provider's per-minute rate window; the judge then adaptively shifts to the next available provider, so don't pin a low-limit provider.
   - **Embeddings**: NVIDIA then OpenRouter — both default to `nvidia/nemotron-3-embed-1b` (2048-dim), so a mid-run failover keeps the dimension constant (required for ragas cosine similarity). Providers without API keys are skipped; local Ollama (`nomic-embed-text`) is used only when no external key is configured. These eval embeddings never touch Qdrant and are independent of the production index embedder.
   - This uses the same paid providers as the app; a full-dataset run costs real LLM calls (≈18 calls/query on the 12-query Spark set). The eval harness (mocked embedder, no infra) is available separately via `make test-eval`.
+
+---
+
+### `dec rag-plan`
+
+FLASH-executor driver for the general RAG improvement plan
+(`plans/rag_general_improvement_execution_plan.md`). Orchestrates the plan's
+phases 0-7 with checkpoint/resume, dry-run, and a standard failure schema.
+
+```
+usage: dec rag-plan [-h] [--phase {0,1,2,3,4,5,6,7}] [--dry-run] [--force]
+                    [--run-id RUN_ID]
+                    [--candidate-generation CANDIDATE_GENERATION] [--json]
+```
+
+**Behavior**
+- Auto-discovers the active generation (same resolution as the RAG service), runs
+  `git status`, `dec status`, `dec spark-config-check`, and
+  `dec spark-validate --generation <active>` in Phase 0.
+- Each run writes artifacts under `.rag_eval/runs/<run_id>/`: `artifacts/`,
+  `logs/`, `trials/`, plus `checkpoint.json`, `result.json`, and on failure
+  `failure.json` (schema_version-pinned, machine-readable).
+- `--phase <n>` runs a single phase; without it, all remaining phases run.
+- Completed phases are checkpointed; re-running resumes from the checkpoint.
+  `--force` re-runs already-completed phases.
+- `--dry-run` prints the exact commands each phase would run without executing
+  anything and without writing a checkpoint.
+- `--json` prints the final summary as JSON.
+- Phases 3 and 7 need `--candidate-generation`; without `--force` they are
+  skipped (no candidate) or blocked (candidate present). Phase 7 activation uses
+  `FORCE=1` internally. Phases 4-6 halt with exit code 10 because they require a
+  code change (candidate provenance instrumentation) that is not implemented yet.
+
+**Phases**
+| Phase | Name | What it runs | Destructive |
+|---|---|---|---|
+| 0 | preflight | git status, dec status, spark-config-check, spark-validate | No |
+| 1 | baseline-eval | `dec evaluate --spark` + `dec evaluate` (general dataset) | No |
+| 2 | chunk-audit | `dec spark-manifest` + structural distribution analysis | No |
+| 3 | contextual-index | `dec spark-build` + `dec spark-validate` (candidate) | No |
+| 4 | multi-query-fusion | halted — code change required | No |
+| 5 | rerank-context | halted — code change required | No |
+| 6 | tuning | halted — code change required | No |
+| 7 | rollout | `dec spark-activate` + post-activation `dec evaluate --spark` | Yes |
+
+**Examples**
+
+```bash
+dec rag-plan --dry-run                 # preview all planned commands
+dec rag-plan --phase 0                 # run the reproducibility gate
+dec rag-plan --phase 1 --run-id baseline-01   # baseline evaluation, resume-safe
+dec rag-plan --phase 3 --candidate-generation <gen> --force   # build + validate
+dec rag-plan --json                    # full run, machine-readable summary
+```
+
+**Exit codes**: `0` success (or remaining phases done/skipped); `2` usage;
+`4` gate failure (validation, Qdrant, active generation); `5` command failure;
+`10` halted — code change required (phases 4-6); `11` blocked — `--force`
+required for a candidate generation.
+
+**Gotchas**
+- Runs real commands against Qdrant/Redis and, for phases 1/7, makes real
+  evaluation LLM calls. It never calls `dec probe-llm`.
+- Uses `dec_venv/bin/dec` (the console script) for subcommands — not
+  `python -m dec`, which is not a module.
 
 ---
 
@@ -717,6 +960,15 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Wipe everything and rebuild | `dec reset-index` |
 | Recreate only Qdrant + BM25 | `dec reset-qdrant` |
 | Reset crawler DB only (keep Qdrant) | `dec reset-crawler-db` |
+| Validate Spark source config | `dec spark-config-check` |
+| Materialize Spark source + manifest | `dec spark-manifest` |
+| Build a Spark generation | `dec spark-build --generation <gen>` |
+| Validate a Spark generation | `dec spark-validate --generation <gen>` |
+| Activate a Spark generation | `dec spark-activate --generation <gen>` |
+| Roll back a Spark generation | `dec spark-rollback --generation <gen>` |
+| Spark retrieval-recall evaluation | `dec evaluate --spark` |
+| Preview plan phase commands | `dec rag-plan --dry-run` |
+| Run RAG improvement plan phase | `dec rag-plan --phase <0-7>` |
 | Profile ingestion | `dec profile --load-sweep 10,50,100` |
 | Health check | `dec health` |
 | System status | `dec status` |
