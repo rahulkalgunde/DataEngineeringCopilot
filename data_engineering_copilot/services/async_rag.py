@@ -157,6 +157,7 @@ class AsyncRagService:
         session_id: str | None = None,
         provenance: list[dict] | None = None,
         bypass_cache: bool = False,
+        expected_urls: list[str] | None = None,
     ) -> Answer:
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
@@ -173,7 +174,7 @@ class AsyncRagService:
         _prov_rerank: dict[str, object] | None = None
         _prov_final: list[dict[str, object]] = []
         _prov_dropped: list[dict[str, object]] = []
-        _prov_pool = 0
+        _prov_expected_urls = expected_urls or []
 
         def _emit_provenance() -> None:
             if provenance is None:
@@ -189,6 +190,7 @@ class AsyncRagService:
                     "rerank": _prov_rerank,
                     "final_context": _prov_final,
                     "dropped": _prov_dropped,
+                    "expected_urls": _prov_expected_urls,
                     "candidate_pool_size": _prov_pool,
                     "stage_times": dict(_stage_times),
                 }
@@ -291,10 +293,15 @@ class AsyncRagService:
         if trace:
             retrieval_span = trace.start_observation(name="retrieval", as_type="span")
 
-        # Determine chunk type filter based on intent
+        # Determine chunk type filter based on intent. When a hard ``modules``
+        # filter is present the exact API page is already pinned, so the "api"
+        # chunk-type restriction is dropped — rendered reference pages carry
+        # ``chunk_type="text"`` and combining both would empty the result set.
         chunk_type_filter = None
         if rewritten is not None and rewritten.intent == "api_lookup":
-            chunk_type_filter = "api"
+            metadata_filters = rewritten.filters if rewritten is not None else None
+            if metadata_filters is None or not metadata_filters.modules:
+                chunk_type_filter = "api"
 
         # Structured metadata filters extracted during rewriting.
         metadata_filters = rewritten.filters if rewritten is not None else None

@@ -564,11 +564,11 @@ class AppSettings(BaseSettings):
     enable_semantic_chunking: bool = True  # Enable semantic chunker (requires embedding model)
     # Retrieve a broad candidate pool per query variant; reranking narrows it
     # to the final context set after dense+sparse rank fusion.
-    retrieval_top_k: int = 30
+    retrieval_top_k: int = 50
     reranker_enabled: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranker_top_k: int = 20
-    max_context_chars: int = 8000
+    reranker_top_k: int = 30
+    max_context_chars: int = 12000
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6

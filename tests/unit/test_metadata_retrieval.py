@@ -160,6 +160,37 @@ def test_build_query_filter_conditions() -> None:
     assert len(conditions) == 2
 
 
+def test_build_query_filter_modules_matches_module_or_title() -> None:
+    from qdrant_client import models as qm
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    filters = RetrievalFilters(modules=("pyspark.sql.functions.filter",))
+    conditions = AsyncQdrantVectorStore._build_query_filter(filters)
+    assert conditions is not None
+    assert len(conditions) == 1
+    module_condition = conditions[0]
+    assert isinstance(module_condition, qm.Filter)
+    assert module_condition.should is not None
+    fields = [getattr(cond, "key", None) for cond in module_condition.should]
+    assert fields == ["module", "title"]
+
+
+def test_build_query_filter_modules_plus_other_fields() -> None:
+    from qdrant_client import models as qm
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    filters = RetrievalFilters(modules=("pyspark.sql.functions",), languages=("python",))
+    conditions = AsyncQdrantVectorStore._build_query_filter(filters)
+    assert conditions is not None
+    assert len(conditions) == 2
+    module_conditions = [c for c in conditions if isinstance(c, qm.Filter)]
+    assert len(module_conditions) == 1
+    language_conditions = [c for c in conditions if isinstance(c, qm.FieldCondition)]
+    assert [c.key for c in language_conditions] == ["language"]
+
+
 # ------------------------------------------------------------------
 # RewrittenQuery carries filters
 # ------------------------------------------------------------------

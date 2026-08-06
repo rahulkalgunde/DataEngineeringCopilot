@@ -279,6 +279,12 @@ class AsyncQdrantVectorStore:
 
         Empty tuples are treated as "no constraint". Returns ``None`` when the
         filter is empty so callers can skip adding a ``must`` condition.
+
+        ``modules`` matches against the ``module`` payload field OR the chunk
+        ``title``: rendered API pages (e.g. ``pyspark.sql.functions.filter``)
+        carry an empty ``module`` but store the dotted identifier in ``title``,
+        so an exact module-only filter would silently drop them and force a
+        degraded unfiltered fallback.
         """
         if filters is None or filters.is_empty:
             return None
@@ -288,13 +294,22 @@ class AsyncQdrantVectorStore:
             ("doc_types", "doc_type"),
             ("languages", "language"),
             ("versions", "spark_version"),
-            ("modules", "module"),
             ("chunk_types", "chunk_type"),
         )
         for attr, field in field_map:
             values = getattr(filters, attr)
             if values:
                 conditions.append(models.FieldCondition(key=field, match=models.MatchAny(any=list(values))))
+        modules = filters.modules
+        if modules:
+            conditions.append(
+                models.Filter(
+                    should=[
+                        models.FieldCondition(key="module", match=models.MatchAny(any=list(modules))),
+                        models.FieldCondition(key="title", match=models.MatchAny(any=list(modules))),
+                    ]
+                )
+            )
         return conditions or None
 
     async def query(
