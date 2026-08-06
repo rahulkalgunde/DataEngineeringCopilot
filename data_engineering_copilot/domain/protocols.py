@@ -16,8 +16,24 @@ from data_engineering_copilot.domain.models import (
     LLMUsage,
     ParsedDocument,
     RawDocument,
+    RetrievalFilters,
     RetrievedChunk,
 )
+
+
+class SparkSourceResolverProtocol(Protocol):
+    """Structural protocol for the pinned Spark source resolver."""
+
+    def resolve(self) -> object: ...
+
+
+class NativeDocumentParserProtocol(Protocol):
+    """Structural protocol for the native document parser."""
+
+    def parse(self, path: object, doc_type: str) -> object: ...
+    def parse_markdown(self, text: str, path: str) -> object: ...
+    def parse_rst(self, text: str, path: str) -> object: ...
+    def parse_code(self, text: str, path: str, language: str) -> object: ...
 
 
 class CrawlerProtocol(Protocol):
@@ -55,6 +71,8 @@ class VectorStoreProtocol(Protocol):
         query_text: str | None = ...,
         source_filter: list[str] | None = ...,
         chunk_type_filter: str | None = ...,
+        metadata_filters: RetrievalFilters | None = ...,
+        fused_limit: int | None = ...,
     ) -> list[RetrievedChunk]: ...
     async def count(self) -> int: ...
     async def count_urls(self, source_name: str) -> int: ...

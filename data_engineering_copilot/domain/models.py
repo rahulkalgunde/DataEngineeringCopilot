@@ -9,13 +9,48 @@ from data_engineering_copilot.config.settings import settings
 
 
 @dataclass(frozen=True)
+class RetrievalFilters:
+    """Structured metadata filters applied during retrieval.
+
+    Empty tuples mean "no constraint" for that field. The default instance is
+    the canonical "no filter" value.
+
+    ``modules`` are hard filters (exact module match, e.g. an explicitly named
+    ``pyspark.sql.functions.filter``). ``preferred_modules`` are soft ranking
+    preferences derived from function terms (e.g. ``dense_rank``) — they are
+    never applied as hard filters so cross-doc-type content (guides, examples)
+    remains retrievable.
+    """
+
+    source_names: tuple[str, ...] = ()
+    doc_types: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ()
+    versions: tuple[str, ...] = ()
+    modules: tuple[str, ...] = ()
+    preferred_modules: tuple[str, ...] = ()
+    chunk_types: tuple[str, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.source_names
+            or self.doc_types
+            or self.languages
+            or self.versions
+            or self.modules
+            or self.preferred_modules
+            or self.chunk_types
+        )
+
+
+@dataclass(frozen=True)
 class CacheScope:
     """Identifies the isolation scope a cache entry belongs to.
 
     Two scopes differing in any field (tenant, role, source filter, embedding
-    model, or collection) must never share cached answers. The fingerprint is
-    embedded in every cache key so cross-tenant / cross-filter leakage is
-    structurally impossible.
+    model, collection, or index generation) must never share cached answers.
+    The fingerprint is embedded in every cache key so cross-tenant /
+    cross-filter / cross-generation leakage is structurally impossible.
     """
 
     tenant_id: str = "default"
@@ -23,6 +58,7 @@ class CacheScope:
     source_filter: tuple[str, ...] = ()
     embedding_model: str = ""
     collection_name: str = ""
+    index_generation: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,6 +121,13 @@ class ParsedDocument:
     url: str
     text: str
     sections: tuple[DocumentSection, ...] = ()
+    doc_type: str = ""
+    language: str = ""
+    spark_version: str = ""
+    module: str = ""
+    source_commit: str = ""
+    file_path: str = ""
+    license: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,6 +145,26 @@ class DocumentChunk:
     chunk_index: int = 0
     total_chunks: int = 0
     crawled_at: str = ""  # ISO 8601 UTC timestamp when the page was crawled
+    doc_type: str = ""
+    language: str = ""
+    spark_version: str = ""
+    module: str = ""
+    source_commit: str = ""
+    file_path: str = ""
+    license: str = ""
+    parser_version: str = ""
+    chunker_version: str = ""
+    index_generation: str = ""
+    # Lossless token-budget segmentation metadata. Empty parent_content_hash
+    # means the chunk was never split (it is its own segment).
+    parent_content_hash: str = ""
+    segment_index: int = -1
+    segment_total: int = 1
+    token_count: int = 0
+    character_count: int = 0
+    # Source representation for the hybrid corpus: "native" (raw repo file) or
+    # "rendered" (locally built HTML). Empty for legacy/non-Spark chunks.
+    representation: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,8 +181,9 @@ class RagConfig:
     reranker_enabled: bool = False
     reranker_model: str = "ms-marco-MiniLM-L-6-v2"
     reranker_top_k: int = 3
-    max_context_chars: int = 4000
+    max_context_chars: int = 8000
     max_expansion_queries: int = 2
+    cache_enabled: bool = True
 
 
 @dataclass(frozen=True)

@@ -135,23 +135,28 @@ async def test_embed_http_error(embeddings):
             await embeddings.embed_texts(["test"])
 
 
-def test_truncate_to_safe_tokens_short_text():
-    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import _truncate_to_safe_tokens
+def test_reject_over_budget_text():
+    from data_engineering_copilot.domain.exceptions import EmbeddingError
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+        OpenAICompatibleEmbeddings,
+    )
 
-    result = _truncate_to_safe_tokens("short text", max_tokens=100)
-    assert result == "short text"
+    embs = OpenAICompatibleEmbeddings(api_key="key", max_tokens_per_input=10)
+    with pytest.raises(EmbeddingError, match="exceeds budget"):
+        embs._reject_over_budget(["hello world " * 100])
 
 
-def test_truncate_to_safe_tokens_long_text():
-    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import _truncate_to_safe_tokens
+def test_accepts_within_budget_text():
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+        OpenAICompatibleEmbeddings,
+    )
 
-    text = "hello world " * 1000
-    result = _truncate_to_safe_tokens(text, max_tokens=10)
-    assert len(result) < len(text)
+    embs = OpenAICompatibleEmbeddings(api_key="key", max_tokens_per_input=100)
+    embs._reject_over_budget(["short text"])
 
 
 @pytest.mark.asyncio
-async def test_embed_sends_truncate_provider_param():
+async def test_embed_has_no_truncation_option():
     embs = OpenAICompatibleEmbeddings(api_key="key")
     with respx.mock:
         route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
@@ -162,7 +167,7 @@ async def test_embed_sends_truncate_provider_param():
         )
         await embs.embed_texts(["hello"])
         body = json.loads(route.calls.last.request.content)
-        assert body["provider"] == {"truncate": "END"}
+        assert body["provider"] == {}
 
 
 @pytest.mark.asyncio

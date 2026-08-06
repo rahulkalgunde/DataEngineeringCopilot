@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Self, cast
 
@@ -17,12 +17,31 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import SparseIndexParams, SparseVectorParams
 
-from data_engineering_copilot.config.settings import PROJECT_ROOT, settings
+from data_engineering_copilot.config.settings import PROJECT_ROOT, resolve_active_generation, settings
 from data_engineering_copilot.domain.exceptions import VectorStoreError
-from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+from data_engineering_copilot.domain.models import DocumentChunk, RetrievalFilters, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_bm25_cache_path(collection_name: str) -> Path:
+    """Return the persisted BM25 tokenizer path for a collection.
+
+    When ``collection_name`` matches the active logical alias (e.g.
+    ``data_engineering_docs``), the Spark generation build persisted its BM25
+    tokenizer under the generation *collection* name (``data_engineering_docs__
+    <generation>``). Resolve to that file so hybrid search remains active after
+    alias activation instead of silently degrading to dense-only. Falls back to
+    the literal ``<collection_name>.json`` cache otherwise.
+    """
+    active_generation = resolve_active_generation()
+    base = PROJECT_ROOT / ".bm25_cache"
+    if active_generation:
+        generation_cache = base / f"{collection_name}__{active_generation}.json"
+        if generation_cache.exists():
+            return generation_cache
+    return base / f"{collection_name}.json"
 
 
 class AsyncQdrantVectorStore:
@@ -52,7 +71,15 @@ class AsyncQdrantVectorStore:
         self._collection_name = collection_name
         self._hybrid_search = hybrid_search
         self._hybrid_rrf_k = hybrid_rrf_k
-        self._bm25_persist_path = bm25_persist_path or (PROJECT_ROOT / ".bm25_cache" / f"{collection_name}.json")
+        if bm25_persist_path is not None:
+            self._bm25_persist_path = bm25_persist_path
+        else:
+            # When the store targets the active alias (e.g. `data_engineering_docs`
+            # pointing at a generation collection), the BM25 tokenizer was
+            # persisted under the generation collection name. Resolve the cache
+            # to the active generation so hybrid search stays enabled after
+            # activation instead of silently degrading to dense-only.
+            self._bm25_persist_path = _resolve_bm25_cache_path(collection_name)
         self._bm25 = None
         self._bm25_loaded_from_disk = False
         if hybrid_search:
@@ -150,6 +177,19 @@ class AsyncQdrantVectorStore:
             )
         except Exception:
             logger.info("Payload index on 'crawled_at' already exists or could not be created.", exc_info=True)
+        for _metadata_field in ("doc_type", "language", "spark_version", "module"):
+            try:
+                await self._client.create_payload_index(
+                    collection_name=self._collection_name,
+                    field_name=_metadata_field,
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                logger.info(
+                    "Payload index on %r already exists or could not be created.",
+                    _metadata_field,
+                    exc_info=True,
+                )
 
     def _embedding_dim(self) -> int:
         if self._embedding_dimension_override is not None:
@@ -171,6 +211,16 @@ class AsyncQdrantVectorStore:
             "chunk_index": chunk.chunk_index,
             "total_chunks": chunk.total_chunks,
             "crawled_at": chunk.crawled_at,
+            "doc_type": chunk.doc_type,
+            "language": chunk.language,
+            "spark_version": chunk.spark_version,
+            "module": chunk.module,
+            "source_commit": chunk.source_commit,
+            "file_path": chunk.file_path,
+            "license": chunk.license,
+            "parser_version": chunk.parser_version,
+            "chunker_version": chunk.chunker_version,
+            "index_generation": chunk.index_generation,
         }
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
@@ -223,6 +273,30 @@ class AsyncQdrantVectorStore:
                 )
                 raise
 
+    @staticmethod
+    def _build_query_filter(filters: RetrievalFilters | None) -> list[object] | None:
+        """Build a list of Qdrant FieldConditions from structured filters.
+
+        Empty tuples are treated as "no constraint". Returns ``None`` when the
+        filter is empty so callers can skip adding a ``must`` condition.
+        """
+        if filters is None or filters.is_empty:
+            return None
+        conditions: list[object] = []
+        field_map = (
+            ("source_names", "source_name"),
+            ("doc_types", "doc_type"),
+            ("languages", "language"),
+            ("versions", "spark_version"),
+            ("modules", "module"),
+            ("chunk_types", "chunk_type"),
+        )
+        for attr, field in field_map:
+            values = getattr(filters, attr)
+            if values:
+                conditions.append(models.FieldCondition(key=field, match=models.MatchAny(any=list(values))))
+        return conditions or None
+
     async def query(
         self,
         query_embedding: list[float],
@@ -230,6 +304,8 @@ class AsyncQdrantVectorStore:
         query_text: str | None = None,
         source_filter: list[str] | None = None,
         chunk_type_filter: str | None = None,
+        metadata_filters: RetrievalFilters | None = None,
+        fused_limit: int | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -249,6 +325,13 @@ class AsyncQdrantVectorStore:
         chunk_type_filter:
             Optional chunk type to filter results by (e.g. "api", "code", "text").
             Applied at the Qdrant query level for efficiency.
+        fused_limit:
+            Optional fused candidate-pool size to pull from Qdrant. RRF rank
+            fusion suppresses single-modality hits, so a cross-encoder reranker
+            must see a wider pool than ``top_k``. When None, defaults to
+            ``max(top_k * 4, 40)``. Callers that rerank (the RAG service) pass
+            ``max(retrieval_top_k * 8, reranker_top_k * 5)`` so expected
+            evidence can survive at ranks below the reranker limit.
         """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
@@ -256,7 +339,7 @@ class AsyncQdrantVectorStore:
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
 
-        # Build Qdrant filter for source names and chunk type
+        # Build Qdrant filter for source names, chunk type, and metadata filters
         query_filter = None
         filter_conditions = []
         if source_filter is not None:
@@ -275,6 +358,9 @@ class AsyncQdrantVectorStore:
                     match=models.MatchValue(value=chunk_type_filter),
                 )
             )
+        metadata_conditions = self._build_query_filter(metadata_filters)
+        if metadata_conditions is not None:
+            filter_conditions.extend(metadata_conditions)
         if filter_conditions:
             query_filter = models.Filter(must=filter_conditions)
 
@@ -284,10 +370,16 @@ class AsyncQdrantVectorStore:
             # fusion suppresses single-modality hits (a chunk only in the BM25
             # list ranks far below the dense head), so the cross-encoder
             # reranker must see a wider candidate pool to rescue them.
-            fused_limit = max(top_k * 4, 40) if use_hybrid else top_k
+            # Task 11: when a caller supplies a fused_limit (the rerank pool),
+            # honour it so the fused pool exposed by Qdrant and consumed by the
+            # reranker are identical.
+            if use_hybrid:
+                effective_fused_limit = fused_limit if fused_limit is not None else max(top_k * 4, 40)
+            else:
+                effective_fused_limit = top_k
             query_kwargs: dict = dict(
                 collection_name=self._collection_name,
-                limit=fused_limit,
+                limit=effective_fused_limit,
                 with_payload=True,
                 score_threshold=None,
             )
@@ -307,7 +399,7 @@ class AsyncQdrantVectorStore:
                     # the truly relevant chunk well below the dense head.  A
                     # cross-encoder reranker (when enabled) then does the precise
                     # selection from this larger pool.
-                    prefetch_limit = max(top_k * 4, 40)
+                    prefetch_limit = effective_fused_limit
                     query_kwargs["prefetch"] = [
                         models.Prefetch(
                             query=query_embedding,
@@ -355,6 +447,16 @@ class AsyncQdrantVectorStore:
                     chunk_index=payload.get("chunk_index", 0),
                     total_chunks=payload.get("total_chunks", 0),
                     crawled_at=payload.get("crawled_at", ""),
+                    doc_type=payload.get("doc_type", ""),
+                    language=payload.get("language", ""),
+                    spark_version=payload.get("spark_version", ""),
+                    module=payload.get("module", ""),
+                    source_commit=payload.get("source_commit", ""),
+                    file_path=payload.get("file_path", ""),
+                    license=payload.get("license", ""),
+                    parser_version=payload.get("parser_version", ""),
+                    chunker_version=payload.get("chunker_version", ""),
+                    index_generation=payload.get("index_generation", ""),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
                 if rrf_confidence_scale is not None and score > 0.0:
@@ -383,6 +485,35 @@ class AsyncQdrantVectorStore:
         the raw query text itself.
         """
         self._last_query_sparse = sparse_vector
+
+    def bm25_status(self) -> dict[str, object]:
+        """Report BM25/hybrid state as a JSON-safe dictionary.
+
+        Returns ``enabled``, ``fitted``, ``loaded_from_disk``, ``cache_path``
+        and ``ready``. ``ready`` is True only when hybrid search is enabled
+        and the tokenizer is present and frozen. Never raises merely because
+        BM25 is unavailable.
+        """
+        enabled = bool(self._hybrid_search)
+        fitted = bool(self._bm25 is not None and self._bm25._frozen)
+        loaded_from_disk = bool(self._bm25_loaded_from_disk)
+        cache_path = str(self._bm25_persist_path)
+        return {
+            "enabled": enabled,
+            "fitted": fitted,
+            "loaded_from_disk": loaded_from_disk,
+            "cache_path": cache_path,
+            "ready": bool(enabled and fitted),
+        }
+
+    def is_hybrid_ready(self) -> bool:
+        """Return True only when hybrid search can serve sparse queries.
+
+        Hybrid search is ready when it is enabled and the BM25 tokenizer has
+        been fitted (frozen). Does not raise when the tokenizer is absent or
+        not yet fitted.
+        """
+        return bool(self._hybrid_search and self._bm25 is not None and self._bm25._frozen)
 
     def clear_query_sparse(self) -> None:
         """Clear the sparse vector set by ``set_query_sparse``."""
@@ -455,6 +586,101 @@ class AsyncQdrantVectorStore:
             self._bm25._avg_doc_len,
         )
 
+    def fit_bm25_corpus(self, texts: Sequence[str]) -> None:
+        """Fit a fresh BM25 tokenizer on the complete corpus for a new generation.
+
+        The tokenizer must be frozen (via ``fit``) before any sparse vectors are
+        written. Raises ``ValueError`` when hybrid search is disabled or the
+        corpus is empty.
+        """
+        if not self._hybrid_search:
+            raise ValueError("fit_bm25_corpus requires hybrid_search_enabled=True")
+        texts_list = list(texts)
+        if not texts_list:
+            raise ValueError("fit_bm25_corpus requires a non-empty corpus")
+        # Fresh tokenizer for every new generation; never reuse an active one.
+        self._bm25 = BM25Tokenizer()
+        self._bm25.fit(texts_list)
+        self._bm25.save(self._bm25_persist_path)
+        self._bm25_loaded_from_disk = True
+        logger.info(
+            "BM25 corpus fitted: vocab=%d corpus_size=%d",
+            self._bm25.vocab_size,
+            self._bm25._corpus_size,
+        )
+
+    async def upsert_frozen_chunks(
+        self,
+        chunks: Sequence[DocumentChunk],
+        vectors: Sequence[list[float]],
+        _sub_batch_size: int = 256,
+    ) -> None:
+        """Upsert dense + sparse vectors using the frozen BM25 tokenizer.
+
+        Requires a frozen tokenizer (see ``fit_bm25_corpus``). Writes sparse
+        vectors generated from the frozen vocabulary alongside dense vectors.
+        Raises ``ValueError`` for mismatched lengths or missing generation.
+        """
+        chunks_list = list(chunks)
+        vectors_list = list(vectors)
+        if len(chunks_list) != len(vectors_list):
+            raise ValueError("chunks and vectors must have equal lengths")
+        if not chunks_list:
+            raise ValueError("upsert_frozen_chunks requires a non-empty chunk list")
+        if self._bm25 is None or not self._bm25._frozen:
+            raise ValueError("upsert_frozen_chunks requires a frozen BM25 tokenizer")
+        for chunk in chunks_list:
+            if not chunk.content_hash:
+                raise ValueError(f"chunk {chunk.chunk_id!r} has empty content_hash")
+            if not chunk.index_generation:
+                raise ValueError(f"chunk {chunk.chunk_id!r} has empty index_generation")
+
+        if self._client is None:
+            raise VectorStoreError("Qdrant client not initialized")
+
+        for i in range(0, len(chunks_list), _sub_batch_size):
+            sub_chunks = chunks_list[i : i + _sub_batch_size]
+            sub_embeddings = vectors_list[i : i + _sub_batch_size]
+            ids = [self._chunk_id_to_uuid(chunk.chunk_id) for chunk in sub_chunks]
+            vectors_dict = {
+                "dense": [list(e) for e in sub_embeddings],
+                "sparse": [self._bm25.tokenize_query(c.text) for c in sub_chunks],
+            }
+            payloads = [self._chunk_to_payload(chunk) for chunk in sub_chunks]
+            await self._client.upsert(
+                collection_name=self._collection_name,
+                points=models.Batch(ids=[str(i) for i in ids], vectors=vectors_dict, payloads=payloads),  # type: ignore[arg-type]
+            )
+
+    async def validate_index_generation(self, expected_points: int | None = None) -> dict[str, object]:
+        """Validate a built generation's Qdrant state and BM25 readiness.
+
+        When ``expected_points`` is provided, the point count must match exactly.
+        Raises ``VectorStoreError`` when required invariants fail.
+        """
+        if self._client is None:
+            raise VectorStoreError("Qdrant client not initialized")
+        collection_info = await self._client.get_collection(collection_name=self._collection_name)
+        point_count = collection_info.points_count or 0
+        config = collection_info.config
+        params = config.params
+        sparse_configured = bool(getattr(params, "sparse_vectors", None))
+        bm25_ready = bool(self._bm25 is not None and self._bm25._frozen)
+
+        report: dict[str, object] = {
+            "collection": self._collection_name,
+            "point_count": point_count,
+            "sparse_configured": sparse_configured,
+            "bm25_ready": bm25_ready,
+            "expected_points": expected_points,
+        }
+        if sparse_configured and not bm25_ready:
+            raise VectorStoreError("Sparse vectors configured but BM25 tokenizer is not ready")
+        if expected_points is not None and point_count != expected_points:
+            raise VectorStoreError(f"Point count mismatch: expected {expected_points}, got {point_count}")
+        report["passed"] = True
+        return report
+
     async def get_content_hash_for_url(self, url: str) -> str | None:
         """Retrieve stored content_hash for a given URL asynchronously."""
         if self._client is None:
@@ -520,6 +746,41 @@ class AsyncQdrantVectorStore:
         except Exception as exc:
             logger.warning("Failed to scroll URLs for source=%s: %s", source_name, exc)
             return []
+
+    async def verify_payload_texts(self, expected: dict[str, str]) -> list[str]:
+        """Compare stored Qdrant payload text to ``expected`` by chunk_id.
+
+        Returns a list of mismatches (empty when every point's payload text
+        equals the expected text). This proves the persisted/embedded text is
+        exactly what was indexed (no truncation, no drift).
+        """
+        if self._client is None:
+            return ["Qdrant client not initialized"]
+        mismatches: list[str] = []
+        next_offset = None
+        while True:
+            points, next_offset = await self._client.scroll(
+                collection_name=self._collection_name,
+                limit=100,
+                offset=next_offset,
+                with_payload=["chunk_id", "text"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                chunk_id = payload.get("chunk_id")
+                stored_text = payload.get("text")
+                expected_text = expected.get(chunk_id) if isinstance(chunk_id, str) else None
+                if expected_text is None:
+                    mismatches.append(f"Qdrant point {point.id!r} has unexpected chunk_id {chunk_id!r}")
+                elif stored_text != expected_text:
+                    mismatches.append(
+                        f"chunk_id {chunk_id!r} payload text differs from persisted chunks.jsonl text "
+                        f"({len(stored_text or '')} chars stored vs {len(expected_text)} chars expected)"
+                    )
+            if next_offset is None or next_offset == "":
+                break
+        return mismatches
 
     async def count(self) -> int:
         """Return the number of points stored in the collection asynchronously."""
