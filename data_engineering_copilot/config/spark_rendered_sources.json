@@ -1,0 +1,94 @@
+{
+  "name": "Apache Spark 4.0.0",
+  "repository": "https://github.com/apache/spark.git",
+  "ref": "v4.0.0",
+  "commit": "fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4",
+  "license": "Apache-2.0",
+  "builds": [
+    {
+      "name": "jekyll_docs",
+      "doc_type": "guide",
+      "language": "conceptual",
+      "working_dir": "docs",
+      "command": [
+        "bundle",
+        "exec",
+        "jekyll",
+        "build",
+        "--destination",
+        "{output}"
+      ],
+      "env": {
+        "SKIP_API": "1",
+        "SKIP_ERRORDOC": "1"
+      },
+      "output_root": "{output}",
+      "include": ["**/*.html"],
+      "exclude": ["index.html", "404.html", "streaming/index.html"],
+      "content_root_selector": "div#content",
+      "excluded_selectors": [
+        ".left-menu-wrapper",
+        ".left-menu",
+        "#markdown-toc",
+        ".breadcrumb",
+        ".search",
+        ".nav-links",
+        ".toc"
+      ],
+      "canonical_url": "https://spark.apache.org/docs/4.0.0/{relpath}",
+      "renderer": "jekyll"
+    },
+    {
+      "name": "pyspark_api",
+      "doc_type": "api_reference",
+      "language": "python",
+      "working_dir": "python/docs",
+      "command": [
+        "{python}",
+        "-m",
+        "sphinx",
+        "-b",
+        "html",
+        "source",
+        "{output}",
+        "-j",
+        "4"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/python"
+      },
+      "output_root": "{output}",
+      "include": [
+        "reference/**/*.html",
+        "getting_started/**/*.html",
+        "user_guide/**/*.html",
+        "development/**/*.html",
+        "migration_guide/**/*.html",
+        "tutorial/**/*.html"
+      ],
+      "exclude": [
+        "reference/index.html",
+        "**/_modules/**",
+        "**/_sources/**",
+        "**/_static/**",
+        "**/_images/**",
+        "**/search.html",
+        "**/genindex.html",
+        "**/py-modindex.html"
+      ],
+      "content_root_selector": "main",
+      "excluded_selectors": [
+        ".bd-breadcrumbs",
+        ".prev-next-bottom",
+        ".headerlink",
+        ".related-topics",
+        ".sphx-glr-footer",
+        ".sidebar-toggle",
+        ".scrollspy-sidebar",
+        "#searchbox"
+      ],
+      "canonical_url": "https://spark.apache.org/docs/4.0.0/api/python/{relpath}",
+      "renderer": "sphinx"
+    }
+  ]
+}

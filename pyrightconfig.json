@@ -11,7 +11,8 @@
         "**/node_modules",
         "**/__pycache__",
         "**/.*",
-        "**/__pycache__"
+        "**/__pycache__",
+        "tests/fixtures/spark_v4_fixture"
     ],
     "useLibraryCodeForTypes": true,
     "reportMissingTypeStubs": false,
