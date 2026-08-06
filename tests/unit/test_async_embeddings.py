@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -178,3 +180,43 @@ def test_slice_texts_into_batches_empty(async_embeddings):
 def test_slice_texts_invalid_batch_size(async_embeddings):
     with pytest.raises(ValueError, match="batch_size must be positive"):
         async_embeddings._slice_texts_into_batches(["text"], batch_size=0)
+
+
+def test_client_is_recreated_across_event_loops():
+    """Regression: a cached httpx client bound to a closed event loop must not
+    be reused. RAGAS evaluates metrics in worker threads, each bridge call
+    running its own ``asyncio.run`` loop, so a provider reused across calls
+    must recreate its client (the old one is bound to a dead loop).
+
+    Uses the production ``OpenAICompatibleEmbeddings`` client (the adaptive
+    multi-provider fallback chain used for NVIDIA/OpenRouter) rather than the
+    local-Ollama embedder."""
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+        OpenAICompatibleEmbeddings,
+    )
+
+    embedder = OpenAICompatibleEmbeddings(
+        api_key="test-key",
+        model_name="nvidia/nemotron-3-embed-1b",
+        base_url="http://localhost:1",
+    )
+
+    async def embed() -> list[float]:
+        return await embedder.embed_query("first loop")
+
+    with respx.mock:
+        respx.post("http://localhost:1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"object": "embedding", "index": 0, "embedding": [0.1] * 2048}]},
+            )
+        )
+
+        asyncio.run(embed())
+        first_client = embedder._client
+        asyncio.run(embed())
+        second_client = embedder._client
+
+    # The loop-bound guard must have recreated the client for the fresh loop
+    # (on the unfixed code the same client object is reused across loops).
+    assert first_client is not second_client

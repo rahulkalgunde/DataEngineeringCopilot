@@ -278,6 +278,7 @@ class LLMClient(SafeAsyncClientMixin):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+            self._client_loop = None
 
     async def generate_stream(
         self,
