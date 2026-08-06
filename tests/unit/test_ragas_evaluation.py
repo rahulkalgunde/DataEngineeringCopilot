@@ -592,3 +592,53 @@ class TestAdaptiveRagasEmbeddings:
         query_vec, doc_vecs = asyncio.run(_run())
         assert query_vec == [1.0] * 2048
         assert doc_vecs[0] == [1.0] * 2048
+
+    def test_sync_embed_works_across_fresh_event_loops(self):
+        """Regression: RAGAS calls the sync ``embed_query``/``embed_documents``
+        from inside its own per-call event loops. Each sync call bridges via a
+        fresh ``asyncio.run`` loop, so the underlying httpx provider must not
+        reuse a client bound to a closed loop. Uses the production
+        ``OpenAICompatibleEmbeddings`` client (the adaptive multi-provider
+        fallback chain used for NVIDIA/OpenRouter)."""
+        import httpx
+        import respx
+
+        from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+            OpenAICompatibleEmbeddings,
+        )
+        from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
+
+        nvidia = OpenAICompatibleEmbeddings(
+            api_key="test-key",
+            model_name="nvidia/nemotron-3-embed-1b",
+            base_url="http://localhost:2",
+        )
+        mock_health = MagicMock()
+        mock_health.get_provider_health.return_value = None
+        mock_health.get_model_health.return_value = None
+        chain = ProviderFallbackChain(
+            FallbackChainConfig(providers=[ProviderConfig("nvidia", nvidia)]),
+            mock_health,
+        )
+        embeddings = AdaptiveRagasEmbeddings(chain)
+
+        with respx.mock:
+            respx.post("http://localhost:2/embeddings").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"data": [{"object": "embedding", "index": 0, "embedding": [0.1] * 2048}]},
+                )
+            )
+            # Each call bridges via its own event loop — the httpx client
+            # created in the first loop dies with it.
+            first = embeddings.embed_query("q")
+            first_client = nvidia._client
+            second = embeddings.embed_query("q2")
+            second_client = nvidia._client
+
+        assert first == [0.1] * 2048
+        assert second == [0.1] * 2048
+        # The loop-bound guard must have recreated the client for the fresh
+        # loop (on the unfixed code the same client object is reused).
+        assert first_client is not None
+        assert first_client is not second_client

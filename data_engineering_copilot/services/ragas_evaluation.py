@@ -17,6 +17,10 @@ Compatibility notes:
   NVIDIA → OpenRouter with local Ollama only as a key-less degraded fallback.
   Both external embedding models default to ``nvidia/nemotron-3-embed-1b``
   (2048-dim), so failover keeps cosine similarity valid.
+- Importing ragas is only safe *through this wrapper* (or ``ragas_adapters.py``),
+  which installs the vertexai shim first. A bare ``import ragas`` in a fresh
+  process raises ``ModuleNotFoundError`` for the missing vertexai module — do
+  not import ragas directly outside these modules.
 """
 
 from __future__ import annotations
@@ -241,6 +245,7 @@ class RagasEvaluator:
             try:
                 scores = result[key]
             except KeyError:
+                logger.warning("RAGAS metric %r did not run — scoring 0.0", key)
                 return 0.0
             return float(sum(scores) / len(scores)) if scores else 0.0
 
