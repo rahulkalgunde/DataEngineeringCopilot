@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from data_engineering_copilot.domain.models import RetrievalFilters
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,62 @@ class RewrittenQuery:
     intent: str
     decomposed_steps: tuple[str, ...]
     hyde_query: str = ""
+    filters: RetrievalFilters = field(default_factory=lambda: RetrievalFilters())
+
+
+# Deterministic exact API/module identifier extraction for retrieval.
+_DOTTED_IDENTIFIER_RE = re.compile(r"\b(pyspark(?:\.\w+)+)\b")
+_VERSION_RE = re.compile(r"\b(?:spark\s*)?v?(\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
+# Known Spark function terms mapped to a module preference (not a hard filter).
+_MODULE_TERMS: dict[str, tuple[str, ...]] = {
+    "filter": ("pyspark.sql.functions", "pyspark.sql"),
+    "transform": ("pyspark.sql.functions",),
+    "aggregate": ("pyspark.sql.functions",),
+    "window": ("pyspark.sql.window", "pyspark.sql"),
+    "dense_rank": ("pyspark.sql.functions",),
+    "row_number": ("pyspark.sql.functions",),
+    "col": ("pyspark.sql.functions",),
+}
+
+
+def extract_retrieval_constraints(query: str) -> RetrievalFilters:
+    """Extract deterministic retrieval constraints from a query.
+
+    Exact dotted PySpark identifiers (e.g. ``pyspark.sql.functions.filter``)
+    become hard ``modules`` filters. Known function terms (e.g. ``dense_rank``)
+    map to ``preferred_modules`` soft preferences — never hard filters — so
+    guide/example chunks without a module remain retrievable. A mutable
+    ``latest`` version is never inferred as a release.
+    """
+    languages: tuple[str, ...] = ()
+    modules: tuple[str, ...] = ()
+    preferred_modules: tuple[str, ...] = ()
+    versions: tuple[str, ...] = ()
+
+    for match in _DOTTED_IDENTIFIER_RE.finditer(query):
+        modules = modules + (match.group(1).lower(),)
+
+    lower = query.lower()
+    for term, pref in _MODULE_TERMS.items():
+        if term in lower:
+            preferred_modules = preferred_modules + pref
+
+    for match in _VERSION_RE.finditer(query):
+        version = match.group(1)
+        if "latest" not in lower:
+            versions = versions + (version,)
+
+    # De-duplicate while preserving order.
+    modules = tuple(dict.fromkeys(modules))
+    preferred_modules = tuple(dict.fromkeys(preferred_modules))
+    versions = tuple(dict.fromkeys(versions))
+
+    return RetrievalFilters(
+        languages=languages,
+        modules=modules,
+        preferred_modules=preferred_modules,
+        versions=versions,
+    )
 
 
 class QueryRewriter:
@@ -190,6 +247,7 @@ class QueryRewriter:
                 intent="factual",
                 decomposed_steps=(query,),
                 hyde_query="",
+                filters=extract_retrieval_constraints(query),
             )
 
         intent = self.classify_intent(query)
@@ -201,6 +259,7 @@ class QueryRewriter:
             intent=intent,
             decomposed_steps=steps,
             hyde_query=hyde,
+            filters=extract_retrieval_constraints(query),
         )
 
     async def async_rewrite(self, query: str) -> RewrittenQuery:
@@ -228,6 +287,7 @@ class QueryRewriter:
                 intent=intent,
                 decomposed_steps=(rewritten,),
                 hyde_query=hyde,
+                filters=extract_retrieval_constraints(query),
             )
         except Exception as exc:
             logger.warning("LLM rewrite failed, falling back to rule-based: %s", exc)
@@ -282,11 +342,16 @@ class QueryRewriter:
     async def expand_queries(self, query: str, max_variations: int = 3) -> list[str]:
         """Generate multiple query variations for improved recall.
 
-        Uses the LLM to generate paraphrases and related queries.
-        Falls back to original query on failure.
+        Uses the LLM to generate paraphrases and related queries, then appends
+        deterministic Spark SQL retrieval variants when the query contains
+        window/rank or array/struct indicators so the exact indexed doc terms
+        (``PARTITION BY``, ``RANGE BETWEEN``, ``dense_rank``, ``filter``,
+        ``transform``, ``aggregate``) are always represented. Falls back to the
+        original query on failure.
         """
+        base = [query]
         if not self._enabled or self._llm_client is None:
-            return [query]
+            return base
 
         prompt = (
             f"Generate {max_variations} different search queries that would find "
@@ -298,10 +363,54 @@ class QueryRewriter:
         try:
             result = await self._llm_client.generate(prompt)
             variations = [q.strip() for q in result.strip().split("\n") if q.strip()]
-            return [query] + variations[:max_variations]
+            base = [query] + variations[:max_variations]
         except Exception as exc:
             logger.warning("Query expansion failed, using original: %s", exc)
-            return [query]
+            base = [query]
+
+        # Deterministic Spark-specific variants using terms present in the
+        # indexed Spark source docs.
+        spark_variants = self._spark_retrieval_variants(query)
+        merged = list(base)
+        for variant in spark_variants:
+            if variant not in merged:
+                merged.append(variant)
+        return merged
+
+    @staticmethod
+    def _spark_retrieval_variants(query: str) -> list[str]:
+        """Return Spark SQL retrieval queries derived from window/array indicators.
+
+        Detects window/ranking intent (rolling, window, dense_rank, rank,
+        partition, order) and array/struct intent (array, struct, nested,
+        filter, transform, aggregate) and returns queries phrased with the
+        exact terms used in the indexed Spark docs.
+        """
+        lower = query.lower()
+        variants: list[str] = []
+
+        if any(k in lower for k in ("rolling", "window", "dense_rank", "rank", "partition", "over (")):
+            variants.extend(
+                [
+                    "Spark SQL window functions syntax PARTITION BY ORDER BY RANGE BETWEEN",
+                    "PySpark Window partitionBy orderBy dense_rank rangeBetween sum",
+                    "window functions examples dense_rank RANK ROW_NUMBER OVER PARTITION BY",
+                ]
+            )
+
+        if any(k in lower for k in ("array", "struct", "nested", "explode", "flatten")):
+            variants.extend(
+                [
+                    "Spark SQL array functions filter transform aggregate",
+                    "PySpark filter transform aggregate ArrayType StructType nested",
+                ]
+            )
+            if "filter" in lower or "discount" in lower:
+                variants.append("filter elements of array of structs without explode")
+            if "aggregate" in lower or "sum" in lower or "net" in lower:
+                variants.append("aggregate array of structs sum price discount net_total")
+
+        return list(dict.fromkeys(variants))
 
     # --- private helpers ---
 

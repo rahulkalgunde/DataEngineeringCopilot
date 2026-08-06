@@ -46,6 +46,8 @@ class InMemoryVectorStore(VectorStoreProtocol):
         query_text: str | None = None,
         source_filter: list[str] | None = None,
         chunk_type_filter: str | None = None,
+        metadata_filters: object | None = None,
+        fused_limit: int | None = None,
     ) -> list[RetrievedChunk]:
         scored: list[tuple[float, DocumentChunk]] = []
         for chunk_id, vector in self._vectors.items():
@@ -53,6 +55,8 @@ class InMemoryVectorStore(VectorStoreProtocol):
             if source_filter and chunk.source_name not in source_filter:
                 continue
             if chunk_type_filter and chunk.chunk_type != chunk_type_filter:
+                continue
+            if metadata_filters is not None and not _matches_metadata(chunk, metadata_filters):
                 continue
             scored.append((_cosine(query_embedding, vector), chunk))
         scored.sort(key=lambda pair: pair[0], reverse=True)
@@ -88,3 +92,27 @@ class InMemoryVectorStore(VectorStoreProtocol):
 
     async def close(self) -> None:
         self._closed = True
+
+
+def _matches_metadata(chunk: DocumentChunk, filters: object) -> bool:
+    """Apply structured metadata filters to an in-memory chunk.
+
+    Mirrors AsyncQdrantVectorStore._build_query_filter semantics: each non-empty
+    tuple is an OR match (MatchAny) on the corresponding chunk field, and all
+    non-empty tuples must match (AND).
+    """
+    from data_engineering_copilot.domain.models import RetrievalFilters
+
+    if not isinstance(filters, RetrievalFilters):
+        return True
+    if filters.source_names and chunk.source_name not in filters.source_names:
+        return False
+    if filters.doc_types and chunk.doc_type not in filters.doc_types:
+        return False
+    if filters.languages and chunk.language not in filters.languages:
+        return False
+    if filters.versions and chunk.spark_version not in filters.versions:
+        return False
+    if filters.modules and chunk.module not in filters.modules:
+        return False
+    return not (filters.chunk_types and chunk.chunk_type not in filters.chunk_types)

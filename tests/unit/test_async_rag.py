@@ -166,12 +166,20 @@ class TestAsyncRagService:
 
     @pytest.mark.asyncio
     async def test_answer_returns_cached_on_hit(self, mock_embedder, mock_vector_store, mock_llm, config):
-        from data_engineering_copilot.domain.models import CachedAnswer
+        from data_engineering_copilot.domain.models import CachedAnswer, DocumentChunk
         from data_engineering_copilot.services.async_rag import AsyncRagService
         from data_engineering_copilot.services.query_cache import QueryCache
 
         cache = QueryCache(exact_enabled=True, semantic_enabled=False)
-        cache.set_exact("what is spark", CachedAnswer(text="cached answer", confidence=0.9))
+        source = DocumentChunk(
+            chunk_id="c1",
+            source_name="test",
+            title="Test",
+            url="http://test.com",
+            text="test content",
+            doc_type="guide",
+        )
+        cache.set_exact("what is spark", CachedAnswer(text="cached answer", sources=(source,), confidence=0.9))
 
         service = AsyncRagService(
             config=config,

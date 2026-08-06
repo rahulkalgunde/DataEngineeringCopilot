@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
-from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig
+from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig, RetrievedChunk
 from data_engineering_copilot.domain.protocols import (
     EmbedderProtocol,
     LLMClientProtocol,
@@ -29,7 +29,54 @@ from data_engineering_copilot.services.query_cache import QueryCache as TwoTierC
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
+
+def merge_retrieval_results(
+    results: list[list[RetrievedChunk]],
+    original_query: str,
+) -> list[RetrievedChunk]:
+    """Merge per-query retrieval results using rank fusion plus an original-query bonus.
+
+    Each result list is ranked in retrieval order. Chunks are scored by the sum
+    of ``1 / (rank + 3)`` across all queries that retrieved them. Chunks that
+    match the original query (retrieved by the original query variant) receive
+    an extra bonus. Chunks whose text defines a Spark function named in the
+    query (e.g. ``def filter(``) receive an additional lexical bonus so the
+    real docstring implementation surfaces above unrelated function-family
+    chunks (e.g. ``inline``, ``array_*``). Returns chunks sorted by fused score
+    descending.
+    """
+    scores: dict[str, float] = {}
+    chunk_by_id: dict[str, RetrievedChunk] = {}
+    for query_index, result_list in enumerate(results):
+        for rank, result in enumerate(result_list):
+            cid = result.chunk.chunk_id
+            chunk_by_id[cid] = result
+            score = 1.0 / (rank + 3.0)
+            # Original-query bonus for the first result set.
+            if query_index == 0:
+                score += 0.5
+            scores[cid] = scores.get(cid, 0.0) + score
+
+    merged = sorted(chunk_by_id.values(), key=lambda c: -scores.get(c.chunk.chunk_id, 0.0))
+    return merged
+
+
 logger = logging.getLogger(__name__)
+
+PROVENANCE_SCHEMA_VERSION = "1"
+
+
+def _chunk_provenance_ref(result: RetrievedChunk, rank: int) -> dict[str, object]:
+    """Compact, JSON-safe per-candidate reference for retrieval provenance."""
+    return {
+        "rank": rank,
+        "chunk_id": result.chunk.chunk_id,
+        "url": result.chunk.url,
+        "source_name": result.chunk.source_name,
+        "distance": result.distance,
+        "confidence": result.confidence,
+    }
+
 
 _PII_PATTERNS = [
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"), "[EMAIL]"),
@@ -48,6 +95,18 @@ def _scrub_pii(text: str) -> str:
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
+
+
+def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
+    """Candidate pool handed to the cross-encoder reranker.
+
+    The pool is intentionally wider than ``retrieval_top_k`` so that URLs that
+    just miss the dense/sparse cutoff can still be rescued by reranking. The
+    ``* 8`` multiplier keeps the pool large enough for the fused rank of a
+    relevant-but-poorly-scored document (observed at rank ~175) to remain
+    inside the pool without running the cross-encoder over the whole corpus.
+    """
+    return max(retrieval_top_k * 8, reranker_top_k * 5)
 
 
 class AsyncRagService:
@@ -96,6 +155,8 @@ class AsyncRagService:
         cache_scope: CacheScope | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
+        provenance: list[dict] | None = None,
+        bypass_cache: bool = False,
     ) -> Answer:
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
@@ -103,13 +164,46 @@ class AsyncRagService:
         def _record_stage(name: str) -> None:
             _stage_times[name] = round((time.monotonic() - _t0) * 1000, 1)
 
+        # Opt-in retrieval provenance capture (used by evaluation). Production
+        # callers pass nothing and are unaffected.
+        effective_query = question
+        _prov_cache_hit = False
+        _prov_variants: list[dict[str, object]] = []
+        _prov_fused: list[dict[str, object]] = []
+        _prov_rerank: dict[str, object] | None = None
+        _prov_final: list[dict[str, object]] = []
+        _prov_dropped: list[dict[str, object]] = []
+        _prov_pool = 0
+
+        def _emit_provenance() -> None:
+            if provenance is None:
+                return
+            provenance.append(
+                {
+                    "schema_version": PROVENANCE_SCHEMA_VERSION,
+                    "question": question,
+                    "effective_query": effective_query,
+                    "cache_hit": _prov_cache_hit,
+                    "query_variants": _prov_variants,
+                    "fused": _prov_fused,
+                    "rerank": _prov_rerank,
+                    "final_context": _prov_final,
+                    "dropped": _prov_dropped,
+                    "candidate_pool_size": _prov_pool,
+                    "stage_times": dict(_stage_times),
+                }
+            )
+
         query_emb_for_cache: list[float] | None = None
-        if self.cache is not None:
+        cache_active = self.cache is not None and self.config.cache_enabled and not bypass_cache
+        if cache_active and self.cache is not None:
             # Exact tier first — no embedding round-trip on an exact hit.
             cached = await self.cache.aget(question, scope=cache_scope)
             if cached is not None:
                 logger.info("cache_hit question=%r", question[:80])
                 _record_stage("cache_lookup")
+                _prov_cache_hit = True
+                _emit_provenance()
                 return Answer(
                     text=cached.text,
                     sources=cached.sources,
@@ -124,6 +218,8 @@ class AsyncRagService:
             if cached is not None:
                 logger.info("cache_hit_semantic question=%r", question[:80])
                 _record_stage("cache_lookup")
+                _prov_cache_hit = True
+                _emit_provenance()
                 return Answer(
                     text=cached.text,
                     sources=cached.sources,
@@ -148,7 +244,6 @@ class AsyncRagService:
         # Phase 2A: Query rewriting — collect all queries for multi-step retrieval
         rewritten = None
         all_queries: list[str] = [question]  # Always include original
-        effective_query = question
 
         rewrite_span = None
         if trace:
@@ -201,11 +296,8 @@ class AsyncRagService:
         if rewritten is not None and rewritten.intent == "api_lookup":
             chunk_type_filter = "api"
 
-        # Embed the HyDE hypothesis once and reuse the vector across all sub-queries,
-        # instead of regenerating the hypothetical text via the LLM for every query.
-        hyde_emb = None
-        if self.query_rewriter is not None and rewritten is not None and rewritten.hyde_query:
-            hyde_emb = await self.embedder.embed_query(rewritten.hyde_query)
+        # Structured metadata filters extracted during rewriting.
+        metadata_filters = rewritten.filters if rewritten is not None else None
 
         # Retrieve with all query variations and merge results
         all_retrieved: list = []
@@ -213,17 +305,61 @@ class AsyncRagService:
         any_success = False
         last_error: Exception | None = None
         try:
-            for q in all_queries:
+            # Collect per-query result sets for rank fusion; the original query
+            # is always first so it receives the fusion bonus.
+            per_query_results: list[list[RetrievedChunk]] = []
+            queries_to_run = list(all_queries)
+            if rewritten is not None and rewritten.hyde_query:
+                queries_to_run.append(rewritten.hyde_query)
+
+            # Human-readable labels for provenance diagnostics (original query,
+            # decomposed steps, HyDE variant, or rewrite expansions).
+            decomposed_count = len(rewritten.decomposed_steps) if rewritten is not None else 0
+            variant_labels: list[str] = []
+            for i in range(len(queries_to_run)):
+                if i == 0:
+                    variant_labels.append("original")
+                elif i <= decomposed_count:
+                    variant_labels.append("decomposed")
+                elif rewritten is not None and rewritten.hyde_query and i == len(queries_to_run) - 1:
+                    variant_labels.append("hyde")
+                else:
+                    variant_labels.append("expanded")
+
+            for i, q in enumerate(queries_to_run):
                 try:
-                    q_emb = hyde_emb if hyde_emb is not None else await self.embedder.embed_query(q)
+                    # Embed every query separately; HyDE is an additional query,
+                    # not a replacement for the real query embeddings.
+                    q_emb = await self.embedder.embed_query(q)
                     results = await self.vector_store.query(
                         q_emb,
                         top_k=self.config.retrieval_top_k,
                         query_text=q,
                         source_filter=source_filter,
                         chunk_type_filter=chunk_type_filter,
+                        metadata_filters=metadata_filters,
+                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
                     )
+                    # Unfiltered fallback: if metadata filters removed everything,
+                    # retry once without inferred filters.
+                    if not results and metadata_filters is not None and not metadata_filters.is_empty:
+                        results = await self.vector_store.query(
+                            q_emb,
+                            top_k=self.config.retrieval_top_k,
+                            query_text=q,
+                            source_filter=source_filter,
+                            chunk_type_filter=chunk_type_filter,
+                            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                        )
                     any_success = True
+                    per_query_results.append(results)
+                    _prov_variants.append(
+                        {
+                            "variant": variant_labels[i],
+                            "query": q,
+                            "retrieved": [_chunk_provenance_ref(r, rank) for rank, r in enumerate(results)],
+                        }
+                    )
                     for r in results:
                         cid = r.chunk.chunk_id
                         if cid not in seen_ids:
@@ -236,8 +372,13 @@ class AsyncRagService:
             if not any_success and last_error is not None:
                 raise RetrievalError(f"Vector store query failed: {last_error}") from last_error
 
-            # Sort merged results by confidence
-            retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
+            # Rank-fusion merge with original-query bonus.
+            if per_query_results:
+                retrieved_chunks = merge_retrieval_results(per_query_results, question)
+            else:
+                retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
+            _prov_pool = len(retrieved_chunks)
+            _prov_fused = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(retrieved_chunks)]
 
             if retrieval_span:
                 retrieval_span.update(
@@ -271,6 +412,7 @@ class AsyncRagService:
             if trace:
                 trace.update(output="No chunks retrieved")
                 trace.end()
+            _emit_provenance()
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
@@ -283,6 +425,7 @@ class AsyncRagService:
                     output=f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {self.config.confidence_threshold:.4f}"
                 )
                 trace.end()
+            _emit_provenance()
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),
@@ -299,6 +442,7 @@ class AsyncRagService:
                 if trace:
                     trace.update(output="All chunks rejected by input guardrails")
                     trace.end()
+                _emit_provenance()
                 return Answer(
                     text="I cannot answer this question because it is outside my knowledge repository.",
                     sources=tuple(),
@@ -320,21 +464,46 @@ class AsyncRagService:
             if trace:
                 rerank_span = trace.start_observation(name="reranking", as_type="span")
 
+            pre_rerank_count = len(retrieved_chunks)
+            reranker = self.reranker
+            rerank_used = False
             if (
                 self.config.reranker_enabled
-                and self.reranker is not None
-                and self.reranker.is_available()
-                and len(retrieved_chunks) > 1
+                and reranker is not None
+                and reranker.is_available()
+                and pre_rerank_count > 1
             ):
-                retrieved_chunks = await self.reranker.rerank(
-                    effective_query, retrieved_chunks, top_k=self.config.reranker_top_k
+                rerank_used = True
+                # Rerank a broad candidate pool against the original question.
+                # Multi-query retrieval and dense+sparse fusion generate recall;
+                # the cross-encoder is the single generic relevance decision.
+                rerank_pool = min(
+                    pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
                 )
+                # Use the concise retrieval rewrite for pair scoring. The
+                # original question remains the generation prompt, while the
+                # rewrite removes conversational detail that can obscure the
+                # technical terms in code and API documentation.
+                rerank_query = effective_query.strip() or question
+                retrieved_chunks = await reranker.rerank(rerank_query, retrieved_chunks, top_k=rerank_pool)
 
-            # MMR diversity reranking — ensures diverse context
-            if len(retrieved_chunks) > 3 and self.reranker is not None:
-                retrieved_chunks = self.reranker.diversify_by_lexical_content(
-                    retrieved_chunks, top_k=self.config.reranker_top_k
-                )
+            _prov_rerank = {
+                "enabled": rerank_used,
+                "query": effective_query.strip() or question,
+                "pool_size": pre_rerank_count,
+                "top_k": (
+                    min(pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k))
+                    if rerank_used
+                    else None
+                ),
+                "final_top_k": self.config.reranker_top_k,
+            }
+
+            # The reranker already returns the final relevance ordering. Do not
+            # apply a second diversity objective here: lexical MMR can discard
+            # complementary evidence needed to answer multi-part questions.
+            if len(retrieved_chunks) > self.config.reranker_top_k:
+                retrieved_chunks = retrieved_chunks[: self.config.reranker_top_k]
 
             # Phase 2D: Context compression (dedup + relevance re-ranking) — runs after reranking
             # to avoid wasted work (compressed results were previously discarded by re-fetch)
@@ -351,10 +520,17 @@ class AsyncRagService:
                 rerank_span.end()
 
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
-            context_str, source_names = assembler.assemble(
+            context_str, source_names, dropped_records = assembler.assemble(
                 retrieved_chunks,
                 deduplicate=self.context_compressor is None,
             )
+            _prov_dropped = dropped_records
+            # The final context reflects only the segments actually placed in
+            # the prompt; budget-dropped segments must not be claimed as
+            # retrieved into the final context.
+            _prov_dropped_ids = {record["chunk_id"] for record in dropped_records}
+            _final_chunks = [c for c in retrieved_chunks if c.chunk.chunk_id not in _prov_dropped_ids]
+            _prov_final = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(_final_chunks)]
 
             if on_step:
                 on_step("Generating answer")
@@ -495,10 +671,11 @@ class AsyncRagService:
                     logger.warning("Telemetry flush failed, ignoring", exc_info=True)
 
             _record_stage("total")
+            _emit_provenance()
             trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None) if trace else None
             result = Answer(
                 text=answer_text,
-                sources=tuple(c.chunk for c in retrieved_chunks),
+                sources=tuple(c.chunk for c in _final_chunks),
                 confidence=retrieved_chunks[0].confidence,
                 stage_times=_stage_times,
                 trace_id=trace_id,
@@ -604,8 +781,10 @@ class AsyncRagService:
                 except Exception as exc:
                     logger.warning("Failed to record Langfuse scores: %s", exc)
 
-            # Phase 2C: Cache the result (exact + semantic tiers)
-            if self.cache is not None:
+            # Phase 2C: Cache the result (exact + semantic tiers). Only cache
+            # answers that pass the quality gate; the QueryCache also enforces
+            # this at the set level (defense-in-depth).
+            if cache_active and self.cache is not None:
                 envelope = CachedAnswer(
                     text=result.text,
                     sources=result.sources,
@@ -613,9 +792,10 @@ class AsyncRagService:
                     groundedness_score=result.groundedness_score,
                     cached_at=time.time(),
                 )
-                await self.cache.aset_exact(question, envelope, scope=cache_scope)
-                if query_emb_for_cache is not None:
-                    await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)
+                if self.cache.is_cacheable(envelope):
+                    await self.cache.aset_exact(question, envelope, scope=cache_scope)
+                    if query_emb_for_cache is not None:
+                        await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)
 
             # Log cache hit rate for observability
             if self.cache is not None:
@@ -732,6 +912,7 @@ class AsyncRagService:
             top_k=top_k,
             query_text=effective_query,
             source_filter=source_filter,
+            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
         )
         if retrieval_span:
             retrieval_span.update(
@@ -769,7 +950,7 @@ class AsyncRagService:
         # Context assembly
         sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
         assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
-        context_str, _source_names = assembler.assemble(sorted_chunks)
+        context_str, _source_names, _dropped_records = assembler.assemble(sorted_chunks)
 
         # Build prompt
         prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)

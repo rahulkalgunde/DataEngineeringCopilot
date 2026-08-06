@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 
@@ -34,7 +36,7 @@ class TestContextAssembler:
 
     def test_assemble_empty_chunks(self):
         assembler = ContextAssembler(max_context_chars=1000)
-        context, sources = assembler.assemble([])
+        context, sources, _dropped = assembler.assemble([])
         assert context == ""
         assert sources == []
 
@@ -43,7 +45,7 @@ class TestContextAssembler:
         chunk = create_test_chunk("chunk1", "This is a single test chunk.")
         retrieved = create_retrieved_chunk(chunk)
 
-        context, sources = assembler.assemble([retrieved])
+        context, sources, _dropped = assembler.assemble([retrieved])
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
@@ -62,7 +64,7 @@ class TestContextAssembler:
         retrieved2 = create_retrieved_chunk(chunk2)
         retrieved3 = create_retrieved_chunk(chunk3)
 
-        context, sources = assembler.assemble([retrieved1, retrieved2, retrieved3])
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2, retrieved3])
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
@@ -83,7 +85,7 @@ class TestContextAssembler:
         retrieved1 = create_retrieved_chunk(chunk1)
         retrieved2 = create_retrieved_chunk(chunk2)
 
-        context, sources = assembler.assemble([retrieved1, retrieved2])
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2])
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
@@ -222,7 +224,7 @@ class TestContextAssembler:
         retrieved1 = create_retrieved_chunk(chunk1)
         retrieved2 = create_retrieved_chunk(chunk2)
 
-        context, sources = assembler.assemble([retrieved1, retrieved2])
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2])
 
         assert len(context) <= 130
         assert sources == ["test_source"]
@@ -235,7 +237,7 @@ class TestContextAssembler:
         retrieved1 = create_retrieved_chunk(chunk1)
         retrieved2 = create_retrieved_chunk(chunk2)
 
-        context, sources = assembler.assemble([retrieved1, retrieved2])
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2])
 
         assert len(context) <= 100
         assert "Short" in context
@@ -251,7 +253,7 @@ class TestContextAssembler:
         retrieved3 = create_retrieved_chunk(chunk3)
 
         with patch("data_engineering_copilot.services.context_assembler.logger") as mock_logger:
-            context, sources = assembler.assemble([retrieved1, retrieved2, retrieved3])
+            context, sources, _dropped = assembler.assemble([retrieved1, retrieved2, retrieved3])
 
             assert mock_logger.info.called
 
@@ -264,7 +266,7 @@ class TestContextAssembler:
         retrieved2 = create_retrieved_chunk(chunk2)
 
         with patch("data_engineering_copilot.services.context_assembler.logger") as mock_logger:
-            context, sources = assembler.assemble([retrieved1, retrieved2])
+            context, sources, _dropped = assembler.assemble([retrieved1, retrieved2])
 
             assert mock_logger.info.called
 
@@ -278,9 +280,64 @@ class TestContextAssembler:
         retrieved2 = create_retrieved_chunk(chunk2)
         retrieved3 = create_retrieved_chunk(chunk3)
 
-        context, sources = assembler.assemble([retrieved1, retrieved2, retrieved3])
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2, retrieved3])
 
         assert sources == ["source_a", "source_b", "source_a"]
+
+    def test_valid_6000_char_segment_is_never_skipped(self):
+        assembler = ContextAssembler(max_context_chars=7000)
+        text = "a" * 6000
+        chunk = create_test_chunk("seg-0", text)
+        chunk = DocumentChunk(
+            **{**chunk.__dict__, "segment_index": 0, "segment_total": 1, "parent_content_hash": "parent-hash"}
+        )
+        retrieved = create_retrieved_chunk(chunk)
+
+        context, sources, dropped = assembler.assemble([retrieved], deduplicate=False)
+
+        assert text in context
+        assert dropped == []
+        assert sources == ["test_source"]
+
+    def test_oversized_segment_raises_invariant_error(self):
+        from data_engineering_copilot.services.context_assembler import ContextAssemblerError
+
+        assembler = ContextAssembler(max_context_chars=20000, item_limit_chars=6000)
+        chunk = create_test_chunk("seg-oversized", "a" * 6001)
+        retrieved = create_retrieved_chunk(chunk)
+
+        with pytest.raises(ContextAssemblerError, match="exceeding the item limit"):
+            assembler.assemble([retrieved], deduplicate=False)
+
+    def test_budget_exhaustion_reports_dropped_reason_and_segment_id(self):
+        assembler = ContextAssembler(max_context_chars=200)
+        chunk1 = create_test_chunk("seg-0", "First segment that fits comfortably in the budget.")
+        chunk2 = create_test_chunk("seg-1", "Second segment which is too long to fit after the first one.")
+        chunk1 = DocumentChunk(
+            **{
+                **chunk1.__dict__,
+                "segment_index": 0,
+                "segment_total": 2,
+                "parent_content_hash": "parent-hash",
+            }
+        )
+        chunk2 = DocumentChunk(
+            **{**chunk2.__dict__, "segment_index": 1, "segment_total": 2, "parent_content_hash": "parent-hash"}
+        )
+        retrieved1 = create_retrieved_chunk(chunk1, confidence=0.9)
+        retrieved2 = create_retrieved_chunk(chunk2, confidence=0.5)
+
+        context, _sources, dropped = assembler.assemble([retrieved1, retrieved2], deduplicate=False)
+
+        assert len(dropped) == 1
+        record = dropped[0]
+        assert record["reason"] == "dropped_due_total_context_budget"
+        assert record["chunk_id"] == "seg-1"
+        assert record["segment_index"] == 1
+        assert record["parent_content_hash"] == "parent-hash"
+        assert record["url"] == "http://example.com/chunkseg-1"
+        assert chunk1.text in context
+        assert chunk2.text not in context
 
 
 if __name__ == "__main__":
