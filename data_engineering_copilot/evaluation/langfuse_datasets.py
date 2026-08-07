@@ -1,6 +1,7 @@
 """Langfuse dataset and experiment management.
 
 Provides functions to upload evaluation datasets to Langfuse and run experiments.
+Targets the Langfuse v4 SDK surface (see ``docs/langfuse-v4-sdk-surface.md``).
 """
 
 from __future__ import annotations
@@ -51,27 +52,76 @@ def upload_evaluation_dataset(dataset_path: str, dataset_name: str) -> bool:
             logger.warning("No examples found in dataset %s", dataset_path)
             return False
 
-        # Create dataset using the underlying Langfuse client
-        if hasattr(client._client, "create_dataset"):
-            client._client.create_dataset(
-                name=dataset_name,
-                description=f"Evaluation dataset uploaded from {dataset_path}",
-            )
+        return upload_evaluation_dataset_rows(
+            dataset_name=dataset_name,
+            items=[
+                {
+                    "input": ex.get("input", {}),
+                    "expected_output": ex.get("expected_output", {}),
+                    "metadata": ex.get("metadata", {}),
+                }
+                for ex in examples
+            ],
+            description=f"Evaluation dataset uploaded from {dataset_path}",
+        )
 
-            # Add examples to dataset
-            for i, example in enumerate(examples):
-                client._client.create_dataset_item(
-                    dataset_name=dataset_name,
-                    input=example.get("input", {}),
-                    expected_output=example.get("expected_output", {}),
-                    metadata=example.get("metadata", {"index": i}),
-                )
+    except Exception as exc:
+        logger.error("Failed to upload dataset to Langfuse: %s", exc)
+        return False
 
-            logger.info("Uploaded %d examples to Langfuse dataset '%s'", len(examples), dataset_name)
-            return True
-        else:
+
+def upload_evaluation_dataset_rows(
+    dataset_name: str,
+    items: list[dict[str, Any]],
+    description: str | None = None,
+) -> bool:
+    """Create (or reuse) a Langfuse dataset and add items.
+
+    Uses the v4 top-level ``create_dataset`` / ``create_dataset_item`` API.
+
+    Args:
+        dataset_name: Name for the dataset in Langfuse
+        items: List of dicts with ``input``, ``expected_output`` (optional),
+            ``metadata`` (optional)
+        description: Optional dataset description
+
+    Returns:
+        True if successful, False otherwise
+    """
+    client = get_langfuse_client()
+    if client is None:
+        logger.warning("Langfuse client not available, cannot upload dataset")
+        return False
+
+    try:
+        inner = client._client
+        if not hasattr(inner, "create_dataset"):
             logger.warning("Langfuse client does not support create_dataset")
             return False
+
+        # Reuse an existing dataset if present (create_dataset is not idempotent).
+        try:
+            inner.create_dataset(
+                name=dataset_name,
+                description=description or f"Evaluation dataset {dataset_name}",
+            )
+        except Exception as exc:
+            logger.info("Dataset '%s' may already exist (%s); adding items to it", dataset_name, exc)
+
+        if not hasattr(inner, "create_dataset_item"):
+            logger.warning("Langfuse client does not support create_dataset_item")
+            return False
+
+        for i, item in enumerate(items):
+            inner.create_dataset_item(
+                dataset_name=dataset_name,
+                input=item.get("input", {}),
+                expected_output=item.get("expected_output"),
+                metadata=item.get("metadata", {"index": i}),
+            )
+
+        logger.info("Uploaded %d examples to Langfuse dataset '%s'", len(items), dataset_name)
+        return True
 
     except Exception as exc:
         logger.error("Failed to upload dataset to Langfuse: %s", exc)
@@ -85,6 +135,10 @@ def run_experiment(
     config_b: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Run A/B experiment comparing two configurations.
+
+    The full experiment runner is implemented in Phase 6 (``dataset.run_experiment``
+    from the Langfuse v4 SDK). Until then this raises a clear error so callers do
+    not silently do nothing.
 
     Args:
         experiment_name: Name for the experiment
@@ -100,31 +154,9 @@ def run_experiment(
         logger.warning("Langfuse client not available, cannot run experiment")
         return None
 
-    try:
-        # Create experiment
-        if hasattr(client._client, "create_experiment"):
-            experiment = client._client.create_experiment(  # type: ignore[attr-defined]  # guarded by hasattr above; Langfuse stub lacks it
-                name=experiment_name,
-                dataset_name=dataset_name,
-            )
-
-            # Note: Actual experiment execution would require running the RAG pipeline
-            # with both configurations and comparing results. This is a placeholder.
-            logger.info("Created experiment '%s' on dataset '%s'", experiment_name, dataset_name)
-
-            return {
-                "experiment_id": getattr(experiment, "id", None),
-                "name": experiment_name,
-                "dataset": dataset_name,
-                "status": "created",
-            }
-        else:
-            logger.warning("Langfuse client does not support create_experiment")
-            return None
-
-    except Exception as exc:
-        logger.error("Failed to create experiment in Langfuse: %s", exc)
-        return None
+    raise NotImplementedError(
+        "Experiments require Phase 6 (langfuse dataset.run_experiment). Use the Langfuse UI for now."
+    )
 
 
 def get_experiment_results(experiment_id: str) -> dict[str, Any] | None:

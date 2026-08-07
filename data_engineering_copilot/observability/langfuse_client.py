@@ -2,23 +2,112 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from opentelemetry.trace import format_span_id, format_trace_id
 
 from data_engineering_copilot.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# Trace-level attributes that must NOT be forwarded to v4 start_observation()
+# (it has no **kwargs and rejects unknown params). These are applied via
+# langfuse.propagate_attributes so every observation in the trace inherits them.
+_V4_TRACE_LEVEL_KWARGS = {"user_id", "session_id", "tags", "environment", "trace_name", "metadata"}
+
+# Kwargs v4 start_observation() actually accepts.
+_V4_OBSERVATION_KWARGS = {
+    "name",
+    "as_type",
+    "input",
+    "output",
+    "metadata",
+    "version",
+    "level",
+    "status_message",
+    "completion_start_time",
+    "model",
+    "model_parameters",
+    "usage_details",
+    "cost_details",
+    "prompt",
+}
+
+
+def _derive_span_id(observation: Any) -> str | None:
+    """Derive the 16-hex Langfuse observation id from a v4 span's OTel context."""
+    if observation is None:
+        return None
+    otel_span = getattr(observation, "_otel_span", None)
+    if otel_span is not None and otel_span.context is not None:
+        try:
+            return format_span_id(otel_span.context.span_id)
+        except Exception:
+            pass
+    return getattr(observation, "id", None)
+
+
+def _derive_trace_id(observation: Any) -> str | None:
+    """Derive the 32-hex Langfuse trace id from a v4 span's OTel context."""
+    if observation is None:
+        return None
+    otel_span = getattr(observation, "_otel_span", None)
+    if otel_span is not None and otel_span.context is not None:
+        try:
+            return format_trace_id(otel_span.context.trace_id)
+        except Exception:
+            pass
+    return getattr(observation, "trace_id", None)
+
+
+def _enter_propagate(trace_attrs: dict[str, Any] | None):
+    """Return a propagate_attributes context manager (or nullcontext) for trace-level attrs."""
+    if trace_attrs:
+        from contextlib import nullcontext
+
+        from langfuse import propagate_attributes
+
+        try:
+            return propagate_attributes(**trace_attrs)
+        except Exception as exc:
+            logger.warning("propagate_attributes failed (%s); proceeding without trace attrs", exc)
+            return nullcontext()
+    from contextlib import nullcontext
+
+    return nullcontext()
+
 
 class _ObservationCompat:
     """Compatibility wrapper for Langfuse v2/v3-style observation objects."""
 
-    def __init__(self, client, observation, kind: str, trace_id=None, parent_observation_id=None):
+    def __init__(
+        self,
+        client,
+        observation,
+        kind: str,
+        trace_id=None,
+        parent_observation_id=None,
+        trace_attrs: dict[str, Any] | None = None,
+    ):
         self._client = client
         self._observation = observation
         self.kind = kind
-        self.trace_id = trace_id
+        self._parent_trace_id = trace_id
         self.parent_observation_id = parent_observation_id
-        self.id = getattr(observation, "id", None)
+        self._trace_attrs = trace_attrs or {}
+
+    @property
+    def id(self) -> Any:
+        if self._observation is None:
+            return None
+        return _derive_span_id(self._observation)
+
+    @property
+    def trace_id(self) -> Any:
+        if self._observation is None:
+            return self._parent_trace_id
+        return _derive_trace_id(self._observation) or self._parent_trace_id
 
     def update(self, **kwargs):
         if self._observation is None:
@@ -56,12 +145,41 @@ class _ObservationCompat:
         if self._observation is None:
             return self
 
-        # Try to use the native Langfuse score method if available
-        if hasattr(self._client._client, "score"):
+        # v4: span objects expose .score() (this observation) and .score_trace() (the trace).
+        if hasattr(self._observation, "score"):
             try:
-                # For Langfuse v3, we need to create a score on the trace
-                if self.kind == "trace" or self.trace_id is not None:
-                    trace_id = self.trace_id or self.id
+                if self.kind == "trace":
+                    method = getattr(self._observation, "score_trace", None)
+                    if method is not None:
+                        method(name=name, value=value, data_type=data_type, **kwargs)
+                        return self
+                self._observation.score(name=name, value=value, data_type=data_type, **kwargs)
+                return self
+            except Exception:
+                pass
+
+        # Try to use the native Langfuse score method if available
+        if hasattr(self._client._client, "create_score"):
+            try:
+                # For Langfuse v4, create_score takes trace_id + optional observation_id
+                trace_id = self.trace_id or self._parent_trace_id or self.id
+                self._client._client.create_score(
+                    trace_id=trace_id,
+                    observation_id=self.id,
+                    name=name,
+                    value=value,
+                    data_type=data_type,
+                    **kwargs,
+                )
+            except Exception:
+                # Fallback to using the observation's score method if available
+                if hasattr(self._observation, "score"):
+                    self._observation.score(name=name, value=value, data_type=data_type, **kwargs)
+        elif hasattr(self._client._client, "score"):
+            try:
+                # For Langfuse v2/v3, create a score on the trace
+                if self.kind == "trace" or self._parent_trace_id is not None:
+                    trace_id = self._parent_trace_id or self.id
                     self._client._client.score(
                         trace_id=trace_id,
                         name=name,
@@ -70,11 +188,10 @@ class _ObservationCompat:
                         **kwargs,
                     )
                 else:
-                    # For spans/generations, we need to use the observation ID
                     observation_id = self.id
                     if observation_id:
                         self._client._client.score(
-                            trace_id=self.trace_id,
+                            trace_id=self._parent_trace_id,
                             observation_id=observation_id,
                             name=name,
                             value=value,
@@ -92,10 +209,24 @@ class _ObservationCompat:
 
     def start_observation(self, name: str, **kwargs):
         as_type = kwargs.pop("as_type", "span")
-        child_kwargs = dict(kwargs)
 
-        if self.kind == "trace" or self.trace_id is not None:
-            child_kwargs.setdefault("trace_id", self.trace_id or self.id)
+        # v4 path: delegate to the wrapped v4 observation (auto-parents via OTel context).
+        if self._observation is not None and hasattr(self._observation, "start_observation"):
+            obs_kwargs = {k: v for k, v in kwargs.items() if k in _V4_OBSERVATION_KWARGS}
+            with _enter_propagate(self._trace_attrs):
+                child_observation = self._observation.start_observation(name=name, as_type=as_type, **obs_kwargs)
+            return _ObservationCompat(
+                self._client,
+                child_observation,
+                kind=as_type,
+                trace_id=self.trace_id,
+                parent_observation_id=self.id,
+                trace_attrs=self._trace_attrs,
+            )
+
+        child_kwargs = dict(kwargs)
+        if self.kind == "trace" or self._parent_trace_id is not None:
+            child_kwargs.setdefault("trace_id", self._parent_trace_id or self.id)
         if self.kind != "trace" and self.id is not None:
             child_kwargs.setdefault("parent_observation_id", self.id)
 
@@ -116,6 +247,7 @@ class _ObservationCompat:
             kind=as_type,
             trace_id=child_kwargs.get("trace_id"),
             parent_observation_id=child_kwargs.get("parent_observation_id"),
+            trace_attrs=self._trace_attrs,
         )
 
     def trace(self, name: str, **kwargs):
@@ -132,16 +264,30 @@ class _ObservationCompat:
 
 
 class LangfuseCompat:
-    """Adapter for Langfuse clients that expose either v3 start_observation or v2 trace/span/generation APIs."""
+    """Adapter for Langfuse clients that expose either v3/v4 start_observation or v2 trace/span/generation APIs."""
 
     def __init__(self, client):
         self._client = client
 
     def start_observation(self, name: str, **kwargs):
         as_type = kwargs.pop("as_type", "trace")
+
         if hasattr(self._client, "start_observation"):
-            observation = self._client.start_observation(name=name, as_type=as_type, **kwargs)
-            return _ObservationCompat(self, observation, kind=as_type, trace_id=None, parent_observation_id=None)
+            # v4 path: as_type="trace" is invalid (root spans are type "span"); trace-level
+            # attributes go through propagate_attributes so all observations inherit them.
+            trace_attrs = {k: kwargs.pop(k) for k in list(kwargs) if k in _V4_TRACE_LEVEL_KWARGS}
+            obs_kwargs = {k: v for k, v in kwargs.items() if k in _V4_OBSERVATION_KWARGS}
+            v4_type = "span" if as_type == "trace" else as_type
+            with _enter_propagate(trace_attrs):
+                observation = self._client.start_observation(name=name, as_type=v4_type, **obs_kwargs)
+            return _ObservationCompat(
+                self,
+                observation,
+                kind=as_type,
+                trace_id=_derive_trace_id(observation),
+                parent_observation_id=None,
+                trace_attrs=trace_attrs,
+            )
 
         method_name = {"trace": "trace", "span": "span", "generation": "generation"}.get(as_type, "trace")
         method = getattr(self._client, method_name)
@@ -172,7 +318,18 @@ class LangfuseCompat:
 
     def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs):
         """Score a trace directly."""
-        if hasattr(self._client, "score"):
+        if hasattr(self._client, "create_score"):
+            try:
+                self._client.create_score(
+                    trace_id=trace_id,
+                    name=name,
+                    value=value,
+                    data_type=data_type,
+                    **kwargs,
+                )
+            except Exception as exc:
+                logger.warning("Failed to score trace %s: %s", trace_id, exc)
+        elif hasattr(self._client, "score"):
             try:
                 self._client.score(
                     trace_id=trace_id,
@@ -267,7 +424,7 @@ def _check_langfuse_health(host: str, timeout: int = 5) -> bool:
 
 def get_langfuse_instance():
     """
-    Create a Langfuse v3 client using centralized settings.
+    Create a Langfuse client using centralized settings.
     Uses lazy import to avoid failing when the langfuse package is not installed.
     Tries the configured host first and then localhost/127.0.0.1 fallbacks when
     the current process cannot resolve the Docker service name.

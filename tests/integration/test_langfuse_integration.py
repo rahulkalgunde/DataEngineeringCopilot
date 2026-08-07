@@ -57,6 +57,13 @@ class TestLangfuseClientInit:
         assert hasattr(langfuse_client, "start_observation")
         assert callable(langfuse_client.start_observation)
 
+    def test_client_has_v4_dataset_and_experiment_surface(self, langfuse_client):
+        inner = langfuse_client._client
+        assert hasattr(inner, "create_dataset")
+        assert hasattr(inner, "create_dataset_item")
+        assert hasattr(inner, "get_dataset")
+        assert hasattr(inner, "run_experiment")
+
     def test_client_has_flush(self, langfuse_client):
         assert hasattr(langfuse_client, "flush")
         assert callable(langfuse_client.flush)
