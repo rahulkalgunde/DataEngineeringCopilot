@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from data_engineering_copilot.domain.models import RetrievalFilters
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,23 @@ _REWRITE_PROMPT = (
     "- Output a single line, no more than 30 words.\n\n"
     "User question: {question}\n\nRewritten query:"
 )
+
+_EXPAND_PROMPT = (
+    "Generate {max_variations} different search queries that would find "
+    "the same information as this question. Return ONLY the queries, "
+    "one per line, no numbering.\n\n"
+    "Original question: {query}\n\nVariations:"
+)
+
+_HYDE_PROMPT = (
+    "Write a short, authoritative paragraph that would perfectly answer "
+    "the following question. Do not address the user directly.\n\nQuestion: {query}"
+)
+
+register_fallback("query-intent-classify", _CLASSIFY_INTENT_PROMPT)
+register_fallback("query-rewrite", _REWRITE_PROMPT)
+register_fallback("query-expand", _EXPAND_PROMPT)
+register_fallback("query-hyde", _HYDE_PROMPT)
 
 
 @dataclass(frozen=True)
@@ -194,7 +212,7 @@ class QueryRewriter:
         try:
             import asyncio
 
-            prompt = _CLASSIFY_INTENT_PROMPT.format(query=query)
+            prompt = get_langfuse_prompt("query-intent-classify").compile(query=query)
 
             # Try async first if event loop is running
             try:
@@ -271,7 +289,7 @@ class QueryRewriter:
             return self.rewrite(query)
 
         try:
-            prompt = _REWRITE_PROMPT.format(question=query)
+            prompt = get_langfuse_prompt("query-rewrite").compile(question=query)
             llm_result = await self._llm_client.generate(prompt)
             rewritten = llm_result.strip()
 
@@ -311,7 +329,7 @@ class QueryRewriter:
         # Fallback: async LLM classifier (if enabled)
         if self._intent_llm_enabled and self._intent_llm_client is not None:
             try:
-                prompt = _CLASSIFY_INTENT_PROMPT.format(query=query)
+                prompt = get_langfuse_prompt("query-intent-classify").compile(query=query)
                 result = await self._intent_llm_client.generate(prompt)
                 if result:
                     parsed = json.loads(result.strip())
@@ -353,12 +371,7 @@ class QueryRewriter:
         if not self._enabled or self._llm_client is None:
             return base
 
-        prompt = (
-            f"Generate {max_variations} different search queries that would find "
-            f"the same information as this question. Return ONLY the queries, "
-            f"one per line, no numbering.\n\n"
-            f"Original question: {query}\n\nVariations:"
-        )
+        prompt = get_langfuse_prompt("query-expand").compile(max_variations=max_variations, query=query)
 
         try:
             result = await self._llm_client.generate(prompt)
@@ -419,10 +432,7 @@ class QueryRewriter:
         if self._llm_client is None:
             return ""
         try:
-            prompt = (
-                "Write a short, authoritative paragraph that would perfectly answer "
-                f"the following question. Do not address the user directly.\n\nQuestion: {query}"
-            )
+            prompt = get_langfuse_prompt("query-hyde").compile(query=query)
             result = await self._llm_client.generate(prompt)
             return str(result).strip() if result else ""
         except Exception as exc:
@@ -437,10 +447,7 @@ class QueryRewriter:
         if self._llm_client is None:
             return ""
         try:
-            prompt = (
-                "Write a short, authoritative paragraph that would perfectly answer "
-                f"the following question. Do not address the user directly.\n\nQuestion: {query}"
-            )
+            prompt = get_langfuse_prompt("query-hyde").compile(query=query)
             # Sync wrapper — caller should use async if available
             import asyncio
 

@@ -9,6 +9,17 @@ from dataclasses import dataclass
 import numpy as np
 
 from data_engineering_copilot.domain.models import RetrievedChunk
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
+
+# Offline fallback for the Langfuse-managed ``eval-faithfulness`` prompt.
+_FAITHFULNESS_PROMPT = (
+    "Given the answer and context below, count how many claims in the "
+    "answer are supported by the context.\n\n"
+    "ANSWER: {answer}\n\nCONTEXT: {context}\n\n"
+    'Return JSON: {{"supported": N, "unsupported": N}}'
+)
+
+register_fallback("eval-faithfulness", _FAITHFULNESS_PROMPT)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -157,12 +168,7 @@ class FaithfulnessEvaluator:
         if self._llm_client is None:
             return FaithfulnessResult(1.0, 0, 0)
 
-        prompt = (
-            "Given the answer and context below, count how many claims in the "
-            "answer are supported by the context.\n\n"
-            f"ANSWER: {answer[:2000]}\n\nCONTEXT: {context[:3000]}\n\n"
-            'Return JSON: {{"supported": N, "unsupported": N}}'
-        )
+        prompt = get_langfuse_prompt("eval-faithfulness").compile(answer=answer[:2000], context=context[:3000])
 
         try:
             import json

@@ -20,6 +20,7 @@ from data_engineering_copilot.domain.protocols import (
     VectorStoreProtocol,
 )
 from data_engineering_copilot.infrastructure.pii_redactor import PiiRedactor
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
@@ -29,6 +30,14 @@ from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, Promp
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
+
+# Offline fallback for the Langfuse-managed ``rag-json-retry-suffix`` prompt.
+_JSON_RETRY_SUFFIX = (
+    "\n\nIMPORTANT: Your previous response was not valid JSON. "
+    "Return ONLY raw JSON with no markdown, no code fences, no preamble."
+)
+
+register_fallback("rag-json-retry-suffix", _JSON_RETRY_SUFFIX)
 
 
 def merge_retrieval_results(
@@ -577,10 +586,7 @@ class AsyncRagService:
                 parsed_attempt = parse_rag_response(answer_text)
                 if not parsed_attempt.answer and len(answer_text.strip()) > 20:
                     logger.info("json_parse_retry intent=%s response_len=%d", intent, len(answer_text))
-                    retry_prompt = prompt + (
-                        "\n\nIMPORTANT: Your previous response was not valid JSON. "
-                        "Return ONLY raw JSON with no markdown, no code fences, no preamble."
-                    )
+                    retry_prompt = prompt + get_langfuse_prompt("rag-json-retry-suffix").compile()
                     retry_span = None
                     if trace:
                         retry_span = trace.start_observation(
