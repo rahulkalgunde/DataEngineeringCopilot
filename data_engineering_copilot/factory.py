@@ -784,6 +784,8 @@ def build_evaluation_embeddings(
 
 
 def build_chunker(app_settings: AppSettings = settings):
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
     strategy = app_settings.chunking_strategy.lower()
 
     if strategy == "semantic":
@@ -807,6 +809,7 @@ def build_chunker(app_settings: AppSettings = settings):
                 min_semantic_similarity=app_settings.min_semantic_similarity,
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
+                telemetry=build_telemetry_tracer(),
             )
 
     if strategy == "header_aware":
@@ -980,7 +983,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             )
 
     contextual_enricher = ContextualChunkEnricher(
-        summarizer=LLMContextSummarizer(llm_client=enrichment_client, failure_recorder=_record_enrichment_failure),
+        summarizer=LLMContextSummarizer(
+            llm_client=enrichment_client,
+            failure_recorder=_record_enrichment_failure,
+            telemetry=build_telemetry_tracer(),
+        ),
         enabled=app_settings.contextual_enrichment_enabled,
         batch_size=app_settings.enrichment_batch_size,
     )

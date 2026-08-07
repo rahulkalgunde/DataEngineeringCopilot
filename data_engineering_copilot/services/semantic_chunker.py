@@ -72,6 +72,7 @@ class SemanticChunker:
         min_semantic_similarity: float = 0.5,
         min_chunk_words: int = 20,
         max_chunk_words: int | None = None,
+        telemetry=None,
     ) -> None:
         """
         Initialize semantic chunker.
@@ -101,6 +102,7 @@ class SemanticChunker:
         self.min_semantic_similarity = min_semantic_similarity
         self.min_chunk_words = min_chunk_words
         self.max_chunk_words = max_chunk_words or int(chunk_size_words * 1.5)
+        self._telemetry = telemetry
 
     @staticmethod
     def extract_sentences(text: str) -> list[str] | None:
@@ -130,10 +132,21 @@ class SemanticChunker:
             try:
                 import asyncio
 
+                embed_span = None
+                if self._telemetry is not None:
+                    embed_span = self._telemetry.start_observation(
+                        name="semantic-chunk-embedding",
+                        as_type="generation",
+                        model=getattr(self.embedding_model, "model_name", getattr(self.embedding_model, "model", None)),
+                        input={"sentences": len(sentences)},
+                    )
                 if asyncio.iscoroutinefunction(self.embedding_model.embed_texts):
                     embeddings = await self.embedding_model.embed_texts(sentences)
                 else:
                     embeddings = self.embedding_model.embed_texts(sentences)
+                if embed_span is not None:
+                    embed_span.update(usage_details={"total": len(sentences)})
+                    embed_span.end()
             except Exception as e:
                 logger.warning(
                     "Embedding failed for url=%s, cannot perform semantic chunking: %s",

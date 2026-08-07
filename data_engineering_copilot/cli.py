@@ -731,6 +731,8 @@ def spark_build(generation: str | None = None) -> int:
         health_registry=health_registry,
     )
     embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
     builder = SparkIndexBuilder(
         config=config,
         resolver=resolver,
@@ -742,6 +744,7 @@ def spark_build(generation: str | None = None) -> int:
         rendered_config=rendered_config,
         rendered_manifest=rendered_manifest,
         chunks_path=artifact_root / "chunks.jsonl",
+        telemetry=build_telemetry_tracer(),
     )
     try:
         report = asyncio.run(builder.build())

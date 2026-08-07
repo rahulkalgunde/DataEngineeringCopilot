@@ -38,6 +38,33 @@ class TestLLMContextSummarizer:
         result = await summarizer.summarize(_doc())
         assert result == "This is a short summary."
 
+    async def test_summarize_creates_generation_span_with_telemetry(self):
+        calls: list[tuple[str, dict]] = []
+
+        class StubTelemetry:
+            def start_observation(self, name, **kwargs):
+                calls.append((name, kwargs))
+                return _StubSpan()
+
+        class _StubSpan:
+            def update(self, **kwargs):
+                return self
+
+            def end(self):
+                return self
+
+        llm = AsyncMock()
+        llm.generate.return_value = "This is a short summary."
+        llm.model = "llama3.2:3b"
+        summarizer = LLMContextSummarizer(llm_client=llm, telemetry=StubTelemetry())
+        result = await summarizer.summarize(_doc())
+        assert result == "This is a short summary."
+        assert len(calls) == 1
+        name, kwargs = calls[0]
+        assert name == "enrichment-summarize"
+        assert kwargs["as_type"] == "generation"
+        assert kwargs["model"] == "llama3.2:3b"
+
     async def test_summarize_collapses_multiline(self):
         llm = AsyncMock()
         llm.generate.return_value = "line1\n\nline2\nline3"
