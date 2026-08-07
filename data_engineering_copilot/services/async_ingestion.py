@@ -319,10 +319,24 @@ class AsyncIngestionService:
                 current_phase="embedding",
             ),
         )
+        embed_span = None
         try:
             texts = [chunk.text for chunk in batch_chunks]
+            if self._telemetry is not None:
+                embed_span = self._telemetry.start_observation(
+                    name="embedding",
+                    as_type="generation",
+                    model=getattr(self.embeddings, "model_name", getattr(self.embeddings, "model", None)),
+                    input={"batch_size": len(texts)},
+                )
             batch_vectors = await self.embeddings.embed_texts(texts)
+            if embed_span is not None:
+                embed_span.update(usage_details={"total": len(texts)})
+                embed_span.end()
         except EmbeddingError as exc:
+            if embed_span is not None:
+                embed_span.update(output=f"embed_failed: {exc}", level="ERROR")
+                embed_span.end()
             log.error(
                 "async_ingestion.embed_batch_failed",
                 batch_size=len(batch_chunks),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from dataclasses import dataclass
@@ -112,6 +113,7 @@ class SparkIndexBuilder:
         rendered_config: SparkRenderedSourceConfig | None = None,
         rendered_manifest: RenderedManifest | None = None,
         chunks_path: Path | None = None,
+        telemetry=None,
     ) -> None:
         self._config = config
         self._resolver = resolver
@@ -126,6 +128,7 @@ class SparkIndexBuilder:
         self._rendered_config = rendered_config
         self._rendered_manifest = rendered_manifest
         self._chunks_path = chunks_path
+        self._telemetry = telemetry
 
     async def build(self) -> IndexBuildReport:
         """Build a generation collection from the pinned Spark source.
@@ -146,6 +149,32 @@ class SparkIndexBuilder:
         return await self._build_from_manifest(manifest)
 
     async def _build_from_manifest(self, manifest: SparkManifest) -> IndexBuildReport:
+        build_trace = None
+        if self._telemetry is not None:
+            build_trace = self._telemetry.start_observation(
+                name="spark-build",
+                input={"generation": self._generation, "source": self._config.name},
+                as_type="trace",
+                metadata={"generation": self._generation, "source": self._config.name},
+                tags=["app:data-engineering-copilot", f"generation:{self._generation}"],
+            )
+        try:
+            report = await self._build_from_manifest_inner(manifest)
+            if build_trace is not None:
+                build_trace.update(output=f"spark-build-ok generation={report.generation} chunks={report.chunk_count}")
+                build_trace.end()
+            return report
+        except Exception as exc:
+            if build_trace is not None:
+                build_trace.update(output=f"spark-build-failed: {exc}", level="ERROR")
+                build_trace.end()
+            raise
+        finally:
+            if self._telemetry is not None:
+                with contextlib.suppress(Exception):
+                    self._telemetry.flush()
+
+    async def _build_from_manifest_inner(self, manifest: SparkManifest) -> IndexBuildReport:
         chunks, coverage = await self._chunk_all(manifest)
         chunks = self._dedup_by_content_hash(chunks)
         self._reject_duplicate_chunk_ids(chunks)
@@ -632,10 +661,27 @@ class SparkIndexBuilder:
 
     async def _embed_all(self, chunks: list[DocumentChunk]) -> list[list[float]]:
         vectors: list[list[float]] = []
-        for i in range(0, len(chunks), self._embedding_batch_size):
-            batch = [c.text for c in chunks[i : i + self._embedding_batch_size]]
-            batch_vectors = await self._embedder.embed_texts(batch)
-            vectors.extend(batch_vectors)
+        embed_span = None
+        if self._telemetry is not None:
+            embed_span = self._telemetry.start_observation(
+                name="embedding",
+                as_type="generation",
+                model=getattr(self._embedder, "model_name", getattr(self._embedder, "model", None)),
+                input={"chunk_count": len(chunks)},
+            )
+        try:
+            for i in range(0, len(chunks), self._embedding_batch_size):
+                batch = [c.text for c in chunks[i : i + self._embedding_batch_size]]
+                batch_vectors = await self._embedder.embed_texts(batch)
+                vectors.extend(batch_vectors)
+            if embed_span is not None:
+                embed_span.update(usage_details={"total": len(chunks)})
+                embed_span.end()
+        except Exception as exc:
+            if embed_span is not None:
+                embed_span.update(output=f"embed_failed: {exc}", level="ERROR")
+                embed_span.end()
+            raise
         return vectors
 
     @staticmethod

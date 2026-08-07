@@ -174,6 +174,43 @@ class TestSemanticClustering:
         # Chunks should group related sentences
         assert all(len(c.text) > 0 for c in chunks)
 
+    async def test_chunk_creates_embedding_span_with_telemetry(self):
+        calls: list[tuple[str, dict]] = []
+
+        class StubTelemetry:
+            def start_observation(self, name, **kwargs):
+                calls.append((name, kwargs))
+                return _StubSpan()
+
+        class _StubSpan:
+            def update(self, **kwargs):
+                return self
+
+            def end(self):
+                return self
+
+        model = MockEmbeddingModel()
+        chunker = SemanticChunker(
+            chunk_size_words=100,
+            overlap_words=10,
+            embedding_model=model,
+            min_semantic_similarity=0.5,
+            min_chunk_words=5,
+            telemetry=StubTelemetry(),
+        )
+        document = ParsedDocument(
+            source_name="Test",
+            title="Test",
+            url="https://example.com/test",
+            text="Python is a programming language. Python is widely used. Java is another language.",
+        )
+        chunks = await chunker.chunk(document)
+        assert len(chunks) > 0
+        assert len(calls) == 1
+        name, kwargs = calls[0]
+        assert name == "semantic-chunk-embedding"
+        assert kwargs["as_type"] == "generation"
+
     def test_clustering_creates_clusters_from_embeddings(self):
         """Test internal clustering mechanism."""
         model = MockEmbeddingModel()
