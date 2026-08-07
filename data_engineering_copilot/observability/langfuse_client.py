@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import urllib.error
 import urllib.request
 from typing import Any
@@ -14,7 +15,15 @@ logger = logging.getLogger(__name__)
 # Trace-level attributes that must NOT be forwarded to v4 start_observation()
 # (it has no **kwargs and rejects unknown params). These are applied via
 # langfuse.propagate_attributes so every observation in the trace inherits them.
-_V4_TRACE_LEVEL_KWARGS = {"user_id", "session_id", "tags", "environment", "trace_name", "metadata"}
+_V4_TRACE_LEVEL_KWARGS = {
+    "user_id",
+    "session_id",
+    "tags",
+    "environment",
+    "release",
+    "trace_name",
+    "metadata",
+}
 
 # Kwargs v4 start_observation() actually accepts.
 _V4_OBSERVATION_KWARGS = {
@@ -62,14 +71,19 @@ def _derive_trace_id(observation: Any) -> str | None:
 
 
 def _enter_propagate(trace_attrs: dict[str, Any] | None):
-    """Return a propagate_attributes context manager (or nullcontext) for trace-level attrs."""
+    """Return a propagate_attributes context manager (or nullcontext) for trace-level attrs.
+
+    ``release`` is excluded: ``propagate_attributes`` does not accept it (it is a
+    client-level ``Langfuse(release=...)`` attribute that applies to all spans).
+    """
     if trace_attrs:
         from contextlib import nullcontext
 
         from langfuse import propagate_attributes
 
+        attrs = {k: v for k, v in trace_attrs.items() if k != "release"}
         try:
-            return propagate_attributes(**trace_attrs)
+            return propagate_attributes(**attrs)
         except Exception as exc:
             logger.warning("propagate_attributes failed (%s); proceeding without trace attrs", exc)
             return nullcontext()
@@ -430,6 +444,12 @@ def get_langfuse_instance():
     the current process cannot resolve the Docker service name.
     Returns None if langfuse is unavailable or cannot be initialized.
     """
+    if not settings.langfuse_enabled:
+        logger.info("Langfuse disabled via LANGFUSE_ENABLED=false")
+        return None
+    if random.random() >= settings.langfuse_sample_rate:
+        logger.debug("Langfuse trace sampled out (sample rate %s)", settings.langfuse_sample_rate)
+        return None
     try:
         from langfuse import Langfuse
 
@@ -447,6 +467,7 @@ def get_langfuse_instance():
                     public_key=settings.langfuse_public_key.get_secret_value(),
                     secret_key=settings.langfuse_secret_key.get_secret_value(),
                     host=candidate_host,
+                    release=settings.image_git_sha,
                     debug=True,
                 )
                 auth_ok = lf.auth_check()

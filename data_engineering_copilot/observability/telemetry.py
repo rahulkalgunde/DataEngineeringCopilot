@@ -23,6 +23,7 @@ class NoOpTelemetryTracer:
         input: Any = None,
         as_type: str = "trace",
         model: str | None = None,
+        **kwargs: Any,
     ) -> _NoOpObservation:
         return _NoOpObservation()
 
@@ -65,13 +66,15 @@ class LangfuseTelemetryTracer:
         input: Any = None,
         as_type: str = "trace",
         model: str | None = None,
+        **kwargs: Any,
     ) -> Any:
-        kwargs: dict[str, Any] = {}
+        kwargs["name"] = name
+        kwargs["as_type"] = as_type
         if input is not None:
             kwargs["input"] = input
         if model is not None:
             kwargs["model"] = model
-        return self._client.start_observation(name=name, as_type=as_type, **kwargs)
+        return self._client.start_observation(**kwargs)
 
     def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs) -> None:
         """Score a trace with a metric."""

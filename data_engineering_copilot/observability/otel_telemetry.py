@@ -108,6 +108,7 @@ class OTelTelemetryTracer:
         input: Any = None,
         as_type: str = "trace",
         model: str | None = None,
+        **kwargs: Any,
     ) -> _OTelSpan:
         if self._tracer is None:
             return _OTelSpan(None)
@@ -117,6 +118,8 @@ class OTelTelemetryTracer:
         if model is not None:
             span.set_attribute("app.model", model)
         span.set_attribute("app.span_type", as_type)
+        for key, val in kwargs.items():
+            span.set_attribute(f"app.{key}", str(val)[:2000])
         return _OTelSpan(span)
 
     def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs: Any) -> None:
