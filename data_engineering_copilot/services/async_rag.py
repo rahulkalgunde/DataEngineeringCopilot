@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
 from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig, RetrievedChunk
 from data_engineering_copilot.domain.protocols import (
@@ -90,6 +91,15 @@ def _scrub_pii(text: str) -> str:
     for pattern, replacement in _PII_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
+
+
+def _llm_model_name(llm_client: Any) -> str:
+    """Best-effort model name from an LLM client (LLMClient, ProviderFallbackChain)."""
+    for attr in ("model", "model_name"):
+        value = getattr(llm_client, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown"
 
 
 def _sse(data: dict) -> str:
@@ -236,11 +246,18 @@ class AsyncRagService:
                 "name": "rag-query-pipeline",
                 "input": _scrub_pii(question),
                 "as_type": "trace",
+                "tags": ["app:data-engineering-copilot"],
+                "metadata": {
+                    "app_env": settings.langfuse_environment,
+                    "git_sha": settings.image_git_sha,
+                },
             }
             if user_id:
                 trace_kwargs["user_id"] = user_id
             if session_id:
                 trace_kwargs["session_id"] = session_id
+            if settings.langfuse_environment:
+                trace_kwargs["environment"] = settings.langfuse_environment
             trace = self.telemetry.start_observation(**trace_kwargs)
 
         # Phase 2A: Query rewriting — collect all queries for multi-step retrieval
@@ -456,13 +473,7 @@ class AsyncRagService:
                     confidence=0.0,
                 )
 
-        generation_span = None
-        if trace:
-            generation_span = trace.start_observation(
-                name="ollama-generation",
-                as_type="generation",
-            )
-
+        generation_span: Any = None
         try:
             if on_step:
                 on_step("Reranking results")
@@ -549,10 +560,15 @@ class AsyncRagService:
                     logger.info("pii_redacted types=%s", _pii_types)
             prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
 
-            if generation_span:
-                generation_span.update(input=prompt)
-
             llm_client = self._select_llm_client(intent)
+            generation_span = None
+            if trace:
+                generation_span = trace.start_observation(
+                    name="llm-generation",
+                    as_type="generation",
+                    model=_llm_model_name(llm_client),
+                )
+                generation_span.update(input=prompt)
             answer_text = await llm_client.generate(prompt)
 
             # JSON retry: if the intent expects JSON output but parsing fails,
@@ -565,12 +581,23 @@ class AsyncRagService:
                         "\n\nIMPORTANT: Your previous response was not valid JSON. "
                         "Return ONLY raw JSON with no markdown, no code fences, no preamble."
                     )
+                    retry_span = None
+                    if trace:
+                        retry_span = trace.start_observation(
+                            name="llm-json-retry",
+                            as_type="generation",
+                            model=_llm_model_name(llm_client),
+                            input=retry_prompt,
+                        )
                     answer_text = await llm_client.generate(retry_prompt)
+                    if retry_span:
+                        retry_span.update(output=answer_text)
+                        retry_span.end()
 
             _record_stage("generation")
 
             # Post-generation syntax check for code intents
-            answer_text = await self._validate_and_fix_code_syntax(answer_text, intent, llm_client)
+            answer_text = await self._validate_and_fix_code_syntax(answer_text, intent, llm_client, trace)
 
             # Track token usage from LLM provider
             if self.token_tracker is not None and hasattr(llm_client, "last_usage"):
@@ -593,6 +620,23 @@ class AsyncRagService:
                                     usage.completion_tokens,
                                     usage.model,
                                 )
+
+                                # Record token usage + cost on the generation observation
+                                if generation_span:
+                                    generation_span.update(
+                                        usage_details={
+                                            "input": usage.prompt_tokens,
+                                            "output": usage.completion_tokens,
+                                            "total": usage.prompt_tokens + usage.completion_tokens,
+                                            "unit": "TOKENS",
+                                        },
+                                        cost_details={
+                                            "input": cost,
+                                            "output": cost,
+                                            "total": cost,
+                                            "currency": "USD",
+                                        },
+                                    )
 
                                 # Update trace with token usage and cost metadata
                                 trace.update(
@@ -859,11 +903,18 @@ class AsyncRagService:
                 "name": "rag-query-pipeline-stream",
                 "input": _scrub_pii(question),
                 "as_type": "trace",
+                "tags": ["app:data-engineering-copilot"],
+                "metadata": {
+                    "app_env": settings.langfuse_environment,
+                    "git_sha": settings.image_git_sha,
+                },
             }
             if user_id:
                 trace_kwargs["user_id"] = user_id
             if session_id:
                 trace_kwargs["session_id"] = session_id
+            if settings.langfuse_environment:
+                trace_kwargs["environment"] = settings.langfuse_environment
             trace = self.telemetry.start_observation(**trace_kwargs)
 
         # PII redaction
@@ -964,10 +1015,14 @@ class AsyncRagService:
         yield _sse({"type": "status", "message": "Generating answer"})
 
         # Stream LLM tokens
+        llm_client = self._select_llm_client(intent)
         generation_span = None
         if trace:
-            generation_span = trace.start_observation(name="generation", as_type="generation")
-        llm_client = self._select_llm_client(intent)
+            generation_span = trace.start_observation(
+                name="generation",
+                as_type="generation",
+                model=_llm_model_name(llm_client),
+            )
         full_text = ""
         try:
             async for token in llm_client.generate_stream(prompt):
@@ -1045,7 +1100,9 @@ class AsyncRagService:
             return self.code_llm_client
         return self.llm_client
 
-    async def _validate_and_fix_code_syntax(self, answer_text: str, intent: str, llm_client: LLMClientProtocol) -> str:
+    async def _validate_and_fix_code_syntax(
+        self, answer_text: str, intent: str, llm_client: LLMClientProtocol, trace: Any | None = None
+    ) -> str:
         """Validate Python code blocks in answer. Retry once if syntax fails.
 
         Only validates Python code blocks — other languages (Scala, SQL, etc.)
@@ -1073,11 +1130,25 @@ class AsyncRagService:
             "keeping the same structure and imports. Return valid Python only.\n\n"
             f"Broken code:\n```python\n{invalid_blocks[0]}\n```"
         )
+        fix_span = None
+        if trace:
+            fix_span = trace.start_observation(
+                name="llm-code-syntax-fix",
+                as_type="generation",
+                model=_llm_model_name(llm_client),
+                input=fix_prompt,
+            )
         try:
             fixed = await llm_client.generate(fix_prompt)
             fixed_code = fixed.strip().strip("`").removeprefix("python").strip()
+            if fix_span:
+                fix_span.update(output=fixed_code)
+                fix_span.end()
             return answer_text.replace(invalid_blocks[0], fixed_code)
         except Exception:
+            if fix_span:
+                fix_span.update(output="syntax fix failed", level="ERROR")
+                fix_span.end()
             logger.warning("Code syntax fix retry failed, returning original")
             return answer_text
 
