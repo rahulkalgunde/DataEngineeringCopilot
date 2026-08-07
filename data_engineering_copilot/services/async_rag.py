@@ -103,6 +103,24 @@ def _scrub_pii(text: str) -> str:
     return text
 
 
+_INTENT_CONFIG_ID_UNSET = "__unset__"
+_intent_config_id_cache: str | None = _INTENT_CONFIG_ID_UNSET  # type: ignore[assignment]
+
+
+def _get_intent_config_id() -> str | None:
+    """Lazily resolve (and cache) the ``intent`` score-config id for categorical scoring.
+
+    Returns ``None`` when it cannot be resolved so the caller can fall back.
+    """
+    global _intent_config_id_cache
+    if _intent_config_id_cache is not _INTENT_CONFIG_ID_UNSET:
+        return _intent_config_id_cache
+    from data_engineering_copilot.evaluation.langfuse_score_configs import get_score_config_id
+
+    _intent_config_id_cache = get_score_config_id("intent")
+    return _intent_config_id_cache
+
+
 def _llm_model_name(llm_client: Any) -> str:
     """Best-effort model name from an LLM client (LLMClient, ProviderFallbackChain)."""
     for attr in ("model", "model_name"):
@@ -177,13 +195,43 @@ class AsyncRagService:
         """
         if self.review_dataset_hook is None:
             return
-        trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None) if trace else None
+        trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None) if trace else None
         if not trace_id:
             return
         try:
             await asyncio.to_thread(self.review_dataset_hook, trace_id, question, answer_text)
         except Exception as exc:
             logger.warning("Failed to create low-confidence review item: %s", exc)
+
+    async def _record_cache_hit_trace(self, question: str, cached, cache_scope, *, semantic: bool) -> None:
+        """Phase 7 (Task 7.4): lightweight cache-hit trace with a boolean ``cache_hit`` score.
+
+        Cache hits return before the full ``rag-query-pipeline`` trace exists, so
+        record them under a distinct name with ``cache_hit=true`` for cache
+        analytics. Fail-open and off the hot path (best-effort).
+        """
+        if not self.telemetry:
+            return
+        try:
+            trace = self.telemetry.start_observation(
+                name="rag-query-pipeline-cache-hit",
+                input=_scrub_pii(question),
+                as_type="trace",
+                tags=["app:data-engineering-copilot"],
+                metadata={
+                    "cache_tier": "semantic" if semantic else "exact",
+                    "cache_scope": cache_scope.value if cache_scope else None,
+                    "app_env": settings.langfuse_environment,
+                },
+            )
+            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
+            if trace_id:
+                self.telemetry.score(trace_id=trace_id, name="cache_hit", value=True, data_type="BOOLEAN")
+            if hasattr(trace, "end"):
+                trace.end()
+            await self.telemetry.flush_async()
+        except Exception as exc:
+            logger.warning("Failed to record cache-hit trace: %s", exc)
 
     async def answer(
         self,
@@ -244,6 +292,7 @@ class AsyncRagService:
                 _record_stage("cache_lookup")
                 _prov_cache_hit = True
                 _emit_provenance()
+                await self._record_cache_hit_trace(question, cached, cache_scope, semantic=False)
                 return Answer(
                     text=cached.text,
                     sources=cached.sources,
@@ -260,6 +309,7 @@ class AsyncRagService:
                 _record_stage("cache_lookup")
                 _prov_cache_hit = True
                 _emit_provenance()
+                await self._record_cache_hit_trace(question, cached, cache_scope, semantic=True)
                 return Answer(
                     text=cached.text,
                     sources=cached.sources,
@@ -640,7 +690,7 @@ class AsyncRagService:
                     # Also send token usage and cost to Langfuse
                     if self.telemetry and trace:
                         try:
-                            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+                            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
                             if trace_id:
                                 # Calculate cost based on provider pricing
                                 cost = self._estimate_cost(
@@ -751,7 +801,7 @@ class AsyncRagService:
 
             _record_stage("total")
             _emit_provenance()
-            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None) if trace else None
+            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None) if trace else None
             result = Answer(
                 text=answer_text,
                 sources=tuple(c.chunk for c in _final_chunks),
@@ -809,7 +859,7 @@ class AsyncRagService:
             if self.telemetry and trace:
                 try:
                     # Get trace ID from the trace object
-                    trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+                    trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
                     if trace_id:
                         # Score confidence
                         self.telemetry.score(
@@ -847,6 +897,44 @@ class AsyncRagService:
                             value=completeness,
                             data_type="NUMERIC",
                         )
+
+                        # Phase 7: richer score types — boolean + categorical.
+                        # A full pipeline trace is never a cache hit (cache hits
+                        # return early via the cache-hit trace), so this is always
+                        # False here.
+                        self.telemetry.score(
+                            trace_id=trace_id,
+                            name="cache_hit",
+                            value=False,
+                            data_type="BOOLEAN",
+                        )
+                        # Categorical intent score, config-bound so the UI renders
+                        # the category labels. Falls back to a bare numeric value
+                        # when the score config cannot be resolved.
+                        intent_config_id = _get_intent_config_id()
+                        if intent_config_id:
+                            self.telemetry.score(
+                                trace_id=trace_id,
+                                name="intent",
+                                value=intent,
+                                data_type="CATEGORICAL",
+                                config_id=intent_config_id,
+                            )
+                        else:
+                            intent_value = {
+                                "factual": 0.0,
+                                "code_example": 1.0,
+                                "api_lookup": 2.0,
+                                "comparative": 3.0,
+                                "debugging": 4.0,
+                                "how_to": 5.0,
+                            }.get(intent, 0.0)
+                            self.telemetry.score(
+                                trace_id=trace_id,
+                                name="intent_label",
+                                value=intent_value,
+                                data_type="CATEGORICAL",
+                            )
 
                         # Log quality metrics for monitoring
                         logger.info(
@@ -1086,7 +1174,7 @@ class AsyncRagService:
 
         # Score and end trace
         if trace:
-            trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None)
+            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
             if trace_id and self.telemetry:
                 with contextlib.suppress(Exception):
                     self.telemetry.score(trace_id=trace_id, name="confidence", value=confidence)

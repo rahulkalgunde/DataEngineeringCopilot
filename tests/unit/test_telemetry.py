@@ -93,7 +93,9 @@ class TestRagTelemetryFlush:
             ):
                 return _FakeSpan()
 
-            def score(self, trace_id: str, name: str, value: float, data_type: str = "numeric", **kwargs: Any) -> None:
+            def score(
+                self, trace_id: str, name: str, value: float | str | bool, data_type: str = "numeric", **kwargs: Any
+            ) -> None:
                 return None
 
             async def flush_async(self, timeout: float = 2.0) -> None:

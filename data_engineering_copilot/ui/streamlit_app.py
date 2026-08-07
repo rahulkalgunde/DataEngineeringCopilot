@@ -144,6 +144,45 @@ def _check_deps_fingerprint(timeout: float = 2.0) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
+def _record_user_feedback(trace_id: str | None, rating: int, comment: str | None = None) -> None:
+    """Record user feedback as a score on a Langfuse trace.
+
+    Posts to ``POST /api/v1/feedback`` (single path shared with other clients);
+    falls back to scoring the trace directly when the API is unreachable.
+    Fail-open: never raises.
+    """
+    if not trace_id:
+        return
+    try:
+        payload = json.dumps({"trace_id": trace_id, "rating": rating, "comment": comment}).encode()
+        req = urllib.request.Request(
+            f"{API_BASE_URL}/api/v1/feedback",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+            return
+    except Exception:
+        logger.debug("API feedback POST failed; falling back to direct tracer", exc_info=True)
+    try:
+        from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
+        tracer = build_telemetry_tracer()
+        if hasattr(tracer, "score"):
+            tracer.score(
+                trace_id=trace_id,
+                name="user_feedback",
+                value=float(rating),
+                data_type="NUMERIC",
+                comment=comment,
+            )
+            tracer.flush()
+    except Exception:
+        logger.debug("Direct user-feedback score failed", exc_info=True)
+
+
 def _post_ingest(source_names: list[str], max_pages: int, use_async: bool = True) -> tuple[str | None, str | None]:
     """POST to /api/v1/ingest to start a background Celery task.
 
@@ -821,23 +860,10 @@ def render_qa_tab() -> None:
                         "rating": "helpful",
                         "timestamp": time.time(),
                     }
-                    # Send feedback to Langfuse
-                    try:
-                        from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
-
-                        tracer = build_telemetry_tracer()
-                        trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
-                            st.session_state, "last_trace_id", None
-                        )
-                        if hasattr(tracer, "score") and trace_id:
-                            tracer.score(
-                                trace_id=trace_id,
-                                name="user_feedback",
-                                value=1.0,
-                                data_type="NUMERIC",
-                            )
-                    except Exception:
-                        pass
+                    trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
+                        st.session_state, "last_trace_id", None
+                    )
+                    _record_user_feedback(trace_id, rating=1)
                     st.toast("Thanks for your feedback!")
             with col_feedback2:
                 if st.button("👎 Not Helpful", key=f"not_helpful_{len(collector.queries)}"):
@@ -848,23 +874,10 @@ def render_qa_tab() -> None:
                         "rating": "not_helpful",
                         "timestamp": time.time(),
                     }
-                    # Send feedback to Langfuse
-                    try:
-                        from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
-
-                        tracer = build_telemetry_tracer()
-                        trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
-                            st.session_state, "last_trace_id", None
-                        )
-                        if hasattr(tracer, "score") and trace_id:
-                            tracer.score(
-                                trace_id=trace_id,
-                                name="user_feedback",
-                                value=0.0,
-                                data_type="NUMERIC",
-                            )
-                    except Exception:
-                        pass
+                    trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
+                        st.session_state, "last_trace_id", None
+                    )
+                    _record_user_feedback(trace_id, rating=0)
                     st.toast("Thanks for your feedback!")
 
             if answer.sources:

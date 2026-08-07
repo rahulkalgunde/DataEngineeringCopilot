@@ -48,7 +48,9 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec ingestion-monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
 | `dec probe-llm` | One real request per configured LLM/embedding provider — shows status, HTTP code, latency, error category, `Retry-After`; `--json`/`--verbose`/`--purpose`/`--providers` |
 | `dec config` | Validates config: checks required settings, URL reachability (Qdrant `GET /`, Redis `PING`), embedding dim, per-purpose LLM config, collection existence |
-| `dec langfuse-seed-prompts` | Idempotently creates/updates Langfuse-managed prompts (rag-answer, query-*, groundedness-nli, chunk-enrichment-summary, eval-faithfulness, rag-json-retry-suffix) labeled `production`; requires reachable Langfuse |
+| `dec langfuse-seed-prompts` | Idempotently creates/updates Langfuse-managed prompts (rag-answer, query-*, groundedness-nli, chunk-enrichment-summary, eval-faithfulness, judge-*, rag-json-retry-suffix) labeled `production`; requires reachable Langfuse |
+| `dec langfuse-evaluate` | LLM-as-a-judge (faithfulness/relevance/out_of_scope) over production `rag-query-pipeline` traces via v4 `run_batched_evaluation`; judges write scores back onto traces. Cost gated by `LANGFUSE_SAMPLE_RATE` unless `--max-items` is passed (explicit run bypasses sampling) |
+| `dec langfuse-seed-score-configs` | Idempotently creates/reconciles Langfuse score configs (confidence/groundedness/relevance/faithfulness/user_feedback/completeness 0-1, cache_hit/out_of_scope boolean, intent categorical, ragas_*) so scores render correctly in the UI |
 
 ## API Routes (`api/routes.py`)
 - `POST /api/v1/ingest` — Celery task dispatch via `SETNX` lock (60s TTL). Checks existing running task.
