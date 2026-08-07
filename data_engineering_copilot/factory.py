@@ -1178,6 +1178,9 @@ def build_rag_service(
 
     input_guardrails = InputGuardrails(enabled=app_settings.input_guardrails_enabled)
 
+    # Phase 6 (Task 6.3): low-confidence answers → review dataset (fail-open).
+    from data_engineering_copilot.evaluation.langfuse_datasets import create_review_item
+
     return AsyncRagService(
         config=rag_config,
         vector_store=vector_store,
@@ -1202,4 +1205,5 @@ def build_rag_service(
         retrieval_tracker=retrieval_tracker,
         pii_redactor=pii_redactor,
         input_guardrails=input_guardrails,
+        review_dataset_hook=create_review_item,
     )

@@ -1,5 +1,3 @@
-import pytest
-
 from data_engineering_copilot.observability import langfuse_client as langfuse_client_module
 
 
@@ -163,11 +161,36 @@ class _FakeSpanContext:
         self.trace_id = int(trace_id, 16)
 
 
+class _FakeDatasetClient:
+    """Minimal stand-in for the v4 DatasetClient (records run_experiment calls)."""
+
+    def __init__(self, client, name):
+        self._client = client
+        self.name = name
+        self.items = []
+
+    def run_experiment(self, **kwargs):
+        self._client.experiments.append(kwargs)
+        from langfuse.experiment import ExperimentResult
+
+        return ExperimentResult(
+            name=kwargs["name"],
+            run_name=kwargs.get("run_name") or kwargs["name"],
+            description=kwargs.get("description"),
+            item_results=[],
+            run_evaluations=[],
+            experiment_id="exp-1",
+            dataset_run_id="run-1",
+            dataset_run_url="http://localhost:3000/run",
+        )
+
+
 class _FakeV4LangfuseClient:
     def __init__(self):
         self.spans = []
         self.scores = []
         self.datasets = []
+        self.experiments = []
 
     def start_observation(self, name, **kwargs):
         as_type = kwargs.get("as_type", "span")
@@ -186,6 +209,9 @@ class _FakeV4LangfuseClient:
 
     def create_dataset_item(self, **kwargs):
         self.datasets.append(kwargs)
+
+    def get_dataset(self, name, **kwargs):
+        return _FakeDatasetClient(self, name)
 
     def flush(self):
         return None
@@ -284,7 +310,7 @@ def test_langfuse_datasets_upload_evaluation_dataset_rows_uses_v4_top_level_api(
     assert client.datasets[1]["dataset_name"] == "test-ds"
 
 
-def test_run_experiment_raises_not_implemented_until_phase6(monkeypatch):
+def test_run_rag_experiment_delegates_to_dataset_run_experiment(monkeypatch):
     client = _FakeV4LangfuseClient()
     compat = langfuse_client_module.LangfuseCompat(client)
     monkeypatch.setattr(
@@ -294,8 +320,39 @@ def test_run_experiment_raises_not_implemented_until_phase6(monkeypatch):
 
     from data_engineering_copilot.evaluation import langfuse_datasets
 
-    with pytest.raises(NotImplementedError):
-        langfuse_datasets.run_experiment(experiment_name="e1", dataset_name="ds", config_a={}, config_b={})
+    result = langfuse_datasets.run_rag_experiment(
+        dataset_name="test-ds",
+        experiment_name="e1",
+        max_concurrency=2,
+    )
+
+    assert result is not None
+    assert len(client.experiments) == 1
+    call = client.experiments[0]
+    assert call["name"] == "e1"
+    assert call["max_concurrency"] == 2
+    assert callable(call["task"])
+    assert len(call["evaluators"]) == 1
+
+
+def test_create_review_item_adds_item_with_source_trace(monkeypatch):
+    client = _FakeV4LangfuseClient()
+    compat = langfuse_client_module.LangfuseCompat(client)
+    monkeypatch.setattr(
+        "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+        lambda: compat,
+    )
+
+    from data_engineering_copilot.evaluation import langfuse_datasets
+
+    ok = langfuse_datasets.create_review_item(trace_id="t1", question="q", answer="a")
+
+    assert ok is True
+    item = client.datasets[-1]
+    assert item["dataset_name"] == "low-confidence-review"
+    assert item["source_trace_id"] == "t1"
+    assert item["input"] == {"query": "q"}
+    assert item["metadata"] == {"source_trace_id": "t1"}
 
 
 def test_get_langfuse_instance_returns_none_when_disabled(monkeypatch):
