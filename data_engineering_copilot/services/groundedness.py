@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from data_engineering_copilot.domain.models import Answer, DocumentChunk, RetrievedChunk
 from data_engineering_copilot.domain.protocols import LLMClientProtocol
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ _NLI_PROMPT = (
     "CONTEXT (excerpted from documentation):\n{context}\n\n"
     "JSON array:"
 )
+
+register_fallback("groundedness-nli", _NLI_PROMPT)
 
 
 @dataclass(frozen=True)
@@ -115,7 +118,7 @@ class GroundednessVerifier:
 
         try:
             context_excerpt = self._build_context_excerpt(answer_text, context_docs)
-            prompt = _NLI_PROMPT.format(answer=answer_text[:2000], context=context_excerpt)
+            prompt = get_langfuse_prompt("groundedness-nli").compile(answer=answer_text[:2000], context=context_excerpt)
             raw = await self._llm_client.generate(prompt)
 
             cleaned = raw.strip()
@@ -183,7 +186,7 @@ class GroundednessVerifier:
 
         try:
             context_excerpt = self._build_context_excerpt(answer_text, context_docs)
-            prompt = _NLI_PROMPT.format(answer=answer_text[:2000], context=context_excerpt)
+            prompt = get_langfuse_prompt("groundedness-nli").compile(answer=answer_text[:2000], context=context_excerpt)
             raw = await self._llm_client.generate(prompt)
 
             cleaned = raw.strip()

@@ -14,8 +14,25 @@ from typing import Protocol
 
 from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
+
+# Offline fallback for the Langfuse-managed ``chunk-enrichment-summary`` prompt.
+_SUMMARY_PROMPT = (
+    "You are a technical documentation indexer.\n"
+    "Provide a direct 1-2 sentence overview (under {max_summary_words} words) "
+    "of the documentation page below.\n"
+    "State ONLY what main concepts, components, or procedures are documented.\n"
+    "INTERNAL STYLE: flat, factual, no introductory fluff.\n"
+    "If the page lacks substantive content beyond navigation links, headers, "
+    "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n"
+    "Title: {title}\n"
+    "Content:\n{text}\n\n"
+    "Summary:"
+)
+
+register_fallback("chunk-enrichment-summary", _SUMMARY_PROMPT)
 
 _INDEX_URL_BLACKLIST = frozenset(
     {
@@ -84,17 +101,10 @@ class LLMContextSummarizer:
         return True
 
     async def summarize(self, document: ParsedDocument) -> str:
-        prompt = (
-            "You are a technical documentation indexer.\n"
-            f"Provide a direct 1-2 sentence overview (under {self._max_summary_words} words) "
-            "of the documentation page below.\n"
-            "State ONLY what main concepts, components, or procedures are documented.\n"
-            "INTERNAL STYLE: flat, factual, no introductory fluff.\n"
-            "If the page lacks substantive content beyond navigation links, headers, "
-            "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n"
-            f"Title: {document.title}\n"
-            f"Content:\n{document.text[:3000]}\n\n"
-            "Summary:"
+        prompt = get_langfuse_prompt("chunk-enrichment-summary").compile(
+            max_summary_words=self._max_summary_words,
+            title=document.title,
+            text=document.text[:3000],
         )
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):

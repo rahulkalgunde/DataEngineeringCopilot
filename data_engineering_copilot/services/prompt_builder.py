@@ -1,12 +1,15 @@
 """Prompt construction service for LLM synthesis.
 
 Decouples prompt template rendering and system instructions from low-level
-HTTP client infrastructure.
+HTTP client infrastructure.  The RAG answer prompt is managed in Langfuse
+(``rag-answer``); ``_RAG_PROMPT_TEMPLATE`` is the offline fallback.
 """
 
 from __future__ import annotations
 
 import re
+
+from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 CODE_INTENTS = frozenset({"code_example", "api_lookup"})
 
@@ -69,6 +72,38 @@ _DOC_OUTPUT_FORMAT = (
     "}"
 )
 
+# Offline fallback for the Langfuse-managed ``rag-answer`` prompt. Must stay
+# byte-identical to the seeded Langfuse template when rendered.
+_RAG_PROMPT_TEMPLATE = "\n".join(
+    [
+        "## SYSTEM",
+        "{system_role}",
+        "Your role is to answer questions using ONLY the provided documentation context.",
+        "",
+        "## CONSTRAINTS",
+        "1. Base your answer strictly on the provided context.",
+        "2. Do NOT invent, assume, or use external knowledge.",
+        "3. If information is missing or unclear, explicitly state the limitation.",
+        "4. Cite specific documentation sources when possible.",
+        "5. Use precise technical terminology from the context.",
+        "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
+        "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
+        "",
+        "## OUTPUT FORMAT",
+        "{output_format}",
+        "",
+        "## INSTRUCTIONS",
+        "{instructions}",
+        "",
+        "## USER QUESTION AND CONTEXT",
+        "Context:\n{tagged_context}\n\nQuestion: {question}",
+        "",
+        "## YOUR ANSWER",
+    ]
+)
+
+register_fallback("rag-answer", _RAG_PROMPT_TEMPLATE)
+
 
 class PromptBuilder:
     """Builds structured prompts for RAG context synthesis."""
@@ -117,32 +152,12 @@ class PromptBuilder:
         density_tag = self._compute_density_tag(context)
         tagged_context = f"<chunk>\n[DENSITY: {density_tag}]\n{context}\n</chunk>"
 
-        return "\n".join(
-            [
-                "## SYSTEM",
-                self.system_role,
-                "Your role is to answer questions using ONLY the provided documentation context.",
-                "",
-                "## CONSTRAINTS",
-                "1. Base your answer strictly on the provided context.",
-                "2. Do NOT invent, assume, or use external knowledge.",
-                "3. If information is missing or unclear, explicitly state the limitation.",
-                "4. Cite specific documentation sources when possible.",
-                "5. Use precise technical terminology from the context.",
-                "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
-                "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
-                "",
-                "## OUTPUT FORMAT",
-                output_format,
-                "",
-                "## INSTRUCTIONS",
-                instructions,
-                "",
-                "## USER QUESTION AND CONTEXT",
-                f"Context:\n{tagged_context}\n\nQuestion: {question}",
-                "",
-                "## YOUR ANSWER",
-            ]
+        return get_langfuse_prompt("rag-answer").compile(
+            system_role=self.system_role,
+            output_format=output_format,
+            instructions=instructions,
+            tagged_context=tagged_context,
+            question=question,
         )
 
     @staticmethod
