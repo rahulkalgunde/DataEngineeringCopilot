@@ -2418,6 +2418,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Commit message recorded on each prompt version (default: 'seed prompts').",
     )
 
+    # Langfuse production trace evaluation (LLM-as-a-judge)
+    eval_run_parser = subparsers.add_parser(
+        "langfuse-evaluate",
+        help="Run LLM-as-a-judge (faithfulness/relevance/out-of-scope) over production rag-query-pipeline traces.",
+    )
+    eval_run_parser.add_argument(
+        "--filter",
+        default=None,
+        help='Trace filter array JSON (default: [{"type": "string", "column": "name", "operator": "=", "value": "rag-query-pipeline"}]).',
+    )
+    eval_run_parser.add_argument("--max-items", type=int, default=None, help="Cap number of traces to judge.")
+    eval_run_parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=5,
+        help="Max concurrent evaluator runs (default: 5).",
+    )
+    eval_run_parser.add_argument("--verbose", action="store_true", help="Verbose output from the SDK runner.")
+
+    # Langfuse score-config seeding
+    score_parser = subparsers.add_parser(
+        "langfuse-seed-score-configs",
+        help="Idempotently create/update Langfuse score configs (confidence, groundedness, cache_hit, intent, ...).",
+    )
+    score_parser.add_argument(
+        "--description-suffix",
+        default=None,
+        help="Optional suffix appended to score-config descriptions (e.g. an environment name).",
+    )
+
     # Inspect DB
     subparsers.add_parser("inspect-db", help="Inspect Qdrant collection: points, sources, chunk types, sample payload.")
 
@@ -2613,6 +2643,26 @@ def main() -> None:
             for name, prompt in created.items():
                 version = getattr(prompt, "version", None)
                 print(f"seeded {name} (version {version})" if version is not None else f"seeded {name}")
+        elif args.command == "langfuse-evaluate":
+            from data_engineering_copilot.evaluation.langfuse_evaluators import run_batched_trace_evaluation
+
+            result = run_batched_trace_evaluation(
+                filter=args.filter,
+                max_items=args.max_items,
+                max_concurrency=args.max_concurrency,
+                verbose=args.verbose,
+            )
+            if result is None:
+                print("No evaluation run executed (sampled out by LANGFUSE_SAMPLE_RATE or Langfuse unavailable).")
+            else:
+                print(f"Evaluated {getattr(result, 'total', '?')} traces")
+                print(f"Result: {result}")
+        elif args.command == "langfuse-seed-score-configs":
+            from data_engineering_copilot.evaluation.langfuse_score_configs import seed_score_configs
+
+            created = seed_score_configs(description_suffix=args.description_suffix)
+            for name, is_created in created.items():
+                print(f"seeded {name}" if is_created else f"already exists: {name}")
         elif args.command == "inspect-db":
             inspect_db()
         elif args.command == "cancel":

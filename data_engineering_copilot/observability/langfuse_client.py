@@ -154,7 +154,7 @@ class _ObservationCompat:
             span.end()
         return self
 
-    def score(self, name: str, value: float, data_type: str = "NUMERIC", **kwargs):
+    def score(self, name: str, value: float | str | bool, data_type: str = "NUMERIC", **kwargs):
         """Score this observation (trace, span, or generation)."""
         if self._observation is None:
             return self
@@ -330,7 +330,7 @@ class LangfuseCompat:
         if hasattr(self._client, "flush"):
             self._client.flush()
 
-    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs):
+    def score(self, trace_id: str, name: str, value: float | str | bool, data_type: str = "NUMERIC", **kwargs):
         """Score a trace directly."""
         if hasattr(self._client, "create_score"):
             try:

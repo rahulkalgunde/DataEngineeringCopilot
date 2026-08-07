@@ -163,6 +163,30 @@ SEED_PROMPTS: dict[str, str] = {
         "ANSWER: {{answer}}\n\nCONTEXT: {{context}}\n\n"
         'Return JSON: {"supported": N, "unsupported": N}'
     ),
+    "judge-faithfulness": (
+        "You are a faithfulness judge. Determine whether the answer is "
+        "supported by the retrieved documentation context. Score 0 to 1 "
+        "(1 = fully supported, 0 = hallucinated or unsupported).\n\n"
+        "Context:\n{{context}}\n\n"
+        "Answer:\n{{output}}\n\n"
+        'Reply with ONLY a JSON object: {"score": <0-1>, "reason": "<brief>"}'
+    ),
+    "judge-relevance": (
+        "You are a relevance judge. Determine whether the answer actually "
+        "addresses the user's question. Score 0 to 1 (1 = directly relevant, "
+        "0 = off-topic or evasive).\n\n"
+        "Question:\n{{input}}\n\n"
+        "Answer:\n{{output}}\n\n"
+        'Reply with ONLY a JSON object: {"score": <0-1>, "reason": "<brief>"}'
+    ),
+    "judge-out-of-scope": (
+        "You are an out-of-scope detector. Determine whether the user's "
+        "question is answerable from the provided documentation. Reply "
+        "true if the question is NOT answerable from the docs, false if it is.\n\n"
+        "Question:\n{{input}}\n\n"
+        "Answer:\n{{output}}\n\n"
+        'Reply with ONLY a JSON object: {"out_of_scope": <true|false>, "reason": "<brief>"}'
+    ),
     "rag-json-retry-suffix": (
         "\n\nIMPORTANT: Your previous response was not valid JSON. "
         "Return ONLY raw JSON with no markdown, no code fences, no preamble."

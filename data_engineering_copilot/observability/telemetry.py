@@ -30,7 +30,9 @@ class NoOpTelemetryTracer:
     def flush(self) -> None:
         pass
 
-    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs: Any) -> None:
+    def score(
+        self, trace_id: str, name: str, value: float | str | bool, data_type: str = "NUMERIC", **kwargs: Any
+    ) -> None:
         return None
 
     async def flush_async(self, timeout: float = 2.0) -> None:
@@ -76,7 +78,7 @@ class LangfuseTelemetryTracer:
             kwargs["model"] = model
         return self._client.start_observation(**kwargs)
 
-    def score(self, trace_id: str, name: str, value: float, data_type: str = "NUMERIC", **kwargs) -> None:
+    def score(self, trace_id: str, name: str, value: float | str | bool, data_type: str = "NUMERIC", **kwargs) -> None:
         """Score a trace with a metric."""
         if self._client is not None:
             self._client.score(trace_id=trace_id, name=name, value=value, data_type=data_type, **kwargs)
