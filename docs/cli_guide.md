@@ -31,6 +31,8 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
   - [dec langfuse-seed-prompts](#dec-langfuse-seed-prompts)
+  - [dec langfuse-evaluate](#dec-langfuse-evaluate)
+  - [dec langfuse-seed-score-configs](#dec-langfuse-seed-score-configs)
   - [dec inspect-db](#dec-inspect-db)
   - [dec cancel](#dec-cancel)
   - [dec ingestion-monitor](#dec-ingestion-monitor)
@@ -825,6 +827,9 @@ usage: dec langfuse-seed-prompts [-h] [--label LABEL] [--commit-message COMMIT_M
 - `groundedness-nli`
 - `chunk-enrichment-summary`
 - `eval-faithfulness`
+- `judge-faithfulness`
+- `judge-relevance`
+- `judge-out-of-scope`
 - `rag-json-retry-suffix`
 
 **Example**
@@ -845,6 +850,63 @@ dec langfuse-seed-prompts
 **Gotchas**
 - Runtime code never depends on these being seeded — every prompt has a hardcoded fallback that is byte-identical to the Langfuse template (see `data_engineering_copilot/observability/langfuse_prompts.py`).
 - Requires `.env.secrets` Langfuse keys and the Langfuse stack up (`make up`).
+
+---
+
+### `dec langfuse-evaluate`
+
+Runs LLM-as-a-judge evaluation over production `rag-query-pipeline` traces: three judges (`faithfulness`, `relevance`, `out_of_scope`) score each trace and write the scores back onto it via the v4 `run_batched_evaluation` API.
+
+```
+usage: dec langfuse-evaluate [-h] [--filter FILTER] [--max-items MAX_ITEMS]
+                             [--max-concurrency MAX_CONCURRENCY] [--verbose]
+```
+
+- `--filter <json>` trace filter array (default: `[{"type": "string", "column": "name", "operator": "=", "value": "rag-query-pipeline"}]`). Streaming traces (`rag-query-pipeline-stream`) are excluded by default.
+- `--max-items N` caps the number of traces judged. **Passing `--max-items` bypasses the sampling gate.**
+- `--max-concurrency N` concurrent evaluator runs (default 5).
+- `--verbose` prints SDK runner progress.
+
+**Behavior**
+- Judges run through the purpose-`evaluation` LLM fallback chain (no pinned provider — local Ollama last). Retrieved context for the faithfulness judge comes from the trace's `retrieval` observation (bounded to 12000 chars).
+- **Cost gating**: without `--max-items`, the run is skipped entirely with probability `1 - LANGFUSE_SAMPLE_RATE`. `--max-items` always runs (explicit operator intent).
+- Prints `Scores created: N` and per-evaluator success stats.
+
+**Example**
+
+```bash
+dec langfuse-evaluate --max-items 10
+dec langfuse-evaluate --verbose
+```
+
+**Exit codes**: `0` run executed or sampled out; `1` error.
+
+---
+
+### `dec langfuse-seed-score-configs`
+
+Idempotently creates any missing Langfuse score configs (and reconciles drifted categories/types) so scores display with proper types/ranges in the UI. Requires a reachable, authenticated Langfuse instance.
+
+```
+usage: dec langfuse-seed-score-configs [-h] [--description-suffix DESCRIPTION_SUFFIX]
+```
+
+- `--description-suffix <s>` appends a suffix to created config descriptions.
+
+**Seeded score configs**: `confidence`, `groundedness`, `relevance`, `faithfulness`, `user_feedback`, `completeness` (NUMERIC 0–1); `cache_hit`, `out_of_scope` (BOOLEAN); `intent` (CATEGORICAL: factual, code_example, api_lookup, comparative, debugging, how_to); `ragas_*` (NUMERIC 0–1).
+
+**Behavior**
+- Matches existing configs by name and only creates missing ones (idempotent).
+- If an existing categorical config's categories drifted from the catalog (e.g. `intent` missing newly added labels), it is updated in place.
+- Prints `seeded <name>` for created configs and `already exists: <name>` for the rest.
+
+**Example**
+
+```bash
+dec langfuse-seed-score-configs
+```
+
+**Exit codes**: `0` complete; `1` Langfuse is unavailable/disabled or the seed fails.
 
 ---
 
@@ -1036,6 +1098,8 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | System status | `dec status` |
 | Validate config | `dec config` |
 | Seed Langfuse-managed prompts | `dec langfuse-seed-prompts` |
+| Run LLM-as-a-judge over production traces | `dec langfuse-evaluate --max-items N` |
+| Seed Langfuse score configs | `dec langfuse-seed-score-configs` |
 | RAG evaluation | `dec evaluate` |
 | Inspect the vector DB | `dec inspect-db` |
 | Cancel a task | `dec cancel <task-id>` |

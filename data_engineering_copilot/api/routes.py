@@ -374,6 +374,12 @@ class AskRequest(BaseModel):
     bypass_cache: bool = False
 
 
+class FeedbackRequest(BaseModel):
+    trace_id: str = Field(..., min_length=1, max_length=64)
+    rating: int = Field(..., ge=0, le=1)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
 class SourceRef(BaseModel):
     source_name: str
     title: str
@@ -495,3 +501,27 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/api/v1/feedback")
+async def post_feedback(request: FeedbackRequest):
+    """Record user feedback (thumbs up/down) as a score on a Langfuse trace.
+
+    Fail-open: returns ``{"ok": true}`` even when Langfuse is unavailable so a
+    UI click is never surfaced as an error to the user.
+    """
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+
+    try:
+        tracer = build_telemetry_tracer()
+        tracer.score(
+            trace_id=request.trace_id,
+            name="user_feedback",
+            value=float(request.rating),
+            data_type="NUMERIC",
+            comment=request.comment,
+        )
+        await tracer.flush_async()
+    except Exception as exc:
+        logger.warning("Failed to record user feedback on trace %s: %s", request.trace_id, exc)
+    return {"ok": True}

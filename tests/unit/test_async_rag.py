@@ -816,3 +816,212 @@ class TestAsyncRagService:
         await service.close()
         assert llm.closed is True
         assert embedder.closed is True
+
+
+class TestPhase7Scoring:
+    """Phase 7: richer score types (boolean cache_hit, categorical intent)."""
+
+    @pytest.fixture
+    def mock_embedder(self):
+        m = MagicMock()
+        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        return m
+
+    @pytest.fixture
+    def mock_vector_store(self):
+        m = MagicMock()
+        m.query = AsyncMock()
+        m.upsert_chunks = AsyncMock()
+        return m
+
+    @pytest.fixture
+    def mock_llm(self):
+        m = MagicMock()
+        m.generate = AsyncMock()
+        return m
+
+    @pytest.fixture
+    def config(self):
+        return RagConfig()
+
+    def _make_chunk(self, text="test content", confidence=0.9):
+        chunk = MagicMock()
+        chunk.chunk.source_name = "test"
+        chunk.chunk.title = "Test"
+        chunk.chunk.url = "http://test.com"
+        chunk.chunk.text = text
+        chunk.confidence = confidence
+        chunk.distance = 1.0 - confidence
+        return chunk
+
+    @pytest.mark.asyncio
+    async def test_answer_scores_cache_hit_boolean_and_intent_categorical(
+        self, mock_embedder, mock_vector_store, mock_llm, config
+    ):
+        from unittest.mock import patch as mock_patch
+
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_generation = MagicMock()
+        mock_trace.start_observation = MagicMock(return_value=mock_generation)
+        mock_trace.trace_id = "trace-32hex"
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.9)])
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=None,
+        )
+
+        with mock_patch(
+            "data_engineering_copilot.services.async_rag._get_intent_config_id",
+            return_value="intent-config-1",
+        ):
+            await service.answer("what is spark")
+
+        scores = {call.kwargs["name"]: call.kwargs for call in mock_telemetry.score.call_args_list}
+        assert "cache_hit" in scores
+        assert scores["cache_hit"]["value"] is False
+        assert scores["cache_hit"]["data_type"] == "BOOLEAN"
+        assert "intent" in scores
+        assert scores["intent"]["data_type"] == "CATEGORICAL"
+        assert scores["intent"]["config_id"] == "intent-config-1"
+        # Full pipeline traces are never cache hits.
+        assert scores["cache_hit"]["value"] is False
+
+    @pytest.mark.asyncio
+    async def test_answer_intent_score_falls_back_to_numeric_without_config(
+        self, mock_embedder, mock_vector_store, mock_llm, config
+    ):
+        from unittest.mock import patch as mock_patch
+
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_generation = MagicMock()
+        mock_trace.start_observation = MagicMock(return_value=mock_generation)
+        mock_trace.trace_id = "trace-32hex"
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.9)])
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=None,
+        )
+
+        with mock_patch(
+            "data_engineering_copilot.services.async_rag._get_intent_config_id",
+            return_value=None,
+        ):
+            await service.answer("what is spark")
+
+        scores = {call.kwargs["name"]: call.kwargs for call in mock_telemetry.score.call_args_list}
+        # "what is spark" classifies as factual -> numeric 0.0.
+        assert "intent_label" in scores
+        assert scores["intent_label"]["data_type"] == "CATEGORICAL"
+        assert scores["intent_label"]["value"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_records_boolean_true_score(self, mock_embedder, mock_vector_store, mock_llm, config):
+        from data_engineering_copilot.domain.models import CachedAnswer, DocumentChunk
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache
+
+        cache = QueryCache(exact_enabled=True, semantic_enabled=False)
+        source = DocumentChunk(
+            chunk_id="c1",
+            source_name="test",
+            title="Test",
+            url="http://test.com",
+            text="test content",
+            doc_type="guide",
+        )
+        cache.set_exact(
+            "what is spark",
+            CachedAnswer(text="cached answer", sources=(source,), confidence=0.9),
+        )
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_trace.trace_id = "cache-trace-32hex"
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=cache,
+        )
+
+        result = await service.answer("what is spark")
+
+        assert result.text == "cached answer"
+        # Cache-hit trace created with distinct name.
+        name = mock_telemetry.start_observation.call_args.kwargs["name"]
+        assert name == "rag-query-pipeline-cache-hit"
+        # cache_hit scored as boolean true.
+        score_call = mock_telemetry.score.call_args.kwargs
+        assert score_call["name"] == "cache_hit"
+        assert score_call["value"] is True
+        assert score_call["data_type"] == "BOOLEAN"
+        mock_telemetry.flush_async.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_trace_failure_is_fail_open(self, mock_embedder, mock_vector_store, mock_llm, config):
+        from data_engineering_copilot.domain.models import CachedAnswer, DocumentChunk
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_cache import QueryCache
+
+        cache = QueryCache(exact_enabled=True, semantic_enabled=False)
+        source = DocumentChunk(
+            chunk_id="c1",
+            source_name="test",
+            title="Test",
+            url="http://test.com",
+            text="test content",
+            doc_type="guide",
+        )
+        cache.set_exact(
+            "what is spark",
+            CachedAnswer(text="cached answer", sources=(source,), confidence=0.9),
+        )
+
+        mock_telemetry = MagicMock()
+        mock_telemetry.start_observation = MagicMock(side_effect=RuntimeError("boom"))
+        mock_telemetry.flush_async = AsyncMock()
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=cache,
+        )
+
+        result = await service.answer("what is spark")
+        assert result.text == "cached answer"

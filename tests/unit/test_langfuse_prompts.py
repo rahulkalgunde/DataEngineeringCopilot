@@ -14,6 +14,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from data_engineering_copilot.domain.models import ParsedDocument
+
+# Importing the service modules registers their fallbacks at import time.
+from data_engineering_copilot.evaluation import (
+    langfuse_evaluators as _eval_module,  # noqa: F401  (registers judge-* fallbacks)
+)
 from data_engineering_copilot.observability import langfuse_prompts as lp_module
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt
 from data_engineering_copilot.services.async_rag import _JSON_RETRY_SUFFIX
@@ -35,7 +40,6 @@ from data_engineering_copilot.services.query_rewriting import (
 from data_engineering_copilot.services.rag_evaluation import _FAITHFULNESS_PROMPT, FaithfulnessEvaluator
 from tests.doubles.llm import StubLLM
 
-# Importing the service modules registers their fallbacks at import time.
 # nosec: B402 — importing service modules is required to trigger register_fallback.
 
 DEFAULT_SYSTEM_ROLE = "You are DataEngineeringCopilot, an expert data engineering assistant."
@@ -49,6 +53,9 @@ _ALL_PROMPTS = {
     "groundedness-nli",
     "chunk-enrichment-summary",
     "eval-faithfulness",
+    "judge-faithfulness",
+    "judge-relevance",
+    "judge-out-of-scope",
     "rag-json-retry-suffix",
 }
 
@@ -67,6 +74,9 @@ _COMPILE_CASES = {
     "groundedness-nli": {"answer": "Spark SQL is a module.", "context": "Spark SQL is a module for data."},
     "chunk-enrichment-summary": {"max_summary_words": 50, "title": "Test Title", "text": "Content here"},
     "eval-faithfulness": {"answer": "answer text", "context": "context text"},
+    "judge-faithfulness": {"output": "the answer", "context": "the context"},
+    "judge-relevance": {"input": "the question", "output": "the answer"},
+    "judge-out-of-scope": {"input": "the question", "output": "the answer"},
     "rag-json-retry-suffix": {},
 }
 
@@ -79,6 +89,30 @@ _FALLBACK_TEMPLATES = {
     "groundedness-nli": _NLI_PROMPT,
     "chunk-enrichment-summary": _SUMMARY_PROMPT,
     "eval-faithfulness": _FAITHFULNESS_PROMPT,
+    "judge-faithfulness": (
+        "You are a faithfulness judge. Determine whether the answer is "
+        "supported by the retrieved documentation context. Score 0 to 1 "
+        "(1 = fully supported, 0 = hallucinated or unsupported).\n\n"
+        "Context:\n{context}\n\n"
+        "Answer:\n{output}\n\n"
+        'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}'
+    ),
+    "judge-relevance": (
+        "You are a relevance judge. Determine whether the answer actually "
+        "addresses the user's question. Score 0 to 1 (1 = directly relevant, "
+        "0 = off-topic or evasive).\n\n"
+        "Question:\n{input}\n\n"
+        "Answer:\n{output}\n\n"
+        'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}'
+    ),
+    "judge-out-of-scope": (
+        "You are an out-of-scope detector. Determine whether the user's "
+        "question is answerable from the provided documentation. Reply "
+        "true if the question is NOT answerable from the docs, false if it is.\n\n"
+        "Question:\n{input}\n\n"
+        "Answer:\n{output}\n\n"
+        'Reply with ONLY a JSON object: {{"out_of_scope": <true|false>, "reason": "<brief>"}}'
+    ),
     "rag-json-retry-suffix": _JSON_RETRY_SUFFIX,
 }
 
