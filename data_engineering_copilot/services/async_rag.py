@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextlib
 import json
 import logging
@@ -147,6 +148,7 @@ class AsyncRagService:
         evaluation_llm_client: LLMClientProtocol | None = None,
         pii_redactor: PiiRedactor | None = None,
         input_guardrails: InputGuardrails | None = None,
+        review_dataset_hook: Callable[[str, str, str], object] | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -164,7 +166,24 @@ class AsyncRagService:
         self.retrieval_tracker = retrieval_tracker
         self._pii_redactor = pii_redactor
         self.input_guardrails = input_guardrails
+        self.review_dataset_hook = review_dataset_hook
         self._prompt_builder = PromptBuilder()
+
+    async def _record_low_confidence_review(self, trace, question: str, answer_text: str) -> None:
+        """Phase 6 (Task 6.3): queue low-confidence answers into the review dataset.
+
+        Fail-open and off the request path: the hook runs in a worker thread and
+        any failure is logged and ignored.
+        """
+        if self.review_dataset_hook is None:
+            return
+        trace_id = getattr(trace, "id", None) or getattr(trace, "trace_id", None) if trace else None
+        if not trace_id:
+            return
+        try:
+            await asyncio.to_thread(self.review_dataset_hook, trace_id, question, answer_text)
+        except Exception as exc:
+            logger.warning("Failed to create low-confidence review item: %s", exc)
 
     async def answer(
         self,
@@ -459,6 +478,9 @@ class AsyncRagService:
                 )
                 trace.end()
             _emit_provenance()
+            await self._record_low_confidence_review(
+                trace, question, "I cannot answer this question because it is outside my knowledge repository."
+            )
             return Answer(
                 text="I cannot answer this question because it is outside my knowledge repository.",
                 sources=tuple(),

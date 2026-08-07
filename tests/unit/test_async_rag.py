@@ -442,6 +442,78 @@ class TestAsyncRagService:
         mock_telemetry.start_observation.assert_called()
         mock_telemetry.flush_async.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_answer_low_confidence_invokes_review_dataset_hook(self, mock_embedder, mock_vector_store, mock_llm):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_generation = MagicMock()
+        mock_trace.start_observation = MagicMock(return_value=mock_generation)
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.05)])
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        calls = []
+
+        def hook(trace_id, question, answer):
+            calls.append((trace_id, question, answer))
+
+        service = AsyncRagService(
+            config=RagConfig(confidence_threshold=0.3),
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=None,
+            review_dataset_hook=hook,
+        )
+
+        result = await service.answer("low confidence question")
+
+        assert len(calls) == 1
+        trace_id, question, answer = calls[0]
+        assert question == "low confidence question"
+        assert answer == result.text
+        assert trace_id is not None
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_answer_high_confidence_skips_review_dataset_hook(self, mock_embedder, mock_vector_store, mock_llm):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_trace.start_observation = MagicMock(return_value=MagicMock())
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.9)])
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        calls = []
+
+        def hook(trace_id, question, answer):
+            calls.append((trace_id, question, answer))
+
+        service = AsyncRagService(
+            config=RagConfig(confidence_threshold=0.3),
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=None,
+            review_dataset_hook=hook,
+        )
+
+        await service.answer("high confidence question")
+
+        assert calls == []
+
     async def test_answer_trace_carries_tags_user_session_model(self, mock_embedder, mock_vector_store, mock_llm):
         from data_engineering_copilot.services.async_rag import AsyncRagService
 

@@ -1714,12 +1714,23 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
     return 0
 
 
-def evaluate(verbose: bool = False, dataset: str | None = None, source: str | None = None) -> None:
+def evaluate(
+    verbose: bool = False,
+    dataset: str | None = None,
+    source: str | None = None,
+    experiment_name: str | None = None,
+    dataset_name: str | None = None,
+) -> None:
     """Run RAG evaluation on golden dataset.
 
     ``dataset`` selects a JSONL dataset file (default ``tests/evaluation/eval_dataset.jsonl``,
     or a per-source file like ``tests/evaluation/eval_dataset_airflow.jsonl``). ``source``
     filters the loaded rows by their ``source_name`` field.
+
+    ``experiment_name`` uploads the evaluated rows to a Langfuse dataset and runs
+    a RAG experiment over them (``dataset.run_experiment``). When ``dataset_name``
+    is also given, the experiment runs directly against that existing Langfuse
+    dataset instead of the freshly evaluated rows.
     """
     import asyncio
 
@@ -1837,6 +1848,47 @@ def evaluate(verbose: bool = False, dataset: str | None = None, source: str | No
         print(f"  overall:           {ragas_report.overall:.3f}")
     else:
         print("\nRAGAS evaluation skipped: 'ragas' package not installed.")
+
+    # Phase 6 (Task 6.1): upload evaluated rows to a Langfuse dataset
+    from data_engineering_copilot.evaluation.langfuse_datasets import upload_evaluation_dataset_rows
+
+    resolved_dataset_name = dataset_name or (
+        f"dec-evaluate-{source or 'all'}-{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y%m%d-%H%M')}"
+    )
+    uploaded = False
+    if results:
+        items = [
+            {
+                "input": {"query": r["query"]},
+                "expected_output": {"answer": r["ground_truth"]},
+                "metadata": {
+                    "confidence": r["confidence"],
+                    "latency_ms": round(r["latency"] * 1000, 1),
+                    "contexts": r["contexts"],
+                },
+            }
+            for r in results
+        ]
+        uploaded = upload_evaluation_dataset_rows(dataset_name=resolved_dataset_name, items=items)
+        if uploaded:
+            print(f"\n📊 Uploaded {len(results)} evaluation results to Langfuse dataset: {resolved_dataset_name}")
+        else:
+            print("\n⚠️  Langfuse dataset upload skipped (Langfuse unavailable).")
+
+    # Phase 6 (Task 6.2): RAG experiment over the dataset
+    if experiment_name and uploaded:
+        from data_engineering_copilot.evaluation.langfuse_datasets import run_rag_experiment
+
+        print(f"\n🧪 Running experiment '{experiment_name}' on dataset '{resolved_dataset_name}'...\n")
+        result = run_rag_experiment(
+            dataset_name=resolved_dataset_name,
+            experiment_name=experiment_name,
+            source_filter=[source] if source else None,
+        )
+        if result is not None:
+            print(result.format())
+        else:
+            print("⚠️  Experiment could not be run (Langfuse unavailable).")
 
     # Drift detection
     if settings.drift_detection_enabled and results:
@@ -2329,6 +2381,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only evaluate queries whose `source_name` matches this value.",
     )
     eval_parser.add_argument(
+        "--experiment-name",
+        default=None,
+        help="Upload evaluated rows to a Langfuse dataset and run a RAG experiment with this name.",
+    )
+    eval_parser.add_argument(
+        "--dataset-name",
+        default=None,
+        help="Langfuse dataset name (default: dec-evaluate-{source}-{date}). With --experiment-name, "
+        "run the experiment against this existing dataset directly instead of freshly evaluated rows.",
+    )
+    eval_parser.add_argument(
         "--spark",
         action="store_true",
         help="Run Spark retrieval-recall evaluation (expected terms/sources).",
@@ -2521,11 +2584,26 @@ def main() -> None:
                 )
                 output_dir = pathlib.Path(args.output_dir) if getattr(args, "output_dir", None) else None
                 sys.exit(evaluate_spark_dataset(pathlib.Path(dataset), output_dir=output_dir))
-            evaluate(
-                verbose=getattr(args, "verbose", False),
-                dataset=getattr(args, "dataset", None),
-                source=getattr(args, "source", None),
-            )
+            if getattr(args, "experiment_name", None) and getattr(args, "dataset_name", None):
+                from data_engineering_copilot.evaluation.langfuse_datasets import run_rag_experiment
+
+                print(f"🧪 Running experiment '{args.experiment_name}' on dataset '{args.dataset_name}'...\n")
+                result = run_rag_experiment(
+                    dataset_name=args.dataset_name,
+                    experiment_name=args.experiment_name,
+                    source_filter=[args.source] if getattr(args, "source", None) else None,
+                )
+                if result is None:
+                    sys.exit(1)
+                print(result.format())
+            else:
+                evaluate(
+                    verbose=getattr(args, "verbose", False),
+                    dataset=getattr(args, "dataset", None),
+                    source=getattr(args, "source", None),
+                    experiment_name=getattr(args, "experiment_name", None),
+                    dataset_name=getattr(args, "dataset_name", None),
+                )
         elif args.command == "config":
             config()
         elif args.command == "langfuse-seed-prompts":

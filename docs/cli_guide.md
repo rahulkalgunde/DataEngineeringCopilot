@@ -635,7 +635,8 @@ Runs RAG evaluation over a golden dataset (default `tests/evaluation/eval_datase
 
 ```
 usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
-                    [--spark] [--output-dir OUTPUT_DIR]
+                    [--experiment-name EXPERIMENT_NAME]
+                    [--dataset-name DATASET_NAME] [--spark] [--output-dir OUTPUT_DIR]
 ```
 
 **Behavior**
@@ -645,6 +646,7 @@ usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
 - Prints per-query `Answer` snippet, `Confidence`, and retrieved-context count.
 - Prints summary: total queries, average confidence.
 - **RAGAS metrics** (if the `ragas` package is installed): `context_recall`, `context_precision`, `faithfulness`, `answer_relevancy`, `overall`. Otherwise prints "RAGAS evaluation skipped".
+- **Langfuse dataset upload** (if Langfuse is reachable): evaluated rows are uploaded to a dataset named `dec-evaluate-{source}-{timestamp}` (override with `--dataset-name`) with `input.query`, `expected_output.answer`, and metadata (confidence, latency_ms, contexts). Prints the dataset name on success.
 - **Drift detection** (if `DRIFT_DETECTION_ENABLED`): records a snapshot into `data/eval_history.jsonl`, compares against the trailing window (`DRIFT_WINDOW_DAYS`, default 7), and prints per-metric deltas, `DRIFT DETECTED`, `No drift detected`, or "First eval recorded".
 
 **`dec evaluate --spark`** runs the Spark retrieval-recall evaluation
@@ -669,6 +671,20 @@ measures retrieval-stage diagnostics:
   below `0.9`, when any forbidden term surfaces in evidence, or when any
   out-of-scope row is not refused.
 
+**Experiments** (`--experiment-name`)
+
+`dec evaluate --experiment-name "My Run"` uploads the evaluated rows (as above)
+and then runs a Langfuse experiment over that dataset via the v4
+`dataset.run_experiment` API: each item's `query` is answered by the production
+RAG service, a term-overlap `faithfulness` evaluator scores output vs
+`expected_output.answer`, and offline RAGAS metrics are scored onto each item
+trace (`ragas_context_recall` etc.). Requires reachable Langfuse; the pipeline
+still needs Qdrant + embedder + LLM for the RAG task itself.
+
+`dec evaluate --experiment-name "My Run" --dataset-name "some-existing-dataset"`
+runs the experiment **directly** against an existing Langfuse dataset, skipping
+the eval loop and upload entirely (exit code 1 if Langfuse is unavailable).
+
 **Example**
 
 ```bash
@@ -676,6 +692,7 @@ dec evaluate
 dec evaluate --source "Apache Spark Documentation"
 dec evaluate --dataset tests/evaluation/eval_dataset_airflow.jsonl
 dec evaluate --spark --output-dir .rag_eval/baseline-01
+dec evaluate --experiment-name "baseline-2026-08"
 ```
 
 **Exit codes**: `0` on completion; `1` if the evaluation dataset is missing, `--source` matches no rows, or (Spark mode) recall is below threshold.
