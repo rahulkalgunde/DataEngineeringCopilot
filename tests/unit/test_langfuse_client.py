@@ -296,3 +296,60 @@ def test_run_experiment_raises_not_implemented_until_phase6(monkeypatch):
 
     with pytest.raises(NotImplementedError):
         langfuse_datasets.run_experiment(experiment_name="e1", dataset_name="ds", config_a={}, config_b={})
+
+
+def test_get_langfuse_instance_returns_none_when_disabled(monkeypatch):
+    from tests.conftest import make_settings
+
+    monkeypatch.setattr(
+        langfuse_client_module,
+        "settings",
+        make_settings(langfuse_enabled=False),
+    )
+    assert langfuse_client_module.get_langfuse_instance() is None
+
+
+def test_get_langfuse_instance_sampling_gates_client(monkeypatch):
+    from tests.conftest import make_settings
+
+    disabled_settings = make_settings(langfuse_enabled=True, langfuse_sample_rate=0.0, image_git_sha="abc1234")
+    monkeypatch.setattr(langfuse_client_module, "settings", disabled_settings)
+    monkeypatch.setattr(langfuse_client_module.random, "random", lambda: 0.999)
+    assert langfuse_client_module.get_langfuse_instance() is None
+
+    enabled_settings = make_settings(langfuse_enabled=True, langfuse_sample_rate=1.0, image_git_sha="abc1234")
+    monkeypatch.setattr(langfuse_client_module, "settings", enabled_settings)
+    monkeypatch.setattr(
+        "data_engineering_copilot.observability.langfuse_client._check_langfuse_health",
+        lambda _host: True,
+    )
+
+    class _FakeV4Client:
+        def __init__(self, **kwargs):
+            self.release = kwargs.get("release")
+
+        def auth_check(self):
+            return True
+
+        def start_observation(self, name, as_type, **kwargs):
+            return _FakeV4Span("s", as_type, "0000000000000001", "b" * 32)
+
+        def flush(self):
+            pass
+
+        def create_score(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "data_engineering_copilot.observability.langfuse_client._candidate_langfuse_hosts",
+        lambda host: [host],
+    )
+    monkeypatch.setattr(
+        "langfuse.Langfuse",
+        _FakeV4Client,
+        raising=False,
+    )
+
+    compat = langfuse_client_module.get_langfuse_instance()
+    assert compat is not None
+    assert getattr(compat._client, "release", None) == "abc1234"

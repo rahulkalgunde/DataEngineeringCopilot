@@ -442,6 +442,44 @@ class TestAsyncRagService:
         mock_telemetry.start_observation.assert_called()
         mock_telemetry.flush_async.assert_awaited_once()
 
+    async def test_answer_trace_carries_tags_user_session_model(self, mock_embedder, mock_vector_store, mock_llm):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_telemetry = MagicMock()
+        mock_trace = MagicMock()
+        mock_generation = MagicMock()
+        mock_trace.start_observation = MagicMock(return_value=mock_generation)
+        mock_telemetry.start_observation = MagicMock(return_value=mock_trace)
+        mock_telemetry.flush_async = AsyncMock()
+
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        mock_llm.generate = AsyncMock(return_value="answer")
+        mock_llm.model = "llama3.2:3b"
+
+        service = AsyncRagService(
+            config=RagConfig(),
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=mock_telemetry,
+            cache=None,
+        )
+
+        await service.answer("what is spark", user_id="user-1", session_id="session-1")
+
+        _, trace_kwargs = mock_telemetry.start_observation.call_args
+        assert trace_kwargs["user_id"] == "user-1"
+        assert trace_kwargs["session_id"] == "session-1"
+        assert trace_kwargs["tags"] == ["app:data-engineering-copilot"]
+        assert "metadata" in trace_kwargs
+
+        generation_calls = [
+            c.kwargs for c in mock_trace.start_observation.call_args_list if c.kwargs.get("as_type") == "generation"
+        ]
+        assert generation_calls, "expected a generation observation"
+        assert any(c.get("model") == "llama3.2:3b" for c in generation_calls)
+
     def test_select_llm_client_no_code_llm_returns_primary(self, config):
         service = self._make_service(config=config)
         llm = service.llm_client

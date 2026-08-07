@@ -78,6 +78,7 @@ with propagate_attributes(
 - Sets attributes on the currently-active span AND in OTel context so all child spans created inside the block inherit them.
 - **Must be entered BEFORE creating the root span** — attributes only apply to spans created while the context is active. Pre-existing spans are NOT retrofitted.
 - `Langfuse(environment=...)` / `release=` / `sample_rate=` on the client apply as defaults for all spans; per-trace `propagate_attributes(environment=...)` overrides for spans created inside it.
+- **`release` is client-level only**: `propagate_attributes` does NOT accept `release` (verified `inspect.signature` in 4.14.3). `LangfuseCompat._enter_propagate` filters it out of the attrs dict; set it via `Langfuse(release=...)` in `get_langfuse_instance()` (uses `settings.image_git_sha`).
 - Span attribute keys (constants in `langfuse._client.attributes.LangfuseOtelSpanAttributes`):
   - `user.id`, `session.id`, `langfuse.trace.tags`, `langfuse.environment`, `langfuse.release`, `langfuse.trace.name`, `langfuse.trace.metadata.<k>`.
 
@@ -129,6 +130,7 @@ span.update(
 ```
 
 - Usage/cost fields are `usage_details` (int counts) and `cost_details` (float USD). No separate `cost`/`usage` kwargs (they land in `**kwargs` and are dropped).
+- **Verified end-to-end (server 4.6.0):** `usage_details={"input","output","total","unit":"TOKENS"}` and `cost_details={"input","output","total","currency":"USD"}` both land on the generation. The public API exposes them as `usageDetails` + `costDetails`, plus computed `calculatedTotalCost` (NOT a `cost` field — reading `.cost` returns None).
 
 ## Prompts
 
