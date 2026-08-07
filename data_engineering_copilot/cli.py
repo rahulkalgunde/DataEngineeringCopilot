@@ -14,6 +14,7 @@ from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.models import DocumentChunk
+from data_engineering_copilot.evaluation.langfuse_metrics import query_aliases
 from data_engineering_copilot.profiler import cli as profiler_cli
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord
 
@@ -2448,6 +2449,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional suffix appended to score-config descriptions (e.g. an environment name).",
     )
 
+    # Langfuse metrics API
+    metrics_parser = subparsers.add_parser(
+        "langfuse-metrics",
+        help="Query the Langfuse Metrics API v2 (cost, latency, volume, scores).",
+    )
+    metrics_parser.add_argument(
+        "query",
+        nargs="?",
+        choices=sorted(query_aliases()),
+        help="Preset query name (cost-by-model, daily-volume-latency, score-summary).",
+    )
+    metrics_parser.add_argument("--days", type=int, default=7, help="Look-back window in days (default: 7).")
+    metrics_parser.add_argument(
+        "--score-name",
+        default=None,
+        help="For --query score-summary: restrict to one score name.",
+    )
+    metrics_parser.add_argument("--json", action="store_true", help="Pretty-print the raw JSON rows.")
+
     # Inspect DB
     subparsers.add_parser("inspect-db", help="Inspect Qdrant collection: points, sources, chunk types, sample payload.")
 
@@ -2663,6 +2683,36 @@ def main() -> None:
             created = seed_score_configs(description_suffix=args.description_suffix)
             for name, is_created in created.items():
                 print(f"seeded {name}" if is_created else f"already exists: {name}")
+        elif args.command == "langfuse-metrics":
+            from data_engineering_copilot.evaluation.langfuse_metrics import (
+                cost_by_model,
+                daily_volume_and_latency,
+                score_summary,
+            )
+
+            preset = args.query
+            if preset == "cost-by-model":
+                rows = cost_by_model(days=args.days)
+            elif preset == "daily-volume-latency":
+                rows = daily_volume_and_latency(days=args.days)
+            elif preset == "score-summary":
+                rows = score_summary(name=args.score_name, days=args.days)
+            else:
+                print("Preset queries:")
+                for name, desc in sorted(query_aliases().items()):
+                    print(f"  {name:<22} {desc}")
+                print("\nExample: dec langfuse-metrics cost-by-model --days 7")
+                return
+            if args.json:
+                print(json.dumps(rows, indent=2, default=str))
+                return
+            if not rows:
+                print("No metrics returned for the selected window.")
+                return
+            headers = list(rows[0].keys())
+            print("\t".join(headers))
+            for row in rows:
+                print("\t".join(str(row.get(h, "")) for h in headers))
         elif args.command == "inspect-db":
             inspect_db()
         elif args.command == "cancel":

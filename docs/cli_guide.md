@@ -33,6 +33,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec langfuse-seed-prompts](#dec-langfuse-seed-prompts)
   - [dec langfuse-evaluate](#dec-langfuse-evaluate)
   - [dec langfuse-seed-score-configs](#dec-langfuse-seed-score-configs)
+  - [dec langfuse-metrics](#dec-langfuse-metrics)
   - [dec inspect-db](#dec-inspect-db)
   - [dec cancel](#dec-cancel)
   - [dec ingestion-monitor](#dec-ingestion-monitor)
@@ -910,6 +911,38 @@ dec langfuse-seed-score-configs
 
 ---
 
+### `dec langfuse-metrics`
+
+Queries the Langfuse Metrics API v2 for cost, latency, volume, and score analytics. Requires a reachable, authenticated Langfuse instance.
+
+```
+usage: dec langfuse-metrics [-h] [{cost-by-model,daily-volume-latency,score-summary}]
+                            [--days DAYS] [--score-name SCORE_NAME] [--json]
+```
+
+**Preset queries**
+- `cost-by-model` — total cost grouped by model, most expensive first.
+- `daily-volume-latency` — daily request count and p95 latency (requires observations with recorded latency in the window).
+- `score-summary` — average numeric score + count grouped by score name; `--score-name <name>` restricts to one score.
+
+**Options**
+- `--days N` look-back window (default 7).
+- `--json` pretty-print the raw rows as JSON instead of a TSV table.
+
+**Examples**
+
+```bash
+dec langfuse-metrics cost-by-model --days 7
+dec langfuse-metrics score-summary --score-name confidence --days 30
+dec langfuse-metrics daily-volume-latency --days 1 --json
+```
+
+Running with no preset prints the list of presets and exits 0.
+
+**Exit codes**: `0` success (including empty result); `1` Langfuse unavailable.
+
+---
+
 ### `dec inspect-db`
 
 Scrolls the Qdrant collection and prints a payload/source/chunk-type analysis plus a sample chunk.
@@ -1100,6 +1133,7 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Seed Langfuse-managed prompts | `dec langfuse-seed-prompts` |
 | Run LLM-as-a-judge over production traces | `dec langfuse-evaluate --max-items N` |
 | Seed Langfuse score configs | `dec langfuse-seed-score-configs` |
+| Query Langfuse metrics (cost/latency/scores) | `dec langfuse-metrics cost-by-model --days 7` |
 | RAG evaluation | `dec evaluate` |
 | Inspect the vector DB | `dec inspect-db` |
 | Cancel a task | `dec cancel <task-id>` |
