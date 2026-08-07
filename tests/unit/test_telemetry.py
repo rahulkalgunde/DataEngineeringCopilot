@@ -88,7 +88,9 @@ class TestRagTelemetryFlush:
         from data_engineering_copilot.services.async_rag import AsyncRagService
 
         class FailingTracer:
-            def start_observation(self, name: str, input: Any = None, as_type: str = "trace", model: str | None = None):
+            def start_observation(
+                self, name: str, input: Any = None, as_type: str = "trace", model: str | None = None, **kwargs: Any
+            ):
                 return _FakeSpan()
 
             def score(self, trace_id: str, name: str, value: float, data_type: str = "numeric", **kwargs: Any) -> None:
