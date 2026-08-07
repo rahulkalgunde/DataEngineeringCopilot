@@ -461,9 +461,13 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
     async def event_stream():
         try:
             service = await get_rag_service()
+            user_id = fastapi_request.headers.get("X-User-ID") or fastapi_request.query_params.get("user_id")
+            session_id = fastapi_request.headers.get("X-Session-ID") or fastapi_request.query_params.get("session_id")
             async for event in service.answer_stream(
                 request.question,
                 source_filter=effective_source_filter,
+                user_id=user_id,
+                session_id=session_id,
             ):
                 yield event
         except TimeoutError:
