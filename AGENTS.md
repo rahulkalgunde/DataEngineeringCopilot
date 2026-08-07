@@ -47,7 +47,8 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 | `dec profile` | Ingestion concurrency profiler |
 | `dec ingestion-monitor --task-id <id>` | Live ingestion dashboard (auto-refresh) |
 | `dec probe-llm` | One real request per configured LLM/embedding provider — shows status, HTTP code, latency, error category, `Retry-After`; `--json`/`--verbose`/`--purpose`/`--providers` |
-| `dec status` / `dec health` / `dec config` | System status, health checks, config validation |
+| `dec config` | Validates config: checks required settings, URL reachability (Qdrant `GET /`, Redis `PING`), embedding dim, per-purpose LLM config, collection existence |
+| `dec langfuse-seed-prompts` | Idempotently creates/updates Langfuse-managed prompts (rag-answer, query-*, groundedness-nli, chunk-enrichment-summary, eval-faithfulness, rag-json-retry-suffix) labeled `production`; requires reachable Langfuse |
 
 ## API Routes (`api/routes.py`)
 - `POST /api/v1/ingest` — Celery task dispatch via `SETNX` lock (60s TTL). Checks existing running task.

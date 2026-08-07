@@ -2341,6 +2341,18 @@ def build_parser() -> argparse.ArgumentParser:
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
 
+    # Langfuse prompt seeding
+    seed_parser = subparsers.add_parser(
+        "langfuse-seed-prompts",
+        help="Idempotently create/update Langfuse-managed prompts (rag-answer, query-*, groundedness-nli, ...).",
+    )
+    seed_parser.add_argument("--label", default="production", help="Prompt label (default: production).")
+    seed_parser.add_argument(
+        "--commit-message",
+        default="seed prompts",
+        help="Commit message recorded on each prompt version (default: 'seed prompts').",
+    )
+
     # Inspect DB
     subparsers.add_parser("inspect-db", help="Inspect Qdrant collection: points, sources, chunk types, sample payload.")
 
@@ -2514,6 +2526,13 @@ def main() -> None:
             )
         elif args.command == "config":
             config()
+        elif args.command == "langfuse-seed-prompts":
+            from data_engineering_copilot.observability.langfuse_prompts import seed_prompts
+
+            created = seed_prompts(label=args.label, commit_message=args.commit_message)
+            for name, prompt in created.items():
+                version = getattr(prompt, "version", None)
+                print(f"seeded {name} (version {version})" if version is not None else f"seeded {name}")
         elif args.command == "inspect-db":
             inspect_db()
         elif args.command == "cancel":
