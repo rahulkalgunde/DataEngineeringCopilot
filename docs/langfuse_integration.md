@@ -16,9 +16,9 @@ See also `docs/langfuse_evaluators.md` (evaluators + score configs) and
   tracer factory in `observability/telemetry.py`
   (`build_telemetry_tracer` → `LangfuseTelemetryTracer` / `NoOpTelemetryTracer`).
 - **Server**: `langfuse/langfuse:4` + `langfuse/langfuse-worker:4` with
-  ClickHouse 26.4. Currently in **dual-write** migration mode
-  (`LANGFUSE_MIGRATION_V4_WRITE_MODE=dual`) — v4 data is written alongside the
-  legacy pipeline. Cutover to `events_only` is deferred (Task 1.5).
+  ClickHouse 26.4. The historic backfill completed successfully and the stack
+  now runs in **events-only** mode (`LANGFUSE_MIGRATION_V4_WRITE_MODE=events_only`,
+  `LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR=direct`).
 - **Scoring**: `telemetry.score(trace_id, name, value, data_type, ...)`
   supports NUMERIC / BOOLEAN / CATEGORICAL values. Categorical scores must be
   config-bound (pass `config_id` + the string label) to render labels in the
@@ -146,8 +146,7 @@ annotate in the queue; annotations attach as scores and feed quality analytics.
 
 ## Monitors & alerts (Task 8.4)
 
-Monitors are a v4 feature available after the Phase 1 cutover. Define alerts in
-the Langfuse UI:
+Monitors are now available in the v4 experience. Define alerts in the Langfuse UI:
 - `groundedness` average < 0.6 over 1h
 - `user_feedback` = 0 spike
 - error rate > 5%
@@ -160,19 +159,20 @@ monitor fires.
 - Langfuse events are uploaded to MinIO (`local-dev` bucket) — verified live
   (observation, dataset_run_item, etc. objects appear). Configured via
   `LANGFUSE_S3_EVENT_UPLOAD_*` in `docker-compose.yml`.
-- **Before the Phase 1.5 cutover**, switch the export source in the Langfuse
-  UI from **"Traces and observations (legacy)"** → **"Enriched observations"**.
-  After cutover the legacy export stops producing data, so the switch must
-  happen first.
+- No blob-storage export integration was configured in this local project, so
+  there was no legacy export source to switch. The event-upload path is active
+  and writes to the MinIO `local-dev` bucket.
 
 ## Migration runbook (Phase 1) & rollback
 
-- Phase 1 upgraded ClickHouse to 26.4 and Langfuse server/worker to `:4`, and
-  put the stack in **dual-write** mode (`LANGFUSE_MIGRATION_V4_WRITE_MODE=dual`).
+- Phase 1 upgraded ClickHouse to 26.4 and Langfuse server/worker to `:4`.
+- Historic v4 backfill completed: root spans, observation rewrite, events
+  backfill, and dataset-run-item backfill all completed without errors.
 - Monitor the UI background-migrations page until the v4 backfill completes.
-- **Cutover (Task 1.5, deferred)**: flip `LANGFUSE_MIGRATION_V4_WRITE_MODE` to
-  `events_only` and restart. Before doing so, complete the export source switch
-  (Task 8.5).
-- **Rollback**: flip back to `dual` (or `none`) and restart the stack. No data
-  is lost while in dual mode. If the SDK is incompatible, pin back the `langfuse`
-  package in `pyproject.toml` and rebuild the image (`make rebuild`).
+- **Cutover completed**: `events_only` + native OTel `direct` are active and
+  verified with a fresh trace written to `events_full` and three evaluator
+  scores written after cutover.
+- **Rollback**: while the legacy tables remain intact, revert the two migration
+  variables to `dual`/`dual_write` and restart the stack. Treat this as a
+  temporary recovery action; new events-only data would not be available to a
+  legacy read path.
