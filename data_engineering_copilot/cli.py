@@ -2468,6 +2468,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     metrics_parser.add_argument("--json", action="store_true", help="Pretty-print the raw JSON rows.")
 
+    # OSS-compatible low-confidence review queue
+    review_parser = subparsers.add_parser(
+        "langfuse-review-queue",
+        help="List low-confidence answers queued for manual review.",
+    )
+    review_parser.add_argument("--limit", type=int, default=100, help="Maximum items to display (default: 100).")
+    review_parser.add_argument("--json", action="store_true", help="Pretty-print review items as JSON.")
+
     # Inspect DB
     subparsers.add_parser("inspect-db", help="Inspect Qdrant collection: points, sources, chunk types, sample payload.")
 
@@ -2713,6 +2721,21 @@ def main() -> None:
             print("\t".join(headers))
             for row in rows:
                 print("\t".join(str(row.get(h, "")) for h in headers))
+        elif args.command == "langfuse-review-queue":
+            from data_engineering_copilot.evaluation.langfuse_datasets import list_review_items
+
+            items = list_review_items(limit=args.limit)
+            if args.json:
+                print(json.dumps(items, indent=2, default=str))
+            elif not items:
+                print("Review queue is empty.")
+            else:
+                for item in items:
+                    print(f"[{item['status']}] {item['item_id']}")
+                    print(f"Question: {item['question']}")
+                    print(f"Answer: {item['answer']}")
+                    print(f"Source trace: {item['source_trace_id']}")
+                    print(f"Created: {item['created_at']}\n")
         elif args.command == "inspect-db":
             inspect_db()
         elif args.command == "cancel":

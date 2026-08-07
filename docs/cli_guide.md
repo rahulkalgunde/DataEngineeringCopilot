@@ -34,6 +34,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec langfuse-evaluate](#dec-langfuse-evaluate)
   - [dec langfuse-seed-score-configs](#dec-langfuse-seed-score-configs)
   - [dec langfuse-metrics](#dec-langfuse-metrics)
+  - [dec langfuse-review-queue](#dec-langfuse-review-queue)
   - [dec inspect-db](#dec-inspect-db)
   - [dec cancel](#dec-cancel)
   - [dec ingestion-monitor](#dec-ingestion-monitor)
@@ -940,6 +941,31 @@ dec langfuse-metrics daily-volume-latency --days 1 --json
 Running with no preset prints the list of presets and exits 0.
 
 **Exit codes**: `0` success (including empty result); `1` Langfuse unavailable.
+
+---
+
+### `dec langfuse-review-queue`
+
+Lists low-confidence production answers from the OSS-compatible
+`low-confidence-review` Langfuse dataset. This replaces Enterprise annotation
+queues for this deployment.
+
+```
+usage: dec langfuse-review-queue [-h] [--limit LIMIT] [--json]
+```
+
+- `--limit N` displays at most `N` items (default 100).
+- `--json` prints structured JSON containing the item ID, question, answer,
+  source trace ID, status, and creation timestamp.
+
+**Examples**
+
+```bash
+dec langfuse-review-queue
+```
+
+Open the `source_trace_id` in Langfuse to inspect the full retrieval context,
+observations, scores, and evaluator results.
 
 ---
 
