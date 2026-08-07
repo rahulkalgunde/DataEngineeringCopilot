@@ -108,6 +108,17 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
     )
 
 
+def _extract_user_session(request) -> tuple[str | None, str | None]:
+    """Extract (user_id, session_id) for Langfuse tracking from headers or query params.
+
+    Headers take precedence over query params.
+    """
+    return (
+        request.headers.get("X-User-ID") or request.query_params.get("user_id"),
+        request.headers.get("X-Session-ID") or request.query_params.get("session_id"),
+    )
+
+
 async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict:
     """Repair progress state when Celery or the worker disappeared.
 
@@ -393,8 +404,7 @@ async def ask(request: AskRequest, fastapi_request: Request):
         cache_scope = _build_cache_scope(fastapi_request, effective_source_filter)
 
         # Extract user/session from request for Langfuse tracking
-        user_id = fastapi_request.headers.get("X-User-ID") or fastapi_request.query_params.get("user_id")
-        session_id = fastapi_request.headers.get("X-Session-ID") or fastapi_request.query_params.get("session_id")
+        user_id, session_id = _extract_user_session(fastapi_request)
 
         answer_obj = await asyncio.wait_for(
             service.answer(
@@ -461,8 +471,7 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
     async def event_stream():
         try:
             service = await get_rag_service()
-            user_id = fastapi_request.headers.get("X-User-ID") or fastapi_request.query_params.get("user_id")
-            session_id = fastapi_request.headers.get("X-Session-ID") or fastapi_request.query_params.get("session_id")
+            user_id, session_id = _extract_user_session(fastapi_request)
             async for event in service.answer_stream(
                 request.question,
                 source_filter=effective_source_filter,
