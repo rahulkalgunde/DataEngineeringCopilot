@@ -26,7 +26,7 @@ Python 3.12+, Pyright (standard mode), Ruff (lint+format), Pytest, structlog, `u
 ## CLI (`cli.py`)
 | Command | Notes |
 |---|---|
-| `dec ask <question>` | Calls `build_rag_service()` directly (no API needed) |
+| `dec ask <question>` | Calls `build_rag_service()` directly (no API needed). `--user-id`/`--session-id` recorded on the Langfuse trace |
 | `dec reenrich --source "X" [--urls <file>] [--category enrichment\|fetch\|embed\|all]` | Re-processes failed pages: clears Qdrant chunks + Redis URL-registry, requeues frontier to DISCOVERED, re-runs ingestion. Default: enrichment failures from Redis. `--category all` retries all failure types. |
 | `dec retry-failed --source "X" [--category fetch\|embed\|upsert\|all]` | Retries all FAILED pages for a source, optionally filtered by error category. |
 | `dec unskip --source "X"` | Re-processes SKIPPED pages (pages where parsing returned no content). |

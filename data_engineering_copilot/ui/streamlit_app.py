@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +29,16 @@ if settings.logging_enabled:
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = "http://localhost:8000"
+
+
+def _new_session_identifiers() -> tuple[str, str]:
+    """Generate a fresh (session_id, user_id) pair for a browser session.
+
+    user_id is a stable anonymous identifier derived from the session so every
+    trace carries a distinct user without requiring authentication.
+    """
+    session_id = str(uuid.uuid4())
+    return session_id, f"anon-{session_id[:8]}"
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +743,12 @@ def render_qa_tab() -> None:
                     completed_steps.append(step_name)
 
                 future = asyncio.run_coroutine_threadsafe(
-                    service.answer(question.strip(), on_step=on_step),
+                    service.answer(
+                        question.strip(),
+                        on_step=on_step,
+                        user_id=st.session_state.get("user_id"),
+                        session_id=st.session_state.get("session_id"),
+                    ),
                     _get_service_loop(),
                 )
                 try:
@@ -757,9 +773,11 @@ def render_qa_tab() -> None:
                         raise RuntimeError("Background thread completed without result")
 
                     answer = result_box[0]
-                    # Store trace_id for feedback tracking
+                    # Store trace_id per question for feedback tracking (robust
+                    # across multiple questions in one session).
                     if hasattr(answer, "trace_id") and answer.trace_id:
                         st.session_state.last_trace_id = answer.trace_id
+                        st.session_state.trace_ids[question.strip()] = answer.trace_id
                     status.update(label="✅ Answer ready", state="complete")
             except Exception as exc:
                 logger.exception("RAG answer failed")
@@ -808,9 +826,12 @@ def render_qa_tab() -> None:
                         from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
 
                         tracer = build_telemetry_tracer()
-                        if hasattr(tracer, "score") and hasattr(st.session_state, "last_trace_id"):
+                        trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
+                            st.session_state, "last_trace_id", None
+                        )
+                        if hasattr(tracer, "score") and trace_id:
                             tracer.score(
-                                trace_id=st.session_state.last_trace_id,
+                                trace_id=trace_id,
                                 name="user_feedback",
                                 value=1.0,
                                 data_type="NUMERIC",
@@ -832,9 +853,12 @@ def render_qa_tab() -> None:
                         from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
 
                         tracer = build_telemetry_tracer()
-                        if hasattr(tracer, "score") and hasattr(st.session_state, "last_trace_id"):
+                        trace_id = st.session_state.trace_ids.get(question.strip()) or getattr(
+                            st.session_state, "last_trace_id", None
+                        )
+                        if hasattr(tracer, "score") and trace_id:
                             tracer.score(
-                                trace_id=st.session_state.last_trace_id,
+                                trace_id=trace_id,
                                 name="user_feedback",
                                 value=0.0,
                                 data_type="NUMERIC",
@@ -1206,6 +1230,12 @@ def main() -> None:
     # Initialize metrics collector in session state
     if "metrics_collector" not in st.session_state:
         st.session_state.metrics_collector = MetricsCollector()
+
+    # Stable per-browser-session identifiers for Langfuse session/user tracking.
+    # Restored across reruns within the same browser tab; regenerated per tab.
+    if "session_id" not in st.session_state:
+        st.session_state.session_id, st.session_state.user_id = _new_session_identifiers()
+    st.session_state.setdefault("trace_ids", {})
 
     st.set_page_config(page_title="DataEngineeringCopilot", layout="wide")
     st.title("📚 DataEngineeringCopilot")

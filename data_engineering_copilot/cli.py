@@ -155,14 +155,14 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
         sys.exit(130)
 
 
-def ask(question: str) -> None:
+def ask(question: str, user_id: str | None = None, session_id: str | None = None) -> None:
     import asyncio
 
     from data_engineering_copilot.factory import build_rag_service
 
     logger.info("CLI ask started question=%r", question[:200])
     service = build_rag_service()
-    answer = asyncio.run(service.answer(question))
+    answer = asyncio.run(service.answer(question, user_id=user_id, session_id=session_id))
     logger.info("CLI ask completed confidence=%.4f sources=%s", answer.confidence, len(answer.sources))
     print(answer.text)
     if answer.sources:
@@ -2202,6 +2202,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the local repository.")
     ask_parser.add_argument("question", help="Question to answer.")
+    ask_parser.add_argument("--user-id", default=None, help="User identifier recorded on the Langfuse trace.")
+    ask_parser.add_argument("--session-id", default=None, help="Session identifier recorded on the Langfuse trace.")
 
     reenrich_parser = subparsers.add_parser(
         "reenrich",
@@ -2468,7 +2470,7 @@ def main() -> None:
                 source_names=tuple(args.source) if args.source else None,
             )
         elif args.command == "ask":
-            ask(question=args.question)
+            ask(question=args.question, user_id=args.user_id, session_id=args.session_id)
         elif args.command == "reenrich":
             reenrich(source=args.source, urls_file=args.urls, category=args.category)
         elif args.command == "retry-failed":

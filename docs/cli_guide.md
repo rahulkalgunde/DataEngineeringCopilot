@@ -131,12 +131,14 @@ dec ingest --max-pages 5
 Ask a question against the indexed documentation. Builds the full RAG service in-process (no API needed).
 
 ```
-usage: dec ask [-h] question
+usage: dec ask [-h] [--user-id USER_ID] [--session-id SESSION_ID] question
 ```
 
 | Argument | Description |
 |---|---|
 | `question` | The question to answer (quote it). |
+| `--user-id` | User identifier recorded on the Langfuse trace. |
+| `--session-id` | Session identifier recorded on the Langfuse trace. |
 
 **Examples**
 
@@ -144,6 +146,7 @@ usage: dec ask [-h] question
 dec ask "What is a Spark DataFrame?"
 dec ask "How do I schedule DAGs in Airflow?"
 dec ask "Explain Delta Lake time travel"
+dec ask --user-id=u1 --session-id=s1 "What is a Spark DataFrame?"
 ```
 
 **Behavior** — runs the RAG pipeline: query rewriting → vector retrieval → reranking → context assembly → LLM → groundedness verification. Prints:
@@ -161,6 +164,7 @@ Confidence: 0.87
 **Gotchas**
 - Requires Qdrant, Redis, the embedding provider, and a reachable LLM chain (or the fallback chain to Ollama).
 - An empty Ollama response usually means the output budget was exhausted (see `OLLAMA_NUM_PREDICT`).
+- When `--user-id`/`--session-id` are omitted and Langfuse tracing is enabled, the trace is recorded without user/session context.
 
 ---
 
