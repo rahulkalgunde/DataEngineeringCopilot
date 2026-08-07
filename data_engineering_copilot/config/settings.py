@@ -386,6 +386,13 @@ class AppSettings(BaseSettings):
         default="http://langfuse:3000",
         validation_alias="LANGFUSE_HOST",
     )
+    langfuse_enabled: bool = Field(default=True, validation_alias="LANGFUSE_ENABLED")
+    langfuse_sample_rate: float = Field(default=1.0, validation_alias="LANGFUSE_SAMPLE_RATE")
+    langfuse_environment: str = Field(
+        default="development",
+        validation_alias="LANGFUSE_TRACING_ENVIRONMENT",
+    )
+    image_git_sha: str = Field(default="unknown", validation_alias="IMAGE_GIT_SHA")
 
     embedding_batch_size: int = 128
     embed_concurrency: int = 1
