@@ -30,6 +30,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec evaluate](#dec-evaluate)
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
+  - [dec langfuse-seed-prompts](#dec-langfuse-seed-prompts)
   - [dec inspect-db](#dec-inspect-db)
   - [dec cancel](#dec-cancel)
   - [dec ingestion-monitor](#dec-ingestion-monitor)
@@ -786,6 +787,46 @@ dec config
 
 ---
 
+### `dec langfuse-seed-prompts`
+
+Idempotently creates (or creates a new version of) every Langfuse-managed prompt via the public API, labeled `production` by default. Requires a reachable, authenticated Langfuse instance.
+
+```
+usage: dec langfuse-seed-prompts [-h] [--label LABEL] [--commit-message COMMIT_MESSAGE]
+```
+
+**Seeded prompts** (all `type=text`):
+- `rag-answer`
+- `query-intent-classify`
+- `query-rewrite`
+- `query-expand`
+- `query-hyde`
+- `groundedness-nli`
+- `chunk-enrichment-summary`
+- `eval-faithfulness`
+- `rag-json-retry-suffix`
+
+**Example**
+
+```bash
+dec langfuse-seed-prompts
+# seeded rag-answer (version 1)
+# seeded query-intent-classify (version 1)
+# ...
+```
+
+**Behavior**
+- **Idempotent** — re-running creates a new version of each prompt under the same label; the runtime resolves to the newest.
+- Prints `seeded <name> (version N)` for each prompt.
+
+**Exit codes**: `0` all prompts seeded; `1` Langfuse is unavailable/disabled or the seed fails.
+
+**Gotchas**
+- Runtime code never depends on these being seeded — every prompt has a hardcoded fallback that is byte-identical to the Langfuse template (see `data_engineering_copilot/observability/langfuse_prompts.py`).
+- Requires `.env.secrets` Langfuse keys and the Langfuse stack up (`make up`).
+
+---
+
 ### `dec inspect-db`
 
 Scrolls the Qdrant collection and prints a payload/source/chunk-type analysis plus a sample chunk.
@@ -973,6 +1014,7 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Health check | `dec health` |
 | System status | `dec status` |
 | Validate config | `dec config` |
+| Seed Langfuse-managed prompts | `dec langfuse-seed-prompts` |
 | RAG evaluation | `dec evaluate` |
 | Inspect the vector DB | `dec inspect-db` |
 | Cancel a task | `dec cancel <task-id>` |
