@@ -355,6 +355,40 @@ def test_create_review_item_adds_item_with_source_trace(monkeypatch):
     assert item["metadata"] == {"source_trace_id": "t1"}
 
 
+def test_list_review_items_returns_dataset_queue_items(monkeypatch):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    item = SimpleNamespace(
+        id="item-1",
+        input={"query": "q"},
+        expected_output={"answer": "a"},
+        metadata={"source_trace_id": "trace-1"},
+        source_trace_id="trace-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    dataset = SimpleNamespace(items=[item])
+    client = SimpleNamespace(get_dataset=lambda name: dataset)
+    monkeypatch.setattr(
+        "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+        lambda: client,
+    )
+
+    from data_engineering_copilot.evaluation import langfuse_datasets
+
+    assert langfuse_datasets.list_review_items(limit=1) == [
+        {
+            "item_id": "item-1",
+            "question": "q",
+            "answer": "a",
+            "source_trace_id": "trace-1",
+            "status": "ACTIVE",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+    ]
+
+
 def test_get_langfuse_instance_returns_none_when_disabled(monkeypatch):
     from tests.conftest import make_settings
 

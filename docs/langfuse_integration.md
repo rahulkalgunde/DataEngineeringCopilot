@@ -138,11 +138,20 @@ widgets as a starting point and filtering by environment/tags:
   `user_feedback` trend, `ragas_*` trend.
 - **Usage**: traces by user, by session, by `intent` (categorical).
 
-## Annotation queues (Task 8.3)
+## Review queue (OSS-compatible replacement for Task 8.3)
 
-Create an annotation queue in the Langfuse UI: **`low-quality-review`**
-filtering traces where `groundedness < 0.5 OR user_feedback = 0`. Reviewers
-annotate in the queue; annotations attach as scores and feed quality analytics.
+The Langfuse Enterprise annotation-queue API requires an organization-scoped
+key and is not available under this OSS plan. Low-confidence answers are
+therefore queued in the `low-confidence-review` Langfuse dataset. Review them
+with:
+
+```bash
+dec langfuse-review-queue --limit 20
+```
+
+Each item includes `source_trace_id`; open that trace in Langfuse to inspect
+retrieval context, observations, scores, and evaluator results. Add reviewer
+feedback through `POST /api/v1/feedback` or the Streamlit thumbs buttons.
 
 ## Monitors & alerts (Task 8.4)
 

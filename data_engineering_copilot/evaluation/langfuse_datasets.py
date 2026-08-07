@@ -183,6 +183,35 @@ def create_review_item(trace_id: str, question: str, answer: str) -> bool:
         return False
 
 
+def list_review_items(limit: int = 100) -> list[dict[str, object]]:
+    """Return queued items from the OSS-compatible review dataset.
+
+    The Langfuse annotation-queue API is organization-scoped and unavailable
+    on this OSS deployment. Dataset items are the supported review queue.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    client = get_langfuse_client()
+    if client is None:
+        raise RuntimeError("Langfuse is unavailable; cannot list review items")
+
+    dataset = client.get_dataset("low-confidence-review")
+    items: list[dict[str, object]] = []
+    for item in dataset.items[:limit]:
+        expected_output = item.expected_output if isinstance(item.expected_output, dict) else {}
+        items.append(
+            {
+                "item_id": item.id,
+                "question": (item.input or {}).get("query"),
+                "answer": expected_output.get("answer"),
+                "source_trace_id": item.source_trace_id or (item.metadata or {}).get("source_trace_id"),
+                "status": getattr(item.status, "value", item.status),
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+        )
+    return items
+
+
 def run_rag_experiment(
     dataset_name: str,
     experiment_name: str,
