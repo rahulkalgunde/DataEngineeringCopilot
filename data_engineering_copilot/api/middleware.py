@@ -156,7 +156,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             limiter = self._limiters.get(path)
             if limiter is not None:
                 rl_key = _rate_limit_key(request)
-                if not limiter.allow(rl_key):
+                if not await limiter.allow_async(rl_key):
                     logger.warning(
                         "rate_limit_exceeded path=%s key=%s correlation_id=%s",
                         path,
