@@ -31,7 +31,7 @@ def redis_test_client(routes_async_redis, fresh_redis_client):
 @pytest.fixture(autouse=True)
 def _bypass_rate_limiter():
     """Disable rate limiting for all API integration tests."""
-    with patch("data_engineering_copilot.api.middleware.RateLimiter.allow", return_value=True):
+    with patch("data_engineering_copilot.api.middleware.RateLimiter.allow_async", return_value=True):
         yield
 
 

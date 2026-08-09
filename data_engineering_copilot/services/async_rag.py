@@ -16,11 +16,11 @@ from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheSc
 from data_engineering_copilot.domain.protocols import (
     EmbedderProtocol,
     LLMClientProtocol,
+    PiiRedactorProtocol,
     RerankerProtocol,
     TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
-from data_engineering_copilot.infrastructure.pii_redactor import PiiRedactor
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.context_assembler import ContextAssembler
@@ -164,7 +164,7 @@ class AsyncRagService:
         retrieval_tracker: RetrievalTracker | None = None,
         code_llm_client: LLMClientProtocol | None = None,
         evaluation_llm_client: LLMClientProtocol | None = None,
-        pii_redactor: PiiRedactor | None = None,
+        pii_redactor: PiiRedactorProtocol | None = None,
         input_guardrails: InputGuardrails | None = None,
         review_dataset_hook: Callable[[str, str, str], object] | None = None,
     ) -> None:

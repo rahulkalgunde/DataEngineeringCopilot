@@ -106,7 +106,7 @@ class RateLimiter:
         self._max_calls = max_calls
         self._period_seconds = period_seconds
 
-    def allow(self, client_ip: str = "") -> bool:
+    def allow_sync(self, client_ip: str = "") -> bool:
         """Check whether a request from *client_ip* is allowed."""
         return sliding_window_allow(
             path=self._path,
@@ -114,3 +114,7 @@ class RateLimiter:
             max_calls=self._max_calls,
             period_seconds=self._period_seconds,
         )
+
+    async def allow_async(self, client_ip: str = "") -> bool:
+        """Async check whether a request from *client_ip* is allowed."""
+        return self.allow_sync(client_ip)

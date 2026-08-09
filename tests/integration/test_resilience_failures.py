@@ -37,20 +37,20 @@ class TestRateLimiterInMemory:
     def test_allows_requests_under_limit(self):
         limiter = RateLimiter(path="/api/v1/ask", max_calls=5, period_seconds=60)
         for i in range(5):
-            assert limiter.allow("client-1"), f"Request {i + 1} should be allowed"
+            assert limiter.allow_sync("client-1"), f"Request {i + 1} should be allowed"
 
     def test_blocks_requests_over_limit(self):
         limiter = RateLimiter(path="/api/v1/ask", max_calls=5, period_seconds=60)
         for _ in range(5):
-            limiter.allow("client-1")
-        assert not limiter.allow("client-1"), "6th request should be blocked"
+            limiter.allow_sync("client-1")
+        assert not limiter.allow_sync("client-1"), "6th request should be blocked"
 
     def test_different_clients_have_separate_limits(self):
         limiter = RateLimiter(path="/api/v1/ask", max_calls=3, period_seconds=60)
         for _ in range(3):
-            limiter.allow("client-a")
-        assert not limiter.allow("client-a"), "client-a's 4th request blocked"
-        assert limiter.allow("client-b"), "client-b's 1st request allowed"
+            limiter.allow_sync("client-a")
+        assert not limiter.allow_sync("client-a"), "client-a's 4th request blocked"
+        assert limiter.allow_sync("client-b"), "client-b's 1st request allowed"
 
 
 # ---------------------------------------------------------------------------
