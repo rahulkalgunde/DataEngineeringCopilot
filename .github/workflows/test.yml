@@ -15,6 +15,7 @@ env:
   UV_VERSION: "0.4"
   COMPOSE_PROJECT_NAME: dec_ci
   UV_PROJECT_ENVIRONMENT: dec_venv
+  LANGFUSE_ENCRYPTION_KEY: a5c970bd2cc6e82928f52b6d055e07874aab6d99c7234416a9835c2827973deb
 
 jobs:
   lint:
@@ -173,10 +174,10 @@ jobs:
           docker save ollama/ollama:0.32.4 \
             -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
 
-          docker save clickhouse/clickhouse-server:24-alpine minio/minio:RELEASE.2025-09-07T16-13-09Z postgres:16-alpine \
+          docker save clickhouse/clickhouse-server:26.4-alpine minio/minio:RELEASE.2025-09-07T16-13-09Z postgres:16-alpine \
             -o /tmp/docker-cache/langfuse1.tar 2>/dev/null || true
 
-          docker save langfuse/langfuse:3 langfuse/langfuse-worker:3 minio/mc:RELEASE.2025-08-13T08-35-41Z \
+          docker save langfuse/langfuse:4 langfuse/langfuse-worker:4 minio/mc:RELEASE.2025-08-13T08-35-41Z \
             -o /tmp/docker-cache/langfuse2.tar 2>/dev/null || true
 
       - name: Cleanup
