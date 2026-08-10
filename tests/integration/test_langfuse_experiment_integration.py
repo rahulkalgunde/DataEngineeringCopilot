@@ -25,7 +25,11 @@ def test_dataset_upload_and_experiment_run(monkeypatch) -> None:
 
     from data_engineering_copilot.config.settings import settings
     from data_engineering_copilot.evaluation import langfuse_datasets
+    from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
     from data_engineering_copilot.services.ragas_evaluation import RagasEvalResult
+
+    if get_langfuse_instance() is None:
+        pytest.skip("Langfuse client could not be initialized (missing LANGFUSE_PUBLIC_KEY/SECRET_KEY)")
 
     dataset_name = f"dec-integration-{uuid.uuid4().hex[:8]}"
     experiment_name = f"exp-{uuid.uuid4().hex[:8]}"

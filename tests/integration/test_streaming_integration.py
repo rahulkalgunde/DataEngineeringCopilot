@@ -157,7 +157,7 @@ class TestStreamingEndpoint:
     def test_streaming_error_emits_error_event(self, mock_get_service, client):
         mock_service = AsyncMock()
 
-        async def _boom(question, source_filter=None):
+        async def _boom(question, source_filter=None, user_id=None, session_id=None):
             raise RuntimeError("LLM crashed")
             yield  # pragma: no cover
 
@@ -173,7 +173,7 @@ class TestStreamingEndpoint:
     def test_streaming_timeout_emits_timeout_error(self, mock_get_service, client):
         mock_service = AsyncMock()
 
-        async def _timeout(question, source_filter=None):
+        async def _timeout(question, source_filter=None, user_id=None, session_id=None):
             raise TimeoutError("timed out")
             yield  # pragma: no cover
 

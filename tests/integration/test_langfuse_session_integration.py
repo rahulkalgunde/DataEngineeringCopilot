@@ -28,7 +28,8 @@ def test_session_groups_multiple_traces() -> None:
     user_id = f"test-user-{uuid.uuid4()}"
 
     client = get_langfuse_instance()
-    assert client is not None
+    if client is None:
+        pytest.skip("Langfuse client could not be initialized (missing LANGFUSE_PUBLIC_KEY/SECRET_KEY)")
     for i in range(2):
         trace = client.trace(
             name="sess-integration",
