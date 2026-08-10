@@ -142,22 +142,22 @@ class PiiRedactorProtocol(Protocol):
 
 class AsyncDocumentationCrawlerProtocol(Protocol):
     """Protocol for asynchronous documentation crawler."""
-    
+
     frontier: Any
-    
+
     async def crawl(
         self,
         source: Any,
         max_pages: int,
         on_event: Callable[[IngestionEvent], None] | None = ...,
     ) -> AsyncIterator[RawDocument]: ...
-    
+
     async def close(self) -> None: ...
 
 
 class AsyncUrlRegistryProtocol(Protocol):
     """Protocol for asynchronous URL registry."""
-    
+
     async def get_html_hash(self, url: str) -> str | None: ...
     async def set_html_hash(self, url: str, html_hash: str) -> None: ...
     async def mget_html_hashes(self, urls: list[str]) -> dict[str, str | None]: ...
