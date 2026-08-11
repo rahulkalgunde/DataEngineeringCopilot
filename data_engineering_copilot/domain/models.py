@@ -205,6 +205,26 @@ class Answer:
     groundedness_score: float = 1.0
     stage_times: Mapping[str, float] = field(default_factory=dict)
     trace_id: str | None = None
+    # --- Debug/visualizer artifacts (populated by AsyncRagService.answer) ---
+    # Effective query actually used for retrieval after rewriting/expansion.
+    rewritten_query: str | None = None
+    # Query variants sent to retrieval: original + decomposed + expanded.
+    query_variants: tuple[str, ...] = ()
+    intent: str | None = None
+    # Per-candidate retrieval details for the visualizer: one dict per ranked
+    # result with rank, chunk_id, source_name, title, url, distance,
+    # confidence, word_count and a short text snippet.
+    retrieval_details: tuple[dict, ...] = ()
+    # Rerank metadata: enabled, pool_size, top_k, final_top_k, dropped count.
+    rerank_details: dict = field(default_factory=dict)
+    # Assembled context string injected into the prompt (PII-safe subset).
+    context: str | None = None
+    # Final LLM prompt (may be large; used only by the visualizer).
+    prompt: str | None = None
+    # Generation token usage (from llm_client.last_usage) when available.
+    token_usage: Mapping[str, object] = field(default_factory=dict)
+    # Unsupported claims flagged by the groundedness verifier.
+    groundedness_claims: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

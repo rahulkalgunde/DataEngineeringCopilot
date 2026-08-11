@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 import redis.exceptions
@@ -8,6 +8,9 @@ import structlog
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig
+
+if TYPE_CHECKING:
+    from data_engineering_copilot.services.pipeline_lab import PipelineLab
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
@@ -1206,4 +1209,72 @@ def build_rag_service(
         pii_redactor=pii_redactor,
         input_guardrails=input_guardrails,
         review_dataset_hook=create_review_item,
+    )
+
+
+def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = True) -> PipelineLab:
+    """Build a :class:`PipelineLab` wired to the production ingestion pieces.
+
+    The enrichment step uses the same contextual-enricher construction as
+    ``build_async_ingestion_service`` but degrades to a no-op if the LLM chain
+    cannot be built (offline). Embedding and the Qdrant store are always built;
+    ``dry_run`` keeps the run read-only (payload preview, no upsert).
+    """
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
+    from data_engineering_copilot.services.contextual_chunk_enricher import (
+        ContextualChunkEnricher,
+        LLMContextSummarizer,
+    )
+    from data_engineering_copilot.services.pipeline_lab import PipelineLab
+
+    enricher: ContextualChunkEnricher | None = None
+    if getattr(app_settings, "contextual_enrichment_enabled", True):
+        try:
+            provider_rate_limiters = _build_provider_rate_limiters(app_settings)
+            health_registry = _build_provider_health_registry(app_settings)
+            enrichment_client = build_llm_fallback_chain(
+                purpose="enrichment",
+                app_settings=app_settings,
+                provider_rate_limiters=provider_rate_limiters,
+                health_registry=health_registry,
+                purpose_provider=app_settings.enrichment_llm_provider or "ollama",
+                purpose_model=app_settings.enrichment_llm_model,
+            )
+            enricher = ContextualChunkEnricher(
+                summarizer=LLMContextSummarizer(
+                    llm_client=enrichment_client,
+                    failure_recorder=None,
+                    telemetry=build_telemetry_tracer(),
+                ),
+                enabled=app_settings.contextual_enrichment_enabled,
+                batch_size=app_settings.enrichment_batch_size,
+            )
+        except Exception as exc:  # noqa: BLE001 - lab degrades to no enrichment
+            logger.warning("pipeline_lab_enricher_unavailable", error=repr(exc))
+            enricher = None
+
+    embedder = None
+    try:
+        provider_rate_limiters = _build_provider_rate_limiters(app_settings)
+        embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
+    except Exception as exc:  # noqa: BLE001 - lab degrades to no embedding step
+        logger.warning("pipeline_lab_embedder_unavailable", error=repr(exc))
+        embedder = None
+
+    return PipelineLab(
+        parser=_build_content_aware_parser(),
+        chunk_filter=ChunkFilter(enabled=getattr(app_settings, "chunk_filtering_enabled", True)),
+        chunker=build_chunker(app_settings),
+        api_extractor=ApiDocExtractor(enabled=getattr(app_settings, "api_extraction_enabled", True)),
+        enricher=enricher,
+        embedder=embedder,
+        vector_store=AsyncQdrantVectorStore(
+            url=app_settings.qdrant_url,
+            collection_name=app_settings.collection_name,
+            hybrid_search=app_settings.hybrid_search_enabled,
+            hybrid_rrf_k=app_settings.hybrid_rrf_k,
+            embedding_dimension=app_settings.get_embedding_dimension(),
+        ),
+        dry_run=dry_run,
     )

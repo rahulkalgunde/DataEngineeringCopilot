@@ -22,6 +22,40 @@ from data_engineering_copilot.domain.exceptions import VectorStoreError
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievalFilters, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
 
+
+def chunk_to_payload(chunk: DocumentChunk) -> dict:
+    """Exact Qdrant point payload for a chunk (mirrors ``_chunk_to_payload``).
+
+    Standalone so the visualizer's Pipeline Lab can preview the stored point
+    without holding a store instance.
+    """
+    return {
+        "chunk_id": chunk.chunk_id,
+        "source_name": chunk.source_name,
+        "title": chunk.title,
+        "url": chunk.url,
+        "text": chunk.text,
+        "content_hash": chunk.content_hash,
+        "section_header": chunk.section_header,
+        "chunk_type": chunk.chunk_type,
+        "word_count": chunk.word_count,
+        "heading_path": list(chunk.heading_path),
+        "chunk_index": chunk.chunk_index,
+        "total_chunks": chunk.total_chunks,
+        "crawled_at": chunk.crawled_at,
+        "doc_type": chunk.doc_type,
+        "language": chunk.language,
+        "spark_version": chunk.spark_version,
+        "module": chunk.module,
+        "source_commit": chunk.source_commit,
+        "file_path": chunk.file_path,
+        "license": chunk.license,
+        "parser_version": chunk.parser_version,
+        "chunker_version": chunk.chunker_version,
+        "index_generation": chunk.index_generation,
+    }
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -197,31 +231,7 @@ class AsyncQdrantVectorStore:
         return settings.get_embedding_dimension()
 
     def _chunk_to_payload(self, chunk: DocumentChunk) -> dict:
-        return {
-            "chunk_id": chunk.chunk_id,
-            "source_name": chunk.source_name,
-            "title": chunk.title,
-            "url": chunk.url,
-            "text": chunk.text,
-            "content_hash": chunk.content_hash,
-            "section_header": chunk.section_header,
-            "chunk_type": chunk.chunk_type,
-            "word_count": chunk.word_count,
-            "heading_path": list(chunk.heading_path),
-            "chunk_index": chunk.chunk_index,
-            "total_chunks": chunk.total_chunks,
-            "crawled_at": chunk.crawled_at,
-            "doc_type": chunk.doc_type,
-            "language": chunk.language,
-            "spark_version": chunk.spark_version,
-            "module": chunk.module,
-            "source_commit": chunk.source_commit,
-            "file_path": chunk.file_path,
-            "license": chunk.license,
-            "parser_version": chunk.parser_version,
-            "chunker_version": chunk.chunker_version,
-            "index_generation": chunk.index_generation,
-        }
+        return chunk_to_payload(chunk)
 
     def _chunk_id_to_uuid(self, chunk_id: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
