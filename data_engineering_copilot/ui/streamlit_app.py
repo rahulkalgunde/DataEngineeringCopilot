@@ -20,8 +20,25 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from data_engineering_copilot.config.logging import setup_logging  # noqa: E402
 from data_engineering_copilot.config.settings import settings  # noqa: E402
-from data_engineering_copilot.factory import build_rag_service  # noqa: E402
+from data_engineering_copilot.domain.models import RawDocument  # noqa: E402
+from data_engineering_copilot.factory import build_pipeline_lab, build_rag_service  # noqa: E402
 from data_engineering_copilot.services.metrics import MetricsCollector  # noqa: E402
+from data_engineering_copilot.ui.components.animations import (  # noqa: E402
+    build_diagram_html,
+    render_animated_metric,
+    render_lottie_badge,
+    render_pipeline_diagram,
+    render_stepper,
+    render_vector_scatter,
+    stream_answer_text,
+)
+from data_engineering_copilot.ui.components.pipeline_states import (  # noqa: E402
+    INGESTION_NODES,
+    QUERY_NODES,
+    NodeState,
+    ingestion_node_states,
+    reduce_query_node_states,
+)
 
 if settings.logging_enabled:
     setup_logging()
@@ -29,6 +46,65 @@ if settings.logging_enabled:
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = "http://localhost:8000"
+
+ANSWER_TIMEOUT_SECONDS = 300
+
+QUERY_EDGES: tuple[tuple[str, str], ...] = tuple(zip(QUERY_NODES, QUERY_NODES[1:], strict=False))
+INGESTION_EDGES: tuple[tuple[str, str], ...] = tuple(zip(INGESTION_NODES, INGESTION_NODES[1:], strict=False))
+_QUERY_STAGE_KIND: dict[str, str] = dict(
+    zip(QUERY_NODES, ("parse", "embed", "search", "search", "generate"), strict=True)
+)
+_INGESTION_EVENT_KIND: dict[str, str] = {
+    "fetch_success": "parse",
+    "page_indexed": "parse",
+    "batch_embedding": "embed",
+    "batch_indexing": "search",
+}
+
+LAB_NODES: tuple[str, ...] = ("HTML Source", "Markdown", "Chunker", "Filter", "Enrich", "Embed", "Qdrant")
+LAB_EDGES: tuple[tuple[str, str], ...] = tuple(zip(LAB_NODES, LAB_NODES[1:], strict=False))
+LAB_NODE_BY_STAGE: dict[str, str] = {
+    "raw": "HTML Source",
+    "markdown": "Markdown",
+    "chunk": "Chunker",
+    "filter": "Filter",
+    "enrich": "Enrich",
+    "embed": "Embed",
+    "qdrant": "Qdrant",
+}
+LAB_STAGE_TITLES: dict[str, str] = {
+    "raw": "① Raw HTML",
+    "markdown": "② Markdown conversion",
+    "chunk": "③ Header-aware chunking",
+    "filter": "④ Quality filtering",
+    "enrich": "⑤ Metadata enrichment",
+    "embed": "⑥ Vector embeddings",
+    "qdrant": "⑦ Qdrant point payload",
+}
+
+_SPARK_SAMPLE_HTML = """<!doctype html>
+<html><head><title>SparkSession — PySpark API Reference</title></head>
+<body>
+<h1>SparkSession</h1>
+<p>The SparkSession class is the main entry point for DataFrame and SQL
+functionality in PySpark. It is the user-facing API to configure Spark, read
+data sources, create DataFrames, and execute SQL queries. Every Spark
+application needs one active SparkSession that coordinates the execution of
+jobs across the cluster.</p>
+<h2>Methods</h2>
+<h3>spark.sql</h3>
+<p>Returns a DataFrame representing the result of the given query string. The
+query is parsed and executed by the Catalyst optimizer before execution.</p>
+<pre><code>df = spark.sql("SELECT * FROM events WHERE ts &gt; '2024-01-01'")</code></pre>
+<h3>spark.read</h3>
+<p>Returns a DataFrameReader that can be used to load data from a variety of
+sources such as Parquet, JSON, Delta Lake tables, and JDBC endpoints.</p>
+<pre><code>df = spark.read.format("parquet").load("/mnt/warehouse/events")</code></pre>
+<h3>spark.conf.set</h3>
+<p>Sets a runtime Spark configuration property for the session.</p>
+<pre><code>spark.conf.set("spark.sql.shuffle.partitions", "200")</code></pre>
+</body></html>
+"""
 
 
 def _new_session_identifiers() -> tuple[str, str]:
@@ -297,6 +373,34 @@ def rag_service():
         return None
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def _embed_for_scatter(question: str, chunk_texts: tuple[str, ...]) -> tuple[list[float], list[list[float]]]:
+    """Lazily embed the query + retrieved chunk texts for the 3D scatter.
+
+    Runs on the shared service event loop so the cached embedder is never
+    touched from a foreign loop. Returns empty lists when embeddings cannot be
+    produced (caller falls back to a text view).
+    """
+    service = rag_service()
+    if service is None or not hasattr(service, "embedder"):
+        return [], []
+    loop = _get_service_loop()
+    try:
+        query_emb = asyncio.run_coroutine_threadsafe(service.embedder.embed_query(question), loop).result(timeout=90)
+        if not chunk_texts:
+            return query_emb, []
+        chunk_embs = asyncio.run_coroutine_threadsafe(service.embedder.embed_texts(list(chunk_texts)), loop).result(
+            timeout=180
+        )
+        return query_emb, chunk_embs
+    except TimeoutError:
+        logger.warning("Timed out embedding vectors for scatter")
+        return [], []
+    except Exception as exc:
+        logger.warning("Failed to embed vectors for scatter: %s", exc)
+        return [], []
+
+
 @dataclass
 class SourceProgress:
     name: str
@@ -484,6 +588,15 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {secs:02d}s"
 
 
+def _badge_kind_for_event(progress: IngestionProgress) -> str:
+    """Choose the Lottie badge matching the most recent ingestion activity."""
+    for event in reversed(progress.recent_events):
+        kind = _INGESTION_EVENT_KIND.get(event.get("type", ""))
+        if kind:
+            return kind
+    return "parse"
+
+
 def _render_state_bar(progress: IngestionProgress) -> None:
     """Compact one-line state bar with status, duration, and counts."""
     if progress.is_running:
@@ -529,6 +642,14 @@ def _render_progress_panel() -> None:
         st.session_state._ingest_was_running = False
         st.rerun(scope="app")
 
+    render_pipeline_diagram(
+        INGESTION_NODES,
+        INGESTION_EDGES,
+        ingestion_node_states(progress),
+        with_view_switch=True,
+        key="ingest_panel",
+    )
+
     if not progress.is_running and not progress.success_message and not progress.error and not progress.source_names:
         return
 
@@ -552,6 +673,14 @@ def _render_progress_panel() -> None:
 def _render_overview_tab(progress: IngestionProgress) -> None:
     """Pipeline overview: stages, current URL, throughput."""
     if progress.is_running:
+        badge_col, p_col, c_col = st.columns([1, 2, 2])
+        with badge_col:
+            render_lottie_badge(_badge_kind_for_event(progress), height=80)
+        with p_col:
+            render_animated_metric("Pages", progress.total_pages_fetched)
+        with c_col:
+            render_animated_metric("Chunks", progress.total_chunks_indexed)
+
         total_sources = len(progress.source_names) or 1
         effective_max_pages = progress.max_pages_per_source or settings.max_pages_per_source
         estimated_pages = effective_max_pages * total_sources
@@ -774,6 +903,7 @@ def render_qa_tab() -> None:
             completed_steps: list[str] = []
             result_box: list = []
             error_box: list = []
+            step_details: dict[str, list[dict]] = {}
 
             def _run_in_background() -> None:
                 """Run the async pipeline on the shared service event loop."""
@@ -781,37 +911,65 @@ def render_qa_tab() -> None:
                 def on_step(step_name: str) -> None:
                     completed_steps.append(step_name)
 
+                def on_step_detail(kind: str, payload: dict) -> None:
+                    step_details.setdefault(kind, []).append(payload)
+
                 future = asyncio.run_coroutine_threadsafe(
                     service.answer(
                         question.strip(),
                         on_step=on_step,
+                        on_step_detail=on_step_detail,
                         user_id=st.session_state.get("user_id"),
                         session_id=st.session_state.get("session_id"),
                     ),
                     _get_service_loop(),
                 )
                 try:
-                    result_box.append(future.result())
+                    result_box.append(future.result(timeout=ANSWER_TIMEOUT_SECONDS))
                 except Exception as e:
                     error_box.append(e)
 
             worker = threading.Thread(target=_run_in_background, daemon=True)
             worker.start()
 
+            diagram_ph = st.empty()
+            stage_phs = [st.empty() for _ in QUERY_NODES]
+
+            def _render_query_pipeline(events: list[str], completed: bool = False, failed: str | None = None) -> None:
+                states = reduce_query_node_states(events, failed_step=failed, completed=completed)
+                diagram_ph.html(build_diagram_html(QUERY_NODES, QUERY_EDGES, states, show_legend=False))
+                node_details = {node: step_details.get(node.lower(), []) for node in QUERY_NODES}
+                render_stepper(
+                    stage_phs,
+                    [(node, states[node], _QUERY_STAGE_KIND[node]) for node in QUERY_NODES],
+                    details=node_details,
+                )
+
+            wait_deadline = time.monotonic() + ANSWER_TIMEOUT_SECONDS
             try:
                 with st.status("Searching...", expanded=True) as status:
-                    while worker.is_alive():
+                    while worker.is_alive() and time.monotonic() < wait_deadline:
+                        _render_query_pipeline(list(completed_steps))
                         if completed_steps:
-                            label = f"Step {len(completed_steps)}/4: {completed_steps[-1]}"
+                            label = f"Step {len(completed_steps)}/{len(QUERY_NODES)}: {completed_steps[-1]}"
                             status.update(label=label, state="running")
                         time.sleep(0.3)
 
+                    if worker.is_alive() and time.monotonic() >= wait_deadline:
+                        raise TimeoutError(
+                            f"No answer generated within {ANSWER_TIMEOUT_SECONDS}s. "
+                            "The LLM provider chain may be slow, rate-limited, or unavailable. "
+                            "Check the **System Health** tab and try again."
+                        )
+
                     if error_box:
+                        _render_query_pipeline(list(completed_steps), failed="Generate")
                         raise error_box[0]
                     if not result_box:
                         raise RuntimeError("Background thread completed without result")
 
                     answer = result_box[0]
+                    _render_query_pipeline(list(completed_steps), completed=True)
                     # Store trace_id per question for feedback tracking (robust
                     # across multiple questions in one session).
                     if hasattr(answer, "trace_id") and answer.trace_id:
@@ -846,8 +1004,40 @@ def render_qa_tab() -> None:
             )
 
             st.subheader("Answer")
-            st.write(answer.text)
+            if answer.text and answer.text.strip():
+                st.write_stream(stream_answer_text(answer.text))
+            else:
+                st.warning(
+                    "No answer could be generated for this question. "
+                    "The knowledge base may not contain enough information, or the "
+                    "LLM returned an empty response. Try rephrasing the question."
+                )
             st.caption(f"Confidence: {answer.confidence:.2%}")
+
+            if answer.sources:
+                with st.expander("Vector Space", expanded=False):
+                    chunk_texts = tuple(source.text for source in answer.sources)
+                    with st.spinner("Projecting embeddings..."):
+                        query_emb, chunk_embs = _embed_for_scatter(question.strip(), chunk_texts)
+                    if chunk_embs and len(chunk_embs) == len(answer.sources):
+                        labels = [
+                            f"{i + 1}. {source.source_name} — {source.title[:48]}"
+                            for i, source in enumerate(answer.sources)
+                        ]
+                        scores = [float(max(source.token_count, 1)) for source in answer.sources]
+                        render_vector_scatter(
+                            query_emb,
+                            chunk_embs,
+                            labels,
+                            scores,
+                            key=f"scatter_{len(collector.queries)}",
+                        )
+                        st.caption("Query vector (red) vs retrieved chunk vectors; play ▶ to watch collapse.")
+                    else:
+                        st.caption("Embeddings unavailable — showing retrieved documents instead.")
+                        for i, source in enumerate(answer.sources, 1):
+                            st.markdown(f"**{i}. [{source.title}]({source.url})**")
+                            st.caption(f"Source: {source.source_name}")
 
             # User feedback buttons
             col_feedback1, col_feedback2, col_feedback3 = st.columns([1, 1, 4])
@@ -888,6 +1078,16 @@ def render_qa_tab() -> None:
 
             # Per-answer detailed metrics
             with st.expander("Answer Metrics", expanded=False):
+                c_anim1, c_anim2, c_anim3 = st.columns(3)
+                with c_anim1:
+                    render_animated_metric("Answer Words", len(answer.text.split()))
+                with c_anim2:
+                    render_animated_metric("Sources Cited", len(answer.sources))
+                with c_anim3:
+                    _total_ms = float(answer.stage_times.get("total", 0))
+                    if not _total_ms:
+                        _total_ms = float(sum(answer.stage_times.values()))
+                    render_animated_metric("Latency (ms)", _total_ms)
                 qm = collector.queries[-1] if collector.queries else None
                 if qm:
                     col_a1, col_a2 = st.columns(2)
@@ -904,6 +1104,251 @@ def render_qa_tab() -> None:
                         sec_status = "Yes" if qm.answer_metrics.has_key_sections else "No"
                         unc_status = "Yes" if qm.answer_metrics.has_uncertainty_markers else "No"
                         st.caption(f"Structured sections: {sec_status}  |  Uncertainty markers: {unc_status}")
+
+            # Per-stage pipeline trace (prompt, context, telemetry)
+            with st.expander("Pipeline Trace", expanded=False):
+                if answer.rewritten_query and answer.rewritten_query != question.strip():
+                    st.markdown("**Effective query**")
+                    st.code(answer.rewritten_query)
+                if answer.query_variants:
+                    st.markdown(f"**Query variants** ({len(answer.query_variants)})")
+                    st.caption(" · ".join(answer.query_variants))
+                if answer.intent:
+                    st.markdown(f"**Intent:** `{answer.intent}`")
+
+                if answer.retrieval_details:
+                    st.markdown("**Retrieval scores**")
+                    st.dataframe(
+                        [
+                            {
+                                "rank": d.get("rank"),
+                                "source": d.get("source_name"),
+                                "title": (str(d.get("title")) or "")[:48],
+                                "confidence": d.get("confidence"),
+                                "distance": d.get("distance"),
+                                "words": d.get("word_count"),
+                            }
+                            for d in answer.retrieval_details
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                if answer.rerank_details:
+                    st.markdown("**Rerank**")
+                    st.json(dict(answer.rerank_details))
+
+                if answer.prompt:
+                    st.markdown(f"**Assembled prompt** ({len(answer.prompt):,} chars)")
+                    with st.expander("View prompt"):
+                        st.code(answer.prompt, language="text")
+
+                if answer.stage_times:
+                    st.markdown("**Stage times**")
+                    st.dataframe(
+                        [{"stage": k, "ms": round(v, 1)} for k, v in answer.stage_times.items()],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                if answer.token_usage:
+                    st.markdown("**Token usage**")
+                    st.json(dict(answer.token_usage))
+
+                st.markdown(f"**Groundedness:** {answer.groundedness_score:.2f}")
+                if answer.groundedness_claims:
+                    st.markdown("**Unsupported claims**")
+                    for claim in answer.groundedness_claims:
+                        st.caption(f"- {claim}")
+
+                if answer.trace_id:
+                    _langfuse_base = settings.langfuse_host.replace("langfuse:", "localhost:").rstrip("/")
+                    st.markdown(f"**Trace:** [`{answer.trace_id}`]({_langfuse_base}/trace/{answer.trace_id})")
+
+
+def _lab_states(events: list[str]) -> dict[str, NodeState]:
+    """Reduce lab stage events to 7-node diagram states."""
+    states: dict[str, NodeState] = {node: NodeState.IDLE for node in LAB_NODES}
+    done: set[str] = set()
+    running: str | None = None
+    for stage in events:
+        node = LAB_NODE_BY_STAGE.get(stage)
+        if node is None:
+            continue
+        if running is not None:
+            done.add(running)
+        running = node
+    for node in done:
+        states[node] = NodeState.COMPLETE
+    if running is not None:
+        states[running] = NodeState.RUNNING
+    return states
+
+
+def _render_lab_stage_payload(stage_name: str, payload: object, raw_html: str) -> None:
+    """Render a single lab stage payload inside an open ``st.status``."""
+    if stage_name == "raw":
+        st.code(raw_html[:600] + ("..." if len(raw_html) > 600 else ""), language="html")
+        return
+    if stage_name == "markdown":
+        markdown = getattr(payload, "get", lambda *_: None)("text") if isinstance(payload, dict) else None
+        if markdown:
+            left, right = st.columns(2)
+            with left:
+                st.caption("Raw HTML (start)")
+                st.text(raw_html[:500] + ("..." if len(raw_html) > 500 else ""))
+            with right:
+                st.caption("Converted Markdown (start)")
+                st.code(str(markdown)[:500] + ("..." if len(markdown) > 500 else ""), language="markdown")
+        return
+    if stage_name in ("chunk", "enrich"):
+        rows = [c for c in (payload or []) if isinstance(c, dict)] if isinstance(payload, list) else []
+        if rows:
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        return
+    if stage_name == "filter":
+        if isinstance(payload, dict):
+            col_a, col_b = st.columns(2)
+            col_a.metric("Kept", payload.get("kept", 0))
+            col_b.metric("Dropped", payload.get("dropped", 0))
+            reasons = payload.get("reasons") or []
+            if reasons:
+                st.dataframe(reasons, use_container_width=True, hide_index=True)
+        return
+    if stage_name == "embed":
+        if isinstance(payload, dict):
+            col_a, col_b = st.columns(2)
+            col_a.metric("Vectors", payload.get("count", 0))
+            col_b.metric("Dimensions", payload.get("dimension", 0))
+            st.write(payload.get("sample"))
+        return
+    if stage_name == "qdrant" and isinstance(payload, dict):
+        st.json(payload)
+        return
+    if isinstance(payload, dict):
+        st.json(payload)
+
+
+def render_pipeline_lab_tab() -> None:
+    """Pipeline Lab: live 7-stage ingestion inspector (dry-run by default)."""
+    st.subheader("Pipeline Lab")
+    st.caption(
+        "Replay a single documentation page through every ingestion stage — raw HTML → exact Qdrant point payload. "
+        "Dry-run by default; nothing is written to the index unless you enable the live upsert."
+    )
+
+    source_mode = st.radio(
+        "Input source",
+        ["URL", "Paste raw HTML", "Sample: PySpark API page"],
+        horizontal=True,
+        key="lab_source_mode",
+    )
+    source_name = st.text_input("Source name", value="pipeline-lab", key="lab_source_name")
+    url = st.text_input("Documentation URL", key="lab_url") if source_mode == "URL" else ""
+    html = (
+        st.text_area("Raw HTML", height=180, key="lab_html", placeholder="<!doctype html>…")
+        if source_mode == "Paste raw HTML"
+        else ""
+    )
+    inject = st.toggle("Also upsert to Qdrant (live write)", value=False, key="lab_inject")
+    run_lab = st.button("Run pipeline", type="primary", key="lab_run")
+
+    if not run_lab:
+        return
+
+    content_type = "text/html"
+    if source_mode == "Sample: PySpark API page":
+        url = "sample://sparksession-api"
+        html = _SPARK_SAMPLE_HTML
+    elif source_mode == "Paste raw HTML":
+        if not html.strip():
+            st.error("Paste some HTML first.")
+            return
+        url = "pasted://html"
+    else:
+        if not url.strip():
+            st.error("Enter a documentation URL.")
+            return
+        with st.spinner("Fetching HTML…"):
+            try:
+                req = urllib.request.Request(
+                    url.strip(), headers={"User-Agent": "DataEngineeringCopilot-pipeline-lab/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    html_bytes = resp.read()
+                content_type = resp.headers.get("Content-Type", "text/html")
+                html = html_bytes.decode("utf-8", errors="replace")
+            except Exception as exc:
+                st.error(f"Failed to fetch URL: {exc}")
+                return
+
+    stage_events: list[str] = []
+    result_box: list = []
+    error_box: list = []
+
+    def _run_lab() -> None:
+        try:
+            lab = build_pipeline_lab(dry_run=not inject)
+        except Exception as exc:
+            error_box.append(exc)
+            return
+        loop = _get_service_loop()
+        raw = RawDocument(
+            source_name=source_name.strip() or "pipeline-lab",
+            url=url,
+            html=html,
+            content_type=content_type,
+        )
+        future = asyncio.run_coroutine_threadsafe(
+            lab.run(raw, on_stage=stage_events.append),
+            loop,
+        )
+        try:
+            result_box.append(future.result(timeout=900))
+        except Exception as exc:
+            error_box.append(exc)
+
+    worker = threading.Thread(target=_run_lab, daemon=True)
+    worker.start()
+
+    diagram_ph = st.empty()
+    with st.status("Running pipeline…", expanded=True) as status:
+        while worker.is_alive():
+            diagram_ph.html(
+                build_diagram_html(LAB_NODES, LAB_EDGES, _lab_states(list(stage_events)), show_legend=False)
+            )
+            if stage_events:
+                last = LAB_STAGE_TITLES.get(stage_events[-1], stage_events[-1])
+                status.update(label=f"Stage {min(len(stage_events), 7)}/7: {last}")
+            time.sleep(0.25)
+
+    diagram_ph.html(build_diagram_html(LAB_NODES, LAB_EDGES, _lab_states(list(stage_events)), show_legend=False))
+
+    if error_box:
+        st.error(f"Pipeline failed: {error_box[0]}")
+        return
+    if not result_box:
+        st.error("Pipeline finished without a trace.")
+        return
+
+    trace = result_box[0]
+    status.update(label="✅ Pipeline complete", state="complete")
+    st.caption(
+        f"Trace for **{trace.raw_document.source_name}** ({trace.raw_document.url}) — "
+        f"{'dry-run' if trace.dry_run else 'live write'} · {len(trace.final_chunks)} final chunks"
+    )
+
+    for stage in trace.stages:
+        title = LAB_STAGE_TITLES.get(stage.name, stage.name)
+        with st.status(
+            f"{title} — {stage.output_summary}", state="error" if stage.error else "complete", expanded=False
+        ):
+            if stage.error:
+                st.error(stage.error)
+            st.caption(f"**Input:** {stage.input_summary}")
+            st.caption(f"**Output:** {stage.output_summary}")
+            if trace.raw_document is not None:
+                _render_lab_stage_payload(stage.name, stage.payload, trace.raw_document.html)
 
 
 def render_ingestion_tab() -> None:
@@ -1320,11 +1765,15 @@ def main() -> None:
     if not deps_ok:
         st.error(f"**Docker image is STALE** — ingestion will fail. Run `make docker-dev` to rebuild.\n\n{deps_msg}")
 
-    tab_ask, tab_ingest, tab_health, tab_metrics = st.tabs(["💬 Ask", "📥 Ingestion", "🔧 System Health", "📊 Metrics"])
+    tab_ask, tab_ingest, tab_lab, tab_health, tab_metrics = st.tabs(
+        ["💬 Ask", "📥 Ingestion", "🧪 Pipeline Lab", "🔧 System Health", "📊 Metrics"]
+    )
     with tab_ask:
         render_qa_tab()
     with tab_ingest:
         render_ingestion_tab()
+    with tab_lab:
+        render_pipeline_lab_tab()
     with tab_health:
         render_health_tab()
     with tab_metrics:

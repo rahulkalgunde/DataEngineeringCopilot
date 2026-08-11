@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
 from data_engineering_copilot.domain.models import Answer, RagConfig
 from data_engineering_copilot.services.async_rag import AsyncRagService
+from data_engineering_copilot.services.groundedness import GroundednessVerifier
+from data_engineering_copilot.services.query_rewriting import QueryRewriter
 
 
 class TestQueryCache:
@@ -414,6 +417,95 @@ class TestAsyncRagService:
         )
 
         await service.answer("what is spark")
+        mock_reranker.rerank.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_answer_lazily_initializes_reranker(self, mock_embedder, mock_vector_store, mock_llm):
+        """A configured-but-not-loaded reranker is loaded before first use."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        loaded = {"value": False}
+
+        async def _fake_initialize():
+            loaded["value"] = True
+
+        mock_reranker = MagicMock()
+        mock_reranker.is_available = MagicMock(side_effect=lambda: loaded["value"])
+        mock_reranker.initialize = _fake_initialize
+        mock_reranker.rerank = AsyncMock(side_effect=lambda query, chunks, top_k: chunks)
+
+        config = RagConfig(reranker_enabled=True, reranker_top_k=3)
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=mock_reranker,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert result.text.strip()
+        assert loaded["value"] is True
+        mock_reranker.rerank.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_answer_degrades_when_reranker_init_fails(self, mock_embedder, mock_vector_store, mock_llm):
+        """A failed model load must not fail the answer — reranking is skipped."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        async def _fail_initialize():
+            raise RuntimeError("model download failed")
+
+        mock_reranker = MagicMock()
+        mock_reranker.is_available = MagicMock(return_value=False)
+        mock_reranker.initialize = _fail_initialize
+        mock_reranker.rerank = AsyncMock()
+
+        config = RagConfig(reranker_enabled=True, reranker_top_k=3)
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=mock_reranker,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert result.text.strip()
+        mock_reranker.rerank.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_answer_handles_non_async_reranker_initialize(self, mock_embedder, mock_vector_store, mock_llm):
+        """A sync double whose initialize() is not awaitable must not crash."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_reranker = MagicMock()
+        mock_reranker.is_available = MagicMock(return_value=False)
+        mock_reranker.rerank = AsyncMock()
+
+        config = RagConfig(reranker_enabled=True, reranker_top_k=3)
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=mock_reranker,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert result.text.strip()
         mock_reranker.rerank.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1025,3 +1117,338 @@ class TestPhase7Scoring:
 
         result = await service.answer("what is spark")
         assert result.text == "cached answer"
+
+
+class TestStepDetailsAndArtifacts:
+    """Behavioral contract for the visualizer step-detail callbacks and the
+    debug artifacts the async RAG service attaches to ``Answer``.
+    """
+
+    @pytest.fixture
+    def config(self):
+        return RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.3,
+            reranker_enabled=True,
+            reranker_top_k=3,
+            max_context_chars=4000,
+        )
+
+    @pytest.fixture
+    def mock_embedder(self):
+        m = MagicMock()
+        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        return m
+
+    @pytest.fixture
+    def mock_vector_store(self):
+        m = MagicMock()
+        m.upsert_chunks = AsyncMock()
+        return m
+
+    @pytest.fixture
+    def mock_llm(self):
+        m = MagicMock()
+        m.generate = AsyncMock(return_value="A concise answer for the user.")
+        return m
+
+    @pytest.fixture
+    def reranker(self):
+        m = MagicMock()
+        m.is_available = MagicMock(return_value=True)
+        m.rerank = AsyncMock(side_effect=lambda query, chunks, top_k: chunks)
+        return m
+
+    def _chunk(self, text="test content", confidence=0.9):
+        chunk = MagicMock()
+        chunk.chunk.chunk_id = "test-chunk"
+        chunk.chunk.source_name = "test"
+        chunk.chunk.title = "Test"
+        chunk.chunk.url = "http://test.com"
+        chunk.chunk.text = text
+        chunk.chunk.word_count = len(text.split())
+        chunk.confidence = confidence
+        chunk.distance = 1.0 - confidence
+        return chunk
+
+    @pytest.mark.asyncio
+    async def test_answer_emits_all_five_step_events_in_order(
+        self, mock_embedder, mock_vector_store, mock_llm, reranker, config
+    ):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query="what is spark",
+                    intent="code",
+                    decomposed_steps=("rewritten step",),
+                    hyde_query="hyde doc",
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return ["expanded variant"]
+
+        mock_vector_store.query = AsyncMock(return_value=[self._chunk()])
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=reranker,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        events: list[str] = []
+        result = await service.answer("what is spark", on_step=events.append)
+
+        assert events == [
+            "Rewriting query",
+            "Embedding query",
+            "Retrieving results",
+            "Reranking results",
+            "Generating answer",
+        ]
+        assert result.text == "A concise answer for the user."
+
+    @pytest.mark.asyncio
+    async def test_answer_emits_step_details_for_every_stage(
+        self, mock_embedder, mock_vector_store, mock_llm, reranker, config
+    ):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query="what is spark",
+                    intent="code",
+                    decomposed_steps=("rewritten step",),
+                    hyde_query="hyde doc",
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return ["expanded variant"]
+
+        mock_vector_store.query = AsyncMock(return_value=[self._chunk()])
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=reranker,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        details: dict[str, list[dict]] = {}
+
+        def on_step_detail(kind: str, payload: dict) -> None:
+            details.setdefault(kind, []).append(payload)
+
+        await service.answer("what is spark", on_step_detail=on_step_detail)
+
+        assert set(details) == {"rewrite", "embed", "retrieve", "rerank", "generate"}
+        assert details["rewrite"][0]["original_query"] == "what is spark"
+        assert "expansions" in details["rewrite"][0]
+        assert details["embed"][0]["variants"] >= 2
+        assert details["retrieve"][0]["pool_size"] == 1
+        assert details["retrieve"][0]["candidates"][0]["chunk_id"] == "test-chunk"
+        assert details["rerank"][0]["enabled"] is False
+        assert details["rerank"][0]["pool_size"] == 1
+        assert details["generate"][0]["context_chunks"] == 1
+
+    @pytest.mark.asyncio
+    async def test_answer_populates_visualizer_artifacts(
+        self, mock_embedder, mock_vector_store, mock_llm, reranker, config
+    ):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query="what is spark",
+                    intent="code",
+                    decomposed_steps=("rewritten step",),
+                    hyde_query="hyde doc",
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return ["expanded variant"]
+
+        mock_vector_store.query = AsyncMock(return_value=[self._chunk()])
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=reranker,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        result = await service.answer("what is spark")
+
+        assert result.rewritten_query == "rewritten step"
+        assert "what is spark" in result.query_variants
+        assert result.intent == "code"
+        assert len(result.retrieval_details) == 1
+        assert result.retrieval_details[0]["source_name"] == "test"
+        assert result.rerank_details["enabled"] is False
+        assert result.context and "test content" in result.context
+        assert result.prompt and "what is spark" in result.prompt
+        assert "total" in result.stage_times
+
+    @pytest.mark.asyncio
+    async def test_groundedness_rebuild_preserves_artifacts(self, mock_embedder, mock_vector_store, mock_llm, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        class _Verifier:
+            async def async_verify_with_score(self, result, chunks):
+                return False, ["unsupported claim one"], 0.42
+
+        mock_vector_store.query = AsyncMock(return_value=[self._chunk()])
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            groundedness_verifier=cast("GroundednessVerifier", _Verifier()),
+        )
+
+        result = await service.answer("what is spark")
+
+        assert result.groundedness_score == 0.42
+        assert result.groundedness_claims == ("unsupported claim one",)
+        assert "[Note:" in result.text
+        # dataclasses.replace must not drop the visualizer artifacts.
+        assert result.stage_times and "total" in result.stage_times
+        assert result.retrieval_details and result.retrieval_details[0]["source_name"] == "test"
+        assert result.context is not None
+        assert result.prompt is not None
+
+
+class TestEmptyAnswerGuardrail:
+    """The answer surface must never be empty: guardrails blanking the output
+    (e.g. INSUFFICIENT_CONTEXT with an empty answer) must fall back to the raw
+    LLM output or a clear default message."""
+
+    @pytest.fixture
+    def config(self):
+        return RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.3,
+            reranker_enabled=True,
+            reranker_top_k=3,
+            max_context_chars=4000,
+        )
+
+    @pytest.fixture
+    def mock_embedder(self):
+        m = MagicMock()
+        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        return m
+
+    @pytest.fixture
+    def mock_vector_store(self):
+        m = MagicMock()
+        chunk = MagicMock()
+        chunk.chunk.chunk_id = "test-chunk"
+        chunk.chunk.source_name = "test"
+        chunk.chunk.title = "Test"
+        chunk.chunk.url = "http://test.com"
+        chunk.chunk.text = "test content"
+        chunk.chunk.word_count = 2
+        chunk.confidence = 0.9
+        chunk.distance = 0.1
+        m.query = AsyncMock(return_value=[chunk])
+        return m
+
+    @pytest.mark.asyncio
+    async def test_empty_insufficient_context_substitutes_default_message(
+        self, mock_embedder, mock_vector_store, config
+    ):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(
+            return_value='{"status": "INSUFFICIENT_CONTEXT", "answer": "", "missing_info": null}'
+        )
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+
+        assert result.text.strip()
+        assert "No answer could be generated" in result.text
+        assert "INSUFFICIENT_CONTEXT" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_insufficient_context_with_info_appends_missing_info(self, mock_embedder, mock_vector_store, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(
+            return_value=(
+                '{"status": "INSUFFICIENT_CONTEXT", "answer": "Spark supports AQE.",'
+                ' "missing_info": "spark 4 specific docs"}'
+            )
+        )
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+
+        assert "Spark supports AQE." in result.text
+        assert "Missing information: spark 4 specific docs" in result.text
+
+    @pytest.mark.asyncio
+    async def test_raw_plain_text_falls_back_when_guardrails_blank_json(self, mock_embedder, mock_vector_store, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(
+            side_effect=[
+                '{"answer": "", "citations": []}',
+                "Plain fallback answer about Apache Spark architecture.",
+            ]
+        )
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+
+        assert "Plain fallback answer" in result.text

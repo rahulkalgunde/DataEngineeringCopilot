@@ -8,11 +8,19 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from typing import Any
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
-from data_engineering_copilot.domain.models import Answer, CachedAnswer, CacheScope, RagConfig, RetrievedChunk
+from data_engineering_copilot.domain.models import (
+    Answer,
+    CachedAnswer,
+    CacheScope,
+    LLMUsage,
+    RagConfig,
+    RetrievedChunk,
+)
 from data_engineering_copilot.domain.protocols import (
     EmbedderProtocol,
     LLMClientProtocol,
@@ -39,6 +47,11 @@ _JSON_RETRY_SUFFIX = (
 )
 
 register_fallback("rag-json-retry-suffix", _JSON_RETRY_SUFFIX)
+
+# How long to wait for the cross-encoder model to load before degrading to
+# "no reranking". The model is cached locally after the first download, so
+# this only bites on a cold cache with a slow network.
+_RERANKER_INIT_TIMEOUT_SECONDS = 120.0
 
 
 def merge_retrieval_results(
@@ -87,6 +100,43 @@ def _chunk_provenance_ref(result: RetrievedChunk, rank: int) -> dict[str, object
         "distance": result.distance,
         "confidence": result.confidence,
     }
+
+
+def _retrieval_details(retrieved_chunks: list[RetrievedChunk], *, limit: int = 50) -> tuple[dict, ...]:
+    """Visualizer-facing per-candidate details (rank, scores, snippet)."""
+    details: list[dict] = []
+    for rank, result in enumerate(retrieved_chunks[:limit]):
+        details.append(
+            {
+                "rank": rank,
+                "chunk_id": result.chunk.chunk_id,
+                "source_name": result.chunk.source_name,
+                "title": result.chunk.title,
+                "url": result.chunk.url,
+                "distance": result.distance,
+                "confidence": result.confidence,
+                "word_count": result.chunk.word_count,
+                "text_snippet": result.chunk.text[:240],
+            }
+        )
+    return tuple(details)
+
+
+def _usage_to_dict(usage: LLMUsage | None) -> dict[str, object]:
+    """Serialize an ``LLMUsage`` dataclass for the ``Answer.token_usage`` field."""
+    if usage is None:
+        return {}
+    return {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "model": usage.model,
+        "duration_ms": usage.duration_ms,
+        "tokens_per_second": usage.tokens_per_second,
+    }
+
+
+def _l2_norm(vector: list[float]) -> float:
+    return sum(v * v for v in vector) ** 0.5
 
 
 _PII_PATTERNS = [
@@ -237,6 +287,7 @@ class AsyncRagService:
         self,
         question: str,
         on_step: Callable[[str], None] | None = None,
+        on_step_detail: Callable[[str, dict], None] | None = None,
         source_filter: list[str] | None = None,
         cache_scope: CacheScope | None = None,
         user_id: str | None = None,
@@ -282,7 +333,14 @@ class AsyncRagService:
                 }
             )
 
+        def _emit_detail(kind: str, payload: dict[str, object]) -> None:
+            """Forward a per-stage input/output snapshot to the visualizer."""
+            if on_step_detail is not None:
+                on_step_detail(kind, payload)
+
         query_emb_for_cache: list[float] | None = None
+        query_dim: int = 0
+        q_emb: list[float] = []
         cache_active = self.cache is not None and self.config.cache_enabled and not bypass_cache
         if cache_active and self.cache is not None:
             # Exact tier first — no embedding round-trip on an exact hit.
@@ -347,6 +405,8 @@ class AsyncRagService:
             rewrite_span = trace.start_observation(name="query-rewriting", as_type="span")
 
         if self.query_rewriter is not None:
+            if on_step:
+                on_step("Rewriting query")
             rewritten = await self.query_rewriter.async_rewrite(question)
             if rewritten.decomposed_steps:
                 all_queries.extend(rewritten.decomposed_steps)
@@ -379,6 +439,18 @@ class AsyncRagService:
                     },
                 )
                 rewrite_span.end()
+
+        _emit_detail(
+            "rewrite",
+            {
+                "original_query": question,
+                "rewritten_query": effective_query,
+                "intent": rewritten.intent if rewritten is not None else None,
+                "hyde_query": rewritten.hyde_query if rewritten is not None else None,
+                "decomposed_steps": list(rewritten.decomposed_steps) if rewritten is not None else [],
+                "expansions": list(all_queries),
+            },
+        )
 
         if on_step:
             on_step("Embedding query")
@@ -433,6 +505,8 @@ class AsyncRagService:
                     # Embed every query separately; HyDE is an additional query,
                     # not a replacement for the real query embeddings.
                     q_emb = await self.embedder.embed_query(q)
+                    if query_dim == 0 and q_emb:
+                        query_dim = len(q_emb)
                     results = await self.vector_store.query(
                         q_emb,
                         top_k=self.config.retrieval_top_k,
@@ -482,6 +556,22 @@ class AsyncRagService:
             _prov_pool = len(retrieved_chunks)
             _prov_fused = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(retrieved_chunks)]
 
+            _emit_detail(
+                "embed",
+                {
+                    "variants": len(queries_to_run),
+                    "dimension": query_dim,
+                    "l2_norm": round(_l2_norm(q_emb), 4) if query_dim and q_emb else None,
+                },
+            )
+            _emit_detail(
+                "retrieve",
+                {
+                    "pool_size": len(retrieved_chunks),
+                    "candidates": list(_retrieval_details(retrieved_chunks)),
+                },
+            )
+
             if retrieval_span:
                 retrieval_span.update(
                     output=[c.chunk.text for c in retrieved_chunks],
@@ -489,6 +579,8 @@ class AsyncRagService:
                 )
                 retrieval_span.end()
             _record_stage("retrieval")
+            if on_step:
+                on_step("Retrieving results")
             logger.info("Multi-step retrieval: %d queries → %d unique chunks", len(all_queries), len(retrieved_chunks))
 
             # Track retrieval scores for observability
@@ -566,25 +658,25 @@ class AsyncRagService:
             pre_rerank_count = len(retrieved_chunks)
             reranker = self.reranker
             rerank_used = False
-            if (
-                self.config.reranker_enabled
-                and reranker is not None
-                and reranker.is_available()
-                and pre_rerank_count > 1
-            ):
-                rerank_used = True
-                # Rerank a broad candidate pool against the original question.
-                # Multi-query retrieval and dense+sparse fusion generate recall;
-                # the cross-encoder is the single generic relevance decision.
-                rerank_pool = min(
-                    pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
-                )
-                # Use the concise retrieval rewrite for pair scoring. The
-                # original question remains the generation prompt, while the
-                # rewrite removes conversational detail that can obscure the
-                # technical terms in code and API documentation.
-                rerank_query = effective_query.strip() or question
-                retrieved_chunks = await reranker.rerank(rerank_query, retrieved_chunks, top_k=rerank_pool)
+            if self.config.reranker_enabled and reranker is not None and pre_rerank_count > 1:
+                # The reranker model is loaded lazily (off the event loop) so a
+                # cold model cache degrades to "no reranking" instead of either
+                # failing the answer or silently skipping reranking forever.
+                await self._ensure_reranker_ready()
+                if reranker.is_available():
+                    rerank_used = True
+                    # Rerank a broad candidate pool against the original question.
+                    # Multi-query retrieval and dense+sparse fusion generate recall;
+                    # the cross-encoder is the single generic relevance decision.
+                    rerank_pool = min(
+                        pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                    )
+                    # Use the concise retrieval rewrite for pair scoring. The
+                    # original question remains the generation prompt, while the
+                    # rewrite removes conversational detail that can obscure the
+                    # technical terms in code and API documentation.
+                    rerank_query = effective_query.strip() or question
+                    retrieved_chunks = await reranker.rerank(rerank_query, retrieved_chunks, top_k=rerank_pool)
 
             _prov_rerank = {
                 "enabled": rerank_used,
@@ -624,6 +716,22 @@ class AsyncRagService:
                 deduplicate=self.context_compressor is None,
             )
             _prov_dropped = dropped_records
+            _emit_detail(
+                "rerank",
+                {
+                    "enabled": rerank_used,
+                    "pool_size": pre_rerank_count,
+                    "top_k": (
+                        min(
+                            pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                        )
+                        if rerank_used
+                        else None
+                    ),
+                    "final_top_k": self.config.reranker_top_k,
+                    "compressed_dropped": len(dropped_records),
+                },
+            )
             # The final context reflects only the segments actually placed in
             # the prompt; budget-dropped segments must not be claimed as
             # retrieved into the final context.
@@ -642,6 +750,16 @@ class AsyncRagService:
             prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
 
             llm_client = self._select_llm_client(intent)
+            _emit_detail(
+                "generate",
+                {
+                    "context_chunks": len(_final_chunks),
+                    "context_chars": len(context_str),
+                    "prompt_chars": len(prompt),
+                    "intent": intent,
+                    "model": _llm_model_name(llm_client),
+                },
+            )
             generation_span = None
             if trace:
                 generation_span = trace.start_observation(
@@ -748,6 +866,7 @@ class AsyncRagService:
             # Output guardrails: verify structure and quality
             from data_engineering_copilot.services.output_guardrails import OutputGuardrails
 
+            raw_answer_text = answer_text  # preserved for empty-fallback below
             validated = OutputGuardrails.verify(answer_text, len(retrieved_chunks))
             if validated is not None:
                 if validated.status == "INSUFFICIENT_CONTEXT" and validated.missing_info:
@@ -762,6 +881,25 @@ class AsyncRagService:
                 )
             else:
                 logger.info("output_guardrails rejected answer, using raw output")
+
+            # Guardrails may blank the answer (e.g. INSUFFICIENT_CONTEXT with an
+            # empty answer and missing_info). Prefer the pre-guardrail raw LLM
+            # output over rendering nothing; only fall back to a message when
+            # both are empty so the UI never shows an empty "answer".
+            if not answer_text or not str(answer_text).strip():
+                if raw_answer_text and str(raw_answer_text).strip():
+                    logger.warning("output_guardrails blanked answer, falling back to raw output")
+                    # Surface the human-readable raw text if available; a raw
+                    # structured-JSON blob with an empty answer still resolves
+                    # to the default message rather than leaking raw JSON.
+                    answer_text = parse_rag_response(str(raw_answer_text)).answer
+                if not answer_text or not str(answer_text).strip():
+                    logger.warning("LLM returned an empty answer, substituting default message")
+                    answer_text = (
+                        "No answer could be generated for this question. "
+                        "The knowledge base may not contain enough information, or the "
+                        "LLM returned an empty response. Try rephrasing the question."
+                    )
 
             # Post-LLM PII redaction: strip PII from answer before returning
             if self._pii_redactor is not None:
@@ -808,6 +946,14 @@ class AsyncRagService:
                 confidence=retrieved_chunks[0].confidence,
                 stage_times=_stage_times,
                 trace_id=trace_id,
+                rewritten_query=effective_query,
+                query_variants=tuple(all_queries),
+                intent=intent,
+                retrieval_details=_retrieval_details(retrieved_chunks),
+                rerank_details={**(_prov_rerank or {}), "compressed_dropped": len(dropped_records)},
+                context=context_str,
+                prompt=prompt,
+                token_usage=_usage_to_dict(getattr(llm_client, "last_usage", None)),
             )
 
             # Phase 2B: Groundedness verification (annotate-only, fail-open)
@@ -830,18 +976,17 @@ class AsyncRagService:
                     groundedness_score,
                 )
                 if not supported and unsupported_claims:
-                    result = Answer(
+                    result = replace(
+                        result,
                         text=result.text + "\n\n[Note: Some claims may not be fully supported by the documentation.]",
-                        sources=result.sources,
-                        confidence=result.confidence,
                         groundedness_score=groundedness_score,
+                        groundedness_claims=tuple(unsupported_claims),
                     )
                 else:
-                    result = Answer(
-                        text=result.text,
-                        sources=result.sources,
-                        confidence=result.confidence,
+                    result = replace(
+                        result,
                         groundedness_score=groundedness_score,
+                        groundedness_claims=tuple(unsupported_claims),
                     )
 
                 if groundedness_span:
@@ -1107,7 +1252,7 @@ class AsyncRagService:
         rerank_span = None
         if trace:
             rerank_span = trace.start_observation(name="reranking", as_type="span")
-        if self.reranker is not None and self.reranker.is_available() and len(retrieved_chunks) > 1:
+        if self.reranker is not None and len(retrieved_chunks) > 1 and await self._ensure_reranker_ready():
             yield _sse({"type": "status", "message": "Reranking"})
             retrieved_chunks = await self.reranker.rerank(
                 query=effective_query,
@@ -1215,6 +1360,28 @@ class AsyncRagService:
         if self.code_llm_client and intent in CODE_INTENTS:
             return self.code_llm_client
         return self.llm_client
+
+    async def _ensure_reranker_ready(self) -> bool:
+        """Lazily load the cross-encoder model so reranking actually runs.
+
+        Returns True when reranking can be used for this request. The model
+        load runs off the event loop and is fail-open: on timeout, missing
+        optional dependency, or any load error we degrade to "no reranking"
+        rather than failing or stalling the answer. Non-async doubles (test
+        mocks) are treated as already ready per ``is_available()``.
+        """
+        reranker = self.reranker
+        if reranker is None or not self.config.reranker_enabled or reranker.is_available():
+            return reranker is not None and reranker.is_available()
+        initialize = reranker.initialize()
+        if not hasattr(initialize, "__await__"):
+            logger.debug("Reranker initialize() is not async; assuming ready=%s", reranker.is_available())
+            return bool(reranker.is_available())
+        try:
+            await asyncio.wait_for(initialize, timeout=_RERANKER_INIT_TIMEOUT_SECONDS)
+        except Exception:
+            logger.warning("Reranker initialization failed or timed out; proceeding without reranking")
+        return bool(reranker.is_available())
 
     async def _validate_and_fix_code_syntax(
         self, answer_text: str, intent: str, llm_client: LLMClientProtocol, trace: Any | None = None

@@ -16,6 +16,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec reset-index](#dec-reset-index)
   - [dec reset-qdrant](#dec-reset-qdrant)
   - [dec reset-crawler-db](#dec-reset-crawler-db)
+  - [dec clear-query-cache](#dec-clear-query-cache)
   - [dec spark-config-check](#dec-spark-config-check)
   - [dec spark-manifest](#dec-spark-manifest)
   - [dec spark-render](#dec-spark-render)
@@ -65,6 +66,7 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `reenrich`, `retry-failed`, `unskip` | No (in-process, direct ingestion) | Yes | Yes | Yes | Yes |
 | `reset-index` | No | Yes | Yes | If set | No |
 | `reset-qdrant` | No | Yes | No | No | No |
+| `clear-query-cache` | No | No | Yes | No | No |
 | `spark-config-check` | No | No | No | No | No |
 | `spark-manifest` | No | No | No | No | No |
 | `spark-render` | No | No | No | No | No |
@@ -367,6 +369,48 @@ dec reset-crawler-db
 - Requires `CRAWL_DB_URL` to be set for PostgreSQL reset
 - Safe to run multiple times (idempotent)
 - After reset, run `dec ingest --source <name>` to re-crawl
+
+---
+
+### `dec clear-query-cache`
+
+Clears the RAG query cache (both exact-match and semantic tiers) without touching the vector index, BM25 cache, or crawler state.
+
+```
+usage: dec clear-query-cache [-h]
+```
+
+**Example**
+
+```bash
+dec clear-query-cache
+```
+
+**Behavior**
+1. Deletes all Redis `rag:cache:*` keys:
+   - `rag:cache:exact:<fingerprint>:<sha256>` — exact-match tier
+   - `rag:cache:semantic:<fingerprint>:<id>` — semantic-similarity tier
+   - `rag:cache:semantic:counter` — semantic id counter
+2. Preserves Qdrant, BM25 cache, and `crawl:*` / PostgreSQL frontier state
+3. Gracefully degrades with a warning if Redis is unreachable (never raises)
+
+**What gets cleared**
+
+| Store | What | Keys |
+|-------|------|------|
+| Redis | Exact-match answers | `rag:cache:exact:*` |
+| Redis | Semantic-similarity answers | `rag:cache:semantic:*` |
+
+**What is preserved**
+- Qdrant vector store (all indexed chunks + content hashes)
+- BM25 tokenizer cache
+- Redis `crawl:*` and PostgreSQL frontier state
+
+**When to use**: After a provider/model change, an answer-quality fix, or when stale cached answers must not be served. Next `dec ask` / UI query re-generates fresh answers.
+
+**Gotchas**
+- Running API or Streamlit processes keep their own in-memory L1 copy of recently cached answers; restart those services for a fully cold cache.
+- The in-memory caches also expire on their own TTL, so clearing Redis is safe and idempotent.
 
 ---
 
