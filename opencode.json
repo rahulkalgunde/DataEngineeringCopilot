@@ -19,7 +19,7 @@
     "",
     "=== RULE 3: SESSION CONTEXT PRESERVATION ON EXIT ===",
     "Whenever exiting or concluding a session, ALWAYS save the full session context, key decisions made, code changes, and outstanding state in detail under the `sessions/` directory.",
-    "Name the session file using the timestamp format `YYYY-MM-DD_HH-MM_session.md` (e.g., `sessions/2026-08-09_15-30_session.md`).",
+    "Use the exact same timestamp convention as plan files (RULE 2): `YYYY-MM-DD_HH-MM_session.md` (e.g., `sessions/2026-08-11_11-55_session.md`). Do NOT add a topic/slug prefix — the filename is only the timestamp + `_session.md`.",
     "",
     "=== RULE 4: CONTEXT GROUNDING & FILE RECONNAISSANCE ===",
     "1. BEFORE generating any implementation plan, inspect the existing workspace structure using tree, find, or grep.",
