@@ -61,28 +61,36 @@ class CrossEncoderReranker:
         self.model_name = model_name
         self.model: CrossEncoder | None = None
         self._executor: ThreadPoolExecutor | None = None
+        # Guards lazy loading so concurrent initialize() calls load once.
+        self._init_lock: asyncio.Lock | None = None
 
     async def initialize(self) -> None:
         """Load the cross-encoder model off the event loop.
 
-        Safe to call multiple times — subsequent calls are no-ops.
+        Safe to call multiple times — subsequent calls are no-ops, and
+        concurrent callers wait on a shared lock so the model loads once.
         """
         if self.model is not None:
             return
-        try:
-            from sentence_transformers import CrossEncoder
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self.model is not None:
+                return
+            try:
+                from sentence_transformers import CrossEncoder
 
-            loop = asyncio.get_running_loop()
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
-            self.model = await loop.run_in_executor(self._executor, lambda: CrossEncoder(self.model_name))
-            logger.info("Initialized CrossEncoder reranker: %s", self.model_name)
-        except ImportError:
-            logger.warning(
-                "sentence_transformers not available; reranking disabled. "
-                "Install with: pip install sentence-transformers"
-            )
-        except Exception as exc:
-            logger.warning("Failed to initialize CrossEncoder reranker: %s", exc)
+                loop = asyncio.get_running_loop()
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
+                self.model = await loop.run_in_executor(self._executor, lambda: CrossEncoder(self.model_name))
+                logger.info("Initialized CrossEncoder reranker: %s", self.model_name)
+            except ImportError:
+                logger.warning(
+                    "sentence_transformers not available; reranking disabled. "
+                    "Install with: pip install sentence-transformers"
+                )
+            except Exception as exc:
+                logger.warning("Failed to initialize CrossEncoder reranker: %s", exc)
 
     async def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
         """Rerank chunks based on query relevance using cross-encoder.

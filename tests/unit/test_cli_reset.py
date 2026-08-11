@@ -91,3 +91,51 @@ def test_reset_index_clears_crawl_redis_keys(monkeypatch, bm25_path):
     deleted.assert_called()
     all_keys = {call.args for call in deleted.call_args_list}
     assert all_keys == {("crawl:url_registry:SourceA",), ("crawl:header:abc",)}
+
+
+def test_clear_query_cache_deletes_rag_cache_keys(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.return_value = [
+        "rag:cache:exact:fp:hash",
+        "rag:cache:semantic:fp:1",
+        "rag:cache:semantic:counter",
+    ]
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+
+    cli.clear_query_cache()
+
+    redis_client.scan_iter.assert_called_once_with("rag:cache:*")
+    redis_client.delete.assert_called_once_with(
+        "rag:cache:exact:fp:hash", "rag:cache:semantic:fp:1", "rag:cache:semantic:counter"
+    )
+
+
+def test_clear_query_cache_empty_is_noop(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.return_value = []
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+
+    cli.clear_query_cache()
+
+    redis_client.scan_iter.assert_called_once_with("rag:cache:*")
+    redis_client.delete.assert_not_called()
+
+
+def test_clear_query_cache_redis_failure_is_graceful(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.side_effect = ConnectionError("redis down")
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+
+    cli.clear_query_cache()  # must not raise

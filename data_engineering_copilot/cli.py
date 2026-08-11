@@ -1215,6 +1215,42 @@ def reset_crawler_db() -> None:
     print("\nNext step: run 'dec ingest --source <name>' to re-crawl.")
 
 
+def clear_query_cache() -> None:
+    """Clear the RAG query cache (Redis ``rag:cache:*`` keys).
+
+    Removes both tiers of the two-tier query cache — exact-match
+    (``rag:cache:exact:*``) and semantic (``rag:cache:semantic:*``) — plus the
+    semantic counter.  Qdrant, the BM25 cache, and crawler state are untouched,
+    so the vector index keeps serving hits while stale answers are dropped.
+
+    Note: each running API / Streamlit process keeps its own in-memory L1 copy
+    of recently cached answers; restart those services for a full cold cache.
+    """
+    print("Clearing RAG query cache...\n")
+
+    from data_engineering_copilot.workers.progress import get_redis_client
+
+    cleared = 0
+    try:
+        redis_client = get_redis_client()
+        cache_keys = list(redis_client.scan_iter("rag:cache:*"))
+        if cache_keys:
+            redis_client.delete(*cache_keys)
+            cleared = len(cache_keys)
+            print(f"  Cleared {cleared} query cache keys (exact + semantic tiers)")
+        else:
+            print("  No query cache keys found (cache already empty)")
+    except Exception as exc:
+        print(f"  Warning: Could not clear Redis keys: {exc}")
+
+    print("\nQuery cache clear complete.")
+    print(f"  Redis: {cleared} keys cleared")
+    print("  Qdrant / BM25 / crawler state: untouched")
+    print(
+        "  Note: running API or Streamlit processes still hold an in-memory copy; restart them for a fully cold cache."
+    )
+
+
 def health() -> None:
     """Check health of all services."""
 
@@ -2320,6 +2356,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Clear crawler state (Redis crawl:* + PostgreSQL frontier) without touching Qdrant.",
     )
     subparsers.add_parser(
+        "clear-query-cache",
+        help="Clear the RAG query cache (Redis rag:cache:* exact + semantic tiers) without touching the index.",
+    )
+    subparsers.add_parser(
         "spark-config-check",
         help="Validate the pinned Spark source configuration without network access.",
     )
@@ -2604,6 +2644,8 @@ def main() -> None:
             reset_qdrant()
         elif args.command == "reset-crawler-db":
             reset_crawler_db()
+        elif args.command == "clear-query-cache":
+            clear_query_cache()
         elif args.command == "spark-config-check":
             sys.exit(validate_spark_source_config() or validate_spark_rendered_config())
         elif args.command == "spark-manifest":
