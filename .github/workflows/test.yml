@@ -15,7 +15,9 @@ env:
   UV_VERSION: "0.4"
   COMPOSE_PROJECT_NAME: dec_ci
   UV_PROJECT_ENVIRONMENT: dec_venv
-  LANGFUSE_ENCRYPTION_KEY: a5c970bd2cc6e82928f52b6d055e07874aab6d99c7234416a9835c2827973deb
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+  LANGFUSE_ENCRYPTION_KEY: ${{ secrets.LANGFUSE_ENCRYPTION_KEY }}
 
 jobs:
   lint:
@@ -29,7 +31,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -51,7 +53,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -63,13 +65,12 @@ jobs:
         run: uv run make test-ci-unit
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: always()
         with:
           files: coverage.xml
           flags: unit
           fail_ci_if_error: false
-          # token: ${{ secrets.CODECOV_TOKEN }}
 
   test-eval:
     runs-on: ubuntu-latest
@@ -83,7 +84,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -97,7 +98,7 @@ jobs:
   test-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [lint, test-unit, test-eval]
+    needs: [lint, test-unit]
 
     steps:
       - uses: actions/checkout@v4
@@ -106,19 +107,22 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker images
         id: docker-cache
         uses: actions/cache@v4
         with:
           path: /tmp/docker-cache
-          key: docker-ci-int-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          key: docker-ci-shared-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
           restore-keys: |
-            docker-ci-int-${{ runner.os }}-
+            docker-ci-shared-${{ runner.os }}-
 
       - name: Load cached Docker images
         run: |
@@ -143,7 +147,7 @@ jobs:
           key: hf-models-${{ runner.os }}
 
       - name: Fix Ollama cache permissions
-        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
+        run: mkdir -p .ollama_cache && sudo chown -R "$(whoami)" .ollama_cache
 
       - name: Start all service dependencies
         run: |
@@ -180,9 +184,11 @@ jobs:
           docker save langfuse/langfuse:4 langfuse/langfuse-worker:4 minio/mc:RELEASE.2025-08-13T08-35-41Z \
             -o /tmp/docker-cache/langfuse2.tar 2>/dev/null || true
 
-      - name: Cleanup
+      - name: Stop services and restore cache ownership
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v || true
+          sudo chown -R "$(whoami)" .ollama_cache /tmp/docker-cache ~/.cache/huggingface 2>/dev/null || true
 
   test-e2e:
     runs-on: ubuntu-latest
@@ -196,19 +202,22 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker images
         id: docker-cache
         uses: actions/cache@v4
         with:
           path: /tmp/docker-cache
-          key: docker-ci-e2e-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
+          key: docker-ci-shared-${{ runner.os }}-${{ hashFiles('docker-compose.ci.yml') }}
           restore-keys: |
-            docker-ci-e2e-${{ runner.os }}-
+            docker-ci-shared-${{ runner.os }}-
 
       - name: Load cached Docker images
         run: |
@@ -227,7 +236,7 @@ jobs:
             ollama-models-${{ runner.os }}-
 
       - name: Fix Ollama cache permissions
-        run: mkdir -p .ollama_cache && sudo chown -R $(whoami) .ollama_cache
+        run: mkdir -p .ollama_cache && sudo chown -R "$(whoami)" .ollama_cache
 
       - name: Start service dependencies
         run: |
@@ -258,6 +267,8 @@ jobs:
           docker save ollama/ollama:0.32.4 \
             -o /tmp/docker-cache/ollama.tar 2>/dev/null || true
 
-      - name: Cleanup
+      - name: Stop services and restore cache ownership
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v || true
+          sudo chown -R "$(whoami)" .ollama_cache /tmp/docker-cache 2>/dev/null || true
