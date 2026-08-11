@@ -158,7 +158,10 @@ class TestIngestQueryPipeline:
 
     async def test_delete_by_url_removes_chunks(self, e2e_settings):
         """Deleting by URL should remove all chunks for that URL."""
-        service = _build_ingestion_service(e2e_settings)
+        isolated = e2e_settings.model_copy(
+            update={"collection_name": f"e2e_delete_test_{uuid.uuid4().hex[:8]}"}
+        )
+        service = _build_ingestion_service(isolated)
         try:
             await service.vector_store.initialize()
 
