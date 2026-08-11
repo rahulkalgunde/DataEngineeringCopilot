@@ -706,12 +706,13 @@ class AsyncQdrantVectorStore:
                 scroll_filter=models.Filter(
                     must=[models.FieldCondition(key="url", match=models.MatchValue(value=url))]
                 ),
-                limit=1,
+                limit=50,
                 with_payload=True,
                 with_vectors=False,
             )
-            if points and points[0].payload:
-                return points[0].payload.get("content_hash")
+            for point in points:
+                if point.payload and point.payload.get("content_hash"):
+                    return point.payload["content_hash"]
             return None
         except Exception as exc:
             logger.warning("Failed to retrieve content hash for url=%s: %s", url, exc)

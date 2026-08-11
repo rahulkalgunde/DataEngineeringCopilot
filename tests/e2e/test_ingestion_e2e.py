@@ -11,6 +11,7 @@ Run with: ``dec_venv/bin/python -m pytest tests/e2e/ -v -m ingestion``
 import dataclasses
 import hashlib
 import time
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -295,7 +296,7 @@ class TestIngestionPipelineE2E:
         assert await vector_store.count() == n
 
     async def test_content_hash_persisted(self, vector_store, embedder):
-        url = "https://spark.apache.org/docs/latest/"
+        url = f"https://spark.apache.org/docs/latest/content-hash/{uuid.uuid4().hex}"
         raw = RawDocument(
             source_name="Apache Spark Documentation",
             url=url,
@@ -315,7 +316,7 @@ class TestIngestionPipelineE2E:
         assert stored == content_hash
 
     async def test_delete_by_url_removes_chunks(self, vector_store, embedder):
-        url = "https://spark.apache.org/docs/latest/"
+        url = f"https://spark.apache.org/docs/latest/delete-test/{uuid.uuid4().hex}"
         raw = RawDocument(
             source_name="Apache Spark Documentation",
             url=url,
