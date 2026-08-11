@@ -278,6 +278,34 @@ async def test_get_content_hash_not_found(mock_async_qdrant):
     assert result is None
 
 
+async def test_get_content_hash_skips_empty_payload(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    empty_point = MagicMock()
+    empty_point.payload = {"content_hash": ""}
+    good_point = MagicMock()
+    good_point.payload = {"content_hash": "abc123"}
+    mock_async_qdrant.scroll = AsyncMock(return_value=([empty_point, good_point], None))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    result = await store.get_content_hash_for_url("http://example.com/page1")
+    assert result == "abc123"
+
+
+async def test_get_content_hash_returns_none_when_only_empty_payloads(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    empty_point = MagicMock()
+    empty_point.payload = {"content_hash": ""}
+    mock_async_qdrant.scroll = AsyncMock(return_value=([empty_point], None))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    result = await store.get_content_hash_for_url("http://example.com/page1")
+    assert result is None
+
+
 async def test_query_404_raises_vector_store_error(mock_async_qdrant):
     from data_engineering_copilot.domain.exceptions import VectorStoreError
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore

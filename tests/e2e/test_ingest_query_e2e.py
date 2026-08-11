@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import uuid
 
 import pytest
 
@@ -120,8 +121,6 @@ class TestIngestQueryPipeline:
     @pytest.mark.serial
     async def test_query_before_ingest_returns_low_confidence(self, e2e_settings):
         """Querying an empty collection should return low confidence."""
-        import uuid
-
         isolated = e2e_settings.model_copy(
             update={
                 "collection_name": f"e2e_empty_{uuid.uuid4().hex[:8]}",
@@ -139,7 +138,7 @@ class TestIngestQueryPipeline:
         try:
             await service.vector_store.initialize()
 
-            url = "https://spark.apache.org/docs/latest/"
+            url = f"https://spark.apache.org/docs/latest/content-hash/{uuid.uuid4().hex}"
             raw = RawDocument(source_name="test", url=url, html=SAMPLE_HTML)
             parsed = MarkdownParser().parse(raw)
             assert parsed is not None
@@ -163,7 +162,7 @@ class TestIngestQueryPipeline:
         try:
             await service.vector_store.initialize()
 
-            url = "https://spark.apache.org/docs/latest/"
+            url = f"https://spark.apache.org/docs/latest/delete-test/{uuid.uuid4().hex}"
             raw = RawDocument(source_name="test", url=url, html=SAMPLE_HTML)
             parsed = MarkdownParser().parse(raw)
             assert parsed is not None
