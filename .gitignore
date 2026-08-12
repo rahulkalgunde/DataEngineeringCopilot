@@ -48,3 +48,7 @@ memory-bank/
 .docker-tag
 .ch-backup/
 repomix-output.xml
+docs/
+coverage.xml
+RAG_PIPELINE_TRACE.md
+dec_pydocs_venv/
