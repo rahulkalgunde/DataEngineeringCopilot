@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import structlog
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
@@ -28,11 +32,47 @@ from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_metadata import derive_spark_metadata
 from data_engineering_copilot.services.spark_rendered_chunker import SparkRenderedChunker
 
+logger = logging.getLogger(__name__)
+_structlog = structlog.get_logger(__name__)
+
 # Relative path (inside the pinned Spark tree) of the function registry that
 # maps expression case classes/builder objects to their registered SQL names.
 _FUNCTION_REGISTRY_RELATIVE_PATH = (
     "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/FunctionRegistry.scala"
 )
+
+# Job-level retry sleeps for a batch whose embedding providers are all down
+# (both 5xx'd and the fallback chain raised ``LLMClientError``). Each sleep
+# outlasts the TEMPORARY_UNAVAILABLE cooldown (10s) set on the failed providers
+# so the chain gate re-opens before the next attempt. Bulk-ingest analogue of
+# the per-request tenacity backoff inside each provider client. NVIDIA→OpenRouter
+# share the same NVIDIA backend, so a simultaneous 503 can last many minutes;
+# the sleeps are generous (≈15 min total budget) so the build waits it out
+# instead of aborting.
+_EMBED_RETRY_SLEEPS = (60.0, 120.0, 240.0, 480.0)
+
+
+async def _embed_batch_with_retry(embedder: object, batch: list[str]) -> list[list[float]]:
+    """Embed *batch*, retrying when every provider in the fallback chain failed.
+
+    Only ``LLMClientError`` (all providers down) is retried; permanent failures
+    (4xx, budget, dimension) surface as other exceptions and fail fast.
+    """
+    from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+
+    for attempt, sleep in enumerate(_EMBED_RETRY_SLEEPS, start=1):
+        try:
+            return await embedder.embed_texts(batch)  # type: ignore[attr-defined]  # injected embedder
+        except LLMClientError as exc:
+            _structlog.warning(
+                "spark_index.embed_all_providers_down",
+                attempt=attempt,
+                sleep=sleep,
+                err=str(exc)[:160],
+            )
+            await asyncio.sleep(sleep)
+    return await embedder.embed_texts(batch)  # type: ignore[attr-defined]  # injected embedder
+
 
 if TYPE_CHECKING:
     from data_engineering_copilot.config.settings import (
@@ -672,7 +712,7 @@ class SparkIndexBuilder:
         try:
             for i in range(0, len(chunks), self._embedding_batch_size):
                 batch = [c.text for c in chunks[i : i + self._embedding_batch_size]]
-                batch_vectors = await self._embedder.embed_texts(batch)
+                batch_vectors = await _embed_batch_with_retry(self._embedder, batch)
                 vectors.extend(batch_vectors)
             if embed_span is not None:
                 embed_span.update(usage_details={"total": len(chunks)})
