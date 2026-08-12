@@ -294,12 +294,7 @@ async def e2e_llm(e2e_settings: AppSettings):
         base_url=f"{e2e_settings.ollama_base_url}/v1",
         model=e2e_settings.ollama_model,
         timeout_seconds=e2e_settings.ollama_timeout_seconds,
-        extra_body={
-            "options": {
-                "num_ctx": e2e_settings.ollama_num_ctx,
-                "num_predict": e2e_settings.ollama_num_predict,
-            }
-        },
+        max_tokens=e2e_settings.ollama_num_predict,
     )
     yield client
     await client.close()

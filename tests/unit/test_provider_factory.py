@@ -128,6 +128,49 @@ class TestBuildPurposeLLMClient:
         assert isinstance(client, LLMClient)
         assert client.model == "llama3.2:3b"
 
+    def test_ollama_sends_max_tokens_not_ignored_options(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(llm_provider="ollama", llm_model="llama3.2:3b")
+        client = _build_purpose_llm_client(provider="", model="", app_settings=s)
+        assert client is not None
+        assert client._max_tokens == s.ollama_num_predict == 512
+        assert client._max_tokens_field == "max_tokens"
+        # options.num_ctx / options.num_predict / keep_alive are ignored on the
+        # OpenAI-compat endpoint and must not be sent.
+        assert client._extra_body == {}
+        assert client._keep_alive is None
+
+    def test_nvidia_per_purpose_max_tokens(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(nvidia_api_key="nvapi-test")
+        answer = _build_purpose_llm_client(
+            provider="nvidia", model="meta/llama-3.1-8b-instruct", purpose="answer", app_settings=s
+        )
+        rewrite = _build_purpose_llm_client(
+            provider="nvidia", model="meta/llama-3.1-8b-instruct", purpose="rewrite", app_settings=s
+        )
+        assert answer is not None and rewrite is not None
+        assert answer._max_tokens == s.purpose_max_tokens["answer"] == 4096
+        assert rewrite._max_tokens == s.purpose_max_tokens["rewrite"] == 768
+        assert answer._max_tokens_field == "max_tokens"
+
+    def test_groq_cerebras_use_max_completion_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(groq_api_key="gsk-test", cerebras_api_key="cb-test")
+        groq = _build_purpose_llm_client(
+            provider="groq", model="llama-3.1-8b-instant", purpose="answer", app_settings=s
+        )
+        cerebras = _build_purpose_llm_client(
+            provider="cerebras", model="gpt-oss-120b", purpose="answer", app_settings=s
+        )
+        assert groq is not None and cerebras is not None
+        assert groq._max_tokens_field == "max_completion_tokens"
+        assert cerebras._max_tokens_field == "max_completion_tokens"
+        assert groq._max_tokens == 4096
+
     def test_openrouter_delegates(self):
         from data_engineering_copilot.factory import _build_purpose_llm_client
         from data_engineering_copilot.infrastructure.llm_client import LLMClient
@@ -280,6 +323,21 @@ class TestBuildEmbedder:
         s = _make_settings(embedding_provider="voyage")
         with pytest.raises(ValueError, match="Unsupported embedding_provider"):
             build_embedder(s)
+
+    def test_local_hf(self):
+        from data_engineering_copilot.factory import build_embedder
+        from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+            LocalSentenceTransformerEmbeddings,
+        )
+
+        s = _make_settings(
+            embedding_provider="local-hf",
+            local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
+        )
+        embedder = build_embedder(s)
+        assert isinstance(embedder, LocalSentenceTransformerEmbeddings)
+        assert embedder.model_name == "nvidia/Nemotron-3-Embed-1B-BF16"
+        assert s.get_embedding_dimension() == 2048
 
     def test_nvidia(self):
         from data_engineering_copilot.factory import build_embedder
