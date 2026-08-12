@@ -87,3 +87,48 @@ class TestHeaderAwareChunker:
             assert chunk.doc_type == "api_reference"
             assert chunk.file_path == "api/overview.md"
             assert chunk.source_name == "Claude Platform Docs"
+
+    def test_small_nested_sections_not_dropped(self):
+        # Short API-reference pages use nested headings (## -> ### -> ####) with
+        # a couple of lines under each. The parent-boundary flush used to discard
+        # any accumulation below min_chunk_words, so a 77-word page produced zero
+        # chunks. Sub-minimum content must be carried forward, not dropped.
+        md = (
+            "## Delete External Key\n"
+            "Delete an external key config by its ID.\n\n"
+            "### Path Parameters\n"
+            "- `external_key_id: string`\n\n"
+            "### Returns\n"
+            "- `id: string`\n"
+            '- `type: "external_key_deleted"`\n\n'
+            "### Example\n"
+            "```http\n"
+            "curl -X DELETE ...\n"
+            "```\n\n"
+            "#### Response\n"
+            "```json\n"
+            '{ "id": "ekey_01AbCd" }\n'
+            "```\n"
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=20)
+        chunks = chunker._sync_chunk(_doc(md))
+        assert chunks, "sub-minimum nested sections must merge into a chunk, not be dropped"
+        joined = " ".join(c.text for c in chunks)
+        assert "Delete an external key config" in joined
+        assert "ekey_01AbCd" in joined
+
+    def test_parent_boundary_flush_still_respected_above_minimum(self):
+        # A level-1 section followed by a level-2 section (parent/child
+        # transition) with enough words must still flush at the boundary, so
+        # the top-level section keeps its own chunk.
+        md = (
+            "# Intro\n"
+            "Some intro text here with enough words to be a real section.\n\n"
+            "## Config\n"
+            "A child section with plenty of words of its own.\n"
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=3)
+        chunks = chunker._sync_chunk(_doc(md))
+        headers = {c.section_header for c in chunks}
+        assert "Intro" in headers
+        assert "Config" in headers
