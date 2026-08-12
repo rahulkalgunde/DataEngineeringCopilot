@@ -269,6 +269,24 @@ async def _probe_embedding(
             result.category = "permanent_error"
             result.message = f"{type(exc).__name__}: {exc}"
         return result
+    elif getattr(type(embedder), "__module__", "").endswith("huggingface_serverless_embeddings"):
+        # HF serverless embeddings: native feature-extraction route (the
+        # OpenAI-compatible /v1 surface is chat-only). Exercise the client
+        # directly so the probe covers the same code path as the fallback chain.
+        target.model = embedder.model_name
+        result.expected_dimension = app_settings.get_embedding_dimension()
+        try:
+            start = time.monotonic()
+            vectors = await embedder.embed_texts([prompt])
+            latency_ms = (time.monotonic() - start) * 1000
+            result.latency_ms = round(latency_ms, 1)
+            result.status = "OK"
+            result.dimension = len(vectors[0]) if vectors else 0
+        except Exception as exc:
+            result.status = "FAIL"
+            result.category = "permanent_error"
+            result.message = f"{type(exc).__name__}: {exc}"
+        return result
     else:
         target.model = embedder.model_name
         payload = {"model": embedder.model_name, "input": [prompt]}

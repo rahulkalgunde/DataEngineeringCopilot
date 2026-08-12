@@ -157,6 +157,23 @@ def test_get_embedding_dimension_unknown_model() -> None:
     assert s.get_embedding_dimension() == s.default_embedding_dimension
 
 
+def test_get_embedding_dimension_huggingface() -> None:
+    s = make_settings(
+        embedding_provider="huggingface",
+        huggingface_api_key="hf-test",
+        huggingface_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
+        _test_allow_non_ollama=True,
+    )
+    assert s.get_embedding_dimension() == 2048
+
+
+def test_huggingface_api_key_alias_reads_hf_token(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("HF_TOKEN=hf_secret\n", encoding="utf-8")
+    settings = make_settings(_env_file=env_file)
+    assert settings.huggingface_api_key.get_secret_value() == "hf_secret"
+
+
 def test_nvidia_nim_rpd_limit_default() -> None:
     settings = make_settings()
     # Free Developer tier is 1000 RPD (not 10000).

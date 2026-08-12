@@ -324,20 +324,32 @@ class TestBuildEmbedder:
         with pytest.raises(ValueError, match="Unsupported embedding_provider"):
             build_embedder(s)
 
-    def test_local_hf(self):
+    def test_huggingface(self):
         from data_engineering_copilot.factory import build_embedder
-        from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
-            LocalSentenceTransformerEmbeddings,
+        from data_engineering_copilot.infrastructure.huggingface_serverless_embeddings import (
+            HuggingFaceServerlessEmbeddings,
         )
 
         s = _make_settings(
-            embedding_provider="local-hf",
-            local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
+            embedding_provider="huggingface",
+            huggingface_api_key="hf-test",
+            huggingface_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         )
         embedder = build_embedder(s)
-        assert isinstance(embedder, LocalSentenceTransformerEmbeddings)
+        assert isinstance(embedder, HuggingFaceServerlessEmbeddings)
         assert embedder.model_name == "nvidia/Nemotron-3-Embed-1B-BF16"
         assert s.get_embedding_dimension() == 2048
+
+    def test_huggingface_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import build_embedder
+
+        s = _make_settings(
+            embedding_provider="huggingface",
+            huggingface_api_key="hf-placeholder",
+        )
+        object.__setattr__(s, "huggingface_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="HF_TOKEN is required"):
+            build_embedder(s)
 
     def test_nvidia(self):
         from data_engineering_copilot.factory import build_embedder
