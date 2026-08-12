@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
@@ -54,8 +55,7 @@ register_fallback(
     "judge-faithfulness",
     "You are a faithfulness judge. Determine whether the answer is "
     "supported by the retrieved documentation context. Score 0 to 1 "
-    "(1 = fully supported, 0 = hallucinated or unsupported).\n\n"
-    "Context:\n{context}\n\n"
+    "(1 = fully supported, 0 = hallucinated or unsupported).\n\n" + SYSTEM_BLOCK_SEPARATOR + "Context:\n{context}\n\n"
     "Answer:\n{output}\n\n"
     'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}',
 )
@@ -63,8 +63,7 @@ register_fallback(
     "judge-relevance",
     "You are a relevance judge. Determine whether the answer actually "
     "addresses the user's question. Score 0 to 1 (1 = directly relevant, "
-    "0 = off-topic or evasive).\n\n"
-    "Question:\n{input}\n\n"
+    "0 = off-topic or evasive).\n\n" + SYSTEM_BLOCK_SEPARATOR + "Question:\n{input}\n\n"
     "Answer:\n{output}\n\n"
     'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}',
 )
@@ -73,7 +72,8 @@ register_fallback(
     "You are an out-of-scope detector. Determine whether the user's "
     "question is answerable from the provided documentation. Reply "
     "true if the question is NOT answerable from the docs, false if it is.\n\n"
-    "Question:\n{input}\n\n"
+    + SYSTEM_BLOCK_SEPARATOR
+    + "Question:\n{input}\n\n"
     "Answer:\n{output}\n\n"
     'Reply with ONLY a JSON object: {{"out_of_scope": <true|false>, "reason": "<brief>"}}',
 )

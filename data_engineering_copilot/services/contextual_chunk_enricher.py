@@ -14,6 +14,7 @@ from typing import Protocol
 
 from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,7 @@ _SUMMARY_PROMPT = (
     "State ONLY what main concepts, components, or procedures are documented.\n"
     "INTERNAL STYLE: flat, factual, no introductory fluff.\n"
     "If the page lacks substantive content beyond navigation links, headers, "
-    "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n"
-    "Title: {title}\n"
+    "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n" + SYSTEM_BLOCK_SEPARATOR + "Title: {title}\n"
     "Content:\n{text}\n\n"
     "Summary:"
 )

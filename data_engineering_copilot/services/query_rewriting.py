@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from data_engineering_copilot.domain.models import RetrievalFilters
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,8 @@ _CLASSIFY_INTENT_PROMPT = (
     'Classify the user query into exactly one category: "code_example" or "factual".\n'
     '- Choose "code_example" if the user wants code snippets, programming examples, or scripts.\n'
     '- Choose "factual" if the user wants conceptual explanations, documentation text, or theory.\n\n'
-    'Query: "{query}"\n'
+    + SYSTEM_BLOCK_SEPARATOR
+    + 'Query: "{query}"\n'
     'JSON Response: {{"intent": "code_example" | "factual"}}'
 )
 
@@ -70,19 +72,19 @@ _REWRITE_PROMPT = (
     "- Preserve the user's intent.\n"
     "- Expand abbreviations and jargon where helpful.\n"
     "- Output a single line, no more than 30 words.\n\n"
-    "User question: {question}\n\nRewritten query:"
+    + SYSTEM_BLOCK_SEPARATOR
+    + "User question: {question}\n\nRewritten query:"
 )
 
 _EXPAND_PROMPT = (
     "Generate {max_variations} different search queries that would find "
     "the same information as this question. Return ONLY the queries, "
-    "one per line, no numbering.\n\n"
-    "Original question: {query}\n\nVariations:"
+    "one per line, no numbering.\n\n" + SYSTEM_BLOCK_SEPARATOR + "Original question: {query}\n\nVariations:"
 )
 
 _HYDE_PROMPT = (
     "Write a short, authoritative paragraph that would perfectly answer "
-    "the following question. Do not address the user directly.\n\nQuestion: {query}"
+    "the following question. Do not address the user directly.\n\n" + SYSTEM_BLOCK_SEPARATOR + "Question: {query}"
 )
 
 register_fallback("query-intent-classify", _CLASSIFY_INTENT_PROMPT)

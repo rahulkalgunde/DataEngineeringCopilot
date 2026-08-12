@@ -9,13 +9,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from data_engineering_copilot.domain.models import RetrievedChunk
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 # Offline fallback for the Langfuse-managed ``eval-faithfulness`` prompt.
 _FAITHFULNESS_PROMPT = (
     "Given the answer and context below, count how many claims in the "
-    "answer are supported by the context.\n\n"
-    "ANSWER: {answer}\n\nCONTEXT: {context}\n\n"
+    "answer are supported by the context.\n\n" + SYSTEM_BLOCK_SEPARATOR + "ANSWER: {answer}\n\nCONTEXT: {context}\n\n"
     'Return JSON: {{"supported": N, "unsupported": N}}'
 )
 

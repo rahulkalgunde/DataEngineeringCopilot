@@ -19,6 +19,7 @@ from data_engineering_copilot.domain.models import ParsedDocument
 from data_engineering_copilot.evaluation import (
     langfuse_evaluators as _eval_module,  # noqa: F401  (registers judge-* fallbacks)
 )
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability import langfuse_prompts as lp_module
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt
 from data_engineering_copilot.services.async_rag import _JSON_RETRY_SUFFIX
@@ -93,15 +94,15 @@ _FALLBACK_TEMPLATES = {
         "You are a faithfulness judge. Determine whether the answer is "
         "supported by the retrieved documentation context. Score 0 to 1 "
         "(1 = fully supported, 0 = hallucinated or unsupported).\n\n"
-        "Context:\n{context}\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "Context:\n{context}\n\n"
         "Answer:\n{output}\n\n"
         'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}'
     ),
     "judge-relevance": (
         "You are a relevance judge. Determine whether the answer actually "
         "addresses the user's question. Score 0 to 1 (1 = directly relevant, "
-        "0 = off-topic or evasive).\n\n"
-        "Question:\n{input}\n\n"
+        "0 = off-topic or evasive).\n\n" + SYSTEM_BLOCK_SEPARATOR + "Question:\n{input}\n\n"
         "Answer:\n{output}\n\n"
         'Reply with ONLY a JSON object: {{"score": <0-1>, "reason": "<brief>"}}'
     ),
@@ -109,7 +110,8 @@ _FALLBACK_TEMPLATES = {
         "You are an out-of-scope detector. Determine whether the user's "
         "question is answerable from the provided documentation. Reply "
         "true if the question is NOT answerable from the docs, false if it is.\n\n"
-        "Question:\n{input}\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "Question:\n{input}\n\n"
         "Answer:\n{output}\n\n"
         'Reply with ONLY a JSON object: {{"out_of_scope": <true|false>, "reason": "<brief>"}}'
     ),
@@ -173,6 +175,34 @@ def test_build_rag_prompt_matches_legacy_template(monkeypatch):
         question="What is X?",
     )
     assert prompt == expected
+
+
+def test_compiled_rag_prompt_splits_into_system_and_user(monkeypatch):
+    """The rag-answer prompt must split into system + user chat messages."""
+    from data_engineering_copilot.infrastructure.llm_client import build_chat_messages
+
+    monkeypatch.setattr(lp_module, "get_langfuse_instance", lambda: None)
+    builder = PromptBuilder()
+    prompt = builder.build_rag_prompt(context="Some docs.", question="What is X?", intent="factual")
+    messages = build_chat_messages(prompt)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert "## SYSTEM" in messages[0]["content"]
+    assert SYSTEM_BLOCK_SEPARATOR not in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "## USER QUESTION AND CONTEXT" in messages[1]["content"]
+    assert "What is X?" in messages[1]["content"]
+
+
+def test_judge_prompts_carry_system_marker(monkeypatch):
+    from data_engineering_copilot.infrastructure.llm_client import build_chat_messages
+
+    monkeypatch.setattr(lp_module, "get_langfuse_instance", lambda: None)
+    for name in ("judge-faithfulness", "judge-relevance", "judge-out-of-scope"):
+        rendered = get_langfuse_prompt(name).compile(**_COMPILE_CASES[name])
+        messages = build_chat_messages(rendered)
+        assert len(messages) == 2, f"{name} did not split into system+user"
+        assert messages[0]["role"] == "system"
 
 
 def test_returns_langfuse_prompt_when_available(monkeypatch):
