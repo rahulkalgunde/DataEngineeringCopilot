@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from data_engineering_copilot.domain.models import Answer, DocumentChunk, RetrievedChunk
 from data_engineering_copilot.domain.protocols import LLMClientProtocol
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,7 @@ _NLI_PROMPT = (
     "determine which claims in the answer are supported by the context.\n\n"
     "For each claim in the answer, output a JSON array of objects:\n"
     '[{{"claim": "...", "supported": true/false, "evidence": "..."}}]\n'
-    "Return ONLY the JSON array, no preamble.\n\n"
-    "ANSWER:\n{answer}\n\n"
+    "Return ONLY the JSON array, no preamble.\n\n" + SYSTEM_BLOCK_SEPARATOR + "ANSWER:\n{answer}\n\n"
     "CONTEXT (excerpted from documentation):\n{context}\n\n"
     "JSON array:"
 )

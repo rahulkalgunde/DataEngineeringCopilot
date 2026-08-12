@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 
 CODE_INTENTS = frozenset({"code_example", "api_lookup"})
@@ -95,6 +96,7 @@ _RAG_PROMPT_TEMPLATE = "\n".join(
         "## INSTRUCTIONS",
         "{instructions}",
         "",
+        SYSTEM_BLOCK_SEPARATOR,
         "## USER QUESTION AND CONTEXT",
         "Context:\n{tagged_context}\n\nQuestion: {question}",
         "",

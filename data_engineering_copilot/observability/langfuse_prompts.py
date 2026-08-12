@@ -17,6 +17,7 @@ import logging
 import time
 from typing import Any
 
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_client import get_langfuse_instance
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ SEED_PROMPTS: dict[str, str] = {
             "## INSTRUCTIONS",
             "{{instructions}}",
             "",
+            SYSTEM_BLOCK_SEPARATOR,
             "## USER QUESTION AND CONTEXT",
             "Context:\n{{tagged_context}}\n\nQuestion: {{question}}",
             "",
@@ -112,7 +114,8 @@ SEED_PROMPTS: dict[str, str] = {
         'Classify the user query into exactly one category: "code_example" or "factual".\n'
         '- Choose "code_example" if the user wants code snippets, programming examples, or scripts.\n'
         '- Choose "factual" if the user wants conceptual explanations, documentation text, or theory.\n\n'
-        'Query: "{{query}}"\n'
+        + SYSTEM_BLOCK_SEPARATOR
+        + 'Query: "{{query}}"\n'
         'JSON Response: {"intent": "code_example" | "factual"}'
     ),
     "query-rewrite": (
@@ -123,25 +126,24 @@ SEED_PROMPTS: dict[str, str] = {
         "- Preserve the user's intent.\n"
         "- Expand abbreviations and jargon where helpful.\n"
         "- Output a single line, no more than 30 words.\n\n"
-        "User question: {{question}}\n\nRewritten query:"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "User question: {{question}}\n\nRewritten query:"
     ),
     "query-expand": (
         "Generate {{max_variations}} different search queries that would find "
         "the same information as this question. Return ONLY the queries, "
-        "one per line, no numbering.\n\n"
-        "Original question: {{query}}\n\nVariations:"
+        "one per line, no numbering.\n\n" + SYSTEM_BLOCK_SEPARATOR + "Original question: {{query}}\n\nVariations:"
     ),
     "query-hyde": (
         "Write a short, authoritative paragraph that would perfectly answer "
-        "the following question. Do not address the user directly.\n\nQuestion: {{query}}"
+        "the following question. Do not address the user directly.\n\n" + SYSTEM_BLOCK_SEPARATOR + "Question: {{query}}"
     ),
     "groundedness-nli": (
         "You are a groundedness verifier. Given an answer and supporting context, "
         "determine which claims in the answer are supported by the context.\n\n"
         "For each claim in the answer, output a JSON array of objects:\n"
         '[{"claim": "...", "supported": true/false, "evidence": "..."}]\n'
-        "Return ONLY the JSON array, no preamble.\n\n"
-        "ANSWER:\n{{answer}}\n\n"
+        "Return ONLY the JSON array, no preamble.\n\n" + SYSTEM_BLOCK_SEPARATOR + "ANSWER:\n{{answer}}\n\n"
         "CONTEXT (excerpted from documentation):\n{{context}}\n\n"
         "JSON array:"
     ),
@@ -152,30 +154,30 @@ SEED_PROMPTS: dict[str, str] = {
         "State ONLY what main concepts, components, or procedures are documented.\n"
         "INTERNAL STYLE: flat, factual, no introductory fluff.\n"
         "If the page lacks substantive content beyond navigation links, headers, "
-        "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n"
-        "Title: {{title}}\n"
+        "or index listings, return exactly: NO_CONTENT_TO_SUMMARIZE\n\n" + SYSTEM_BLOCK_SEPARATOR + "Title: {{title}}\n"
         "Content:\n{{text}}\n\n"
         "Summary:"
     ),
     "eval-faithfulness": (
         "Given the answer and context below, count how many claims in the "
         "answer are supported by the context.\n\n"
-        "ANSWER: {{answer}}\n\nCONTEXT: {{context}}\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "ANSWER: {{answer}}\n\nCONTEXT: {{context}}\n\n"
         'Return JSON: {"supported": N, "unsupported": N}'
     ),
     "judge-faithfulness": (
         "You are a faithfulness judge. Determine whether the answer is "
         "supported by the retrieved documentation context. Score 0 to 1 "
         "(1 = fully supported, 0 = hallucinated or unsupported).\n\n"
-        "Context:\n{{context}}\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "Context:\n{{context}}\n\n"
         "Answer:\n{{output}}\n\n"
         'Reply with ONLY a JSON object: {"score": <0-1>, "reason": "<brief>"}'
     ),
     "judge-relevance": (
         "You are a relevance judge. Determine whether the answer actually "
         "addresses the user's question. Score 0 to 1 (1 = directly relevant, "
-        "0 = off-topic or evasive).\n\n"
-        "Question:\n{{input}}\n\n"
+        "0 = off-topic or evasive).\n\n" + SYSTEM_BLOCK_SEPARATOR + "Question:\n{{input}}\n\n"
         "Answer:\n{{output}}\n\n"
         'Reply with ONLY a JSON object: {"score": <0-1>, "reason": "<brief>"}'
     ),
@@ -183,7 +185,8 @@ SEED_PROMPTS: dict[str, str] = {
         "You are an out-of-scope detector. Determine whether the user's "
         "question is answerable from the provided documentation. Reply "
         "true if the question is NOT answerable from the docs, false if it is.\n\n"
-        "Question:\n{{input}}\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "Question:\n{{input}}\n\n"
         "Answer:\n{{output}}\n\n"
         'Reply with ONLY a JSON object: {"out_of_scope": <true|false>, "reason": "<brief>"}'
     ),
