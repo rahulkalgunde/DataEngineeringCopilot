@@ -159,7 +159,15 @@ def test_get_embedding_dimension_unknown_model() -> None:
 
 def test_nvidia_nim_rpd_limit_default() -> None:
     settings = make_settings()
-    assert settings.nvidia_rpd_limit == 10000
+    # Free Developer tier is 1000 RPD (not 10000).
+    assert settings.nvidia_rpd_limit == 1000
+
+
+def test_nvidia_nim_rpd_limit_accepts_legacy_alias(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("NVIDIA_NIM_RPD_LIMIT=0\n", encoding="utf-8")
+    settings = make_settings(_env_file=env_file)
+    assert settings.nvidia_rpd_limit == 0
 
 
 def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
