@@ -9,6 +9,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
 - [Overview](#overview)
 - [Commands](#commands)
   - [dec ingest](#dec-ingest)
+  - [dec ingest-claude-docs](#dec-ingest-claude-docs)
   - [dec ask](#dec-ask)
   - [dec reenrich](#dec-reenrich)
   - [dec retry-failed](#dec-retry-failed)
@@ -129,6 +130,52 @@ dec ingest --max-pages 5
 **Gotchas**
 - If the API is unreachable it instructs you to start `backend-api` + `celery_worker`.
 - URL dedup is handled by the `AsyncUrlRegistry` in Redis; re-ingesting mostly skips cached pages (`pages_skipped`).
+
+---
+
+### `dec ingest-claude-docs`
+
+Ingest Anthropic Claude documentation (the Claude platform and API "LLMs docs") directly into the Qdrant vector index — no Celery, no crawler/Redis/Postgres. Downloads the markdown sources in-process (via `httpx`), strips YAML frontmatter, then runs them through the same `HeaderAwareChunker` + embedding fallback chain + `AsyncQdrantVectorStore` as the standard ingestion pipeline.
+
+```
+usage: dec ingest-claude-docs [-h] [--site {platform,code,all}] [--max-docs MAX_DOCS]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--site` | `platform` \| `code` \| `all` | `all` | Which site(s) to ingest. `platform` = `platform.claude.com` LLM docs; `code` = `code.claude.com` docs. |
+| `--max-docs N` | int | `None` (all) | Cap the number of `.md` docs ingested **per site** (useful for a quick smoke run). |
+
+**Sources indexed** (routed to Qdrant with `doc_type` `guide`/`api_reference` per file path):
+- `Claude Platform Documentation` — `https://platform.claude.com/docs/en/llms*.md`, `url_prefix` `build-with-claude/`.
+- `Claude Code Docs` — `https://code.claude.com/docs/llms*.md`, `url_prefix` matching Claude Code markdown pages.
+
+**Examples**
+
+```bash
+# Ingest ALL Claude docs (platform + code)
+dec ingest-claude-docs --site all
+
+# Quick smoke run: only the platform site, capped at 5 pages
+dec ingest-claude-docs --site platform --max-docs 5
+
+# Only Claude Code docs
+dec ingest-claude-docs --site code
+```
+
+**Note on re-ingesting over an existing index**: this command upserts into the existing collection and does **not** rebuild already-stored chunks. If the embedding model or its `input_type` mode changed (see the note under [`dec reset-index`](#dec-reset-index)), run `dec reset-index`/`dec reset-qdrant` first so the whole corpus is re-embedded in the correct mode — otherwise old chunks stay in the incompatible subspace.
+
+**Behavior**
+- Pulls the site's `llms*.md` index (an index of markdown links), then downloads each `.md` page to a cache dir under `settings.data_dir/claude_docs/<site>/` (skips files already downloaded). Pages under ~100 chars of text are skipped.
+- Chunks with `HeaderAwareChunker` and upserts with deterministic chunk IDs, so re-running is idempotent (re-upsert overwrites the same IDs — no duplicates).
+- Prints a summary on completion: per-source document counts, chunked documents, total chunks uploaded, and any fetch failures.
+- Does **not** require the crawler stack (Redis/Postgres/celery_worker) — only Qdrant + an available embedder.
+
+**Exit codes**: `0` success; `1` on error (unreachable Qdrant, missing embedder, download failures).
+
+**Gotchas**
+- Requires the LLM docs index to be reachable; the CLI warns per-site on download failures and continues with the other site.
+- Weighty pages are chunked identically to regular ingestion, so queries against this data use the same routers (`--claude-only`/`--sources` in `dec ask`).
 
 ---
 
@@ -298,6 +345,12 @@ dec reset-index
 **Behavior**
 - Deletes then recreates the collection first, so a failure aborts before any frontier history is dropped.
 - Recreating with a **different embedding provider/model** than the original collection is the main reason to reset (dimension mismatch).
+
+**Note on embedding mode (`input_type`)** — dual-mode embedding models (e.g. `nemotron-3-embed-1b`) encode passages and queries in different, non-interchangeable subspaces:
+- Index-time chunks are embedded with `input_type="passage"`; live search prompts with `input_type="query"`.
+- **Existing chunks ingested before this mode was wired are in the wrong/mixed subspace** and will not match query-mode vectors. After a `reset-index` (or a full re-ingest), the index is rebuilt in the correct mode automatically.
+- Re-ingesting **over an existing collection** (e.g. `dec ingest-claude-docs --site code` without `reset-index`) only *adds/overwrites* points — it does **not** fix already-stored chunks that were embedded in the old mode. Use `reset-index` (or `reset-qdrant`) first to rebuild the corpus, then re-ingest.
+- After switching to `input_type`, also **clear the embedding query cache** (Redis + in-process) so stale pre-change query embeddings are not served for new passage-mode chunks.
 
 **Gotchas**
 - Destructive and irreversible for the index/crawl state. Run `dec inspect-db` first if unsure.
@@ -1179,6 +1232,7 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 |---|---|
 | Build/rebuild the index | `dec ingest` |
 | Ingest one source, capped | `dec ingest --source "Apache Spark Documentation" --max-pages 50` |
+| Ingest Claude LLM docs (no crawler) | `dec ingest-claude-docs --site all` |
 | Ask a question | `dec ask "What is a Spark DataFrame?"` |
 | Re-enrich failed summaries | `dec reenrich --source "Apache Spark Documentation"` |
 | Retry all failed pages | `dec retry-failed --source "Apache Spark Documentation"` |

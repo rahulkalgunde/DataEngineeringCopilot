@@ -62,6 +62,7 @@ Python 3.12+, Pyright, Ruff, Pytest, `uv` only.
 | Command | Purpose | Infra Needed |
 |---------|---------|--------------|
 | `dec ingest --source "Name" --max-pages N` | Crawl + index via Celery | API + worker + Qdrant + Redis + PG + Ollama |
+| `dec ingest-claude-docs --site all` | Ingest Claude LLM docs (in-process, no Celery) | Qdrant + embedder |
 | `dec ask "question"` | In-process RAG query | Qdrant + Redis + embedder + LLM |
 | `dec reenrich --source "Name"` | Re-enrich failed summaries | Qdrant + Redis + PG + Ollama |
 | `dec retry-failed --source "Name" --category fetch` | Retry failed pages | Qdrant + Redis + PG + Ollama |

@@ -2,13 +2,13 @@
   {
     "name": "Apache Spark Documentation",
     "start_urls": [
-      "https://spark.apache.org/docs/latest/"
+      "https://spark.apache.org/docs/4.2.0/"
     ],
     "allowed_domains": [
       "spark.apache.org"
     ],
     "url_prefixes": [
-      "https://spark.apache.org/docs/latest/"
+      "https://spark.apache.org/docs/4.2.0/"
     ]
   },
   {

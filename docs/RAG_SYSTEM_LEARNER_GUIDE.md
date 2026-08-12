@@ -1128,6 +1128,7 @@ All default to empty string (fall back to global `llm_provider`/`llm_model`):
 | `reranker_top_k` | 5 | 1-20 | `settings.py:174` |
 | `max_context_chars` | 4000 | 500-10000 | `settings.py:175` |
 | `confidence_threshold` | 0.18 | 0.0-1.0 | `settings.py:176` |
+| `reranker_confidence_threshold` | 0.10 | 0.0-1.0 | cross-encoder gate |
 | `hybrid_search_enabled` | True | — | `settings.py:204` |
 | `hybrid_rrf_k` | 60 | 10-200 | `settings.py:205` |
 | `semantic_cache_threshold` | 0.95 | 0.5-1.0 | `settings.py:207` |
