@@ -20,6 +20,9 @@ from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.llm_client import LLMClient
+from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+    LocalSentenceTransformerEmbeddings,
+)
 from data_engineering_copilot.infrastructure.provider_fallback import (
     FallbackChainConfig,
     ProviderConfig,
@@ -28,6 +31,7 @@ from data_engineering_copilot.infrastructure.provider_fallback import (
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.infrastructure.rst_parser import RstParser
+from data_engineering_copilot.infrastructure.tokenizer_registry import declared_input_limit, token_counter_for
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
@@ -137,7 +141,6 @@ def _categorize_embedding_error(exc: Exception, provider: str, model: str):
     import httpx
 
     from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
-    from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
     def _status_category(status: int) -> ProviderErrorCategory:
         if status == 429:
@@ -220,6 +223,9 @@ def _build_purpose_llm_client(
         model=eff_model,
     )
 
+    # Per-purpose output cap (sent as max_tokens / max_completion_tokens).
+    purpose_max_tokens = app_settings.purpose_max_tokens.get((purpose or "global").lower(), app_settings.llm_max_tokens)
+
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
     if eff_provider == "ollama":
@@ -229,15 +235,9 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key="",
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            keep_alive=app_settings.ollama_keep_alive,
+            max_tokens=app_settings.ollama_num_predict,
             connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
             pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
-            extra_body={
-                "options": {
-                    "num_ctx": app_settings.ollama_num_ctx,
-                    "num_predict": app_settings.ollama_num_predict,
-                }
-            },
         )
 
     if eff_provider == "openrouter":
@@ -249,6 +249,8 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
             extra_headers={"HTTP-Referer": "https://data-engineering-copilot.local"},
             rate_limiter=rate_limiter,
         )
@@ -262,6 +264,7 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
             rate_limiter=rate_limiter,
         )
 
@@ -274,6 +277,8 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
             rate_limiter=rate_limiter,
         )
 
@@ -286,6 +291,8 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
             rate_limiter=rate_limiter,
         )
 
@@ -298,6 +305,7 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
             rate_limiter=rate_limiter,
         )
 
@@ -310,6 +318,7 @@ def _build_purpose_llm_client(
             model=eff_model,
             api_key=api_key,
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
             rate_limiter=rate_limiter,
         )
 
@@ -552,6 +561,8 @@ def _build_embedding_chain_config(
                         batch_size=app_settings.embedding_batch_size,
                         rate_limiter=limiters.get("nvidia"),
                         include_provider_param=False,
+                        token_counter=token_counter_for(app_settings.nvidia_embedding_model),
+                        declared_input_limit=declared_input_limit(app_settings.nvidia_embedding_model),
                     )
             elif provider_name == "openrouter":
                 api_key = app_settings.openrouter_api_key.get_secret_value()
@@ -567,6 +578,8 @@ def _build_embedding_chain_config(
                         batch_size=app_settings.embedding_batch_size,
                         rate_limiter=limiters.get("openrouter"),
                         include_provider_param=True,
+                        token_counter=token_counter_for(app_settings.openrouter_embedding_model),
+                        declared_input_limit=declared_input_limit(app_settings.openrouter_embedding_model),
                     )
             elif provider_name == "gemini":
                 api_key = app_settings.gemini_api_key.get_secret_value()
@@ -582,7 +595,17 @@ def _build_embedding_chain_config(
                         batch_size=app_settings.embedding_batch_size,
                         rate_limiter=limiters.get("gemini"),
                         include_provider_param=False,
+                        token_counter=token_counter_for(app_settings.gemini_embedding_model),
+                        declared_input_limit=declared_input_limit(app_settings.gemini_embedding_model),
                     )
+            elif provider_name == "local-hf":
+                client = LocalSentenceTransformerEmbeddings(
+                    model_name=app_settings.local_hf_embedding_model,
+                    embedding_dimension=app_settings.embedding_model_dimensions.get(
+                        app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
+                    ),
+                    batch_size=app_settings.embedding_batch_size,
+                )
             elif provider_name in ("ollama", "local"):
                 embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
                 client = AsyncOllamaEmbeddings(
@@ -704,6 +727,8 @@ def build_embedder(
             batch_size=app_settings.embedding_batch_size,
             rate_limiter=rate_limiter,
             include_provider_param=True,
+            token_counter=token_counter_for(app_settings.openrouter_embedding_model),
+            declared_input_limit=declared_input_limit(app_settings.openrouter_embedding_model),
         )
     elif provider == "nvidia":
         api_key = app_settings.nvidia_api_key.get_secret_value()
@@ -717,6 +742,8 @@ def build_embedder(
             batch_size=app_settings.embedding_batch_size,
             rate_limiter=rate_limiter,
             include_provider_param=False,
+            token_counter=token_counter_for(app_settings.nvidia_embedding_model),
+            declared_input_limit=declared_input_limit(app_settings.nvidia_embedding_model),
         )
     elif provider == "gemini":
         api_key = app_settings.gemini_api_key.get_secret_value()
@@ -730,6 +757,16 @@ def build_embedder(
             batch_size=app_settings.embedding_batch_size,
             rate_limiter=rate_limiter,
             include_provider_param=False,
+            token_counter=token_counter_for(app_settings.gemini_embedding_model),
+            declared_input_limit=declared_input_limit(app_settings.gemini_embedding_model),
+        )
+    elif provider == "local-hf":
+        return LocalSentenceTransformerEmbeddings(
+            model_name=app_settings.local_hf_embedding_model,
+            embedding_dimension=app_settings.embedding_model_dimensions.get(
+                app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
+            ),
+            batch_size=app_settings.embedding_batch_size,
         )
     elif provider in ("ollama", "local"):
         embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
@@ -1045,6 +1082,7 @@ def build_rag_service(
         reranker_enabled=app_settings.reranker_enabled,
         reranker_model=app_settings.reranker_model,
         reranker_top_k=app_settings.reranker_top_k,
+        reranker_confidence_threshold=app_settings.reranker_confidence_threshold,
         max_context_chars=app_settings.max_context_chars,
         max_expansion_queries=app_settings.max_expansion_queries,
     )
