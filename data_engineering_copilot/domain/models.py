@@ -175,12 +175,33 @@ class RetrievedChunk:
 
 
 @dataclass(frozen=True)
+class EmbeddingRequest:
+    """A batch of texts plus the retrieval role for dual-mode embedding models.
+
+    Some embedding models (e.g. ``nemotron-3-embed-1b``) encode passages and
+    queries in different, non-interchangeable modes. The provider chain is
+    mode-agnostic, so this request carries the role so clients can set
+    ``input_type`` on the provider API. ``input_type`` is ``"passage"`` for
+    index-time chunks, ``"query"`` for live search prompts, and ``None`` when
+    the target model has no mode (client skips the field).
+    """
+
+    input_type: str | None
+    texts: list[str]
+
+
+@dataclass(frozen=True)
 class RagConfig:
     retrieval_top_k: int = 5
     confidence_threshold: float = 0.3
     reranker_enabled: bool = False
     reranker_model: str = "ms-marco-MiniLM-L-6-v2"
     reranker_top_k: int = 3
+    # Cross-encoder scores sit on a different scale than embedding/fused
+    # confidence (relevant pairs often land ~0.10-0.15). Gate on this value
+    # when a reranker ran for the query; otherwise fall back to
+    # ``confidence_threshold`` (the embedding scale).
+    reranker_confidence_threshold: float = 0.10
     max_context_chars: int = 8000
     max_expansion_queries: int = 2
     cache_enabled: bool = True
