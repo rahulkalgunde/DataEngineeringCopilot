@@ -394,13 +394,18 @@ class AppSettings(BaseSettings):
     )
     image_git_sha: str = Field(default="unknown", validation_alias="IMAGE_GIT_SHA")
 
-    embedding_batch_size: int = 128
+    embedding_batch_size: int = 64
     embed_concurrency: int = 1
     enrichment_batch_size: int = 20
 
     # LLM Provider selection: "ollama" | "openrouter"
     # Embedding provider selection: "ollama" | "openrouter"
     embedding_model_name: str = "nomic-embed-text"
+    # Local HuggingFace embedding model (provider "local-hf"): runs
+    # sentence-transformers on the local CPU, mirroring the reranker. Produces
+    # vectors identical to the hosted NVIDIA nemotron-3-embed-1b (verified cos
+    # ~1.0) with zero provider dependence.
+    local_hf_embedding_model: str = "nvidia/Nemotron-3-Embed-1B-BF16"
     # Embedding dimension is model-dependent, not provider-dependent.
     # Map model names to their known output dimensions.
     embedding_model_dimensions: dict[str, int] = {
@@ -410,6 +415,7 @@ class AppSettings(BaseSettings):
         "llama3.2:3b": 3072,
         "nvidia/nemotron-3-embed-1b": 2048,
         "nvidia/nemotron-3-embed-1b:free": 2048,
+        "nvidia/Nemotron-3-Embed-1B-BF16": 2048,
         "text-embedding-004": 768,
     }
     default_embedding_dimension: int = 768
@@ -417,6 +423,24 @@ class AppSettings(BaseSettings):
     llm_model: str = "llama3.2:3b"
     embedding_provider: str = "ollama"
     ollama_model: str = "llama3.2:3b"
+
+    # Max output tokens for LLM calls, sent as ``max_tokens`` (or
+    # ``max_completion_tokens`` where the provider requires it). Omitting it is
+    # NOT safe: several providers silently truncate (Cloudflare defaults to
+    # 256, NVIDIA to 1024) while Groq/Cerebras/Gemini/OpenRouter run unbounded.
+    llm_max_tokens: int = 2048
+    # Per-purpose output caps — short-output purposes (rewrite/intent/
+    # groundedness) get small budgets, long-output ones (answer/code) get more.
+    purpose_max_tokens: dict[str, int] = {
+        "answer": 4096,
+        "code": 4096,
+        "enrichment": 1536,
+        "evaluation": 1536,
+        "groundedness": 1024,
+        "rewrite": 768,
+        "intent": 768,
+        "global": 2048,
+    }
 
     # API key for the API auth middleware (pydantic-set, env-file aware).
     api_key: SecretStr = SecretStr("")
@@ -438,7 +462,12 @@ class AppSettings(BaseSettings):
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_embedding_model: str = "nvidia/nemotron-3-embed-1b"
     nvidia_rpm_limit: int = 36
-    nvidia_rpd_limit: int = 10000
+    # Free Developer tier is 40 RPM / 1000 RPD (per-key; chat + embeddings share
+    # the same daily budget). 0 disables the daily gate entirely.
+    nvidia_rpd_limit: int = Field(
+        default=1000,
+        validation_alias=AliasChoices("NVIDIA_RPD_LIMIT", "NVIDIA_NIM_RPD_LIMIT"),
+    )
 
     # Groq settings (LLM only)
     groq_api_key: SecretStr = SecretStr("")
@@ -458,7 +487,7 @@ class AppSettings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     gemini_model: str = "gemini-2.5-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_model: str = "text-embedding-001"
     gemini_rpm_limit: int = 13
     gemini_rpd_limit: int = 450
 
@@ -468,7 +497,7 @@ class AppSettings(BaseSettings):
     cloudflare_account_id: str = ""
     cloudflare_base_url: str = ""
     cloudflare_rpm_limit: int = 60
-    cloudflare_rpd_limit: int = 100000
+    cloudflare_rpd_limit: int = 1000
 
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(
@@ -580,12 +609,23 @@ class AppSettings(BaseSettings):
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
     confidence_threshold: float = 0.18
+    # Cross-encoder sigmoid scores cluster lower than embedding/fused
+    # confidence (relevant pairs commonly land ~0.10-0.15). When a reranker
+    # ran for a query, the quality gate compares against this value; without a
+    # reranker it falls back to ``confidence_threshold``.
+    reranker_confidence_threshold: float = 0.10
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 180
     ollama_connect_timeout_seconds: int = 5
     ollama_pool_timeout_seconds: int = 5
     ollama_keep_alive: str | int = "10m"
+    # Native /api/chat params (num_ctx / keep_alive) are NOT honored on the
+    # OpenAI-compat /v1/chat/completions endpoint — only ``max_tokens`` maps
+    # to num_predict there. `num_ctx` / `keep_alive` are therefore only
+    # applied when Ollama is driven through the native API.
     ollama_num_ctx: int = 4096
+    # Used as ``max_tokens`` on the OpenAI-compat endpoint (enforced output cap
+    # for the local model, which is CPU-bound and slow).
     ollama_num_predict: int = 512
     ollama_retry_context_ratio: float = 0.5
     ollama_retry_extra_num_predict: int = 512
@@ -744,6 +784,8 @@ class AppSettings(BaseSettings):
             model_name = self.nvidia_embedding_model
         elif provider == "gemini":
             model_name = self.gemini_embedding_model
+        elif provider == "local-hf":
+            model_name = self.local_hf_embedding_model
         else:
             model_name = self.embedding_model_name
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
@@ -758,6 +800,12 @@ class AppSettings(BaseSettings):
             errors.append(
                 f"reranker_top_k ({self.reranker_top_k}) must be <= retrieval_top_k ({self.retrieval_top_k}) "
                 "— the reranker can only narrow the retrieved set."
+            )
+        if not 0.0 <= self.confidence_threshold <= 1.0:
+            errors.append(f"confidence_threshold ({self.confidence_threshold}) must be within [0.0, 1.0]")
+        if not 0.0 <= self.reranker_confidence_threshold <= 1.0:
+            errors.append(
+                f"reranker_confidence_threshold ({self.reranker_confidence_threshold}) must be within [0.0, 1.0]"
             )
         if self.max_pages_per_source < 0:
             errors.append(f"max_pages_per_source ({self.max_pages_per_source}) must be >= 0")
