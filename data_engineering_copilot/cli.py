@@ -12,9 +12,10 @@ import urllib.request
 from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
-from data_engineering_copilot.config.settings import settings
+from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.evaluation.langfuse_metrics import query_aliases
+from data_engineering_copilot.infrastructure.token_budget import TokenEncoder
 from data_engineering_copilot.profiler import cli as profiler_cli
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord
 
@@ -156,14 +157,80 @@ def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
         sys.exit(130)
 
 
-def ask(question: str, user_id: str | None = None, session_id: str | None = None) -> None:
+_CLAUDE_ROUTING_KEYWORDS = frozenset(
+    {
+        "claude",
+        "anthropic",
+        "messages api",
+        "tool use",
+        "tool_choice",
+        "input_schema",
+        "extended thinking",
+        "thinking",
+        "prompt caching",
+        "agent sdk",
+        "mcp",
+        "system prompt",
+    }
+)
+
+
+def _claude_source_filter(question: str, source_names: list[str] | None) -> list[str] | None:
+    """Resolve the source filter for ``dec ask``.
+
+    Explicit ``--source`` flags win; otherwise a Claude/Anthropic keyphrase in
+    the question auto-routes to the Claude documentation sources.
+    """
+    if source_names:
+        return list(source_names)
+    from data_engineering_copilot.services.claude_docs_ingestion import SOURCE_CODE, SOURCE_PLATFORM
+
+    lowered = question.lower()
+    if any(keyword in lowered for keyword in _CLAUDE_ROUTING_KEYWORDS):
+        return [SOURCE_PLATFORM, SOURCE_CODE]
+    return None
+
+
+def _resolve_embedding_encoder(settings: AppSettings) -> TokenEncoder:
+    """Pick the token encoder matching the primary embedding provider.
+
+    The lossless splitter and the embedder's pre-flight budget must count with
+    the same encoder. Resolution follows ``EMBEDDING_FALLBACK_ORDER``: the first
+    configured provider's model slug drives the encoder (unknown models resolve
+    to the shared cl100k fallback without touching the network).
+    """
+    from data_engineering_copilot.infrastructure.tokenizer_registry import resolve_token_encoder
+
+    order = settings.embedding_fallback_order or ["nvidia"]
+    for provider in order:
+        model = {
+            "nvidia": settings.nvidia_embedding_model,
+            "openrouter": settings.openrouter_embedding_model,
+            "gemini": settings.gemini_embedding_model,
+        }.get(provider)
+        if model:
+            return resolve_token_encoder(model)
+    return resolve_token_encoder(settings.embedding_model_name)
+
+
+def ask(
+    question: str,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    source_names: list[str] | None = None,
+) -> None:
     import asyncio
 
     from data_engineering_copilot.factory import build_rag_service
 
-    logger.info("CLI ask started question=%r", question[:200])
+    source_filter = _claude_source_filter(question, source_names)
+    logger.info(
+        "CLI ask started question=%r source_filter=%s",
+        question[:200],
+        source_filter,
+    )
     service = build_rag_service()
-    answer = asyncio.run(service.answer(question, user_id=user_id, session_id=session_id))
+    answer = asyncio.run(service.answer(question, user_id=user_id, session_id=session_id, source_filter=source_filter))
     logger.info("CLI ask completed confidence=%.4f sources=%s", answer.confidence, len(answer.sources))
     print(answer.text)
     if answer.sources:
@@ -171,6 +238,83 @@ def ask(question: str, user_id: str | None = None, session_id: str | None = None
         for source in answer.sources:
             print(f"- {source.title}: {source.url}")
     print(f"\nConfidence: {answer.confidence:.2f}")
+
+
+def ingest_claude_docs(site: str = "all", max_docs: int | None = None) -> None:
+    """Fetch Claude Platform / Claude Code docs from their ``llms.txt`` indexes and ingest into Qdrant.
+
+    Runs in-process (no Celery/API). Requires Qdrant and an embedder (default
+    Ollama). ``--max-docs`` limits the number of markdown files fetched per
+    site for a quick smoke run.
+    """
+    import asyncio
+
+    from data_engineering_copilot.domain.protocols import EmbedderProtocol
+    from data_engineering_copilot.factory import (
+        _build_provider_health_registry,
+        _build_provider_rate_limiters,
+        build_embedding_fallback_chain,
+    )
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+    from data_engineering_copilot.services.claude_docs_ingestion import (
+        LLMS_DOC_SITES,
+    )
+    from data_engineering_copilot.services.claude_docs_ingestion import (
+        ingest_claude_docs as run_ingest,
+    )
+    from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+
+    sites = ["platform", "code"]
+    if site != "all":
+        if site not in LLMS_DOC_SITES:
+            raise ValueError(f"Unknown site: {site!r}. Choose from: platform, code, all.")
+        sites = [site]
+
+    chunker = HeaderAwareChunker(
+        chunk_size_words=settings.chunk_size_words,
+        overlap_words=settings.chunk_overlap_words,
+        min_chunk_words=int(settings.chunk_size_words * 0.1),
+    )
+    # Route embeddings through the unified fallback chain (per EMBEDDING_FALLBACK_ORDER)
+    # with Ollama as degraded fallback, so a transient 5xx on the primary provider
+    # fails over instead of aborting the whole ingest.
+    provider_rate_limiters = _build_provider_rate_limiters(settings)
+    health_registry = _build_provider_health_registry(settings)
+    embedding_chain = build_embedding_fallback_chain(
+        purpose="global",
+        app_settings=settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
+    embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+    store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=settings.collection_name,
+        hybrid_search=settings.hybrid_search_enabled,
+        hybrid_rrf_k=settings.hybrid_rrf_k,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
+
+    # Use the same token encoder as the embedding providers for the lossless
+    # split budget, so segments that pass the splitter also pass the embedder's
+    # pre-flight budget check.
+    split_encoder = _resolve_embedding_encoder(settings)
+
+    async def _run() -> dict[str, object]:
+        await store.initialize()
+        try:
+            return await run_ingest(sites, max_docs, chunker, embedder, store, encoder=split_encoder)
+        finally:
+            await store.close()
+
+    summary = asyncio.run(_run())
+    print(
+        f"Ingested {summary['documents']} documents → {summary['chunks']} chunks "
+        f"({summary['chunked_documents']} chunked, {summary['fetch_failures']} fetch failures)"
+    )
+    for source_name, count in summary["per_source"].items():  # type: ignore[union-attr]
+        print(f"  {source_name}: {count} documents")
 
 
 def reenrich(source: str, urls_file: str | None, category: str = "enrichment") -> None:
@@ -2293,6 +2437,30 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("question", help="Question to answer.")
     ask_parser.add_argument("--user-id", default=None, help="User identifier recorded on the Langfuse trace.")
     ask_parser.add_argument("--session-id", default=None, help="Session identifier recorded on the Langfuse trace.")
+    ask_parser.add_argument(
+        "--source",
+        action="append",
+        default=None,
+        help="Restrict retrieval to a documentation source name. Repeatable. "
+        "Default: auto-route Claude/Anthropic questions to the Claude docs.",
+    )
+
+    ingest_claude_parser = subparsers.add_parser(
+        "ingest-claude-docs",
+        help="Fetch Claude Platform / Claude Code docs from their llms.txt indexes and ingest into Qdrant.",
+    )
+    ingest_claude_parser.add_argument(
+        "--site",
+        choices=["platform", "code", "all"],
+        default="all",
+        help="Which documentation site to ingest (default: all).",
+    )
+    ingest_claude_parser.add_argument(
+        "--max-docs",
+        type=int,
+        default=None,
+        help="Maximum number of markdown files to fetch per site (for a quick smoke run).",
+    )
 
     reenrich_parser = subparsers.add_parser(
         "reenrich",
@@ -2631,7 +2799,14 @@ def main() -> None:
                 source_names=tuple(args.source) if args.source else None,
             )
         elif args.command == "ask":
-            ask(question=args.question, user_id=args.user_id, session_id=args.session_id)
+            ask(
+                question=args.question,
+                user_id=args.user_id,
+                session_id=args.session_id,
+                source_names=list(args.source) if args.source else None,
+            )
+        elif args.command == "ingest-claude-docs":
+            ingest_claude_docs(site=args.site, max_docs=args.max_docs)
         elif args.command == "reenrich":
             reenrich(source=args.source, urls_file=args.urls, category=args.category)
         elif args.command == "retry-failed":

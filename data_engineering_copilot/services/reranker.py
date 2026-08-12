@@ -126,7 +126,8 @@ class CrossEncoderReranker:
             pairs = [[query, text] for text in chunk_texts]
 
             # Score in batches to avoid memory spikes on large candidate sets.
-            _BATCH_SIZE = 32
+            # Small batches also keep per-batch latency bounded on CPU-only hosts.
+            _BATCH_SIZE = 12
             _TIMEOUT_SECONDS = 30
             all_scores: list[float] = []
             executor = self._executor
