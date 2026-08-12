@@ -476,6 +476,70 @@ class _RecordingEmbedder:
         return None
 
 
+def test_embed_batch_with_retry_recovers_after_all_providers_down(monkeypatch) -> None:
+    """A batch whose providers all 5xx'd (LLMClientError) is retried with
+    backoff sleeps and succeeds once the provider recovers."""
+    import asyncio
+
+    from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+    from data_engineering_copilot.services.spark_index_builder import _embed_batch_with_retry
+
+    sleep_log: list[float] = []
+
+    class _FlakyEmbedder:
+        def __init__(self) -> None:
+            self._attempts = 0
+
+        async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            self._attempts += 1
+            if self._attempts < 3:
+                raise LLMClientError("All providers in fallback chain failed")
+            return [[0.1, 0.2, 0.3]] * len(texts)
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_log.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    embedder = _FlakyEmbedder()
+    vectors = asyncio.run(_embed_batch_with_retry(embedder, ["a", "b"]))
+
+    assert len(vectors) == 2
+    assert embedder._attempts == 3  # 2 failures + 1 recovery
+    assert len(sleep_log) == 2
+    for seconds in sleep_log:
+        assert seconds >= 60.0
+
+
+def test_embed_batch_with_retry_gives_up_after_all_retries(monkeypatch) -> None:
+    """If every retry fails, the batch failure propagates (build aborts)."""
+    import asyncio
+
+    from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+    from data_engineering_copilot.services.spark_index_builder import (
+        _EMBED_RETRY_SLEEPS,
+        _embed_batch_with_retry,
+    )
+
+    class _AlwaysDownEmbedder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            self.calls += 1
+            raise LLMClientError("All providers in fallback chain failed")
+
+    async def _noop_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    embedder = _AlwaysDownEmbedder()
+    with pytest.raises(LLMClientError):
+        asyncio.run(_embed_batch_with_retry(embedder, ["a"]))
+
+    # 1 initial + N retry attempts, then the final attempt.
+    assert embedder.calls == 1 + len(_EMBED_RETRY_SLEEPS)
+
+
 def test_build_embeds_and_fits_exactly_the_persisted_segments(tmp_path) -> None:
     """BM25 corpus and embedder receive exactly the texts that get upserted."""
     import asyncio
@@ -595,11 +659,13 @@ def test_fallback_embedder_delegates_to_single_embedder() -> None:
 
 
 def test_fallback_embedder_delegates_to_chain_execute() -> None:
+    from data_engineering_copilot.domain.models import EmbeddingRequest
     from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
 
     class _Chain:
         async def execute(self, request):
-            return [[0.5] * 4 for _ in request]
+            assert isinstance(request, EmbeddingRequest)
+            return [[0.5] * 4 for _ in request.texts]
 
         async def close(self):
             return None
@@ -614,6 +680,35 @@ def test_fallback_embedder_delegates_to_chain_execute() -> None:
     result = asyncio.run(_run())
     assert len(result) == 2
     assert result[0] == [0.5] * 4
+
+
+def test_fallback_embedder_threads_passage_and_query_mode() -> None:
+    """embed_texts/embed_query must carry the retrieval role through the chain."""
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+
+    seen: list[tuple[str | None, list[str]]] = []
+
+    class _Chain:
+        async def execute(self, request):
+            seen.append((request.input_type, request.texts))
+            return [[0.5] * 4 for _ in request.texts]
+
+        async def close(self):
+            return None
+
+    embedder = FallbackEmbedder(_Chain())
+
+    async def _run():
+        await embedder.embed_texts(["chunk a", "chunk b"])
+        await embedder.embed_query("live question")
+
+    import asyncio
+
+    asyncio.run(_run())
+    assert seen == [
+        ("passage", ["chunk a", "chunk b"]),
+        ("query", ["live question"]),
+    ]
 
 
 # ------------------------------------------------------------------
