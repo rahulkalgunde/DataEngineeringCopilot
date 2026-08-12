@@ -207,6 +207,7 @@ def _resolve_embedding_encoder(settings: AppSettings) -> TokenEncoder:
             "nvidia": settings.nvidia_embedding_model,
             "openrouter": settings.openrouter_embedding_model,
             "gemini": settings.gemini_embedding_model,
+            "huggingface": settings.huggingface_embedding_model,
         }.get(provider)
         if model:
             return resolve_token_encoder(model)

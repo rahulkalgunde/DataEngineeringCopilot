@@ -499,6 +499,23 @@ class AppSettings(BaseSettings):
     cloudflare_rpm_limit: int = 60
     cloudflare_rpd_limit: int = 1000
 
+    # Hugging Face Inference Providers (LLM + Embeddings).
+    # Serverless embeddings use the native ``feature-extraction`` route (the
+    # OpenAI-compatible ``/v1`` surface is chat-completions only). Free-tier
+    # credits apply when routed through ``router.huggingface.co``.
+    huggingface_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("HUGGINGFACE_API_KEY", "HF_TOKEN"),
+    )
+    huggingface_embedding_model: str = "nvidia/Nemotron-3-Embed-1B-BF16"
+    huggingface_base_url: str = "https://router.huggingface.co/hf-inference"
+    # Free-tier rate budget: ~270 requests/hour (~900/day per model). The
+    # sliding-window limiter is per-minute, so rpm 4 caps sustained throughput
+    # at ~240/hr — safely under the hourly limit while the rpd 900 is the hard
+    # daily gate (fail over to the next provider when either is exhausted).
+    huggingface_rpm_limit: int = 4
+    huggingface_rpd_limit: int = 900
+
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(
         default_factory=lambda: ["cloudflare", "groq", "nvidia", "gemini", "cerebras", "ollama"]
@@ -761,6 +778,7 @@ class AppSettings(BaseSettings):
             "cerebras": ("cerebras_api_key", "CEREBRAS_API_KEY"),
             "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
             "cloudflare": ("cloudflare_api_key", "CLOUDFLARE_API_KEY"),
+            "huggingface": ("huggingface_api_key", "HUGGINGFACE_API_KEY or HF_TOKEN"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():
             key_value = getattr(self, field_name).get_secret_value()
@@ -786,6 +804,8 @@ class AppSettings(BaseSettings):
             model_name = self.gemini_embedding_model
         elif provider == "local-hf":
             model_name = self.local_hf_embedding_model
+        elif provider == "huggingface":
+            model_name = self.huggingface_embedding_model
         else:
             model_name = self.embedding_model_name
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)

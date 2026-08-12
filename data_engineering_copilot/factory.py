@@ -19,6 +19,9 @@ from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdra
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
+from data_engineering_copilot.infrastructure.huggingface_serverless_embeddings import (
+    HuggingFaceServerlessEmbeddings,
+)
 from data_engineering_copilot.infrastructure.llm_client import LLMClient
 from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
     LocalSentenceTransformerEmbeddings,
@@ -88,6 +91,8 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
         if p:
             providers.add(p.lower())
     providers.add(app_settings.embedding_provider.lower())
+    for p in app_settings.embedding_fallback_order:
+        providers.add(p.lower())
     for p in app_settings.llm_fallback_order:
         providers.add(p.lower())
 
@@ -122,6 +127,11 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
             rate_limiters[p] = SlidingWindowRateLimiter(
                 rpm_limit=app_settings.cloudflare_rpm_limit,
                 rpd_limit=app_settings.cloudflare_rpd_limit,
+            )
+        elif p == "huggingface":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.huggingface_rpm_limit,
+                rpd_limit=app_settings.huggingface_rpd_limit,
             )
     return rate_limiters
 
@@ -598,6 +608,21 @@ def _build_embedding_chain_config(
                         token_counter=token_counter_for(app_settings.gemini_embedding_model),
                         declared_input_limit=declared_input_limit(app_settings.gemini_embedding_model),
                     )
+            elif provider_name == "huggingface":
+                api_key = app_settings.huggingface_api_key.get_secret_value()
+                if api_key:
+                    dimension = app_settings.embedding_model_dimensions.get(
+                        app_settings.huggingface_embedding_model, app_settings.default_embedding_dimension
+                    )
+                    client = HuggingFaceServerlessEmbeddings(
+                        api_key=api_key,
+                        model_name=app_settings.huggingface_embedding_model,
+                        base_url=app_settings.huggingface_base_url,
+                        embedding_dimension=dimension,
+                        batch_size=app_settings.embedding_batch_size,
+                        rate_limiter=limiters.get("huggingface"),
+                        token_counter=token_counter_for(app_settings.huggingface_embedding_model),
+                    )
             elif provider_name == "local-hf":
                 client = LocalSentenceTransformerEmbeddings(
                     model_name=app_settings.local_hf_embedding_model,
@@ -767,6 +792,18 @@ def build_embedder(
                 app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
             ),
             batch_size=app_settings.embedding_batch_size,
+        )
+    elif provider == "huggingface":
+        api_key = app_settings.huggingface_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("HF_TOKEN is required when embedding_provider='huggingface'")
+        return HuggingFaceServerlessEmbeddings(
+            api_key=api_key,
+            model_name=app_settings.huggingface_embedding_model,
+            base_url=app_settings.huggingface_base_url,
+            embedding_dimension=app_settings.get_embedding_dimension(),
+            batch_size=app_settings.embedding_batch_size,
+            token_counter=token_counter_for(app_settings.huggingface_embedding_model),
         )
     elif provider in ("ollama", "local"):
         embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url

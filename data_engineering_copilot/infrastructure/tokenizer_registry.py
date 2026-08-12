@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 KNOWN_INPUT_LIMITS: dict[str, tuple[str, int]] = {
     "nvidia/nemotron-3-embed-1b": ("chars", 65536),
     "nvidia/nemotron-3-embed-1b:free": ("tokens", 4096),
+    "nvidia/Nemotron-3-Embed-1B-BF16": ("tokens", 8192),
 }
 
 # Mapping from embedding model slug to the HuggingFace repo id whose tokenizer
@@ -39,6 +40,7 @@ KNOWN_INPUT_LIMITS: dict[str, tuple[str, int]] = {
 _MODEL_TOKENIZER_REPO: dict[str, str] = {
     "nvidia/nemotron-3-embed-1b": "nvidia/Nemotron-3-Embed-1B-BF16",
     "nvidia/nemotron-3-embed-1b:free": "nvidia/Nemotron-3-Embed-1B-BF16",
+    "nvidia/Nemotron-3-Embed-1B-BF16": "nvidia/Nemotron-3-Embed-1B-BF16",
 }
 
 
