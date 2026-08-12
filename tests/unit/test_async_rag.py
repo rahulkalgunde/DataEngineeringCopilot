@@ -396,6 +396,139 @@ class TestAsyncRagService:
         mock_reranker.rerank.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_answer_reranker_score_above_reranker_threshold_rescues_answer(
+        self, mock_embedder, mock_vector_store, mock_llm
+    ):
+        """A weak embedding match (below the embedding-scale threshold) is NOT
+        rejected when the cross-encoder scores it above
+        ``reranker_confidence_threshold`` — the reranker is the gate when used."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_reranker = MagicMock()
+        mock_reranker.is_available = MagicMock(return_value=True)
+
+        def _reranked(query, chunks, top_k):
+            top = self._make_chunk(confidence=0.15)
+            for c in chunks[1:]:
+                top.chunk.text += " " + c.chunk.text
+            return [top] + [self._make_chunk(confidence=0.05) for _ in chunks[1:]]
+
+        mock_reranker.rerank = AsyncMock(side_effect=_reranked)
+
+        config = RagConfig(
+            reranker_enabled=True,
+            reranker_top_k=3,
+            confidence_threshold=0.3,
+            reranker_confidence_threshold=0.10,
+        )
+        # Embedding confidence 0.05 < embedding-scale 0.3 would previously
+        # reject before reranking could intervene.
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.05) for _ in range(3)])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=mock_reranker,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert "knowledge repository" not in result.text
+        assert result.confidence == 0.15
+
+    @pytest.mark.asyncio
+    async def test_answer_reranker_below_reranker_threshold_rejects(self, mock_embedder, mock_vector_store, mock_llm):
+        """When the reranker runs, its score is the gate: a top chunk scored
+        below ``reranker_confidence_threshold`` rejects the answer."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_reranker = MagicMock()
+        mock_reranker.is_available = MagicMock(return_value=True)
+        mock_reranker.rerank = AsyncMock(side_effect=lambda query, chunks, top_k: chunks)
+
+        config = RagConfig(
+            reranker_enabled=True,
+            reranker_top_k=3,
+            confidence_threshold=0.3,
+            reranker_confidence_threshold=0.10,
+        )
+        # Chunks carry the reranker score (0.04) below the reranker threshold.
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.04) for _ in range(3)])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=mock_reranker,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert "knowledge repository" in result.text
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_answer_without_reranker_uses_embedding_threshold(self, mock_embedder, mock_vector_store, mock_llm):
+        """Without a reranker, the embedding-scale ``confidence_threshold`` is
+        still the gate (fallback path)."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        config = RagConfig(
+            reranker_enabled=True,
+            reranker_top_k=3,
+            confidence_threshold=0.3,
+            reranker_confidence_threshold=0.50,
+        )
+        # reranker=None → rerank_used=False → gate on confidence_threshold=0.3.
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.4)])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert "knowledge repository" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_answer_without_reranker_below_threshold_rejects(self, mock_embedder, mock_vector_store, mock_llm):
+        """Fallback path: embedding-scale gate rejects a weak match when no
+        reranker is available, even if the reranker threshold is lax."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        config = RagConfig(
+            reranker_enabled=True,
+            reranker_top_k=3,
+            confidence_threshold=0.3,
+            reranker_confidence_threshold=0.05,
+        )
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.1)])
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+
+        result = await service.answer("what is spark")
+        assert "knowledge repository" in result.text
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio
     async def test_answer_skips_reranker_when_disabled(self, mock_embedder, mock_vector_store, mock_llm):
         from data_engineering_copilot.services.async_rag import AsyncRagService
 

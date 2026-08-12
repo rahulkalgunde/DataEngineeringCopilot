@@ -190,11 +190,14 @@ def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
 
     The pool is intentionally wider than ``retrieval_top_k`` so that URLs that
     just miss the dense/sparse cutoff can still be rescued by reranking. The
-    ``* 8`` multiplier keeps the pool large enough for the fused rank of a
-    relevant-but-poorly-scored document (observed at rank ~175) to remain
-    inside the pool without running the cross-encoder over the whole corpus.
+    retrieval multiplier is ``* 4`` (tuned for CPU-only hosts: keeping the pool
+    wider than needed costs real cross-encoder inference time on hosts without
+    a GPU forcing rerank to the actual dense cutoff), while the reranker
+    multiplier of ``* 8`` guarantees a relevant-but-poorly-scored document
+    (fused at rank ~175) stays inside the pool without running the cross-encoder
+    over the whole corpus.
     """
-    return max(retrieval_top_k * 8, reranker_top_k * 5)
+    return max(retrieval_top_k * 4, reranker_top_k * 8)
 
 
 class AsyncRagService:
@@ -252,6 +255,45 @@ class AsyncRagService:
             await asyncio.to_thread(self.review_dataset_hook, trace_id, question, answer_text)
         except Exception as exc:
             logger.warning("Failed to create low-confidence review item: %s", exc)
+
+    async def _reject_low_confidence(
+        self,
+        retrieved_chunks: list[RetrievedChunk],
+        *,
+        rerank_used: bool,
+        trace,
+        question: str,
+        emit_provenance: Callable[[], None],
+    ) -> Answer | None:
+        """Gate the top chunk against the confidence threshold and, when it
+        fails, return the out-of-repository ``Answer`` (else ``None``).
+
+        The cross-encoder reranker is the single generic relevance decision, so
+        when a reranker ran for this query the gate compares its sigmoid score
+        against ``reranker_confidence_threshold`` (relevant pairs commonly land
+        ~0.10-0.15). Without a reranker the gate falls back to the
+        embedding/fused-scale ``confidence_threshold`` so weak but genuinely
+        relevant matches are not rejected before reranking.
+        """
+        if not retrieved_chunks:
+            return None
+        gate_threshold = self.config.reranker_confidence_threshold if rerank_used else self.config.confidence_threshold
+        if retrieved_chunks[0].confidence >= gate_threshold:
+            return None
+        if trace:
+            trace.update(
+                output=(f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {gate_threshold:.4f}")
+            )
+            trace.end()
+        emit_provenance()
+        await self._record_low_confidence_review(
+            trace, question, "I cannot answer this question because it is outside my knowledge repository."
+        )
+        return Answer(
+            text="I cannot answer this question because it is outside my knowledge repository.",
+            sources=tuple(),
+            confidence=0.0,
+        )
 
     async def _record_cache_hit_trace(self, question: str, cached, cache_scope, *, semantic: bool) -> None:
         """Phase 7 (Task 7.4): lightweight cache-hit trace with a boolean ``cache_hit`` score.
@@ -613,22 +655,6 @@ class AsyncRagService:
                 confidence=0.0,
             )
 
-        if retrieved_chunks[0].confidence < self.config.confidence_threshold:
-            if trace:
-                trace.update(
-                    output=f"Low confidence: {retrieved_chunks[0].confidence:.4f} < threshold {self.config.confidence_threshold:.4f}"
-                )
-                trace.end()
-            _emit_provenance()
-            await self._record_low_confidence_review(
-                trace, question, "I cannot answer this question because it is outside my knowledge repository."
-            )
-            return Answer(
-                text="I cannot answer this question because it is outside my knowledge repository.",
-                sources=tuple(),
-                confidence=0.0,
-            )
-
         # Indirect prompt injection guard: drop retrieved chunks that look like
         # embedded instructions before they reach the prompt.
         if self.input_guardrails is not None:
@@ -709,6 +735,16 @@ class AsyncRagService:
                     output=f"{len(retrieved_chunks)} chunks after reranking",
                 )
                 rerank_span.end()
+
+            rejected = await self._reject_low_confidence(
+                retrieved_chunks,
+                rerank_used=rerank_used,
+                trace=trace,
+                question=question,
+                emit_provenance=_emit_provenance,
+            )
+            if rejected is not None:
+                return rejected
 
             assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
             context_str, source_names, dropped_records = assembler.assemble(

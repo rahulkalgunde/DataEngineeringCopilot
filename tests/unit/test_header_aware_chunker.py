@@ -69,3 +69,21 @@ class TestHeaderAwareChunker:
         # Both sections are too short individually and don't merge across parent boundaries
         # So we might get 0 or 1 chunk depending on merge behavior
         assert len(chunks) <= 1
+
+    def test_metadata_propagated_from_document(self):
+        md = "# Title\nSome intro text here with enough words to produce a chunk.\n"
+        doc = ParsedDocument(
+            source_name="Claude Platform Docs",
+            title="Overview",
+            url="https://platform.claude.com/docs/en/api/overview.md",
+            text=md,
+            doc_type="api_reference",
+            file_path="api/overview.md",
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=3)
+        chunks = chunker._sync_chunk(doc)
+        assert chunks
+        for chunk in chunks:
+            assert chunk.doc_type == "api_reference"
+            assert chunk.file_path == "api/overview.md"
+            assert chunk.source_name == "Claude Platform Docs"

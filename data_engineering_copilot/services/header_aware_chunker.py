@@ -194,6 +194,13 @@ class HeaderAwareChunker:
                         chunk_type=ct,
                         word_count=wc,
                         heading_path=current_path,
+                        doc_type=document.doc_type,
+                        file_path=document.file_path,
+                        language=document.language,
+                        spark_version=document.spark_version,
+                        module=document.module,
+                        source_commit=document.source_commit,
+                        license=document.license,
                     )
                 )
 
