@@ -322,8 +322,7 @@ class ProviderFallbackChain[T, R]:
         self,
         prompt: str,
         temperature: float | None = None,
-        num_predict: int | None = None,
-        num_ctx: int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate using the fallback chain (delegates to execute)."""
         return cast(str, await self.execute(cast(T, prompt)))
@@ -332,6 +331,7 @@ class ProviderFallbackChain[T, R]:
         self,
         prompt: str,
         temperature: float | None = None,
+        max_tokens: int | None = None,
     ):
         """Stream tokens — not supported via fallback chain, falls back to generate."""
         result = await self.generate(prompt, temperature=temperature)

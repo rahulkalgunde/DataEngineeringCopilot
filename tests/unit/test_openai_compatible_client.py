@@ -7,7 +7,12 @@ import pytest
 import respx
 
 from data_engineering_copilot.domain.models import LLMUsage
-from data_engineering_copilot.infrastructure.llm_client import LLMClient, LLMClientError
+from data_engineering_copilot.infrastructure.llm_client import (
+    SYSTEM_BLOCK_SEPARATOR,
+    LLMClient,
+    LLMClientError,
+    build_chat_messages,
+)
 
 
 @pytest.fixture
@@ -95,6 +100,124 @@ async def test_generate_sends_auth_header(client):
         )
         await client.generate("test")
         assert route.calls.last.request.headers["Authorization"] == "Bearer sk-or-v1-test-key"
+
+
+@pytest.mark.asyncio
+async def test_generate_sends_constructor_max_tokens():
+    with respx.mock:
+        route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    "model": "anthropic/claude-3.5-sonnet",
+                },
+            )
+        )
+        capped = LLMClient(
+            api_key="sk-test",
+            model="anthropic/claude-3.5-sonnet",
+            base_url="https://openrouter.ai/api/v1",
+            max_tokens=4096,
+        )
+        await capped.generate("test")
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_generate_max_completion_tokens_field_name():
+    with respx.mock:
+        route = respx.post("https://api.cerebras.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    "model": "gpt-oss-120b",
+                },
+            )
+        )
+        capped = LLMClient(
+            api_key="sk-test",
+            model="gpt-oss-120b",
+            base_url="https://api.cerebras.ai/v1",
+            max_tokens=1024,
+            max_tokens_field="max_completion_tokens",
+        )
+        await capped.generate("test")
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["max_completion_tokens"] == 1024
+        assert "max_tokens" not in body
+
+
+@pytest.mark.asyncio
+async def test_generate_omits_max_tokens_when_unset(client):
+    with respx.mock:
+        route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    "model": "anthropic/claude-3.5-sonnet",
+                },
+            )
+        )
+        await client.generate("test")
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert "max_tokens" not in body
+
+
+def test_build_chat_messages_splits_system_block():
+    prompt = f"## SYSTEM\nYou are an assistant.\n{SYSTEM_BLOCK_SEPARATOR}Context: docs\nQuestion: hi?"
+    messages = build_chat_messages(prompt)
+    assert len(messages) == 2
+    assert messages[0] == {"role": "system", "content": "## SYSTEM\nYou are an assistant."}
+    assert messages[1] == {"role": "user", "content": "Context: docs\nQuestion: hi?"}
+
+
+def test_build_chat_messages_legacy_single_user_when_no_marker():
+    messages = build_chat_messages("Just a prompt.")
+    assert messages == [{"role": "user", "content": "Just a prompt."}]
+
+
+def test_build_chat_messages_falls_back_when_one_side_empty():
+    empty_system = f"{SYSTEM_BLOCK_SEPARATOR}only user content"
+    assert build_chat_messages(empty_system) == [{"role": "user", "content": empty_system}]
+    empty_user = f"only system content{SYSTEM_BLOCK_SEPARATOR}   "
+    assert build_chat_messages(empty_user) == [{"role": "user", "content": empty_user}]
+
+
+@pytest.mark.asyncio
+async def test_generate_sends_system_and_user_messages(client):
+    with respx.mock:
+        route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    "model": "anthropic/claude-3.5-sonnet",
+                },
+            )
+        )
+        prompt = f"## SYSTEM\nYou are an assistant.\n{SYSTEM_BLOCK_SEPARATOR}What is Delta Lake?"
+        await client.generate(prompt)
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["messages"] == [
+            {"role": "system", "content": "## SYSTEM\nYou are an assistant."},
+            {"role": "user", "content": "What is Delta Lake?"},
+        ]
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,35 @@ from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRa
 
 logger = logging.getLogger(__name__)
 
+# Separator between the system-instruction block and the user-facing data in a
+# compiled prompt. Prompt templates (see ``langfuse_prompts.SEED_PROMPTS`` and
+# each service's fallback template) embed this literal so ``generate()`` can
+# split a single compiled string into a proper ``system`` + ``user`` message
+# pair. Providers follow system instructions more reliably when they arrive in
+# the ``system`` role instead of being buried in a ``user`` message.
+#
+# Prompts that do NOT contain the separator are sent unchanged as a single
+# ``user`` message (backwards compatible with already-seeded Langfuse prompts).
+SYSTEM_BLOCK_SEPARATOR = "\n\n<<<SYSTEM_BLOCK_END>>>\n\n"
+
+
+def build_chat_messages(prompt: str) -> list[dict[str, str]]:
+    """Build chat ``messages`` from a compiled prompt.
+
+    When *prompt* embeds :data:`SYSTEM_BLOCK_SEPARATOR`, the text before it
+    becomes the ``system`` message and the text after it the ``user`` message.
+    Otherwise (and whenever either half is empty) the whole prompt is sent as a
+    single ``user`` message so behavior is identical to the previous format.
+    """
+    if SYSTEM_BLOCK_SEPARATOR in prompt:
+        system_part, user_part = prompt.split(SYSTEM_BLOCK_SEPARATOR, 1)
+        if system_part.strip() and user_part.strip():
+            return [
+                {"role": "system", "content": system_part.strip()},
+                {"role": "user", "content": user_part.strip()},
+            ]
+    return [{"role": "user", "content": prompt}]
+
 
 class LLMClientError(CoreDomainException):
     """Raised when the LLM provider cannot return an answer.
@@ -73,6 +102,14 @@ class LLMClient(SafeAsyncClientMixin):
         Sampling temperature.
     endpoint_path:
         API endpoint path (default ``"/chat/completions"``).
+    max_tokens:
+        Max output tokens sent with every request. ``None`` omits the field
+        (provider default applies — avoid: Cloudflare truncates at 256, NVIDIA
+        at 1024). Use 0 only where a provider treats 0 as "no limit".
+    max_tokens_field:
+        Body field name for the output cap — ``"max_tokens"`` (NVIDIA,
+        Cloudflare, Ollama, OpenRouter, Gemini) or ``"max_completion_tokens"``
+        (Groq, Cerebras; NVIDIA's schema rejects unknown fields with 422).
     extra_body:
         Additional fields merged into the request body (e.g.
         ``{"options": {"num_ctx": 4096}}`` for Ollama-specific options).
@@ -94,6 +131,8 @@ class LLMClient(SafeAsyncClientMixin):
         timeout_seconds: int = 120,
         temperature: float = 0.05,
         endpoint_path: str = "/chat/completions",
+        max_tokens: int | None = None,
+        max_tokens_field: str = "max_tokens",
         extra_body: dict | None = None,
         extra_headers: dict | None = None,
         rate_limiter: SlidingWindowRateLimiter | None = None,
@@ -107,6 +146,8 @@ class LLMClient(SafeAsyncClientMixin):
         self.timeout_seconds = timeout_seconds
         self._temperature = temperature
         self._endpoint_path = endpoint_path
+        self._max_tokens = max_tokens
+        self._max_tokens_field = max_tokens_field
         self._extra_body = extra_body or {}
         self._extra_headers = extra_headers or {}
         self._keep_alive = keep_alive
@@ -139,37 +180,33 @@ class LLMClient(SafeAsyncClientMixin):
         self,
         prompt: str,
         temperature: float | None = None,
-        num_predict: int | None = None,
-        num_ctx: int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         temp = temperature if temperature is not None else self._temperature
+        if max_tokens is None:
+            max_tokens = self._max_tokens
         request_id = uuid.uuid4().hex[:12]
         started = time.perf_counter()
         logger.info(
-            "LLM generation started request_id=%s model=%s prompt_chars=%s temperature=%.2f",
+            "LLM generation started request_id=%s model=%s prompt_chars=%s temperature=%.2f max_tokens=%s",
             request_id,
             self.model,
             len(prompt),
             temp,
+            max_tokens,
         )
 
         payload: dict = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": build_chat_messages(prompt),
             "temperature": temp,
         }
+        if max_tokens is not None and max_tokens > 0:
+            payload[self._max_tokens_field] = max_tokens
         if self._extra_body:
             payload.update(self._extra_body)
         if self._keep_alive is not None:
             payload["keep_alive"] = self._keep_alive
-
-        options: dict = {}
-        if num_predict is not None:
-            options["num_predict"] = num_predict
-        if num_ctx is not None:
-            options["num_ctx"] = num_ctx
-        if options:
-            payload.setdefault("options", {}).update(options)
 
         # Single attempt: no retry loop, no circuit breaker. Failures carry
         # structured status_code / retry_after so the router can fail over fast.
@@ -293,10 +330,12 @@ class LLMClient(SafeAsyncClientMixin):
         temp = temperature if temperature is not None else self._temperature
         payload: dict = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": build_chat_messages(prompt),
             "temperature": temp,
             "stream": True,
         }
+        if self._max_tokens is not None and self._max_tokens > 0:
+            payload[self._max_tokens_field] = self._max_tokens
         if self._extra_body:
             payload.update(self._extra_body)
 

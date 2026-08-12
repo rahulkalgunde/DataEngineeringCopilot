@@ -357,7 +357,7 @@ class _FakeLLMClient:
         self.calls.append(request)
         return f"out-{len(self.calls)}"
 
-    async def generate(self, prompt, temperature=None, num_predict=None, num_ctx=None):
+    async def generate(self, prompt, temperature=None, max_tokens=None):
         return await self.call(prompt)
 
     @property

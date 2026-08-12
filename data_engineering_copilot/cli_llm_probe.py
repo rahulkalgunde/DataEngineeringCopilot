@@ -13,7 +13,7 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.factory import _build_purpose_llm_client, build_embedder
 from data_engineering_copilot.infrastructure.adaptive_llm_router import _categorize_llm_error
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
-from data_engineering_copilot.infrastructure.llm_client import LLMClient
+from data_engineering_copilot.infrastructure.llm_client import LLMClient, build_chat_messages
 
 _PURPOSES = ["answer", "rewrite", "groundedness", "intent", "enrichment", "evaluation", "code"]
 
@@ -131,9 +131,11 @@ def _enumerate_llm_targets(app_settings: AppSettings, only_providers: set[str] |
 def _build_llm_request_payload(client: LLMClient, prompt: str) -> dict:
     payload: dict = {
         "model": client.model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": build_chat_messages(prompt),
         "temperature": client._temperature,
     }
+    if client._max_tokens is not None and client._max_tokens > 0:
+        payload[client._max_tokens_field] = client._max_tokens
     if client._extra_body:
         payload.update(client._extra_body)
     return payload
@@ -251,6 +253,22 @@ async def _probe_embedding(
             payload["provider"] = {"truncate": "END"}
         endpoint = "/embeddings"
         headers = {"Authorization": f"Bearer {embedder.api_key}"}
+    elif getattr(type(embedder), "__module__", "").endswith("local_sentence_transformer_embeddings"):
+        # Local HF provider: no HTTP endpoint. Verify by running a local embed.
+        target.model = embedder.model_name
+        result.expected_dimension = app_settings.get_embedding_dimension()
+        try:
+            start = time.monotonic()
+            vectors = await embedder.embed_texts([prompt])
+            latency_ms = (time.monotonic() - start) * 1000
+            result.latency_ms = round(latency_ms, 1)
+            result.status = "OK"
+            result.dimension = len(vectors[0]) if vectors else 0
+        except Exception as exc:
+            result.status = "FAIL"
+            result.category = "permanent_error"
+            result.message = f"{type(exc).__name__}: {exc}"
+        return result
     else:
         target.model = embedder.model_name
         payload = {"model": embedder.model_name, "input": [prompt]}
