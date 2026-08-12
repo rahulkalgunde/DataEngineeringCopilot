@@ -7,6 +7,7 @@ Provides an EmbedderProtocol-compatible interface for any OpenAI-compatible
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import httpx
 import tiktoken
@@ -14,7 +15,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
-from data_engineering_copilot.domain.models import LLMUsage
+from data_engineering_copilot.domain.models import EmbeddingRequest, LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
@@ -50,6 +51,8 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         include_provider_param: bool = True,
         retry_wait: wait_base | None = None,
         max_tokens_per_input: int = MAX_SAFE_TOKENS,
+        token_counter: Callable[[str], int] | None = None,
+        declared_input_limit: tuple[str, int] | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -60,6 +63,14 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self._rate_limiter = rate_limiter
         self._include_provider_param = include_provider_param
         self._max_tokens_per_input = max_tokens_per_input
+        self._token_counter = token_counter or _count_tokens
+        if declared_input_limit is not None:
+            unit, limit = declared_input_limit
+            if unit == "tokens" and max_tokens_per_input > limit:
+                raise ValueError(
+                    f"max_tokens_per_input ({max_tokens_per_input}) exceeds provider-declared {model_name} "
+                    f"input limit ({limit} tokens). Lower the budget or the provider will reject/truncate input."
+                )
         logger.info("Using embedding model %s at %s", model_name, self.base_url)
         self._request_embeddings = retry(
             stop=stop_after_attempt(5),
@@ -90,7 +101,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         before embedding). Failing loudly beats silently losing content.
         """
         for text in texts:
-            token_count = _count_tokens(text)
+            token_count = self._token_counter(text)
             if token_count > self._max_tokens_per_input:
                 raise EmbeddingError(
                     f"Embedding input exceeds budget: model={self.model_name} "
@@ -99,10 +110,16 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
                     "Split the text losslessly before embedding."
                 )
 
-    async def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
-        # Acquire rate limiter slot before making the request
-        if self._rate_limiter is not None:
-            await self._rate_limiter.acquire()
+    async def _request_embeddings(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
+        # Non-blocking rate-limit gate: when the RPM/RPD window is exhausted,
+        # fail fast so the fallback chain skips to the next provider instead of
+        # queueing a (potentially heavy, many-text) request behind the window.
+        # Mirrors the LLM path's ``try_acquire()`` behavior: over-limit means
+        # "provider not called", not "wait then send anyway".
+        if self._rate_limiter is not None and not await self._rate_limiter.try_acquire():
+            raise EmbeddingError(
+                "Rate limit window exhausted; embedding provider not called.",
+            )
 
         # Never truncate input to fit the provider limit — reject over-budget
         # text so silent content loss can never corrupt the index.
@@ -112,6 +129,12 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             "model": self.model_name,
             "input": texts,
         }
+        if input_type is not None:
+            # Dual-mode models (nemotron-3-embed-1b) require the retrieval role
+            # so passage/query embeddings live in compatible subspaces. Only
+            # sent when the caller supplies a mode; models without one (Gemini,
+            # Ollama) are unaffected.
+            payload["input_type"] = input_type
         if self._include_provider_param:
             payload["provider"] = {}
 
@@ -131,6 +154,12 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                # Transient server-side failure: propagate the raw HTTPStatusError
+                # so the tenacity retry decorator (which retries HTTPStatusError)
+                # retries it, and the fallback categorizer maps it to
+                # TEMPORARY_UNAVAILABLE after retries are exhausted.
+                raise
             raise EmbeddingError(f"Failed to get embeddings: {exc}") from exc
         resp_data = response.json()
 
@@ -162,16 +191,16 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self._validate_embedding_dimensions(embeddings, texts)
         return embeddings
 
-    async def _embed_with_batching(self, texts: list[str]) -> list[list[float]]:
+    async def _embed_with_batching(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
         batches = self._slice_texts_into_batches(texts, self._batch_size)
         if len(batches) == 1:
-            return await self._request_embeddings(texts)
+            return await self._request_embeddings(texts, input_type=input_type)
 
         logger.info("Processing %d texts in %d batches (batch_size=%d)", len(texts), len(batches), self._batch_size)
         all_embeddings: list[list[float]] = []
         for batch_idx, batch_texts in enumerate(batches, start=1):
             logger.debug("Processing batch %d/%d with %d texts", batch_idx, len(batches), len(batch_texts))
-            batch_embeddings = await self._request_embeddings(batch_texts)
+            batch_embeddings = await self._request_embeddings(batch_texts, input_type=input_type)
             all_embeddings.extend(batch_embeddings)
 
         logger.info("Successfully embedded all %d texts in %d batches", len(texts), len(batches))
@@ -192,20 +221,33 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        vectors = await self._embed_with_batching(texts)
+        vectors = await self._embed_with_batching(texts, input_type="passage")
         logger.info("Embedded texts count=%s", len(texts))
         return vectors
 
     async def embed_query(self, text: str) -> list[float]:
-        results = await self.embed_texts([text])
+        results = await self._embed_with_batching([text], input_type="query")
         if not results or results[0] is None:
             raise EmbeddingError(f"Embedding returned empty result for query: {text[:80]!r}")
         return results[0]
 
     # ProviderClient protocol method
-    async def call(self, request: list[str]) -> list[list[float]]:
-        """Unified call interface for ProviderFallbackChain."""
-        return await self.embed_texts(request)
+    async def call(self, request: list[str] | EmbeddingRequest) -> list[list[float]]:
+        """Unified call interface for ProviderFallbackChain.
+
+        Accepts either a plain ``list[str]`` (legacy; embedded as passages) or
+        an ``EmbeddingRequest`` carrying the retrieval role so dual-mode models
+        receive the correct ``input_type``.
+        """
+        if isinstance(request, EmbeddingRequest):
+            input_type = request.input_type
+            texts = request.texts
+        else:
+            input_type = "passage"
+            texts = list(request)
+        if not texts:
+            return []
+        return await self._embed_with_batching(texts, input_type=input_type)
 
     @property
     def model(self) -> str:

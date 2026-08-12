@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from data_engineering_copilot.domain.models import EmbeddingRequest
+
 
 class FallbackEmbedder:
     """Adapt a ``ProviderFallbackChain[list[str], list[list[float]]]`` or a
@@ -20,6 +22,8 @@ class FallbackEmbedder:
 
     Fallback logic lives entirely in the chain; this class only bridges the
     ``execute()`` interface to ``embed_texts``/``embed_query``/``close``.
+    Requests carry an ``EmbeddingRequest`` role (passage/query) so dual-mode
+    embedding models receive the correct ``input_type`` even through the chain.
     """
 
     def __init__(
@@ -30,11 +34,14 @@ class FallbackEmbedder:
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if hasattr(self._chain, "execute"):
-            return await self._chain.execute(texts)
+            return await self._chain.execute(EmbeddingRequest(input_type="passage", texts=list(texts)))
         return await self._chain.embed_texts(texts)
 
     async def embed_query(self, text: str) -> list[float]:
-        results = await self.embed_texts([text])
+        if hasattr(self._chain, "execute"):
+            results = await self._chain.execute(EmbeddingRequest(input_type="query", texts=[text]))
+        else:
+            results = await self._chain.embed_texts([text])
         if not results or results[0] is None:
             raise ValueError("embed_query returned no embedding")
         return results[0]

@@ -17,7 +17,7 @@ from tenacity.wait import wait_base
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import EmbeddingError
-from data_engineering_copilot.domain.models import LLMUsage
+from data_engineering_copilot.domain.models import EmbeddingRequest, LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
 
 logger = logging.getLogger(__name__)
@@ -181,9 +181,14 @@ class AsyncOllamaEmbeddings(SafeAsyncClientMixin):
         return results[0]
 
     # ProviderClient protocol method
-    async def call(self, request: list[str]) -> list[list[float]]:
-        """Unified call interface for ProviderFallbackChain."""
-        return await self.embed_texts(request)
+    async def call(self, request: list[str] | EmbeddingRequest) -> list[list[float]]:
+        """Unified call interface for ProviderFallbackChain.
+
+        Ollama has no query/passage mode; an ``EmbeddingRequest`` (if received
+        through the chain) is unpacked to its texts and embedded as-is.
+        """
+        texts = request.texts if isinstance(request, EmbeddingRequest) else list(request)
+        return await self.embed_texts(texts)
 
     @property
     def model(self) -> str:
