@@ -14,6 +14,7 @@ split (losslessly, by lines).
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 import tiktoken
 
@@ -29,6 +30,17 @@ DEFAULT_MAX_CHARS = 6000
 # uses for its pre-flight counting.
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
+
+class TokenEncoder(Protocol):
+    """Anything whose ``.encode(text)`` yields the token sequence for counting.
+
+    Both ``tiktoken`` encodings and model-specific tokenizers (e.g. a
+    ``transformers`` tokenizer adapter) satisfy this shape.
+    """
+
+    def encode(self, text: str) -> list[int]: ...
+
+
 # Boundaries tried in order for non-fence text, each keeping its delimiter
 # attached to the part it terminates so that ``"".join(segments)``
 # reconstructs the source exactly.
@@ -41,7 +53,7 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'(])")
 _FENCE_RE = re.compile(r"(?ms)^(`{3,}|~{3,})[^\n]*\n.*?^\1[^\n]*$")
 
 
-def count_tokens(text: str, encoder=_ENCODER) -> int:
+def count_tokens(text: str, encoder: TokenEncoder = _ENCODER) -> int:
     """Return the number of tokens in *text* using the shared encoder."""
     if not text:
         return 0
@@ -53,6 +65,7 @@ def split_text_losslessly(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_chars: int = DEFAULT_MAX_CHARS,
     separators: tuple[str, ...] = (),
+    encoder: TokenEncoder = _ENCODER,
 ) -> list[str]:
     """Split *text* into segments that fit within *max_tokens* and *max_chars*.
 
@@ -71,6 +84,11 @@ def split_text_losslessly(
     separators:
         Optional explicit separator strings tried before the default
         boundaries (in order).
+    encoder:
+        Token encoder whose ``.encode(text)`` yields the token sequence used
+        for budget counting. Defaults to the shared cl100k encoder; pass a
+        model-specific encoder so the split budget matches the embedder's own
+        pre-flight counting.
     """
     if max_tokens <= 0:
         raise ValueError("max_tokens must be positive")
@@ -80,10 +98,10 @@ def split_text_losslessly(
     normalized = text.strip()
     if not normalized:
         return []
-    if _fits(normalized, max_tokens, max_chars):
+    if _fits(normalized, max_tokens, max_chars, encoder):
         return [normalized]
 
-    segments = _pack_atoms(normalized, max_tokens, max_chars, separators)
+    segments = _pack_atoms(normalized, max_tokens, max_chars, separators, encoder)
     validate_segments(normalized, segments)
     return segments
 
@@ -100,8 +118,8 @@ def validate_segments(original: str, segments: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fits(text: str, max_tokens: int, max_chars: int) -> bool:
-    return len(text) <= max_chars and count_tokens(text) <= max_tokens
+def _fits(text: str, max_tokens: int, max_chars: int, encoder: TokenEncoder = _ENCODER) -> bool:
+    return len(text) <= max_chars and count_tokens(text, encoder) <= max_tokens
 
 
 def _atoms(text: str) -> list[tuple[str, str]]:
@@ -130,15 +148,16 @@ def _pack_atoms(
     max_tokens: int,
     max_chars: int,
     separators: tuple[str, ...],
+    encoder: TokenEncoder = _ENCODER,
 ) -> list[str]:
     atoms = _atoms(text)
     boundaries = _boundary_patterns(separators)
     segments: list[str] = []
     current = ""
     for kind, content in atoms:
-        if _fits(content, max_tokens, max_chars):
+        if _fits(content, max_tokens, max_chars, encoder):
             candidate = current + content
-            if _fits(candidate, max_tokens, max_chars):
+            if _fits(candidate, max_tokens, max_chars, encoder):
                 current = candidate
             else:
                 if current:
@@ -152,20 +171,20 @@ def _pack_atoms(
         if kind == "fence":
             # Split a too-large fence losslessly by lines, then re-pack so
             # continuation markers land in their own segments.
-            for piece in _split_fence_losslessly(content, max_tokens, max_chars):
-                if _fits(piece, max_tokens, max_chars):
+            for piece in _split_fence_losslessly(content, max_tokens, max_chars, encoder):
+                if _fits(piece, max_tokens, max_chars, encoder):
                     segments.append(piece)
                 else:
                     raise ValueError(f"Fence continuation exceeds budget: {len(piece)} chars")
         else:
-            pieces = _split_recursive(content, max_tokens, max_chars, boundaries, depth=0)
+            pieces = _split_recursive(content, max_tokens, max_chars, boundaries, depth=0, encoder=encoder)
             segments.extend(pieces)
     if current:
         segments.append(current)
     return segments
 
 
-def _split_fence_losslessly(fence: str, max_tokens: int, max_chars: int) -> list[str]:
+def _split_fence_losslessly(fence: str, max_tokens: int, max_chars: int, encoder: TokenEncoder = _ENCODER) -> list[str]:
     """Split an oversized fenced block by lines without dropping characters.
 
     The opener stays on the first piece and the closer on the last piece;
@@ -184,7 +203,7 @@ def _split_fence_losslessly(fence: str, max_tokens: int, max_chars: int) -> list
     current: list[str] = [opener]
     for line in body:
         candidate = "\n".join(current + [line])
-        if _fits(candidate, max_tokens, max_chars):
+        if _fits(candidate, max_tokens, max_chars, encoder):
             current.append(line)
         else:
             # End this piece with a newline so the next piece reconstructs it.
@@ -219,31 +238,32 @@ def _split_recursive(
     max_chars: int,
     boundaries: list[re.Pattern[str]],
     depth: int,
+    encoder: TokenEncoder = _ENCODER,
 ) -> list[str]:
-    if _fits(text, max_tokens, max_chars):
+    if _fits(text, max_tokens, max_chars, encoder):
         return [text]
     if depth >= len(boundaries):
-        return _split_by_chars(text, max_chars, max_tokens)
+        return _split_by_chars(text, max_chars, max_tokens, encoder)
 
     pattern = boundaries[depth]
     parts = _split_keep_delimiter(text, pattern)
     if len(parts) <= 1:
-        return _split_recursive(text, max_tokens, max_chars, boundaries, depth + 1)
+        return _split_recursive(text, max_tokens, max_chars, boundaries, depth + 1, encoder)
 
     segments: list[str] = []
     current = ""
     for part in parts:
         candidate = current + part
-        if _fits(candidate, max_tokens, max_chars):
+        if _fits(candidate, max_tokens, max_chars, encoder):
             current = candidate
             continue
         if current:
             segments.append(current)
             current = ""
-        if _fits(part, max_tokens, max_chars):
+        if _fits(part, max_tokens, max_chars, encoder):
             current = part
         else:
-            sub = _split_recursive(part, max_tokens, max_chars, boundaries, depth + 1)
+            sub = _split_recursive(part, max_tokens, max_chars, boundaries, depth + 1, encoder)
             segments.extend(sub[:-1])
             current = sub[-1]
     if current:
@@ -262,7 +282,7 @@ def _split_keep_delimiter(text: str, pattern: re.Pattern[str]) -> list[str]:
     return [p for p in parts if p]
 
 
-def _split_by_chars(text: str, max_chars: int, max_tokens: int) -> list[str]:
+def _split_by_chars(text: str, max_chars: int, max_tokens: int, encoder: TokenEncoder = _ENCODER) -> list[str]:
     """Last-resort split at whitespace boundaries preserving all characters."""
     parts = re.split(r"(\s+)", text)
     segments: list[str] = []
@@ -273,7 +293,7 @@ def _split_by_chars(text: str, max_chars: int, max_tokens: int) -> list[str]:
         if len(part) > max_chars:
             raise ValueError(f"Single token exceeds budget ({len(part)} > {max_chars} chars)")
         candidate = current + part
-        if _fits(candidate, max_tokens, max_chars):
+        if _fits(candidate, max_tokens, max_chars, encoder):
             current = candidate
             continue
         if current:
