@@ -18,12 +18,7 @@ def client():
         base_url="http://localhost:11434/v1",
         model="llama3.2:3b",
         timeout_seconds=300,
-        extra_body={
-            "options": {
-                "num_ctx": 4096,
-                "num_predict": 512,
-            }
-        },
+        max_tokens=512,
     )
 
 

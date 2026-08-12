@@ -67,8 +67,7 @@ class _AdaptiveLLMProtocol(Protocol):
         self,
         prompt: str,
         temperature: float | None = None,
-        num_predict: int | None = None,
-        num_ctx: int | None = None,
+        max_tokens: int | None = None,
     ) -> str: ...
 
 

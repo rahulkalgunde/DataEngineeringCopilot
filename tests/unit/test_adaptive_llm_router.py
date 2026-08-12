@@ -127,8 +127,7 @@ class TestAdaptiveLLMRouter:
         mock_client.generate.assert_called_once_with(
             prompt="test prompt",
             temperature=None,
-            num_predict=None,
-            num_ctx=None,
+            max_tokens=None,
         )
 
     @pytest.mark.asyncio
@@ -392,13 +391,12 @@ class TestAdaptiveLLMRouter:
         mock_client.generate = AsyncMock(return_value="ok")
         health.register_provider("openrouter", ["test-model"])
 
-        await router.generate("prompt", temperature=0.7, num_predict=100, num_ctx=2048)
+        await router.generate("prompt", temperature=0.7, max_tokens=100)
 
         mock_client.generate.assert_called_once_with(
             prompt="prompt",
             temperature=0.7,
-            num_predict=100,
-            num_ctx=2048,
+            max_tokens=100,
         )
 
     @pytest.mark.asyncio

@@ -162,8 +162,7 @@ class AdaptiveLLMRouter:
         client: LLMClient,
         prompt: str,
         temperature: float | None,
-        num_predict: int | None,
-        num_ctx: int | None,
+        max_tokens: int | None,
     ) -> str:
         """Single-attempt call. Records health outcome and returns the text."""
         start = time.monotonic()
@@ -171,8 +170,7 @@ class AdaptiveLLMRouter:
             text = await client.generate(
                 prompt=prompt,
                 temperature=temperature,
-                num_predict=num_predict,
-                num_ctx=num_ctx,
+                max_tokens=max_tokens,
             )
             latency = time.monotonic() - start
             self._health.track_success(name, client.model, latency)
@@ -203,8 +201,7 @@ class AdaptiveLLMRouter:
         self,
         prompt: str,
         temperature: float | None = None,
-        num_predict: int | None = None,
-        num_ctx: int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         purpose_is_ollama = bool(self._clients) and self._clients[0][0].lower() == "ollama"
         main_candidates = self._clients if purpose_is_ollama else [c for c in self._clients if c[0].lower() != "ollama"]
@@ -252,8 +249,7 @@ class AdaptiveLLMRouter:
                     client,
                     prompt,
                     temperature,
-                    num_predict,
-                    num_ctx,
+                    max_tokens,
                 )
             except ProviderError as p_err:
                 last_error = p_err
@@ -291,8 +287,7 @@ class AdaptiveLLMRouter:
                         client,
                         prompt,
                         temperature,
-                        num_predict,
-                        num_ctx,
+                        max_tokens,
                     )
                 except ProviderError as p_err:
                     last_error = p_err
