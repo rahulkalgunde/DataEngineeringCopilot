@@ -116,7 +116,7 @@ class HeaderAwareChunker:
                 )
             )
 
-        heading_stack: list[str] = []
+        heading_stack: list[tuple[int, str]] = []
 
         for i, m in enumerate(matches):
             level = len(m.group(1))
@@ -128,11 +128,14 @@ class HeaderAwareChunker:
             # Extract code blocks from the body
             code_blocks = tuple(blk.group(0) for blk in _FENCE_RE.finditer(raw_body))
 
-            # Build heading path
-            while heading_stack and len(heading_stack) >= level:
+            # Build heading path. Pop entries at or below the new heading's
+            # level so a sibling (same level) replaces the previous sibling
+            # instead of being nested under it (which would fabricate a false
+            # parent/child relation and flush boundary later).
+            while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
-            heading_stack.append(header_text)
-            path = tuple(heading_stack)
+            heading_stack.append((level, header_text))
+            path = tuple(text for _, text in heading_stack)
 
             sections.append(
                 _RawSection(
@@ -203,6 +206,20 @@ class HeaderAwareChunker:
                         license=document.license,
                     )
                 )
+            elif chunks:
+                # Sub-minimum trailing content (e.g. the tail of a short API
+                # reference page split across nested headings) must not be
+                # silently discarded — append it to the previous chunk so the
+                # page keeps every word. Only a document whose *entire* body is
+                # below the minimum is filtered out (matches the no-content
+                # contract of ``min_chunk_words``).
+                last = chunks[-1]
+                merged_text = last.text + "\n\n" + body
+                chunks[-1] = replace(
+                    last,
+                    text=merged_text,
+                    word_count=len(merged_text.split()),
+                )
 
             current_text_parts = []
             current_code_parts = []
@@ -212,10 +229,15 @@ class HeaderAwareChunker:
             section_wc = len(section.text.split()) if section.text else 0
 
             # If this section is under a different parent than current accumulation,
-            # flush first to preserve topical boundaries.
+            # flush first to preserve topical boundaries — but only when enough
+            # words have accumulated to clear the minimum. A sub-minimum flush
+            # would silently drop the whole (small) section, losing content from
+            # short API-reference pages whose nested headings each own a couple
+            # of lines. Carrying the content forward merges it with the next
+            # section instead of discarding it.
             parent_current = current_path[:-1] if current_path else ()
             parent_new = section.heading_path[:-1] if section.heading_path else ()
-            if parent_current != parent_new and current_text_parts:
+            if parent_current != parent_new and current_text_parts and current_words >= self.min_chunk_words:
                 _flush()
 
             # Would adding this section exceed the target?
