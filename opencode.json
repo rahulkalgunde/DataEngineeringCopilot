@@ -66,7 +66,18 @@
     "4. COMPLETENESS VERIFICATION: Verify that generated files contain all necessary imports, complete function bodies, and return statements. Never accept cut-off or partial code responses.",
     "5. MODEL DEGRADATION FALLBACK: If 2 consecutive retries fail quality checks due to weak model output, halt task execution and write a warning log to `plans/QUALITY_REJECT_<timestamp>.md`.",
     "=== RATE LIMIT RETRY RULE ===",
-    "If any bash tool or API response contains a rate-limit error or 'retry after N seconds' message, then sleep for N+2 seocnds before attempting the tool call again."
+    "If any bash tool or API response contains a rate-limit error or 'retry after N seconds' message, then sleep for N+2 seocnds before attempting the tool call again.",
+    "",
+    "=== RULE 11: DAILY CI HEALTH CHECK (GITHUB ACTIONS) ===",
+    "1. DAILY REQUIREMENT: At the START of the first session each day, and again at least once per day if a session runs long, check GitHub Actions CI health for this repo: `gh run list --limit 15`. If the last run on main is failing or there is any failure on the most recent push/PR, investigate and FIX it before doing other work.",
+    "2. CHECK FAILED JOB LOGS: `gh run view <run-id> --log-failed 2>&1` and `gh run view <run-id>` to identify the failing job and the exact failing test. Do NOT guess — read the actual error output.",
+    "3. FIX FIRST: If the failure is a real regression (test mismatch, code bug, stale test, config drift), create a fix commit. Reproduce locally where possible: `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v -n 0`, then `dec_venv/bin/python -m ruff check ... --fix`, `dec_venv/bin/python -m ruff format ...`, `dec_venv/bin/python -m pyright ...` before committing.",
+    "4. TYPED OUTCOMES: If CI is green, continue normally. If a failure cannot be fixed immediately (needs secrets, live paid API, infra unavailable), leave the fix as an explicit todo in the session context and note it in `sessions/`. NEVER silently ignore a red CI run.",
+    "5. FLAKY VS REGRESSION: Check whether the same test failed in the previous 3 runs. If it failed repeatedly across runs it is a real regression to fix; if it failed once after passing consistently, re-run the job (`gh run rerun <run-id> --failed`) before treating it as a bug.",
+    "6. PRE-PUSH VERIFICATION: Before pushing a commit that touches application code, proactively run `gh run list --limit 5` to confirm the previous CI state was not already red for unrelated reasons; if it was, flag it rather than assuming the push caused it.",
+    "",
+    "=== RULE 12: CI COMMAND SHORTCUT ===",
+    "Use the `.opencode/command/check-ci.md` command (`/check-ci`) for on-demand CI health checks. It checks recent GitHub Actions runs, identifies failures, and drives the same fix loop as RULE 11."
   ]
   ,
   "lsp": {
