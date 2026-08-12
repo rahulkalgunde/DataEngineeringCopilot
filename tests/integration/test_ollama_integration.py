@@ -78,11 +78,11 @@ class TestOllamaClientGeneration:
         assert len(answer) > 0
 
     @pytest.mark.asyncio
-    async def test_generate_with_custom_num_predict(self, ollama_client):
-        """generate() should respect num_predict override."""
+    async def test_generate_with_custom_max_tokens(self, ollama_client):
+        """generate() should respect max_tokens override."""
         answer = await ollama_client.generate(
             "Write a single sentence about data engineering.",
-            num_predict=100,
+            max_tokens=100,
         )
         assert len(answer) > 0
         assert len(answer) < 2000
@@ -91,5 +91,5 @@ class TestOllamaClientGeneration:
     async def test_generate_prompt_passthrough(self, ollama_client):
         """Client passes prompt as-is to Ollama (formatting lives in PromptBuilder)."""
         raw = "What is Spark? Answer briefly."
-        answer = await ollama_client.generate(raw, num_predict=50)
+        answer = await ollama_client.generate(raw, max_tokens=50)
         assert len(answer) > 0
