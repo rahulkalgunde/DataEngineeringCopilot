@@ -32,12 +32,33 @@ class InMemoryVectorStore(VectorStoreProtocol):
         self._chunks: dict[str, DocumentChunk] = {}
         self._vectors: dict[str, list[float]] = {}
         self._bm25_fit_count = 0
+        self._bm25 = None
+        self._collection_name = "test"
         self._closed = False
 
     async def upsert_chunks(self, chunks: Iterable[DocumentChunk], vectors: Iterable[list[float]]) -> None:
         for chunk, vector in zip(chunks, vectors, strict=False):
             self._chunks[chunk.chunk_id] = chunk
             self._vectors[chunk.chunk_id] = list(vector)
+
+    async def upsert_frozen_chunks(self, chunks: Iterable[DocumentChunk], vectors: Iterable[list[float]]) -> None:
+        await self.upsert_chunks(chunks, vectors)
+
+    def fit_bm25_corpus(self, texts: list[str]) -> None:
+        self._bm25_fit_count += 1
+
+    async def validate_index_generation(self, expected_points: int | None = None) -> dict[str, object]:
+        point_count = len(self._chunks)
+        if expected_points is not None and point_count != expected_points:
+            raise RuntimeError(f"Point count mismatch: expected {expected_points}, got {point_count}")
+        return {
+            "collection": self._collection_name,
+            "point_count": point_count,
+            "sparse_configured": False,
+            "bm25_ready": False,
+            "expected_points": expected_points,
+            "passed": True,
+        }
 
     async def query(
         self,
@@ -72,15 +93,15 @@ class InMemoryVectorStore(VectorStoreProtocol):
     async def count_urls(self, source_name: str) -> int:
         return sum(1 for c in self._chunks.values() if c.source_name == source_name)
 
-    async def get_content_hash_for_url(self, url: str) -> str | None:
+    async def get_content_hash_for_url(self, url: str, source_name: str = "") -> str | None:
         for chunk in self._chunks.values():
-            if chunk.url == url and chunk.content_hash:
+            if chunk.url == url and (not source_name or chunk.source_name == source_name) and chunk.content_hash:
                 return chunk.content_hash
         return None
 
-    async def delete_by_url(self, url: str) -> None:
+    async def delete_by_url(self, url: str, source_name: str = "") -> None:
         for chunk_id, chunk in list(self._chunks.items()):
-            if chunk.url == url:
+            if chunk.url == url and (not source_name or chunk.source_name == source_name):
                 self._chunks.pop(chunk_id, None)
                 self._vectors.pop(chunk_id, None)
 
