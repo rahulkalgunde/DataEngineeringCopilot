@@ -229,3 +229,70 @@ def test_gen_rollback_to_previous_generation(monkeypatch, tmp_path) -> None:
 
     assert result == 0
     assert target["gen"] == "pinned-old"
+
+
+# ------------------------------------------------------------------
+# gen-reset
+# ------------------------------------------------------------------
+
+
+def test_gen_reset_aborts_without_confirmation(monkeypatch, tmp_path) -> None:
+    _patch_settings(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", lambda *a: "n")
+    assert cli.gen_reset() == 0
+    assert not (cli.settings.index_state_dir / "active.json").exists()
+
+
+def test_gen_reset_purges_collections_state_and_caches(monkeypatch, tmp_path) -> None:
+    settings = _patch_settings(monkeypatch, tmp_path)
+    (settings.index_state_dir / "active.json").write_text(json.dumps({"generation": _GEN}))
+    (settings.index_state_dir / "history.jsonl").write_text("")
+    (settings.index_state_dir / "validation-pinned-x.json").write_text("{}")
+    monkeypatch.setenv("FORCE", "1")
+
+    project_root = tmp_path / "root"
+    bm25_dir = project_root / ".bm25_cache"
+    bm25_dir.mkdir(parents=True)
+    (bm25_dir / "data_engineering_docs__pinned-x.json").write_text("{}")
+    (bm25_dir / "other.json").write_text("{}")
+    monkeypatch.setattr("data_engineering_copilot.config.settings.PROJECT_ROOT", project_root)
+
+    deleted = []
+
+    def _drop_alias():
+        deleted.append("alias")
+
+    def _collections():
+        return ["data_engineering_docs__pinned-x", "unrelated"]
+
+    def _delete_collection(name):
+        deleted.append(name)
+
+    monkeypatch.setattr(cli, "_qdrant_drop_alias", _drop_alias)
+    monkeypatch.setattr(cli, "_list_qdrant_collections", _collections)
+    monkeypatch.setattr(cli, "_qdrant_delete_collection", _delete_collection)
+    monkeypatch.setattr(cli, "reset_index", lambda: None)
+
+    result = cli.gen_reset()
+
+    assert result == 0
+    assert "alias" in deleted
+    assert "data_engineering_docs__pinned-x" in deleted
+    assert "unrelated" not in deleted
+    assert not (settings.index_state_dir / "active.json").exists()
+    assert not (settings.index_state_dir / "history.jsonl").exists()
+    assert not (settings.index_state_dir / "validation-pinned-x.json").exists()
+    assert not (bm25_dir / "data_engineering_docs__pinned-x.json").exists()
+    assert (bm25_dir / "other.json").exists()
+
+
+def test_gen_reset_returns_5_on_collection_list_failure(monkeypatch, tmp_path) -> None:
+    _patch_settings(monkeypatch, tmp_path)
+    monkeypatch.setenv("FORCE", "1")
+
+    def _boom():
+        raise TimeoutError("qdrant unreachable")
+
+    monkeypatch.setattr(cli, "_qdrant_drop_alias", lambda: None)
+    monkeypatch.setattr(cli, "_list_qdrant_collections", _boom)
+    assert cli.gen_reset() == 5

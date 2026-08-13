@@ -1444,6 +1444,111 @@ def gen_rollback(generation: str) -> int:
     return spark_rollback(generation)
 
 
+def _list_qdrant_collections() -> list[str]:
+    """Return the collection names currently present in Qdrant."""
+    req = urllib.request.Request(f"{settings.qdrant_url}/collections", method="GET")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+    result = body.get("result", {}) if isinstance(body, dict) else {}
+    collections = result.get("collections", []) if isinstance(result, dict) else []
+    names = [entry.get("name") for entry in collections if isinstance(entry, dict) and entry.get("name")]
+    return [name for name in names if isinstance(name, str)]
+
+
+def _qdrant_delete_collection(name: str) -> None:
+    req = urllib.request.Request(f"{settings.qdrant_url}/collections/{name}", method="DELETE")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+        if isinstance(body, dict) and body.get("status") != "ok":
+            raise RuntimeError(f"Qdrant delete failed for {name}: {body}")
+
+
+def _qdrant_drop_alias() -> None:
+    """Best-effort removal of the logical alias (required before deleting its target)."""
+    payload = {"actions": [{"delete_alias": {"alias_name": settings.active_collection_alias}}]}
+    req = urllib.request.Request(
+        f"{settings.qdrant_url}/collections/aliases",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+        if isinstance(body, dict) and body.get("status") != "ok":
+            raise RuntimeError(f"Qdrant alias drop failed: {body}")
+
+
+def _purge_generation_state() -> None:
+    """Delete active.json, history.jsonl, and validation reports from index state."""
+    state_dir = settings.index_state_dir
+    for name in ("active.json", "history.jsonl"):
+        path = state_dir / name
+        if path.exists():
+            path.unlink()
+            print(f"  Deleted {path}")
+    for report in sorted(state_dir.glob("validation-*.json")):
+        report.unlink()
+        print(f"  Deleted {report}")
+
+
+def _purge_generation_bm25_caches() -> None:
+    """Delete persisted BM25 tokenizers for generation collections."""
+    from data_engineering_copilot.config.settings import PROJECT_ROOT
+
+    cache_dir = PROJECT_ROOT / ".bm25_cache"
+    if not cache_dir.is_dir():
+        print("  No .bm25_cache dir")
+        return
+    for path in sorted(cache_dir.glob("data_engineering_docs*.json")):
+        path.unlink()
+        print(f"  Deleted {path}")
+
+
+def gen_reset() -> int:
+    """Wipe all generation state: alias, gen collections, index state, BM25 caches.
+
+    Deletes every ``data_engineering_docs__*`` generation collection plus the
+    active alias, clears ``.index_state`` (active.json / history.jsonl /
+    validation reports) and the persisted BM25 tokenizers for generation
+    collections, then runs the full ``reset_index()`` crawl-state purge. Disk
+    source caches (``data/spark_src``, ``data/raw_sources``,
+    ``data/pinned_src``) are preserved.
+    """
+    if not _confirm_required("Reset all generation collections? This deletes every gen index"):
+        print("Aborted.")
+        return 0
+    try:
+        _qdrant_drop_alias()
+        print(f"  Dropped alias {settings.active_collection_alias}")
+    except urllib.error.HTTPError as exc:
+        print(f"  No alias to drop: {exc.code}" if exc.code == 404 else f"  Could not drop alias: {exc}")
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+        print(f"  Could not drop alias: {exc}")
+    try:
+        collection_names = _list_qdrant_collections()
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"❌ Could not list Qdrant collections: {exc}")
+        return 5
+    for name in collection_names:
+        if not name.startswith("data_engineering_docs__"):
+            continue
+        try:
+            _qdrant_delete_collection(name)
+            print(f"  Deleted collection {name}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                print(f"❌ Could not delete collection {name}: {exc}")
+                return 5
+        except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+            print(f"❌ Could not delete collection {name}: {exc}")
+            return 5
+    _purge_generation_state()
+    _purge_generation_bm25_caches()
+    reset_index()
+    print("✅ Generation reset complete (disk source caches preserved)")
+    return 0
+
+
 def _get_bm25_status() -> dict[str, object]:
     """Report BM25/hybrid state for the current collection.
 
@@ -2814,6 +2919,10 @@ def build_parser() -> argparse.ArgumentParser:
         "gen-config-check",
         help="Validate the pinned sources configuration without network access.",
     )
+    subparsers.add_parser(
+        "gen-reset",
+        help="Wipe all generation state: alias, gen collections, index state, BM25 caches.",
+    )
     gen_manifest_parser = subparsers.add_parser(
         "gen-manifest",
         help="Materialize all pinned sources and write per-source + combined manifests.",
@@ -3133,6 +3242,8 @@ def main() -> None:
             sys.exit(spark_rollback(generation=args.generation))
         elif args.command == "gen-config-check":
             sys.exit(gen_config_check())
+        elif args.command == "gen-reset":
+            sys.exit(gen_reset())
         elif args.command == "gen-manifest":
             sys.exit(gen_manifest(generation=args.generation))
         elif args.command == "gen-build":
