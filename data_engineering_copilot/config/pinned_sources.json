@@ -1,0 +1,135 @@
+{
+  "sources": [
+    {
+      "type": "github",
+      "name": "Apache Spark 4.0.0",
+      "slug": "spark",
+      "version": "4.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/spark.git",
+      "ref": "v4.0.0",
+      "commit": "fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4",
+      "streams": [
+        {
+          "name": "guides",
+          "doc_type": "guide",
+          "include": ["docs/**/*.md", "docs/**/*.rst"],
+          "exclude": ["docs/api/**", "docs/vendor/**"],
+          "language": "conceptual",
+          "chunking": "header_aware"
+        },
+        {
+          "name": "api",
+          "doc_type": "api_reference",
+          "include": ["python/pyspark/**/*.py"],
+          "exclude": [
+            "**/tests/**",
+            "**/*_test.py",
+            "**/test_*.py",
+            "**/testing/**",
+            "python/pyspark/sql/connect/proto/**",
+            "**/worker/**",
+            "**/cloudpickle/**",
+            "**/errors/exceptions/**",
+            "**/logger/tests/**",
+            "python/pyspark/sql/pandas/**",
+            "**/missing/**",
+            "**/data_type_ops/**"
+          ],
+          "language": "python",
+          "chunking": "api"
+        },
+        {
+          "name": "examples",
+          "doc_type": "code_example",
+          "include": [
+            "examples/src/main/**/*.py",
+            "examples/src/main/**/*.scala",
+            "examples/src/main/**/*.sql",
+            "examples/src/main/**/*.java",
+            "examples/src/main/**/*.R"
+          ],
+          "exclude": ["**/data/**"],
+          "language": "mixed",
+          "chunking": "code"
+        },
+        {
+          "name": "sql_functions",
+          "doc_type": "sql_function_ref",
+          "include": ["sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/**/*.scala"],
+          "exclude": ["**/codegen/**", "**/test/**"],
+          "language": "scala",
+          "chunking": "code",
+          "content_requires": ["ExpressionDescription"]
+        }
+      ]
+    },
+    {
+      "type": "github",
+      "name": "Apache Airflow Documentation",
+      "slug": "airflow",
+      "version": "3.3.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/airflow.git",
+      "ref": "3.3.1",
+      "commit": "3adbbe1c58e4532df1964cb7794805e763816ee8",
+      "streams": [
+        {
+          "name": "core-docs",
+          "doc_type": "guide",
+          "include": ["airflow-core/docs/**/*.rst"],
+          "exclude": [
+            "airflow-core/docs/img/**",
+            "airflow-core/docs/static/**",
+            "airflow-core/docs/templates/**",
+            "airflow-core/docs/empty_plugin/**"
+          ],
+          "language": "conceptual",
+          "chunking": "header_aware"
+        }
+      ]
+    },
+    {
+      "type": "github",
+      "name": "Delta Lake Documentation",
+      "slug": "delta",
+      "version": "v4.3.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/delta-io/delta.git",
+      "ref": "v4.3.1",
+      "commit": "54ce02692567fc3e5107a3ae69ebeccdffa7edfe",
+      "streams": [
+        {
+          "name": "docs",
+          "doc_type": "guide",
+          "include": ["docs/src/content/docs/**/*.mdx"],
+          "exclude": ["docs/src/content/docs/delta-streaming/**"],
+          "language": "conceptual",
+          "chunking": "header_aware"
+        }
+      ]
+    },
+    {
+      "type": "url_index",
+      "name": "Claude Platform Docs",
+      "slug": "claude-platform",
+      "version": "unpinned",
+      "index_url": "https://platform.claude.com/docs/llms.txt",
+      "url_prefix": "https://platform.claude.com/docs/en/",
+      "base_url": "https://platform.claude.com/docs",
+      "cache_dir": "claude-platform",
+      "doc_type": "guide"
+    },
+    {
+      "type": "url_index",
+      "name": "Claude Code Docs",
+      "slug": "claude-code",
+      "version": "unpinned",
+      "index_url": "https://code.claude.com/docs/llms.txt",
+      "url_prefix": "https://code.claude.com/docs/en/",
+      "base_url": "https://code.claude.com/docs",
+      "cache_dir": "claude-code",
+      "doc_type": "guide"
+    }
+  ]
+}
