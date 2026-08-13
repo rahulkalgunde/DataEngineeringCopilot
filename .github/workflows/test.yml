@@ -151,7 +151,7 @@ jobs:
 
       - name: Start all service dependencies
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --wait-timeout 300
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --wait-timeout 480
 
       - name: Pull Ollama models
         run: |
