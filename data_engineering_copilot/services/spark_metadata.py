@@ -6,8 +6,8 @@ import re
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
-from data_engineering_copilot.config.settings import SparkSourceConfig
 from data_engineering_copilot.domain.models import ParsedDocument
+from data_engineering_copilot.domain.protocols import GitRepoSource
 from data_engineering_copilot.infrastructure.spark_source_resolver import SparkFileRecord
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -28,7 +28,7 @@ class SparkMetadata:
 
 def derive_spark_metadata(
     record: SparkFileRecord,
-    source: SparkSourceConfig,
+    source: GitRepoSource,
     title: str,
     text: str,
 ) -> SparkMetadata:
