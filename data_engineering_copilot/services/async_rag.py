@@ -697,16 +697,30 @@ class AsyncRagService:
                     rerank_pool = min(
                         pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
                     )
-                    # Use the concise retrieval rewrite for pair scoring. The
-                    # original question remains the generation prompt, while the
-                    # rewrite removes conversational detail that can obscure the
-                    # technical terms in code and API documentation.
-                    rerank_query = effective_query.strip() or question
+                    # Combined-corpus safeguard: multi-query fusion can union many
+                    # hundreds of chunks across sources (query variants each return
+                    # up to ``fused_limit``). Feed the cross-encoder only the top
+                    # fused pool — ``merge_retrieval_results`` already sorts by
+                    # fused score descending — so inference cost stays bounded and
+                    # the pool handed to the reranker is focused, not dominated by
+                    # low-rank union tail. The pool is still 8x the final top_k,
+                    # preserving the reranker's recall-rescue role.
+                    if pre_rerank_count > rerank_pool:
+                        retrieved_chunks = retrieved_chunks[:rerank_pool]
+                        pre_rerank_count = len(retrieved_chunks)
+                    # Rerank against the original question, not the rewritten
+                    # query (restores ``spark_ingestion_OPERATIONAL_ROLLOUT.md``
+                    # fix 7): the rewrite can drift user-typed API terms (e.g.
+                    # ``dense_rank`` → "dense ranking"), and the cross-encoder
+                    # scores code/API pairs far higher against the verbatim
+                    # question. The rewrite still drives the retrieval variants
+                    # and the generation prompt.
+                    rerank_query = question
                     retrieved_chunks = await reranker.rerank(rerank_query, retrieved_chunks, top_k=rerank_pool)
 
             _prov_rerank = {
                 "enabled": rerank_used,
-                "query": effective_query.strip() or question,
+                "query": question,
                 "pool_size": pre_rerank_count,
                 "top_k": (
                     min(pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k))

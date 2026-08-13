@@ -366,6 +366,84 @@ async def test_rag_service_passes_rerank_pool_as_fused_limit() -> None:
     assert expected >= max(config.retrieval_top_k * 8, config.reranker_top_k * 5)
 
 
+@pytest.mark.asyncio
+async def test_reranker_scores_against_original_question() -> None:
+    """Reranking must use the verbatim user question, not the rewritten query.
+
+    Restores ``spark_ingestion_OPERATIONAL_ROLLOUT.md`` fix 7: the rewrite can
+    drift user-typed API terms (e.g. ``dense_rank`` → "dense ranking"), and the
+    cross-encoder scores code/API pairs far higher against the original text.
+    The rewrite still drives the retrieval variants and the generation prompt.
+    """
+    from data_engineering_copilot.domain.models import RetrievedChunk
+    from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+    class _Rewriter:
+        async def async_rewrite(self, question: str) -> RewrittenQuery:
+            return RewrittenQuery(
+                original_query=question,
+                intent="factual",
+                decomposed_steps=("apply dense ranking over partitions using window functions",),
+            )
+
+        async def expand_queries(self, question: str, max_variations: int = 2) -> list[str]:
+            return ["Spark Window PARTITION BY ORDER BY dense_rank rangeBetween"]
+
+    class _RecordingReranker:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
+            self.queries.append(query)
+            return chunks[:top_k]
+
+        def diversify_by_lexical_content(self, chunks: list[RetrievedChunk], top_k: int = 5) -> list[RetrievedChunk]:
+            return chunks[:top_k]
+
+        def is_available(self) -> bool:
+            return True
+
+        async def initialize(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    store = InMemoryVectorStore()
+    await store.initialize()
+    embedder = StubEmbedder(dimension=768)
+    chunks = _build_chunks()
+    vectors = await embedder.embed_texts([c.text for c in chunks])
+    await store.upsert_chunks(chunks, vectors)
+    reranker = _RecordingReranker()
+    question = "How do I use pyspark.sql.functions.dense_rank over a window?"
+    service = AsyncRagService(
+        config=RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.0,
+            reranker_enabled=True,
+            reranker_confidence_threshold=0.0,
+            reranker_top_k=20,
+        ),
+        vector_store=store,
+        llm_client=StubLLM(),
+        embedder=embedder,
+        query_rewriter=_Rewriter(),  # type: ignore[arg-type]
+        reranker=reranker,  # type: ignore[arg-type]
+    )
+    try:
+        prov: list[dict] = []
+        await service.answer(question, provenance=prov)
+    finally:
+        await embedder.close()
+        await store.close()
+
+    assert reranker.queries, "expected the reranker to run for this question"
+    assert reranker.queries[0] == question
+    assert prov[0]["rerank"]["query"] == question
+    assert prov[0]["rerank"]["enabled"] is True
+
+
 # ------------------------------------------------------------------
 # Task 12: cache-poisoning prevention + diagnostic cache bypass
 # ------------------------------------------------------------------
