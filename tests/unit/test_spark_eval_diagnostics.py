@@ -276,13 +276,19 @@ def test_spark_eval_dataset_covers_required_topics() -> None:
 
 
 def test_spark_eval_dataset_out_of_scope_rows_exist() -> None:
-    """Delta Lake and Airflow rows are present but marked out of scope."""
+    """Kubernetes and React rows are present but marked out of scope.
+
+    The original Delta Lake/Airflow out-of-scope rows were replaced during the
+    T3 reconciliation because the combined pinned generation legitimately
+    answers those topics (they are in the corpus); Kubernetes and React are
+    genuinely outside the Spark knowledge base.
+    """
     rows = _spark_dataset_rows()
     oos = [row for row in rows if row.get("out_of_scope")]
     assert len(oos) == 2
     topics = " ".join((row["question"] or "").lower() for row in oos)
-    assert "delta" in topics
-    assert "airflow" in topics
+    assert "kubernetes" in topics
+    assert "react" in topics
 
 
 def test_compute_result_reports_forbidden_term_hits() -> None:
