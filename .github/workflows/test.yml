@@ -65,7 +65,7 @@ jobs:
         run: uv run make test-ci-unit
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7.0.0
         if: always()
         with:
           files: coverage.xml
