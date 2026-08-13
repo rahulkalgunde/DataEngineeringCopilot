@@ -1086,11 +1086,40 @@ def _confirm_required(action: str) -> bool:
     return answer.strip().lower() in ("y", "yes")
 
 
+def _qdrant_collection_aliases(name: str) -> list[str]:
+    """Return the alias names that resolve to *name* (empty when not an alias)."""
+    req = urllib.request.Request(f"{settings.qdrant_url}/collections/{name}/aliases", method="GET")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+    result = body.get("result", {}) if isinstance(body, dict) else {}
+    aliases = result.get("aliases", []) if isinstance(result, dict) else []
+    found: list[str] = []
+    for entry in aliases:
+        if isinstance(entry, dict):
+            value: object = entry.get("alias_name")
+            if isinstance(value, str):
+                found.append(value)
+    return found
+
+
 def _qdrant_change_alias(generation: str) -> None:
-    """Atomically repoint the logical alias to a generation collection."""
+    """Atomically repoint the logical alias to a generation collection.
+
+    Handles both prior states: the alias already existing (delete + recreate in
+    one batch) or a plain collection shadowing the alias name (delete that
+    collection first, then create the alias) — e.g. right after ``gen-reset``
+    recreated the base collection. Qdrant refuses to create an alias whose name
+    is already a collection.
+    """
     collection = _spark_generation_collection(generation)
-    changes = [{"delete_alias": {"alias_name": settings.active_collection_alias}}]
-    changes.append({"create_alias": {"alias_name": settings.active_collection_alias, "collection_name": collection}})
+    alias = settings.active_collection_alias
+    if alias in _qdrant_collection_aliases(alias):
+        changes: list[dict[str, object]] = [{"delete_alias": {"alias_name": alias}}]
+    else:
+        if alias in _list_qdrant_collections():
+            _qdrant_delete_collection(alias)
+        changes = []
+    changes.append({"create_alias": {"alias_name": alias, "collection_name": collection}})
     payload = {"actions": changes}
     req = urllib.request.Request(
         f"{settings.qdrant_url}/collections/aliases",

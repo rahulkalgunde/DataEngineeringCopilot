@@ -83,6 +83,8 @@ def test_chunk_spark_uses_spark_chunker_with_metadata() -> None:
     for chunk in chunks:
         assert chunk.source_commit == _COMMIT
         assert chunk.source_name == "Apache Spark 4.0.0"
+        assert chunk.index_generation == _GENERATION
+        assert chunk.chunker_version == "spark-chunker-v1"
     by_doc_type = {c.doc_type for c in chunks}
     assert {"guide", "api_reference"}.issubset(by_doc_type)
     api_chunks = [c for c in chunks if c.doc_type == "api_reference"]

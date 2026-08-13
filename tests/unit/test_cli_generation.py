@@ -12,6 +12,20 @@ from data_engineering_copilot import cli
 _GEN = "pinned-abc123def456"
 
 
+class _FakeResp:
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload.encode()
+
+    def __enter__(self) -> _FakeResp:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
 def _patch_settings(monkeypatch, tmp_path):
     from tests.conftest import make_settings
 
@@ -229,6 +243,92 @@ def test_gen_rollback_to_previous_generation(monkeypatch, tmp_path) -> None:
 
     assert result == 0
     assert target["gen"] == "pinned-old"
+
+
+# ------------------------------------------------------------------
+# _qdrant_change_alias
+# ------------------------------------------------------------------
+
+
+def test_change_alias_repoints_existing_alias(monkeypatch, tmp_path) -> None:
+    from unittest.mock import patch
+
+    settings = _patch_settings(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "_qdrant_collection_aliases", lambda name: [settings.active_collection_alias])
+    monkeypatch.setattr(cli, "_list_qdrant_collections", lambda: [settings.active_collection_alias])
+    deleted = []
+
+    def _delete(name):
+        deleted.append(name)
+
+    monkeypatch.setattr(cli, "_qdrant_delete_collection", _delete)
+    sent = {}
+
+    class _Capture:
+        def __init__(self, request, timeout=None):
+            sent["body"] = json.loads(request.data.decode())
+
+        def __enter__(self):
+            return _FakeResp(json.dumps({"status": "ok"}))
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    with patch("data_engineering_copilot.cli.urllib.request.urlopen", _Capture):
+        cli._qdrant_change_alias(_GEN)
+
+    assert deleted == []
+    assert sent["body"] == {
+        "actions": [
+            {"delete_alias": {"alias_name": settings.active_collection_alias}},
+            {
+                "create_alias": {
+                    "alias_name": settings.active_collection_alias,
+                    "collection_name": cli._spark_generation_collection(_GEN),
+                }
+            },
+        ]
+    }
+
+
+def test_change_alias_deletes_shadowing_collection_first(monkeypatch, tmp_path) -> None:
+    from unittest.mock import patch
+
+    settings = _patch_settings(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "_qdrant_collection_aliases", lambda name: [])
+    monkeypatch.setattr(cli, "_list_qdrant_collections", lambda: [settings.active_collection_alias])
+    deleted = []
+
+    def _delete(name):
+        deleted.append(name)
+
+    monkeypatch.setattr(cli, "_qdrant_delete_collection", _delete)
+    sent = {}
+
+    class _Capture:
+        def __init__(self, request, timeout=None):
+            sent["body"] = json.loads(request.data.decode())
+
+        def __enter__(self):
+            return _FakeResp(json.dumps({"status": "ok"}))
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    with patch("data_engineering_copilot.cli.urllib.request.urlopen", _Capture):
+        cli._qdrant_change_alias(_GEN)
+
+    assert deleted == [settings.active_collection_alias]
+    assert sent["body"] == {
+        "actions": [
+            {
+                "create_alias": {
+                    "alias_name": settings.active_collection_alias,
+                    "collection_name": cli._spark_generation_collection(_GEN),
+                }
+            }
+        ]
+    }
 
 
 # ------------------------------------------------------------------

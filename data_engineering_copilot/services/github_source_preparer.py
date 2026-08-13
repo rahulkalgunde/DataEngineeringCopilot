@@ -92,6 +92,7 @@ class GithubSourcePreparer:
             parsed = self._parse_record(record)
             metadata = derive_spark_metadata(record, self._config, title=parsed.title, text=parsed.text)
             doc_chunks = await chunker.chunk(parsed, metadata)
+            doc_chunks = [self._attach_spark_metadata(chunk) for chunk in doc_chunks]
             chunk_count_by_path[record.relative_path] = len(doc_chunks)
             chunks.extend(doc_chunks)
         return chunks, self._build_coverage(manifest, chunk_count_by_path)
@@ -136,6 +137,13 @@ class GithubSourcePreparer:
             license=self._config.license,
             index_generation=self._generation,
             chunker_version="header-aware-v1",
+        )
+
+    def _attach_spark_metadata(self, chunk: DocumentChunk) -> DocumentChunk:
+        return replace(
+            chunk,
+            index_generation=self._generation,
+            chunker_version="spark-chunker-v1",
         )
 
     @staticmethod
