@@ -254,6 +254,32 @@ async def test_delete_by_url_success(mock_async_qdrant):
     mock_async_qdrant.delete.assert_awaited_once()
 
 
+async def test_delete_by_url_scoped_to_source(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    await store.delete_by_url("http://example.com/page1", "Source A")
+
+    filter_arg = mock_async_qdrant.delete.await_args.kwargs["points_selector"].filter
+    keys = [c.key for c in filter_arg.must]
+    assert keys == ["url", "source_name"]
+    match_values = [c.match.value for c in filter_arg.must]
+    assert match_values == ["http://example.com/page1", "Source A"]
+
+
+async def test_delete_by_url_unsourced_keeps_url_only_filter(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    await store.delete_by_url("http://example.com/page1")
+
+    filter_arg = mock_async_qdrant.delete.await_args.kwargs["points_selector"].filter
+    keys = [c.key for c in filter_arg.must]
+    assert keys == ["url"]
+
+
 async def test_get_content_hash_found(mock_async_qdrant):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -265,6 +291,25 @@ async def test_get_content_hash_found(mock_async_qdrant):
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
     result = await store.get_content_hash_for_url("http://example.com/page1")
     assert result == "abc123"
+
+
+async def test_get_content_hash_scoped_to_source(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_point = MagicMock()
+    mock_point.payload = {"content_hash": "abc123"}
+    mock_async_qdrant.scroll = AsyncMock(return_value=([mock_point], None))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    result = await store.get_content_hash_for_url("http://example.com/page1", "Source A")
+    assert result == "abc123"
+
+    scroll_filter = mock_async_qdrant.scroll.await_args.kwargs["scroll_filter"]
+    keys = [c.key for c in scroll_filter.must]
+    assert keys == ["url", "source_name"]
+    match_values = [c.match.value for c in scroll_filter.must]
+    assert match_values == ["http://example.com/page1", "Source A"]
 
 
 async def test_get_content_hash_not_found(mock_async_qdrant):

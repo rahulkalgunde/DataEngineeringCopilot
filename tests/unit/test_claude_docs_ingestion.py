@@ -51,12 +51,16 @@ class FakeStore:
     def __init__(self, indexed_urls: list[str] | None = None) -> None:
         self.upserts: list[tuple[list[DocumentChunk], list[list[float]]]] = []
         self._indexed_urls = set(indexed_urls or [])
+        self.bm25_fits: list[list[str]] = []
 
     async def upsert_chunks(self, chunks, vectors) -> None:
         self.upserts.append((list(chunks), list(vectors)))
 
     async def scroll_urls(self, source_name: str) -> list[str]:
         return list(self._indexed_urls)
+
+    def fit_bm25(self, texts: list[str]) -> None:
+        self.bm25_fits.append(list(texts))
 
 
 def _platform_mock_documents() -> list[ParsedDocument]:
@@ -190,6 +194,21 @@ def test_chunk_embed_upsert_pins_contract() -> None:
     assert chunked_docs == 1
     assert total_chunks >= 1
     assert len(store.upserts) == 1
+
+
+def test_chunk_embed_upsert_fits_bm25_once_over_all_texts() -> None:
+    """BM25 parity: the Claude path accumulates the tokenizer over every chunk
+    text after the final flush (mirroring the crawler path)."""
+    chunker = HeaderAwareChunker()
+    embedder = FakeEmbedder()
+    store = FakeStore()
+    documents = _platform_mock_documents() * 2
+
+    _run(_chunk_embed_upsert(documents, chunker, embedder, store))
+
+    assert len(store.bm25_fits) == 1
+    embedded_texts = sum(len(batch) for batch in embedder.calls)
+    assert len(store.bm25_fits[0]) == embedded_texts
 
 
 def test_chunk_embed_upsert_flushes_per_document() -> None:
