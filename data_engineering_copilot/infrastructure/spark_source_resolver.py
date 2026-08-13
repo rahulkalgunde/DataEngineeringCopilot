@@ -1,8 +1,8 @@
-"""Pinned Spark source resolver.
+"""Pinned GitHub source resolver.
 
-Acquires a pinned Apache Spark release tarball (by commit SHA) and builds a
-deterministic manifest of files selected by the configured streams. Uses only
-the Python standard library — no Git, no GitHub API, no third-party client.
+Acquires a pinned release tarball (by commit SHA) and builds a deterministic
+manifest of files selected by the configured streams. Uses only the Python
+standard library — no Git, no GitHub API, no third-party client.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from data_engineering_copilot.config.settings import SparkSourceConfig
+from data_engineering_copilot.domain.protocols import GitRepoSource
 
 # Safety cap for individual source files; larger files are skipped (in bytes).
 _DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -98,7 +98,7 @@ class SparkSourceResolver:
 
     def __init__(
         self,
-        config: SparkSourceConfig,
+        config: GitRepoSource,
         cache_dir: Path,
         max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
     ) -> None:
@@ -225,7 +225,20 @@ class SparkSourceResolver:
         return self._cache_dir / f"{self._config.ref.replace('/', '_')}-{digest}"
 
     def _archive_url(self) -> str:
-        return f"https://github.com/apache/spark/archive/{self._config.commit}.tar.gz"
+        owner, name = self._repo_parts()
+        return f"https://github.com/{owner}/{name}/archive/{self._config.commit}.tar.gz"
+
+    def _repo_parts(self) -> tuple[str, str]:
+        """Return ``(owner, name)`` from the configured GitHub repository URL."""
+        repo = self._config.repository.rstrip("/")
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+        if "github.com" not in repo:
+            raise RuntimeError(f"Unsupported repository: {self._config.repository!r}")
+        parts = repo.split("/")
+        if len(parts) < 2:
+            raise RuntimeError(f"Unsupported repository: {self._config.repository!r}")
+        return parts[-2], parts[-1]
 
     def _download(self, url: str, destination: Path) -> None:
         request = urllib.request.Request(url, headers={"User-Agent": "data-engineering-copilot/1.0"})
@@ -312,4 +325,5 @@ class SparkSourceResolver:
         return _LANGUAGE_BY_EXTENSION.get(file_path.suffix.lower(), "conceptual")
 
     def _source_url_for(self, rel: str) -> str:
-        return f"https://raw.githubusercontent.com/apache/spark/{self._config.commit}/{rel}"
+        owner, name = self._repo_parts()
+        return f"https://raw.githubusercontent.com/{owner}/{name}/{self._config.commit}/{rel}"
