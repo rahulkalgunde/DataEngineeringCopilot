@@ -169,7 +169,7 @@ class AsyncIngestionService:
 
         if stored_hash is not None:
             log.info("async_ingestion.content_changed", url=parsed.url)
-            await self._delete_chunks_for_url(parsed.url)
+            await self._delete_chunks_for_url(parsed.url, parsed.source_name)
 
         extract_sentences = getattr(self.chunker, "extract_sentences", None)
         if self._spark_chunker is not None and parsed.doc_type:
@@ -880,17 +880,17 @@ class AsyncIngestionService:
         skip decisions, so a stale/divergent Redis hash can never cause a page
         to be skipped after the vector store was reset.
         """
-        return await self.vector_store.get_content_hash_for_url(url)
+        return await self.vector_store.get_content_hash_for_url(url, source_name)
 
     async def _set_content_hash(self, url: str, source_name: str, content_hash: str) -> None:
         registry = self._get_url_registry(source_name)
         if registry is not None:
             await registry.set_html_hash(url, content_hash)
 
-    async def _delete_chunks_for_url(self, url: str) -> None:
+    async def _delete_chunks_for_url(self, url: str, source_name: str = "") -> None:
         deleter = getattr(self.vector_store, "delete_by_url", None)
         if deleter is not None:
-            await deleter(url)
+            await deleter(url, source_name)
         else:
             log.debug("vector_store.no_delete_by_url", url=url)
 
@@ -1030,7 +1030,7 @@ class AsyncIngestionService:
         deleted = 0
         for url in stale:
             try:
-                await self._delete_chunks_for_url(url)
+                await self._delete_chunks_for_url(url, source_name)
                 deleted += 1
             except Exception as exc:
                 log.warning("async_ingestion.stale_delete_failed", url=url, error=str(exc))

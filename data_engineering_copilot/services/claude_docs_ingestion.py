@@ -341,6 +341,7 @@ async def _chunk_embed_upsert(
     total_chunks = 0
     all_chunks: list[DocumentChunk] = []
     all_vectors: list[list[float]] = []
+    all_texts: list[str] = []
 
     async def _flush() -> None:
         if all_chunks:
@@ -356,6 +357,7 @@ async def _chunk_embed_upsert(
             batch_vectors = await _embed_batch_with_retry(embedder, batch)
             all_chunks.extend(normalized[i : i + _EMBED_BATCH_SIZE])
             all_vectors.extend(batch_vectors)
+            all_texts.extend(batch)
         chunked_docs += 1
         total_chunks += len(normalized)
         # Flush after every document so a mid-run outage (provider 5xx) never
@@ -367,6 +369,11 @@ async def _chunk_embed_upsert(
         all_vectors.clear()
 
     await _flush()
+    # BM25 parity with the crawler path (which accumulates the tokenizer per
+    # run): refit once over every chunk text after the final flush.
+    fit = getattr(store, "fit_bm25", None)
+    if callable(fit) and all_texts:
+        fit(all_texts)
     return chunked_docs, total_chunks
 
 

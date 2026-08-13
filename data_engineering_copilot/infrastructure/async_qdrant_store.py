@@ -706,16 +706,17 @@ class AsyncQdrantVectorStore:
         report["passed"] = True
         return report
 
-    async def get_content_hash_for_url(self, url: str) -> str | None:
-        """Retrieve stored content_hash for a given URL asynchronously."""
+    async def get_content_hash_for_url(self, url: str, source_name: str = "") -> str | None:
+        """Retrieve stored content_hash for a given URL (optionally scoped to a source) asynchronously."""
         if self._client is None:
             return None
         try:
+            must: list[models.Condition] = [models.FieldCondition(key="url", match=models.MatchValue(value=url))]
+            if source_name:
+                must.append(models.FieldCondition(key="source_name", match=models.MatchValue(value=source_name)))
             points, _ = await self._client.scroll(
                 collection_name=self._collection_name,
-                scroll_filter=models.Filter(
-                    must=[models.FieldCondition(key="url", match=models.MatchValue(value=url))]
-                ),
+                scroll_filter=models.Filter(must=must),
                 limit=50,
                 with_payload=True,
                 with_vectors=False,
@@ -728,21 +729,22 @@ class AsyncQdrantVectorStore:
             logger.warning("Failed to retrieve content hash for url=%s: %s", url, exc)
             return None
 
-    async def delete_by_url(self, url: str) -> None:
-        """Delete all points whose payload ``url`` field matches the given URL asynchronously."""
+    async def delete_by_url(self, url: str, source_name: str = "") -> None:
+        """Delete all points whose payload ``url`` field matches (optionally scoped to a source) asynchronously."""
         if self._client is None:
             logger.warning("Qdrant client not initialized. Cannot delete by url=%s.", url)
             return
         try:
+            must: list[models.Condition] = [models.FieldCondition(key="url", match=models.MatchValue(value=url))]
+            if source_name:
+                must.append(models.FieldCondition(key="source_name", match=models.MatchValue(value=source_name)))
             await self._client.delete(
                 collection_name=self._collection_name,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(must=[models.FieldCondition(key="url", match=models.MatchValue(value=url))])
-                ),
+                points_selector=models.FilterSelector(filter=models.Filter(must=must)),
             )
-            logger.info("Deleted all points for url=%s", url)
+            logger.info("Deleted all points for url=%s source=%s", url, source_name)
         except Exception as exc:
-            logger.warning("Failed to delete points for url=%s: %s", url, exc)
+            logger.warning("Failed to delete points for url=%s source=%s: %s", url, source_name, exc)
 
     async def scroll_urls(self, source_name: str) -> list[str]:
         """Return all distinct URLs stored for a given source."""
