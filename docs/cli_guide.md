@@ -120,7 +120,7 @@ dec ingest
 dec ingest --source "Apache Spark Documentation" --max-pages 50
 
 # Ingest two specific sources
-dec ingest --source "Apache Spark Documentation" --source "Delta Lake Documentation"
+dec ingest --source "Apache Spark Documentation" --source "Databricks Documentation"
 
 # Ingest all sources with a small page budget (quick smoke run)
 dec ingest --max-pages 5
@@ -764,7 +764,7 @@ usage: dec profile [-h] [--sources [SOURCES ...]] [--load-sweep LOAD_SWEEP] [--o
 dec profile
 
 # Profile two sources at three load levels
-dec profile --sources "Apache Spark Documentation" "Apache Airflow Documentation" --load-sweep 5,10,25
+dec profile --sources "Apache Spark Documentation" "Databricks Documentation" --load-sweep 5,10,25
 
 # Write reports somewhere else
 dec profile --load-sweep 50,100 --output-dir /tmp/profiler_reports
@@ -785,7 +785,7 @@ dec profile --load-sweep 50,100 --output-dir /tmp/profiler_reports
 - The `dec profile` wrapper only forwards `--sources`, `--load-sweep`, `--output-dir`. The underlying profiler also accepts `--sample-interval` (default `1.0`) and `--poll-interval` (default `2.0`), which are **not** wired through `dec`. To use them, run the profiler module directly:
   ```bash
   dec_venv/bin/python -m data_engineering_copilot.profiler.cli \
-      --sources "Delta Lake Documentation" \
+      --sources "Databricks Documentation" \
       --load-sweep 20,40 \
       --sample-interval 0.5 \
       --poll-interval 1.0
@@ -1396,9 +1396,9 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 **Full dev loop (API-based ingestion)**
 ```bash
 make dev                                # first time: build image + start stack + pull models
-dec ingest --source "Delta Lake Documentation" --max-pages 20
+dec ingest --source "Apache Spark Documentation" --max-pages 20
 dec ingestion-monitor --interval 5     # watch progress live
-dec ask "What is Delta Lake time travel?"
+dec ask "What is Apache Spark?"
 ```
 
 **After changing dependencies**
