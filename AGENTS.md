@@ -72,6 +72,12 @@ Python 3.12+, Pyright, Ruff, Pytest, `uv` only.
 | `dec spark-build --generation <gen>` | Build Spark gen in Qdrant (no activate) | Qdrant + embedder |
 | `dec spark-validate --generation <gen>` | Validate built generation | Qdrant |
 | `dec spark-activate --generation <gen>` | Atomically switch alias to validated gen | Qdrant |
+| `dec gen-manifest` | Materialize all pinned sources + manifest | Qdrant (none) |
+| `dec gen-build` | Build combined pinned generation (Spark+Airflow+Delta+Claude) | Qdrant + embedder |
+| `dec gen-validate --generation <gen>` | Validate combined generation | Qdrant |
+| `dec gen-activate --generation <gen>` | Switch alias to combined gen | Qdrant |
+| `dec gen-reset` | Purge alias + gen collections + state + BM25 caches, then reset | Qdrant + Redis + PG |
+| `dec gen-stale` | List active/stale/orphan generations | Qdrant |
 | `dec evaluate --spark` | Spark retrieval-recall evaluation | Qdrant + embedder + LLM |
 | `dec profile --load-sweep 10,50,100` | Ingestion load sweep | API + worker + all infra |
 | `dec health` | Component health check | All |

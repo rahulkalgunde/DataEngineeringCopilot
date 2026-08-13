@@ -44,6 +44,12 @@ parser_version, chunker_version, index_generation`.
 - `content_hash` is the ingestion dedup mechanism: re-crawled pages with
   unchanged content are skipped (see `get_content_hash_for_url`,
   `delete_by_url`, `scroll_urls`).
+- **Source-scoped dedup** (Phase 1): `delete_by_url`/`get_content_hash_for_url`
+  take an optional `source_name`; when provided the `must` filter adds
+  `source_name == source_name` so two sources may each host the same URL and
+  dedup is per-source. Sourced writes (`upsert_chunks` from crawler tasks) carry
+  `source_name`; legacy/unsourced paths keep URL-only filters (pre-Phase-1
+  behavior).
 - `url` is indexed so `delete_by_url` / URL-scoped filters are fast.
 
 ## Query & filtering
@@ -77,6 +83,12 @@ chunk_type_filter, metadata_filters, fused_limit)`:
 - `bm25_status()` / `is_hybrid_ready()` report whether hybrid is usable.
 - `_warn_unfrozen_bm25_desync` guards against upserting sparse vectors from an
   unfitted tokenizer.
+- **Combined pinned generation** (`PinnedIndexBuilder.build`): `fit_bm25_corpus`
+  is called **once** over the concatenated corpus of every prepared source
+  (spark + airflow + delta + claude url-index) into the single
+  `data_engineering_docs__{gen}` collection, then `upsert_frozen_chunks` +
+  `validate_index_generation`. The interim Claude crawler path uses an
+  accumulating `fit_bm25` instead; it is superseded by `dec gen-build`.
 
 ## Spark index generations & aliases
 
@@ -101,6 +113,19 @@ Generation lifecycle (all in `data_engineering_copilot/cli.py`):
 4. **`dec spark-rollback --generation <gen>`** — only if `<gen>` is the current
    active generation; repoints the alias to the previous entry in
    `history.jsonl`.
+
+**Combined pinned generation (all 5 sources, one alias)** — `dec gen-build`
+prepares Spark (SparkChunker full fidelity), Airflow/Delta (HeaderAwareChunker
+with RST/MDX heading conversion), and Claude url-index pages, then
+`PinnedIndexBuilder` stamps `index_generation`, dedups by content hash across
+sources, fits **one combined BM25 corpus**, and freezes everything into a single
+`data_engineering_docs__{gen}`. Lifecycle mirrors spark-*:
+`dec gen-manifest` → `dec gen-build` → `dec gen-validate --generation <gen>` →
+`dec gen-activate --generation <gen>` (same validation-report gate + alias
+change) → `dec gen-rollback`. `dec gen-reset` drops the alias, deletes every
+`data_engineering_docs__*` collection, purges `.index_state` + generation BM25
+caches, then runs the `reset-index` crawl purge. `dec gen-stale` classifies
+collections as active/stale/orphan (see `services/pin_maintenance.py`).
 
 State files under `.index_state/`: `active.json`, `history.jsonl`,
 `validation-{generation}.json`. `resolve_active_generation()` (in
@@ -131,8 +156,9 @@ routing follow the active generation without env changes or restarts.
 ## Reference
 
 - Store: `data_engineering_copilot/infrastructure/async_qdrant_store.py`
-- CLI: `data_engineering_copilot/cli.py` (spark_* / reset_* / inspect_db /
+- CLI: `data_engineering_copilot/cli.py` (spark_* / gen_* / reset_* / inspect_db /
   `_qdrant_change_alias` / `_spark_generation_collection`)
 - Settings: `data_engineering_copilot/config/settings.py`
-- Builder: `data_engineering_copilot/services/spark_index_builder.py`
+- Builder: `data_engineering_copilot/services/spark_index_builder.py` +
+  `data_engineering_copilot/services/pinned_index_builder.py`
 - CLI guide: `docs/cli_guide.md`
