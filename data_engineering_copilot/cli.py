@@ -1549,6 +1549,37 @@ def gen_reset() -> int:
     return 0
 
 
+def gen_stale() -> int:
+    """Report generation collections: active, stale, or orphan."""
+    from data_engineering_copilot.services.pin_maintenance import (
+        classify_generations,
+        local_generation_collections,
+    )
+
+    try:
+        names = _list_qdrant_collections()
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"❌ Could not list Qdrant collections: {exc}")
+        return 5
+    local = local_generation_collections([settings.spark_corpus_dir, settings.pinned_corpus_dir])
+    active = _load_active_state().get("generation")
+    statuses = classify_generations(names, active, local)
+    if not statuses:
+        print("No generation collections found")
+        return 0
+    markers = {"active": "✅ active", "stale": "🟡 stale", "orphan": "⚪ orphan"}
+    stale_count = 0
+    for status in statuses:
+        print(f"  {markers[status.state]}  {status.name}")
+        if status.state == "stale":
+            stale_count += 1
+    if stale_count:
+        print(
+            f"\n{stale_count} stale generation(s). Rebuild with `dec gen-build`, then `dec gen-validate` + `dec gen-activate`."
+        )
+    return 0
+
+
 def _get_bm25_status() -> dict[str, object]:
     """Report BM25/hybrid state for the current collection.
 
@@ -2923,6 +2954,10 @@ def build_parser() -> argparse.ArgumentParser:
         "gen-reset",
         help="Wipe all generation state: alias, gen collections, index state, BM25 caches.",
     )
+    subparsers.add_parser(
+        "gen-stale",
+        help="Report generation collections as active, stale, or orphan.",
+    )
     gen_manifest_parser = subparsers.add_parser(
         "gen-manifest",
         help="Materialize all pinned sources and write per-source + combined manifests.",
@@ -3244,6 +3279,8 @@ def main() -> None:
             sys.exit(gen_config_check())
         elif args.command == "gen-reset":
             sys.exit(gen_reset())
+        elif args.command == "gen-stale":
+            sys.exit(gen_stale())
         elif args.command == "gen-manifest":
             sys.exit(gen_manifest(generation=args.generation))
         elif args.command == "gen-build":
