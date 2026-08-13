@@ -203,6 +203,184 @@ def load_spark_source_config(path: Path) -> SparkSourceConfig:
 
 
 # ---------------------------------------------------------------------------
+# Pinned multi-source configuration (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PinnedStreamConfig:
+    """One controlled ingestion stream for a pinned GitHub source release."""
+
+    name: str
+    doc_type: str
+    include: tuple[str, ...]
+    exclude: tuple[str, ...]
+    language: str
+    chunking: str
+    content_requires: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PinnedSourceConfig:
+    """An immutable pinned source: a GitHub repo release or an llms.txt index.
+
+    ``type`` is ``"github"`` (uses ``repository``/``ref``/``commit``/``streams``)
+    or ``"url_index"`` (uses ``index_url``/``url_prefix``/``cache_dir``/``doc_type``).
+    ``slug`` is a short stable identifier used in generation IDs and CLI source
+    selection.
+    """
+
+    type: str
+    name: str
+    slug: str
+    version: str
+    license: str = ""
+    repository: str = ""
+    ref: str = ""
+    commit: str = ""
+    streams: tuple[PinnedStreamConfig, ...] = ()
+    index_url: str = ""
+    url_prefix: str = ""
+    base_url: str = ""
+    cache_dir: str = ""
+    doc_type: str = "guide"
+
+
+_VALID_PINNED_SOURCE_TYPES = frozenset({"github", "url_index"})
+
+
+def load_pinned_sources(path: Path) -> tuple[PinnedSourceConfig, ...]:
+    """Load and validate pinned sources from a JSON file.
+
+    Raises ``ValueError`` with a field path in the message on any invalid value.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("pinned source config must be a JSON object")
+
+    raw_sources = raw.get("sources")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise ValueError("pinned source config `sources` must be a non-empty list")
+
+    sources: list[PinnedSourceConfig] = []
+    seen_slugs: set[str] = set()
+    seen_names: set[str] = set()
+    for idx, raw_source in enumerate(raw_sources):
+        if not isinstance(raw_source, dict):
+            raise ValueError(f"pinned source config `sources[{idx}]` must be an object")
+
+        def _require_str(obj: dict, field: str, _idx: int = idx) -> str:
+            value = obj.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"pinned source config `sources[{_idx}].{field}` must be a non-empty string")
+            return value.strip()
+
+        source_type = _require_str(raw_source, "type")
+        if source_type not in _VALID_PINNED_SOURCE_TYPES:
+            raise ValueError(
+                f"pinned source config `sources[{idx}].type` must be one of {sorted(_VALID_PINNED_SOURCE_TYPES)}"
+            )
+        name = _require_str(raw_source, "name")
+        if name in seen_names:
+            raise ValueError(f"pinned source config `sources[{idx}].name` must be unique: {name!r}")
+        seen_names.add(name)
+        slug = _require_str(raw_source, "slug")
+        if slug in seen_slugs:
+            raise ValueError(f"pinned source config `sources[{idx}].slug` must be unique: {slug!r}")
+        seen_slugs.add(slug)
+        version = _require_str(raw_source, "version")
+
+        if source_type == "github":
+            repository = _require_str(raw_source, "repository")
+            ref = _require_str(raw_source, "ref")
+            commit = _require_str(raw_source, "commit")
+            license_name = _require_str(raw_source, "license")
+            if not (repository.startswith("https://") and (repository.endswith(".git") or "github.com" in repository)):
+                raise ValueError(f"pinned source config `sources[{idx}].repository` must be an HTTPS GitHub repository")
+            import re
+
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+                raise ValueError(f"pinned source config `sources[{idx}].commit` must be a 40-character hexadecimal SHA")
+
+            raw_streams = raw_source.get("streams")
+            if not isinstance(raw_streams, list) or not raw_streams:
+                raise ValueError(f"pinned source config `sources[{idx}].streams` must be a non-empty list")
+            streams: list[PinnedStreamConfig] = []
+            seen_streams: set[str] = set()
+            for s_idx, raw_stream in enumerate(raw_streams):
+                if not isinstance(raw_stream, dict):
+                    raise ValueError(f"pinned source config `sources[{idx}].streams[{s_idx}]` must be an object")
+                stream_name = _require_str(raw_stream, "name")
+                if stream_name in seen_streams:
+                    raise ValueError(
+                        f"pinned source config `sources[{idx}].streams[{s_idx}].name` must be unique: {stream_name!r}"
+                    )
+                seen_streams.add(stream_name)
+                doc_type = _require_str(raw_stream, "doc_type")
+                if doc_type not in _VALID_DOC_TYPES:
+                    raise ValueError(
+                        f"pinned source config `sources[{idx}].streams[{s_idx}].doc_type` "
+                        f"must be one of {sorted(_VALID_DOC_TYPES)}"
+                    )
+                chunking = _require_str(raw_stream, "chunking")
+                if chunking not in _VALID_CHUNKING:
+                    raise ValueError(
+                        f"pinned source config `sources[{idx}].streams[{s_idx}].chunking` "
+                        f"must be one of {sorted(_VALID_CHUNKING)}"
+                    )
+                language = _require_str(raw_stream, "language")
+                streams.append(
+                    PinnedStreamConfig(
+                        name=stream_name,
+                        doc_type=doc_type,
+                        include=_optional_string_tuple(raw_stream, "include", s_idx),
+                        exclude=_optional_string_tuple(raw_stream, "exclude", s_idx),
+                        language=language,
+                        chunking=chunking,
+                        content_requires=_optional_string_tuple(raw_stream, "content_requires", s_idx),
+                    )
+                )
+            sources.append(
+                PinnedSourceConfig(
+                    type=source_type,
+                    name=name,
+                    slug=slug,
+                    version=version,
+                    license=license_name,
+                    repository=repository,
+                    ref=ref,
+                    commit=commit,
+                    streams=tuple(streams),
+                )
+            )
+        else:
+            index_url = _require_str(raw_source, "index_url")
+            url_prefix = _require_str(raw_source, "url_prefix")
+            base_url = _require_str(raw_source, "base_url")
+            cache_dir = _require_str(raw_source, "cache_dir")
+            doc_type = _require_str(raw_source, "doc_type")
+            if doc_type not in _VALID_DOC_TYPES:
+                raise ValueError(
+                    f"pinned source config `sources[{idx}].doc_type` must be one of {sorted(_VALID_DOC_TYPES)}"
+                )
+            sources.append(
+                PinnedSourceConfig(
+                    type=source_type,
+                    name=name,
+                    slug=slug,
+                    version=version,
+                    index_url=index_url,
+                    url_prefix=url_prefix,
+                    base_url=base_url,
+                    cache_dir=cache_dir,
+                    doc_type=doc_type,
+                )
+            )
+
+    return tuple(sources)
+
+
+# ---------------------------------------------------------------------------
 # Spark rendered documentation configuration (Phase 2)
 # ---------------------------------------------------------------------------
 
@@ -353,8 +531,11 @@ class AppSettings(BaseSettings):
     spark_rendered_sources_path: Path = (
         PROJECT_ROOT / "data_engineering_copilot" / "config" / "spark_rendered_sources.json"
     )
+    pinned_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "pinned_sources.json"
     spark_cache_dir: Path = PROJECT_ROOT / "data" / "spark_src"
     spark_corpus_dir: Path = PROJECT_ROOT / "data" / "spark_corpus"
+    pinned_cache_dir: Path = PROJECT_ROOT / "data" / "pinned_src"
+    pinned_corpus_dir: Path = PROJECT_ROOT / "data" / "pinned_corpus"
     index_state_dir: Path = PROJECT_ROOT / ".index_state"
     active_collection_alias: str = "data_engineering_docs"
     collection_name: str = "data_engineering_docs"
