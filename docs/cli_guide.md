@@ -25,6 +25,14 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec spark-validate](#dec-spark-validate)
   - [dec spark-activate](#dec-spark-activate)
   - [dec spark-rollback](#dec-spark-rollback)
+  - [dec gen-config-check](#dec-gen-config-check)
+  - [dec gen-manifest](#dec-gen-manifest)
+  - [dec gen-build](#dec-gen-build)
+  - [dec gen-validate](#dec-gen-validate)
+  - [dec gen-activate](#dec-gen-activate)
+  - [dec gen-rollback](#dec-gen-rollback)
+  - [dec gen-reset](#dec-gen-reset)
+  - [dec gen-stale](#dec-gen-stale)
   - [dec ui](#dec-ui)
   - [dec profile](#dec-profile)
   - [dec health](#dec-health)
@@ -74,6 +82,13 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `spark-build` | No | Yes | No | No | Yes (embedder) |
 | `spark-validate` | No | Yes | No | No | No |
 | `spark-activate` / `spark-rollback` | No | Yes | No | No | No |
+| `gen-config-check` | No | No | No | No | No |
+| `gen-manifest` | No | No | No | No | No |
+| `gen-build` | No | Yes | No | No | Yes (embedder) |
+| `gen-validate` | No | Yes | No | No | No |
+| `gen-activate` / `gen-rollback` | No | Yes | No | No | No |
+| `gen-reset` | No | Yes | No | No | No |
+| `gen-stale` | No | Yes | No | No | No |
 | `health`, `status`, `config`, `inspect-db` | `status` checks workers | Yes (except health/config degrade gracefully) | Yes | Yes (status) | Yes (health) |
 
 > `dec ingest`, `dec cancel`, and `dec ingestion-monitor` talk to the FastAPI server at `http://localhost:8000`. Start it with `make dev` (first time) or `make up` (subsequent).
@@ -604,6 +619,107 @@ usage: dec spark-rollback [-h] --generation GENERATION
 - `--generation`: Generation identifier (required).
 
 **Exit codes**: `0` success/aborted, `4` not the active generation / no previous generation, `5` operational failure.
+
+---
+
+### `dec gen-config-check`
+
+Validates the combined pinned sources configuration (`config/pinned_sources.json` → `pinned_sources_path`) without network access. Checks that every source is `github` or `url_index`, names/slugs are unique, GitHub sources carry an HTTPS repository + 40-hex commit + non-empty streams, and `url_index` sources carry `index_url`/`url_prefix`/`base_url`/`cache_dir`/`doc_type`.
+
+```
+usage: dec gen-config-check [-h]
+```
+
+**Exit codes**: `0` valid, `1` invalid.
+
+---
+
+### `dec gen-manifest`
+
+Materializes every pinned source (GitHub tarballs at their pinned commits + `llms.txt` url-index pages) and writes per-source manifests `manifest-<slug>.json` plus a combined `manifest.json` under `pinned_corpus_dir/<generation>/`. The generation defaults to `_default_generation()` (a `pinned-{sha12}` digest over the embedder name and the full pinned config).
+
+```
+usage: dec gen-manifest [-h] [--generation GENERATION]
+```
+
+**Options**
+- `--generation`: Generation identifier (default: derived `pinned-{sha12}`).
+
+**Exit codes**: `0` success, `5` materialization failure.
+
+---
+
+### `dec gen-build`
+
+Builds a combined frozen generation collection (not activated) from all five pinned sources: Spark (full SparkChunker fidelity incl. SQL function registry), Airflow + Delta (HeaderAwareChunker with RST/MDX heading support), Claude Platform + Claude Code (url-index pages). Prepares each source via `GithubSourcePreparer`/`UrlIndexPreparer`, then `PinnedIndexBuilder` combines them: per-source commit validation, global content-hash dedup, batch embedding through the fallback chain, one combined `fit_bm25_corpus`, frozen upsert into `data_engineering_docs__<generation>`, and writes `chunks.jsonl` / `coverage.json` / `build_report.json`.
+
+```
+usage: dec gen-build [-h] [--generation GENERATION]
+```
+
+**Infrastructure**: Qdrant + embedder (via fallback chain).
+
+**Exit codes**: `0` success, `5` build failure.
+
+---
+
+### `dec gen-validate`
+
+Validates a built combined generation without mutation. Runs the pinned artifact checks (chunk generation stamp, source commit ∈ pinned commits, coverage coverage of every chunk `file_path`, chunk-ID uniqueness, Qdrant point count vs `chunks.jsonl`) plus store-level checks (sparse config, BM25 readiness, doc_type metadata, payload text). Writes the validation report required by `dec gen-activate`.
+
+```
+usage: dec gen-validate [-h] --generation GENERATION
+```
+
+**Exit codes**: `0` passed, `2` invalid identifier, `3` failed/missing artifacts, `5` operational failure.
+
+---
+
+### `dec gen-activate`
+
+Atomically repoints the logical alias to a validated combined generation. Shares the validation-report gate, alias change, and `.index_state/active.json` write with `dec spark-activate`.
+
+```
+usage: dec gen-activate [-h] --generation GENERATION
+```
+
+**Exit codes**: `0` success/aborted, `3` missing/failed validation, `5` operational failure.
+
+---
+
+### `dec gen-rollback`
+
+Points the logical alias back to the previously recorded generation.
+
+```
+usage: dec gen-rollback [-h] --generation GENERATION
+```
+
+**Exit codes**: `0` success/aborted, `4` not active / no previous generation, `5` operational failure.
+
+---
+
+### `dec gen-reset`
+
+Wipes all generation state: drops the active alias, deletes every `data_engineering_docs__*` collection, removes `.index_state/active.json`, `.index_state/history.jsonl`, and `validation-*.json` reports, deletes `.bm25_cache/data_engineering_docs*.json` tokenizers, then runs the full `reset-index` crawl-state purge. Disk source caches (`data/spark_src`, `data/raw_sources`, `data/pinned_src`) are preserved. Requires confirmation or `FORCE=1`.
+
+```
+usage: dec gen-reset [-h]
+```
+
+**Exit codes**: `0` success/aborted, `5` collection purge failure.
+
+---
+
+### `dec gen-stale`
+
+Reports every generation collection in Qdrant as `active`, `stale` (built but not the active index and still backed by local `chunks.jsonl` artifacts), or `orphan` (no local artifacts).
+
+```
+usage: dec gen-stale [-h]
+```
+
+**Exit codes**: `0` success, `5` collection list failure.
 
 ---
 
@@ -1247,6 +1363,14 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Validate a Spark generation | `dec spark-validate --generation <gen>` |
 | Activate a Spark generation | `dec spark-activate --generation <gen>` |
 | Roll back a Spark generation | `dec spark-rollback --generation <gen>` |
+| Validate pinned sources config | `dec gen-config-check` |
+| Materialize all pinned sources + manifest | `dec gen-manifest` |
+| Build the combined pinned generation | `dec gen-build` |
+| Validate the combined generation | `dec gen-validate --generation <gen>` |
+| Activate the combined generation | `dec gen-activate --generation <gen>` |
+| Roll back the combined generation | `dec gen-rollback --generation <gen>` |
+| Wipe all generation state + re-run reset | `dec gen-reset` |
+| List active/stale/orphan generations | `dec gen-stale` |
 | Spark retrieval-recall evaluation | `dec evaluate --spark` |
 | Preview plan phase commands | `dec rag-plan --dry-run` |
 | Run RAG improvement plan phase | `dec rag-plan --phase <0-7>` |
