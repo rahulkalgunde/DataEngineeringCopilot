@@ -11,7 +11,10 @@ import pytest
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
-from data_engineering_copilot.services.pinned_index_builder import PinnedIndexBuilder
+from data_engineering_copilot.services.pinned_index_builder import (
+    PinnedIndexBuilder,
+    validate_pinned_generation_artifacts,
+)
 from data_engineering_copilot.services.prepared_source import PreparedSource
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord
 from tests.doubles.vector_store import InMemoryVectorStore
@@ -158,3 +161,90 @@ def test_build_writes_artifacts(tmp_path) -> None:
     assert (tmp_path / "chunks.jsonl").is_file()
     assert (tmp_path / "coverage.json").is_file()
     assert (tmp_path / "build_report.json").is_file()
+
+
+def _coverage_record(relative_path: str, **kwargs) -> CoverageRecord:
+    defaults = {
+        "relative_path": relative_path,
+        "representation": "native",
+        "doc_type": "guide",
+        "canonical_url": "https://example.com/doc",
+        "status": "indexed",
+        "chunk_count": 1,
+        "content_hash": "",
+    }
+    defaults.update(kwargs)
+    return CoverageRecord(**defaults)
+
+
+def _artifacts_chunk(generation: str, commit: str, chunk_id: str, file_path: str = "docs/doc.md") -> DocumentChunk:
+    return DocumentChunk(
+        chunk_id=chunk_id,
+        source_name="Apache Airflow Documentation",
+        title="Doc",
+        url="https://example.com/doc",
+        text="word " * 40,
+        doc_type="guide",
+        language="conceptual",
+        file_path=file_path,
+        index_generation=generation,
+        source_commit=commit,
+    )
+
+
+def test_validate_artifacts_passes_clean_generation() -> None:
+    generation = "gen-x"
+    chunks = [_artifacts_chunk(generation, "a" * 40, "id-1")]
+    coverage = [_coverage_record("docs/doc.md")]
+
+    failures = validate_pinned_generation_artifacts(
+        generation=generation,
+        expected_commits={"a" * 40, ""},
+        chunks=chunks,
+        coverage=coverage,
+        qdrant_point_count=1,
+        bm25_ready=True,
+        sparse_configured=True,
+    )
+
+    assert failures == []
+
+
+def test_validate_artifacts_rejects_bad_generation_and_commit() -> None:
+    generation = "gen-x"
+    chunks = [_artifacts_chunk("gen-y", "b" * 40, "id-1")]
+    coverage = [_coverage_record("docs/doc.md")]
+
+    failures = validate_pinned_generation_artifacts(
+        generation=generation,
+        expected_commits={"a" * 40, ""},
+        chunks=chunks,
+        coverage=coverage,
+        qdrant_point_count=None,
+        bm25_ready=True,
+        sparse_configured=True,
+    )
+
+    assert any("generation mismatch" in f for f in failures)
+    assert any("not pinned" in f for f in failures)
+
+
+def test_validate_artifacts_rejects_point_count_and_duplicates() -> None:
+    generation = "gen-x"
+    chunks = [_artifacts_chunk(generation, "a" * 40, "id-1"), _artifacts_chunk(generation, "a" * 40, "id-1")]
+    coverage = [_coverage_record("docs/doc.md")]
+
+    failures = validate_pinned_generation_artifacts(
+        generation=generation,
+        expected_commits={"a" * 40, ""},
+        chunks=chunks,
+        coverage=coverage,
+        qdrant_point_count=1,
+        bm25_ready=False,
+        sparse_configured=False,
+    )
+
+    assert any("duplicate chunk ids" in f for f in failures)
+    assert any("qdrant point count" in f for f in failures)
+    assert any("bm25 not ready" in f for f in failures)
+    assert any("sparse vectors" in f for f in failures)

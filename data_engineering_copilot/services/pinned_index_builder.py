@@ -237,3 +237,44 @@ def _reject_duplicate_ids(chunks: list[DocumentChunk]) -> None:
         if chunk.chunk_id in seen:
             raise ValueError(f"Duplicate chunk_id in pinned corpus: {chunk.chunk_id!r}")
         seen.add(chunk.chunk_id)
+
+
+def validate_pinned_generation_artifacts(
+    generation: str,
+    expected_commits: set[str],
+    chunks: list[DocumentChunk],
+    coverage: Sequence[CoverageRecord],
+    qdrant_point_count: int | None,
+    bm25_ready: bool,
+    sparse_configured: bool,
+) -> list[str]:
+    """Return the list of validation failures for a built pinned generation.
+
+    Mirrors ``validate_generation_artifacts`` for the combined generation:
+    every chunk must carry the generation and a source commit from
+    ``expected_commits`` (which includes ``""`` for unpinned url_index
+    sources), chunk IDs must be unique, coverage paths must cover every chunk
+    ``file_path``, and the Qdrant side must be frozen and sparse-ready.
+    """
+    failures: list[str] = []
+    if not chunks:
+        failures.append("no chunks in generation")
+    chunk_ids: list[str] = []
+    covered_paths = {record.relative_path for record in coverage}
+    for chunk in chunks:
+        chunk_ids.append(chunk.chunk_id)
+        if chunk.index_generation != generation:
+            failures.append(f"chunk {chunk.chunk_id}: generation mismatch")
+        if chunk.source_commit not in expected_commits:
+            failures.append(f"chunk {chunk.chunk_id}: commit {chunk.source_commit!r} not pinned")
+        if chunk.file_path not in covered_paths:
+            failures.append(f"chunk {chunk.chunk_id}: file_path {chunk.file_path!r} missing from coverage")
+    if len(set(chunk_ids)) != len(chunk_ids):
+        failures.append("duplicate chunk ids")
+    if qdrant_point_count is not None and qdrant_point_count != len(chunks):
+        failures.append(f"qdrant point count {qdrant_point_count} != chunks {len(chunks)}")
+    if not bm25_ready:
+        failures.append("bm25 not ready")
+    if not sparse_configured:
+        failures.append("sparse vectors not configured")
+    return failures
