@@ -8,12 +8,14 @@ import pathlib
 import sys
 import urllib.error
 import urllib.request
+from typing import cast
 
 from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import DocumentChunk
+from data_engineering_copilot.domain.protocols import EmbedderProtocol
 from data_engineering_copilot.evaluation.langfuse_metrics import query_aliases
 from data_engineering_copilot.infrastructure.token_budget import TokenEncoder
 from data_engineering_copilot.profiler import cli as profiler_cli
@@ -250,7 +252,6 @@ def ingest_claude_docs(site: str = "all", max_docs: int | None = None) -> None:
     """
     import asyncio
 
-    from data_engineering_copilot.domain.protocols import EmbedderProtocol
     from data_engineering_copilot.factory import (
         _build_provider_health_registry,
         _build_provider_rate_limiters,
@@ -814,6 +815,30 @@ def _spark_pydocs_python() -> pathlib.Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _build_fallback_embedder() -> EmbedderProtocol:
+    """Build the unified embedding fallback chain (NVIDIA -> OpenRouter, ...).
+
+    Routes a 429/network failure on one provider over to the next instead of
+    aborting the whole build. Used by both ``spark_build`` and ``gen_build``.
+    """
+    from data_engineering_copilot.factory import (
+        _build_provider_health_registry,
+        _build_provider_rate_limiters,
+        build_embedding_fallback_chain,
+    )
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+
+    provider_rate_limiters = _build_provider_rate_limiters(settings)
+    health_registry = _build_provider_health_registry(settings)
+    embedding_chain = build_embedding_fallback_chain(
+        purpose="global",
+        app_settings=settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
+    return FallbackEmbedder(embedding_chain)
+
+
 def spark_build(generation: str | None = None) -> int:
     """Build a Spark generation collection without activating it."""
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
@@ -857,26 +882,7 @@ def spark_build(generation: str | None = None) -> int:
     )
     chunker = SparkChunker(header_chunker=header_chunker)
 
-    # Use the unified embedding fallback chain (e.g. NVIDIA -> OpenRouter per
-    # EMBEDDING_FALLBACK_ORDER) so a 429/network failure on one provider fails
-    # over to the next instead of aborting the whole build.
-    from data_engineering_copilot.domain.protocols import EmbedderProtocol
-    from data_engineering_copilot.factory import (
-        _build_provider_health_registry,
-        _build_provider_rate_limiters,
-        build_embedding_fallback_chain,
-    )
-    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
-
-    provider_rate_limiters = _build_provider_rate_limiters(settings)
-    health_registry = _build_provider_health_registry(settings)
-    embedding_chain = build_embedding_fallback_chain(
-        purpose="global",
-        app_settings=settings,
-        provider_rate_limiters=provider_rate_limiters,
-        health_registry=health_registry,
-    )
-    embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+    embedder = _build_fallback_embedder()
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
 
     builder = SparkIndexBuilder(
@@ -1164,6 +1170,278 @@ def spark_rollback(generation: str) -> int:
     _write_active_state(previous)
     print(f"✅ Rolled back to generation {previous['generation']}")
     return 0
+
+
+# ------------------------------------------------------------------
+# Pinned generation (gen-*) pipeline
+# ------------------------------------------------------------------
+
+
+def _load_pinned_sources_or_exit() -> tuple:
+    from data_engineering_copilot.config.settings import load_pinned_sources
+
+    try:
+        return load_pinned_sources(settings.pinned_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid pinned sources config: {exc}")
+        raise SystemExit(2) from exc
+
+
+def gen_config_check() -> int:
+    """Validate the pinned sources configuration without network access."""
+    from data_engineering_copilot.config.settings import load_pinned_sources
+
+    try:
+        sources = load_pinned_sources(settings.pinned_sources_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ Invalid pinned sources config: {exc}")
+        return 1
+    print(f"Pinned sources: {len(sources)}")
+    for source in sources:
+        print(f"  {source.slug} ({source.type}): name={source.name} version={source.version}")
+        if source.type == "github":
+            print(f"    repository: {source.repository}")
+            print(f"    commit:     {source.commit}")
+            for stream in source.streams:
+                print(
+                    f"    - {stream.name}: doc_type={stream.doc_type} "
+                    f"language={stream.language} chunking={stream.chunking}"
+                )
+        else:
+            print(f"    index_url:  {source.index_url}")
+            print(f"    url_prefix: {source.url_prefix}")
+            print(f"    doc_type:   {source.doc_type}")
+    print("✅ Pinned sources config valid")
+    return 0
+
+
+def _default_generation() -> str:
+    """Derive the combined pinned generation ID from config + embedder."""
+    import hashlib
+    from dataclasses import asdict
+
+    sources = _load_pinned_sources_or_exit()
+    embedding = _resolve_spark_embedding_name()
+    identity = json.dumps(
+        {"embedding": embedding, "sources": [asdict(source) for source in sources]},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return f"pinned-{digest}"
+
+
+def _resolve_pinned_sources() -> list[dict[str, object]]:
+    """Materialize every pinned source and return per-source manifest dicts."""
+    from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
+    from data_engineering_copilot.services.url_index_resolver import UrlIndexResolver
+
+    results: list[dict[str, object]] = []
+    for config in _load_pinned_sources_or_exit():
+        if config.type == "github":
+            manifest = SparkSourceResolver(config, settings.pinned_cache_dir).resolve()
+            results.append(
+                {
+                    "slug": config.slug,
+                    "type": config.type,
+                    "name": config.name,
+                    "commit": config.commit,
+                    "files": [
+                        {
+                            "stream": record.stream,
+                            "relative_path": record.relative_path,
+                            "doc_type": record.doc_type,
+                            "language": record.language,
+                            "source_url": record.source_url,
+                        }
+                        for record in manifest.files
+                    ],
+                }
+            )
+        else:
+            manifest = asyncio.run(UrlIndexResolver(config, settings.pinned_cache_dir).resolve())
+            results.append(
+                {
+                    "slug": config.slug,
+                    "type": config.type,
+                    "name": config.name,
+                    "commit": "",
+                    "files": [
+                        {"relative_path": entry.relative_path, "title": entry.title, "url": entry.url}
+                        for entry in manifest.entries
+                    ],
+                }
+            )
+    return results
+
+
+def gen_manifest(generation: str | None = None) -> int:
+    """Materialize all pinned sources and write per-source + combined manifests."""
+    gen = generation or _default_generation()
+    artifact_root = settings.pinned_corpus_dir / gen
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    try:
+        results = _resolve_pinned_sources()
+    except RuntimeError as exc:
+        print(f"❌ Failed to materialize pinned sources: {exc}")
+        return 5
+    combined_files: list[dict[str, str]] = []
+    total = 0
+    for result in results:
+        slug = str(result["slug"])
+        files = cast(list[dict[str, str]], result["files"])
+        (artifact_root / f"manifest-{slug}.json").write_text(json.dumps(result, indent=2))
+        combined_files.extend({"relative_path": entry["relative_path"]} for entry in files)
+        total += len(files)
+        print(f"  {slug}: {len(files)} files")
+    (artifact_root / "manifest.json").write_text(json.dumps({"files": combined_files}, indent=2))
+    print(f"✅ Pinned manifest written: {artifact_root}")
+    print(f"  Total files: {total}")
+    return 0
+
+
+def gen_build(generation: str | None = None) -> int:
+    """Build a combined pinned generation collection without activating it."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.services.github_source_preparer import GithubSourcePreparer
+    from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+    from data_engineering_copilot.services.pinned_index_builder import PinnedIndexBuilder
+    from data_engineering_copilot.services.url_index_preparer import UrlIndexPreparer
+
+    gen = generation or _default_generation()
+    collection = _spark_generation_collection(gen)
+    artifact_root = settings.pinned_corpus_dir / gen
+    artifact_root.mkdir(parents=True, exist_ok=True)
+
+    store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=collection,
+        hybrid_search=settings.hybrid_search_enabled,
+        hybrid_rrf_k=settings.hybrid_rrf_k,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
+    embedder = _build_fallback_embedder()
+    header_chunker = HeaderAwareChunker(
+        chunk_size_words=settings.chunk_size_words,
+        overlap_words=settings.chunk_overlap_words,
+    )
+
+    packages = []
+    for config in _load_pinned_sources_or_exit():
+        if config.type == "github":
+            package = asyncio.run(
+                GithubSourcePreparer(config, settings.pinned_cache_dir, gen, header_chunker=header_chunker).prepare()
+            )
+        else:
+            package = asyncio.run(UrlIndexPreparer(config, settings.pinned_cache_dir, gen).prepare())
+        packages.append(package)
+        print(f"  {config.slug}: {len(package.chunks)} chunks, {len(package.coverage)} files")
+
+    builder = PinnedIndexBuilder(store, embedder, gen, output_dir=artifact_root)
+    try:
+        report = asyncio.run(builder.build(packages))
+    except Exception as exc:
+        print(f"❌ Pinned build failed: {exc}")
+        return 5
+    print(f"✅ Pinned build complete: generation={report.generation}")
+    print(f"  Chunks: {report.chunk_count}  Files: {report.source_file_count}")
+    print(f"  BM25 vocab: {report.bm25_vocabulary_size}  Validation: {report.validation_passed}")
+    print(f"  Collection: {report.qdrant_collection} (not activated)")
+    return 0
+
+
+def gen_validate(generation: str) -> int:
+    """Validate a built pinned generation collection without mutation."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.services.pinned_index_builder import validate_pinned_generation_artifacts
+
+    if not generation or not re_fullmatch_identifier(generation):
+        print("❌ Invalid generation identifier")
+        return 2
+
+    collection = _spark_generation_collection(generation)
+    artifact_root = settings.pinned_corpus_dir / generation
+
+    chunks, coverage, _native_paths, _rendered_paths = _load_generation_artifacts(generation, artifact_root)
+    if chunks is None:
+        return 3
+
+    store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=collection,
+        hybrid_search=settings.hybrid_search_enabled,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
+
+    async def _validate_store() -> dict[str, object]:
+        await store.initialize()
+        report = await store.validate_index_generation(expected_points=len(chunks))
+        report["metadata_complete"] = await _collection_has_metadata(store)
+        report["payload_text_mismatches"] = await store.verify_payload_texts(
+            {chunk.chunk_id: chunk.text for chunk in chunks}
+        )
+        return report
+
+    try:
+        store_report = asyncio.run(_validate_store())
+    except Exception as exc:
+        print(f"❌ Pinned validation failed: {exc}")
+        return 5
+    if store_report.get("error"):
+        print(f"❌ Validation failed: {store_report['error']}")
+        return 3
+
+    expected_commits = {config.commit for config in _load_pinned_sources_or_exit() if config.type == "github"}
+    expected_commits.add("")
+    point_count_value = store_report.get("point_count")
+    failures = validate_pinned_generation_artifacts(
+        generation=generation,
+        expected_commits=expected_commits,
+        chunks=chunks,
+        coverage=coverage,
+        qdrant_point_count=int(point_count_value) if isinstance(point_count_value, int) else None,
+        bm25_ready=bool(store_report.get("bm25_ready")),
+        sparse_configured=bool(store_report.get("sparse_configured")),
+    )
+    if not store_report.get("metadata_complete", False):
+        failures.append("collection lacks doc_type metadata")
+    payload_mismatches = store_report.get("payload_text_mismatches", [])
+    if isinstance(payload_mismatches, list):
+        failures.extend(str(item) for item in payload_mismatches)
+
+    if failures:
+        print("❌ Generation validation failed:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 3
+
+    print(f"✅ Generation {generation} validated")
+    print(f"  Collection: {store_report.get('collection')}  Points: {store_report.get('point_count')}")
+    print(f"  Sparse: {store_report.get('sparse_configured')}  BM25 ready: {store_report.get('bm25_ready')}")
+    print(f"  Chunks (chunks.jsonl): {len(chunks)}  Coverage records: {len(coverage)}")
+
+    try:
+        settings.index_state_dir.mkdir(parents=True, exist_ok=True)
+        _validation_report_path(generation).write_text(
+            json.dumps({"generation": generation, "collection": collection, "passed": True})
+        )
+    except OSError as exc:
+        print(f"⚠️  Could not write validation report: {exc}")
+    return 0
+
+
+def gen_activate(generation: str) -> int:
+    """Activate a validated pinned generation by repointing the logical alias.
+
+    Shares the validation-report gate, alias change, and active-state write
+    with ``spark_activate``.
+    """
+    return spark_activate(generation)
+
+
+def gen_rollback(generation: str) -> int:
+    """Roll the logical alias back to a previously recorded generation."""
+    return spark_rollback(generation)
 
 
 def _get_bm25_status() -> dict[str, object]:
@@ -2532,6 +2810,23 @@ def build_parser() -> argparse.ArgumentParser:
         "spark-config-check",
         help="Validate the pinned Spark source configuration without network access.",
     )
+    subparsers.add_parser(
+        "gen-config-check",
+        help="Validate the pinned sources configuration without network access.",
+    )
+    gen_manifest_parser = subparsers.add_parser(
+        "gen-manifest",
+        help="Materialize all pinned sources and write per-source + combined manifests.",
+    )
+    gen_manifest_parser.add_argument("--generation", type=str, default=None, help="Generation identifier.")
+    gen_build_parser = subparsers.add_parser(
+        "gen-build",
+        help="Build a combined pinned generation collection without activating it.",
+    )
+    gen_build_parser.add_argument("--generation", type=str, default=None, help="Generation identifier.")
+    for _cmd in ("gen-validate", "gen-activate", "gen-rollback"):
+        _parser = subparsers.add_parser(_cmd, help=f"Manage pinned generation: {_cmd}.")
+        _parser.add_argument("--generation", type=str, required=True, help="Generation identifier.")
     spark_manifest_parser = subparsers.add_parser(
         "spark-manifest",
         help="Materialize the pinned Spark source and write a file manifest.",
@@ -2836,6 +3131,18 @@ def main() -> None:
             sys.exit(spark_activate(generation=args.generation))
         elif args.command == "spark-rollback":
             sys.exit(spark_rollback(generation=args.generation))
+        elif args.command == "gen-config-check":
+            sys.exit(gen_config_check())
+        elif args.command == "gen-manifest":
+            sys.exit(gen_manifest(generation=args.generation))
+        elif args.command == "gen-build":
+            sys.exit(gen_build(generation=args.generation))
+        elif args.command == "gen-validate":
+            sys.exit(gen_validate(generation=args.generation))
+        elif args.command == "gen-activate":
+            sys.exit(gen_activate(generation=args.generation))
+        elif args.command == "gen-rollback":
+            sys.exit(gen_rollback(generation=args.generation))
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")
