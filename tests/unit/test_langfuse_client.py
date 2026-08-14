@@ -1,3 +1,5 @@
+import pytest
+
 from data_engineering_copilot.observability import langfuse_client as langfuse_client_module
 
 
@@ -444,3 +446,135 @@ def test_get_langfuse_instance_sampling_gates_client(monkeypatch):
     compat = langfuse_client_module.get_langfuse_instance()
     assert compat is not None
     assert getattr(compat._client, "release", None) == "abc1234"
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload):
+        self.status = 200
+        self._payload = payload
+
+    def read(self):
+        return self._payload.encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _CountingUrlOpener:
+    def __init__(self, payload='{"data":[{"id":"pid123","name":"my-project"}]}'):
+        self.payload = payload
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return _FakeHttpResponse(self.payload)
+
+
+def _fake_langfuse_settings(**overrides):
+    from tests.conftest import make_settings
+
+    defaults = {
+        "langfuse_enabled": True,
+        "langfuse_public_key": "pk-lf-fake-public",
+        "langfuse_secret_key": "sk-lf-fake-secret",
+        "langfuse_host": "http://localhost:3000",
+    }
+    defaults.update(overrides)
+    return make_settings(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _clear_project_id_cache():
+    langfuse_client_module._PROJECT_ID_CACHE.clear()
+    yield
+    langfuse_client_module._PROJECT_ID_CACHE.clear()
+
+
+def test_browser_langfuse_base_maps_docker_hostname(monkeypatch):
+    monkeypatch.setattr(
+        langfuse_client_module, "settings", _fake_langfuse_settings(langfuse_host="http://langfuse:3000")
+    )
+
+    assert langfuse_client_module._browser_langfuse_base() == "http://localhost:3000"
+
+
+def test_browser_langfuse_base_keeps_localhost_host(monkeypatch):
+    monkeypatch.setattr(
+        langfuse_client_module,
+        "settings",
+        _fake_langfuse_settings(langfuse_host="http://localhost:3000/"),
+    )
+
+    assert langfuse_client_module._browser_langfuse_base() == "http://localhost:3000"
+
+
+def test_get_langfuse_project_id_parses_projects_response(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+    opener = _CountingUrlOpener()
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", opener)
+
+    assert langfuse_client_module.get_langfuse_project_id() == "pid123"
+    assert opener.calls == 1
+
+
+def test_get_langfuse_project_id_cached_across_calls(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+    opener = _CountingUrlOpener()
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", opener)
+
+    assert langfuse_client_module.get_langfuse_project_id() == "pid123"
+    assert langfuse_client_module.get_langfuse_project_id() == "pid123"
+    assert opener.calls == 1
+
+
+def test_get_langfuse_project_id_none_on_error(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+
+    def _raise(*args, **kwargs):
+        raise langfuse_client_module.urllib.error.URLError("boom")
+
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", _raise)
+
+    assert langfuse_client_module.get_langfuse_project_id() is None
+
+
+def test_get_langfuse_project_id_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings(langfuse_enabled=False))
+
+    def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("urlopen should not be called")
+
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", _should_not_be_called)
+
+    assert langfuse_client_module.get_langfuse_project_id() is None
+
+
+def test_build_trace_url_uses_v4_project_route(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", _CountingUrlOpener())
+
+    url = langfuse_client_module.build_trace_url("abc123")
+
+    assert url == "http://localhost:3000/project/pid123/traces/abc123"
+
+
+def test_build_trace_url_falls_back_to_legacy_route(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+
+    def _raise(*args, **kwargs):
+        raise langfuse_client_module.urllib.error.URLError("boom")
+
+    monkeypatch.setattr(langfuse_client_module.urllib.request, "urlopen", _raise)
+
+    url = langfuse_client_module.build_trace_url("abc123")
+
+    assert url == "http://localhost:3000/trace/abc123"
+
+
+def test_build_trace_url_empty_trace_id(monkeypatch):
+    monkeypatch.setattr(langfuse_client_module, "settings", _fake_langfuse_settings())
+
+    assert langfuse_client_module.build_trace_url("") == ""

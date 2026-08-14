@@ -436,6 +436,82 @@ def _check_langfuse_health(host: str, timeout: int = 5) -> bool:
         return False
 
 
+_PROJECT_ID_CACHE: dict[str, str] = {}
+
+
+def _browser_langfuse_base() -> str:
+    """Return the Langfuse base URL reachable from the user's browser.
+
+    The app may run inside Docker where ``settings.langfuse_host`` points at the
+    service name (``http://langfuse:3000``); the browser cannot resolve that, so
+    map the service name to localhost (kept as the host's published port).
+    """
+    return settings.langfuse_host.replace("langfuse:", "localhost:").rstrip("/")
+
+
+def get_langfuse_project_id() -> str | None:
+    """Resolve the Langfuse project id via ``GET /api/public/projects``.
+
+    Caches a successful lookup keyed by host + public key so the UI only pays
+    for one request. Returns ``None`` (and does not cache) when Langfuse is
+    disabled, no keys are configured, or the lookup fails so a later render can
+    retry.
+    """
+    if not settings.langfuse_enabled:
+        return None
+    public_key = settings.langfuse_public_key.get_secret_value()
+    secret_key = settings.langfuse_secret_key.get_secret_value()
+    if not public_key or not secret_key:
+        return None
+
+    cache_key = f"{settings.langfuse_host}|{public_key}"
+    if cache_key in _PROJECT_ID_CACHE:
+        return _PROJECT_ID_CACHE[cache_key]
+
+    import base64
+
+    token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+    for host in _candidate_langfuse_hosts(settings.langfuse_host):
+        url = f"{host.rstrip('/')}/api/public/projects"
+        try:
+            req = urllib.request.Request(
+                url,
+                method="GET",
+                headers={"Authorization": f"Basic {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status != 200:
+                    logger.warning("Langfuse project lookup returned HTTP %d: %s", resp.status, url)
+                    continue
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("data") or []
+                project_id = items[0].get("id") if items else None
+                if project_id:
+                    _PROJECT_ID_CACHE[cache_key] = project_id
+                    return project_id
+        except urllib.error.URLError as exc:
+            logger.warning("Langfuse project lookup failed for %s: %s", url, exc)
+        except Exception as exc:
+            logger.warning("Langfuse project lookup failed for %s: %s", url, exc)
+    return None
+
+
+def build_trace_url(trace_id: str) -> str:
+    """Build a browser-reachable Langfuse v4 trace detail URL.
+
+    Langfuse v4 replaced the legacy ``/trace/{id}`` route with
+    ``/project/{projectId}/traces/{traceId}``, so the project id is resolved
+    from the public API. Falls back to the legacy route when the project id
+    cannot be resolved so a link is still shown.
+    """
+    if not trace_id:
+        return ""
+    project_id = get_langfuse_project_id()
+    if project_id:
+        return f"{_browser_langfuse_base()}/project/{project_id}/traces/{trace_id}"
+    return f"{_browser_langfuse_base()}/trace/{trace_id}"
+
+
 def get_langfuse_instance():
     """
     Create a Langfuse client using centralized settings.
