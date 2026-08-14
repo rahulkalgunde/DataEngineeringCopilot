@@ -259,11 +259,33 @@ class TestDiagramHtml:
         assert "dec-node--running" in html
         assert "dec-node--complete" in html
 
-    def test_edges_adjacent_to_running_node_flow(self):
-        states = reduce_query_node_states(["Generating answer"])
-        html = build_diagram_html(QUERY_NODES, LINEAR_EDGES, states, show_legend=False)
-        assert 'data-edge="3-4"' in html  # Rerank -> Generate
-        assert "dec-edge--flow" in html
+    def test_edges_flow_only_into_running_node(self):
+        """The flow animation must not start on an edge out of a running node:
+        dots only stream into the currently-active step, never toward an idle
+        successor (e.g. Rerank -> Generate must not flow while Rerank runs)."""
+        cases = {
+            "Rewrite": (["Rewriting query"], set(), {"0-1"}),
+            "Embed/Retrieve": (
+                ["Embedding query"],
+                {"0-1", "1-2"},
+                {"2-3"},
+            ),
+            "Rerank": (
+                ["Retrieving results", "Reranking results"],
+                {"2-3"},
+                {"3-4"},
+            ),
+            "Generate": (["Generating answer"], {"3-4"}, set()),
+        }
+        for stage, (events, flowing, not_flowing) in cases.items():
+            states = reduce_query_node_states(events)
+            html = build_diagram_html(QUERY_NODES, LINEAR_EDGES, states, show_legend=False)
+            for edge in flowing:
+                assert f'class="dec-edge dec-edge--flow" data-edge="{edge}"' in html, (
+                    f"edge {edge} should flow during {stage}"
+                )
+            for edge in not_flowing:
+                assert f'class="dec-edge" data-edge="{edge}"' in html, f"edge {edge} should be still during {stage}"
 
     def test_legend_omitted_when_disabled(self):
         html = build_diagram_html(QUERY_NODES, LINEAR_EDGES, reduce_query_node_states([]), show_legend=False)
