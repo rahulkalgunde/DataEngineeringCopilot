@@ -285,3 +285,99 @@ class TestAsyncRewrite:
 
         assert result.intent == "how_to"
         assert result.original_query == "How to configure Delta Lake with Spark"
+
+
+class TestDegenerateRewriteFilter:
+    def test_detects_placeholder_sql_template(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            is_degenerate_query,
+        )
+
+        assert is_degenerate_query("SELECT column_name FROM table_name WHERE column_name IS NOT NULL")
+        assert is_degenerate_query("* `SELECT * FROM table_name WHERE column_name IS NOT NULL`")
+
+    def test_detects_prompt_echo(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            is_degenerate_query,
+        )
+
+        assert is_degenerate_query("Here are two different search queries that would find the same information:")
+        assert is_degenerate_query("Original question: How does filter work?")
+        assert is_degenerate_query("Return ONLY the queries, one per line.")
+
+    def test_detects_list_artifacts(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            is_degenerate_query,
+        )
+
+        assert is_degenerate_query('1. `from kafka.connect("kafka://localhost:9092")`')
+        assert is_degenerate_query("- How does filter work on an array column?")
+
+    def test_accepts_normal_rewrites(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            is_degenerate_query,
+        )
+
+        assert not is_degenerate_query("How does pyspark.sql.functions.filter work on an array column?")
+        assert not is_degenerate_query("calculate 7-day rolling sum of amount for each customer grouped by customer_id")
+        assert not is_degenerate_query("code example for joins in Spark SQL")
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_falls_back_on_degenerate_llm_output(self):
+        class DegenerateLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "SELECT column_name FROM table_name WHERE column_name IS NOT NULL"
+
+        rw = QueryRewriter(llm_client=DegenerateLLM(), enabled=True, hyde_enabled=True)
+
+        result = await rw.async_rewrite("How to access nested struct fields and handle nulls?")
+
+        assert result.original_query == "How to access nested struct fields and handle nulls?"
+        assert result.intent == "how_to"
+        assert all("column_name" not in step and "table_name" not in step for step in result.decomposed_steps)
+
+    @pytest.mark.asyncio
+    async def test_expand_queries_drops_degenerate_variations(self):
+        class MixedLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return (
+                    "How does filter handle null values in an array column?\n"
+                    "* `SELECT column_name FROM table_name`\n"
+                    "Here are two different search queries for the same question:"
+                )
+
+        rw = QueryRewriter(llm_client=MixedLLM(), enabled=True)
+
+        result = await rw.expand_queries("How does filter handle nulls?", max_variations=5)
+
+        assert result == ["How does filter handle nulls?", "How does filter handle null values in an array column?"]
+
+    @pytest.mark.asyncio
+    async def test_expand_queries_falls_back_when_all_degenerate(self):
+        class AllDegenerateLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "Original question: How does filter work?"
+
+        rw = QueryRewriter(llm_client=AllDegenerateLLM(), enabled=True)
+
+        result = await rw.expand_queries("How does filter work?", max_variations=5)
+
+        assert result == ["How does filter work?"]
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_hyde_drops_degenerate_text(self):
+        class HydeDegenerateLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls += 1
+                if self.calls == 1:
+                    return "spark sql module structured data"
+                return "Original question: What is Spark SQL?"
+
+        rw = QueryRewriter(llm_client=HydeDegenerateLLM(), enabled=True, hyde_enabled=True)
+
+        result = await rw.async_rewrite("What is Spark SQL?")
+
+        assert result.hyde_query == ""
