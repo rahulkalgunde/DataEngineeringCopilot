@@ -96,6 +96,7 @@ SEED_PROMPTS: dict[str, str] = {
             "5. Use precise technical terminology from the context.",
             "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
             "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
+            "8. Out-of-Scope Topics: Answer ONLY from the provided context. If the context does not cover the question's topic — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the provided documentation does not cover.",
             "",
             "## OUTPUT FORMAT",
             "{{output_format}}",

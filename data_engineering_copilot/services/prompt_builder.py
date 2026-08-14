@@ -35,7 +35,8 @@ _DOCUMENTATION_INSTRUCTIONS = (
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing."
+    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
+    "7. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover."
 )
 
 # Safety net: allow code blocks in documentation answers when query contains code keywords
@@ -46,7 +47,8 @@ _DOCUMENTATION_INSTRUCTIONS_WITH_CODE = (
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
     "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
-    "7. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block."
+    "7. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
+    "8. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block."
 )
 
 # Code-intent output format — allows fenced code blocks in the answer
@@ -89,6 +91,7 @@ _RAG_PROMPT_TEMPLATE = "\n".join(
         "5. Use precise technical terminology from the context.",
         "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
         "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
+        "8. Out-of-Scope Topics: Answer ONLY from the provided context. If the context does not cover the question's topic — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the provided documentation does not cover.",
         "",
         "## OUTPUT FORMAT",
         "{output_format}",
