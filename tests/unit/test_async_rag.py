@@ -1585,3 +1585,105 @@ class TestEmptyAnswerGuardrail:
         result = await service.answer("what is spark")
 
         assert "Plain fallback answer" in result.text
+
+
+class TestScopeGate:
+    """Topic-scope gate: refuses answers when the retrieved context does not
+    cover the question's topic; preserves answers when covered."""
+
+    @pytest.fixture
+    def config(self):
+        return RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.3,
+            reranker_enabled=True,
+            reranker_top_k=3,
+            max_context_chars=4000,
+        )
+
+    @pytest.fixture
+    def mock_embedder(self):
+        m = MagicMock()
+        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        return m
+
+    @pytest.fixture
+    def mock_vector_store(self):
+        m = MagicMock()
+        chunk = MagicMock()
+        chunk.chunk.chunk_id = "test-chunk"
+        chunk.chunk.source_name = "test"
+        chunk.chunk.title = "Test"
+        chunk.chunk.url = "http://test.com"
+        chunk.chunk.text = "test content"
+        chunk.chunk.word_count = 2
+        chunk.confidence = 0.9
+        chunk.distance = 0.1
+        m.query = AsyncMock(return_value=[chunk])
+        return m
+
+    def _make_service(self, scope_verifier, config, mock_embedder, mock_vector_store, mock_llm=None):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        return AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm or MagicMock(generate=AsyncMock(return_value="Spark SQL is a module.")),
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            scope_verifier=scope_verifier,
+        )
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_topic_not_covered(self, mock_embedder, mock_vector_store, config):
+        from data_engineering_copilot.services.async_rag import _SCOPE_REFUSAL_TEXT
+        from data_engineering_copilot.services.scope_verifier import ScopeVerifier
+
+        class _Verifier:
+            async def verify(self, question, context):
+                assert "spark" in question
+                assert "test content" in context
+                return False
+
+        service = self._make_service(cast("ScopeVerifier", _Verifier()), config, mock_embedder, mock_vector_store)
+        result = await service.answer("how does spark window functions work")
+        assert result.text == _SCOPE_REFUSAL_TEXT
+        assert "INSUFFICIENT_CONTEXT" in result.text
+        assert "cannot answer" in result.text
+        assert "Missing information:" in result.text
+
+    @pytest.mark.asyncio
+    async def test_preserves_answer_when_topic_covered(self, mock_embedder, mock_vector_store, config):
+        from data_engineering_copilot.services.scope_verifier import ScopeVerifier
+
+        class _Verifier:
+            async def verify(self, question, context):
+                return True
+
+        mock_llm = MagicMock(generate=AsyncMock(return_value="Spark SQL is a module."))
+        service = self._make_service(
+            cast("ScopeVerifier", _Verifier()), config, mock_embedder, mock_vector_store, mock_llm
+        )
+        result = await service.answer("what is spark sql")
+        assert "Spark SQL is a module." in result.text
+        assert "INSUFFICIENT_CONTEXT" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_no_verifier_leaves_answer_untouched(self, mock_embedder, mock_vector_store, config):
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_llm = MagicMock(generate=AsyncMock(return_value="Spark SQL is a module."))
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+        )
+        result = await service.answer("what is spark sql")
+        assert "Spark SQL is a module." in result.text
+        assert "INSUFFICIENT_CONTEXT" not in result.text

@@ -1104,6 +1104,7 @@ def build_rag_service(
     from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
     from data_engineering_copilot.services.query_rewriting import QueryRewriter
     from data_engineering_copilot.services.reranker import CrossEncoderReranker
+    from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 
     logger.info(
         "building_async_rag_service",
@@ -1239,6 +1240,13 @@ def build_rag_service(
         enabled=app_settings.groundedness_enabled,
         groundedness_threshold=app_settings.groundedness_threshold,
     )
+    # Topic-scope gate rides the strong answer-purpose chain (not the cheap
+    # budget chain): the gate is a nuanced topical judgment and needs the most
+    # capable available model, not a cost-optimized verifier.
+    scope_verifier = ScopeVerifier(
+        llm_client=answer_client or llm_client,
+        enabled=app_settings.scope_check_enabled,
+    )
     context_compressor = ContextCompressor(
         enabled=app_settings.context_compression_enabled,
         max_chunks=app_settings.retrieval_top_k,
@@ -1279,6 +1287,7 @@ def build_rag_service(
         ),
         query_rewriter=query_rewriter,
         groundedness_verifier=groundedness,
+        scope_verifier=scope_verifier,
         context_compressor=context_compressor,
         token_tracker=token_tracker,
         retrieval_tracker=retrieval_tracker,
