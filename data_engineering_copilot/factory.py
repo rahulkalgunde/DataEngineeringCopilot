@@ -7,7 +7,7 @@ import redis.exceptions
 import structlog
 
 from data_engineering_copilot.config.settings import AppSettings, settings
-from data_engineering_copilot.domain.models import RagConfig
+from data_engineering_copilot.domain.models import RagConfig, RerankRequest, RerankResult
 
 if TYPE_CHECKING:
     from data_engineering_copilot.services.pipeline_lab import PipelineLab
@@ -94,6 +94,8 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
     for p in app_settings.embedding_fallback_order:
         providers.add(p.lower())
     for p in app_settings.llm_fallback_order:
+        providers.add(p.lower())
+    for p in app_settings.rerank_fallback_order:
         providers.add(p.lower())
 
     rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
@@ -734,6 +736,182 @@ def build_embedding_fallback_chain(
     return chain
 
 
+def _categorize_rerank_error(exc: Exception, provider: str, model: str):
+    """Categorize rerank provider errors for the unified fallback chain."""
+    import httpx
+
+    from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+
+    def _status_category(status: int) -> ProviderErrorCategory:
+        if status == 429:
+            return ProviderErrorCategory.RATE_LIMITED
+        if status in (401, 403):
+            return ProviderErrorCategory.AUTHENTICATION_ERROR
+        if status in (400, 422):
+            return ProviderErrorCategory.INVALID_REQUEST
+        if status >= 500:
+            return ProviderErrorCategory.TEMPORARY_UNAVAILABLE
+        return ProviderErrorCategory.PERMANENT_ERROR
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
+        return ProviderError(
+            _status_category(status),
+            provider,
+            model,
+            retry_after=retry_after if status == 429 else None,
+            original=exc,
+        )
+
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+
+    lower_msg = str(exc).lower()
+    if "rate limit" in lower_msg or "429" in lower_msg or "too many requests" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
+    if "quota" in lower_msg or "exceeded" in lower_msg:
+        return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
+    if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
+        return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
+    if "timed out" in lower_msg or "timeout" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+    if "could not reach" in lower_msg or "connection" in lower_msg:
+        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
+
+    return ProviderError(ProviderErrorCategory.PERMANENT_ERROR, provider, model, original=exc)
+
+
+def _build_rerank_chain_config(
+    app_settings: AppSettings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None,
+    health_registry: ProviderHealthRegistry,
+    local_reranker=None,
+) -> FallbackChainConfig:
+    """Build ``FallbackChainConfig`` for cloud rerank providers.
+
+    Cloud providers come from ``rerank_fallback_order`` (providers without an
+    API key are skipped). The local ``CrossEncoderReranker`` is attached as the
+    ``degraded_fallback`` — the last resort tried only after every cloud
+    provider is skipped or fails.
+    """
+    from data_engineering_copilot.infrastructure.provider_fallback import ProviderConfig
+    from data_engineering_copilot.infrastructure.rerank_clients import (
+        HuggingFaceRerankClient,
+        LocalRerankerClient,
+        NvidiaRerankClient,
+        OpenRouterRerankClient,
+    )
+
+    limiters = provider_rate_limiters or {}
+    timeout = app_settings.rerank_cloud_timeout_seconds
+
+    providers_config: list[ProviderConfig] = []
+    for provider_name in app_settings.rerank_fallback_order:
+        provider_name = provider_name.lower()
+        try:
+            client = None
+            if provider_name == "openrouter":
+                api_key = app_settings.openrouter_api_key.get_secret_value()
+                if api_key:
+                    client = OpenRouterRerankClient(
+                        api_key=api_key,
+                        model_name=app_settings.openrouter_rerank_model,
+                        base_url=app_settings.openrouter_rerank_url,
+                        timeout_seconds=timeout,
+                        rate_limiter=limiters.get("openrouter"),
+                    )
+            elif provider_name == "nvidia":
+                api_key = app_settings.nvidia_api_key.get_secret_value()
+                if api_key:
+                    client = NvidiaRerankClient(
+                        api_key=api_key,
+                        model_name=app_settings.nvidia_rerank_model,
+                        base_url=app_settings.nvidia_rerank_url,
+                        timeout_seconds=timeout,
+                        rate_limiter=limiters.get("nvidia"),
+                    )
+            elif provider_name == "huggingface":
+                api_key = app_settings.huggingface_api_key.get_secret_value()
+                if api_key:
+                    client = HuggingFaceRerankClient(
+                        api_key=api_key,
+                        model_name=app_settings.huggingface_rerank_model,
+                        base_url=app_settings.huggingface_base_url,
+                        timeout_seconds=timeout,
+                        rate_limiter=limiters.get("huggingface"),
+                    )
+
+            if client is not None:
+                providers_config.append(
+                    ProviderConfig(
+                        name=provider_name,
+                        client=client,
+                        rate_limiter=limiters.get(provider_name),
+                    )
+                )
+                health_registry.register_provider(provider_name, [client.model])
+        except Exception as exc:
+            logger.warning(
+                "Skipping provider in rerank fallback chain",
+                provider=provider_name,
+                error=str(exc),
+            )
+
+    degraded = None
+    if local_reranker is not None:
+        local_client = LocalRerankerClient(local_reranker)
+        degraded = ProviderConfig(
+            name="local-crossencoder",
+            client=local_client,
+            rate_limiter=None,
+        )
+        health_registry.register_provider("local-crossencoder", [local_client.model])
+
+    return FallbackChainConfig(
+        providers=providers_config,
+        degraded_fallback=degraded,
+        max_degraded_consecutive_failures=3,
+        error_categorizer=_categorize_rerank_error,
+    )
+
+
+def build_rerank_fallback_chain(
+    app_settings: AppSettings = settings,
+    provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
+    health_registry: ProviderHealthRegistry | None = None,
+    local_reranker=None,
+) -> ProviderFallbackChain[RerankRequest, RerankResult] | None:
+    """Build the cloud rerank fallback chain.
+
+    Returns ``None`` when no cloud rerank provider has an API key configured
+    (the caller keeps local-only reranking). Cloud providers run in
+    ``rerank_fallback_order``; the local cross-encoder is the degraded
+    fallback.
+    """
+    health = health_registry or _build_provider_health_registry(app_settings)
+    limiters = provider_rate_limiters or _build_provider_rate_limiters(app_settings)
+
+    config = _build_rerank_chain_config(
+        app_settings=app_settings,
+        provider_rate_limiters=limiters,
+        health_registry=health,
+        local_reranker=local_reranker,
+    )
+
+    if not config.providers:
+        logger.info("rerank_fallback_chain_built", chain="local-only", degraded="local-crossencoder")
+        return None
+
+    chain = ProviderFallbackChain(config, health)
+    logger.info(
+        "rerank_fallback_chain_built",
+        chain=str([(p.name, p.client.model) for p in config.providers]),
+        degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
+    )
+    return chain
+
+
 def build_embedder(
     app_settings: AppSettings = settings,
     rate_limiter: SlidingWindowRateLimiter | None = None,
@@ -1220,7 +1398,19 @@ def build_rag_service(
     )
     reranker = None
     if app_settings.reranker_enabled:
-        reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+        from data_engineering_copilot.services.llm_reranker import LLMReranker
+
+        local_reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+        if app_settings.llm_rerank_enabled:
+            rerank_chain = build_rerank_fallback_chain(
+                app_settings=app_settings,
+                provider_rate_limiters=provider_rate_limiters,
+                health_registry=health_registry,
+                local_reranker=local_reranker,
+            )
+            reranker = LLMReranker(chain=rerank_chain, local=local_reranker)
+        else:
+            reranker = local_reranker
 
     telemetry = build_telemetry_tracer()
     if token_tracker is None:

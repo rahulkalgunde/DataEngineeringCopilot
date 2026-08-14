@@ -377,3 +377,85 @@ class TestBuildEmbedder:
         object.__setattr__(s, "nvidia_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
             build_embedder(s)
+
+
+class TestBuildRerankFallbackChain:
+    def test_no_cloud_keys_returns_none(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+
+        s = _make_settings(llm_rerank_enabled=True)
+        assert build_rerank_fallback_chain(s) is None
+
+    def test_openrouter_key_builds_chain(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+
+        s = _make_settings(
+            llm_rerank_enabled=True,
+            openrouter_api_key="sk-or-v1-test",
+        )
+        chain = build_rerank_fallback_chain(s)
+        assert isinstance(chain, ProviderFallbackChain)
+
+    def test_all_three_keys_builds_ordered_chain(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+
+        s = _make_settings(
+            llm_rerank_enabled=True,
+            openrouter_api_key="sk-or-v1-test",
+            nvidia_api_key="nvapi-test",
+            huggingface_api_key="hf-test",
+        )
+        chain = build_rerank_fallback_chain(s)
+        assert chain is not None
+        providers = [p.name for p in chain._config.providers]
+        assert providers == ["openrouter", "nvidia", "huggingface"]
+
+    def test_degraded_fallback_attached_when_local_reranker_provided(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+        from data_engineering_copilot.infrastructure.rerank_clients import LocalRerankerClient
+
+        class _StubReranker:
+            model_name = "stub-crossencoder"
+
+        s = _make_settings(
+            llm_rerank_enabled=True,
+            openrouter_api_key="sk-or-v1-test",
+        )
+        chain = build_rerank_fallback_chain(s, local_reranker=_StubReranker())
+        assert chain is not None
+        assert chain._config.degraded_fallback is not None
+        assert isinstance(chain._config.degraded_fallback.client, LocalRerankerClient)
+
+    def test_no_degraded_fallback_without_local_reranker(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+
+        s = _make_settings(
+            llm_rerank_enabled=True,
+            openrouter_api_key="sk-or-v1-test",
+        )
+        chain = build_rerank_fallback_chain(s)
+        assert chain is not None
+        assert chain._config.degraded_fallback is None
+
+    def test_rerank_fallback_order_skips_provider_without_key(self):
+        from data_engineering_copilot.factory import build_rerank_fallback_chain
+
+        s = _make_settings(
+            llm_rerank_enabled=True,
+            openrouter_api_key="sk-or-v1-test",
+            nvidia_api_key="",
+            huggingface_api_key="",
+        )
+        chain = build_rerank_fallback_chain(s)
+        assert chain is not None
+        providers = [p.name for p in chain._config.providers]
+        assert providers == ["openrouter"]
+
+    def test_settings_validation_rejects_unknown_rerank_provider(self):
+        from pydantic import ValidationError
+
+        s = _make_settings()
+        object.__setattr__(s, "rerank_fallback_order", ["bogus"])
+        with pytest.raises(ValidationError, match="unknown provider"):
+            s.validate_all()
