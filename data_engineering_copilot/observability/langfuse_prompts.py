@@ -148,6 +148,27 @@ SEED_PROMPTS: dict[str, str] = {
         "CONTEXT (excerpted from documentation):\n{{context}}\n\n"
         "JSON array:"
     ),
+    "scope-check": (
+        "You are a scope verifier for a documentation RAG system. Given a user question "
+        "and the retrieved documentation context, decide whether the context covers the "
+        "question's topic.\n"
+        "The context COVERS the topic when it contains material needed to answer the "
+        "question: prose, API reference entries, function signatures, docstrings, or "
+        "code samples for the feature being asked about.\n"
+        '- "covers": the context directly addresses the question\'s topic (the docs, '
+        "API, or code for the feature asked about is present).\n"
+        '- "partially": the context is related to the topic but only tangentially — it '
+        "touches the feature without directly documenting it. Treated as acceptable.\n"
+        '- "does_not_cover": the context has no material on the question\'s topic — it '
+        "documents a DIFFERENT product, technology, or feature, even if it mentions "
+        "some related terms.\n"
+        "Answer ONLY with a JSON object:\n"
+        '{"verdict": "covers" | "partially" | "does_not_cover", "reason": "..."}\n\n'
+        + SYSTEM_BLOCK_SEPARATOR
+        + "QUESTION:\n{{question}}\n\n"
+        "CONTEXT (excerpted from documentation):\n{{context}}\n\n"
+        "JSON:"
+    ),
     "chunk-enrichment-summary": (
         "You are a technical documentation indexer.\n"
         "Provide a direct 1-2 sentence overview (under {{max_summary_words}} words) "

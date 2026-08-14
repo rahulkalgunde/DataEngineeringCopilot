@@ -38,6 +38,7 @@ from data_engineering_copilot.services.input_guardrails import InputGuardrails
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
+from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
 # Offline fallback for the Langfuse-managed ``rag-json-retry-suffix`` prompt.
@@ -47,6 +48,18 @@ _JSON_RETRY_SUFFIX = (
 )
 
 register_fallback("rag-json-retry-suffix", _JSON_RETRY_SUFFIX)
+
+# Refusal text emitted by the topic-scope gate. Both the CLI and the Spark eval
+# detect INSUFFICIENT_CONTEXT via the "cannot answer" / "Missing information:"
+# / "INSUFFICIENT_CONTEXT" markers.
+_SCOPE_REFUSAL_TEXT = (
+    '{"status": "INSUFFICIENT_CONTEXT", "answer": "", "missing_info": "The retrieved '
+    'documentation does not cover the topic of the question."}\n\n'
+    "I cannot answer this question because the provided documentation does not cover "
+    "its topic.\n\n"
+    "Missing information: The retrieved documentation does not contain material on "
+    "the topic of the question, so I cannot answer it from the knowledge base."
+)
 
 # How long to wait for the cross-encoder model to load before degrading to
 # "no reranking". The model is cached locally after the first download, so
@@ -212,6 +225,7 @@ class AsyncRagService:
         cache: TwoTierCache | None = None,
         query_rewriter: QueryRewriter | None = None,
         groundedness_verifier: GroundednessVerifier | None = None,
+        scope_verifier: ScopeVerifier | None = None,
         context_compressor: ContextCompressor | None = None,
         token_tracker: TokenTracker | None = None,
         retrieval_tracker: RetrievalTracker | None = None,
@@ -232,6 +246,7 @@ class AsyncRagService:
         self.cache = cache
         self.query_rewriter = query_rewriter
         self.groundedness_verifier = groundedness_verifier
+        self.scope_verifier = scope_verifier
         self.context_compressor = context_compressor
         self.token_tracker = token_tracker
         self.retrieval_tracker = retrieval_tracker
@@ -1053,6 +1068,10 @@ class AsyncRagService:
                     )
                     groundedness_span.end()
 
+            # Phase 2C: Topic-scope gate (fail-open) — refuse the answer when the
+            # retrieved context does not cover the question's topic.
+            result = await self._apply_scope_gate(result, safe_question, context_str, trace)
+
             # Phase 2E: Langfuse scoring (confidence, groundedness, quality)
             if self.telemetry and trace:
                 try:
@@ -1409,6 +1428,11 @@ class AsyncRagService:
                 await self.telemetry.flush_async()
 
         # Done event with metadata
+        if self.scope_verifier is not None and full_text.strip():
+            scope_covered = await self.scope_verifier.verify(safe_question, context_str)
+            if not scope_covered:
+                logger.info("scope_gate_refused_stream topic_not_covered question=%r", safe_question[:80])
+                full_text = _SCOPE_REFUSAL_TEXT
         yield _sse({"type": "done", "text": full_text, "confidence": confidence})
 
     def _select_llm_client(self, intent: str) -> LLMClientProtocol:
@@ -1416,6 +1440,33 @@ class AsyncRagService:
         if self.code_llm_client and intent in CODE_INTENTS:
             return self.code_llm_client
         return self.llm_client
+
+    async def _apply_scope_gate(
+        self,
+        result: Answer,
+        question: str,
+        context: str,
+        trace: TelemetryTracerProtocol | None,
+    ) -> Answer:
+        """Topic-scope gate: refuse the answer when the retrieved context does
+        not cover the question's topic. Fail-open — errors never block.
+        """
+        if self.scope_verifier is None:
+            return result
+        scope_span = None
+        if trace:
+            scope_span = trace.start_observation(name="scope-verification", as_type="span")
+        scope_covered = await self.scope_verifier.verify(question, context)
+        if not scope_covered:
+            logger.info("scope_gate_refused topic_not_covered question=%r", question[:80])
+            result = replace(result, text=_SCOPE_REFUSAL_TEXT)
+        if scope_span:
+            scope_span.update(
+                input={"question": question, "context_chars": len(context)},
+                output={"covered": scope_covered},
+            )
+            scope_span.end()
+        return result
 
     async def _ensure_reranker_ready(self) -> bool:
         """Lazily load the cross-encoder model so reranking actually runs.

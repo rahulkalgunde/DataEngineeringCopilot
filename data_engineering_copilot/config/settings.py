@@ -652,14 +652,14 @@ class AppSettings(BaseSettings):
 
     # Groq settings (LLM only)
     groq_api_key: SecretStr = SecretStr("")
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "openai/gpt-oss-20b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_rpm_limit: int = 27
     groq_rpd_limit: int = 13000
 
     # Cerebras settings (LLM only)
     cerebras_api_key: SecretStr = SecretStr("")
-    cerebras_model: str = "gpt-oss-120b"
+    cerebras_model: str = "gemma-4-31b"
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
     cerebras_rpm_limit: int = 4
     cerebras_rpd_limit: int = 2200
@@ -872,6 +872,10 @@ class AppSettings(BaseSettings):
     # Query rewriting / grounding
     query_rewrite_enabled: bool = True
     groundedness_enabled: bool = True
+    # Post-answer topic-scope gate (fail-open): refuses answers when the retrieved
+    # context does not cover the question's topic, converting them to
+    # INSUFFICIENT_CONTEXT. Reuses the groundedness-purpose LLM client.
+    scope_check_enabled: bool = True
     intent_classification_llm_enabled: bool = False  # Enable LLM fallback for intent classification
     # Context management
     context_compression_enabled: bool = False
