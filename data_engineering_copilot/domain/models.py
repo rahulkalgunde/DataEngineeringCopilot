@@ -191,6 +191,32 @@ class EmbeddingRequest:
 
 
 @dataclass(frozen=True)
+class RerankRequest:
+    """A batch of documents to rerank against a query.
+
+    Provider-agnostic request passed through the fallback chain. Clients
+    translate to their native payload shapes (NVIDIA ``passages``, OpenRouter
+    ``documents``, HF text-classification inputs).
+    """
+
+    query: str
+    documents: list[str]
+    top_n: int = 10
+
+
+@dataclass(frozen=True)
+class RerankResult:
+    """Normalized rerank output: ``(index_into_documents, score)`` pairs.
+
+    Scores are normalized to ``[0, 1]`` so the rerank confidence gate
+    semantics hold across providers. ``index`` refers to the position in the
+    original ``RerankRequest.documents`` list (sorted descending by score).
+    """
+
+    rankings: tuple[tuple[int, float], ...] = ()
+
+
+@dataclass(frozen=True)
 class RagConfig:
     retrieval_top_k: int = 5
     confidence_threshold: float = 0.3

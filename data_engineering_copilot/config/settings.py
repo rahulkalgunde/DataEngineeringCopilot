@@ -816,6 +816,18 @@ class AppSettings(BaseSettings):
     # ran for a query, the quality gate compares against this value; without a
     # reranker it falls back to ``confidence_threshold``.
     reranker_confidence_threshold: float = 0.10
+    # LLM-based (cloud) reranking: when enabled, ``rerank_fallback_order`` is
+    # tried before the local cross-encoder (which stays the degraded last
+    # resort). All providers normalize scores to [0, 1] so the confidence gate
+    # above keeps the same meaning across providers.
+    llm_rerank_enabled: bool = True
+    rerank_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "huggingface"])
+    openrouter_rerank_model: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
+    openrouter_rerank_url: str = "https://openrouter.ai/api/v1/rerank"
+    nvidia_rerank_model: str = "nv-rerank-qa-mistral-4b:1"
+    nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
+    huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_cloud_timeout_seconds: int = 30
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 180
     ollama_connect_timeout_seconds: int = 5
@@ -1016,6 +1028,15 @@ class AppSettings(BaseSettings):
             errors.append(
                 f"reranker_confidence_threshold ({self.reranker_confidence_threshold}) must be within [0.0, 1.0]"
             )
+        _known_rerank_providers = {"openrouter", "nvidia", "huggingface", "local"}
+        unknown_rerank = [p for p in self.rerank_fallback_order if p.lower() not in _known_rerank_providers]
+        if unknown_rerank:
+            errors.append(
+                f"rerank_fallback_order contains unknown provider(s): {unknown_rerank}. "
+                f"Known providers: {sorted(_known_rerank_providers)}"
+            )
+        if self.rerank_cloud_timeout_seconds < 1:
+            errors.append(f"rerank_cloud_timeout_seconds ({self.rerank_cloud_timeout_seconds}) must be >= 1")
         if self.max_pages_per_source < 0:
             errors.append(f"max_pages_per_source ({self.max_pages_per_source}) must be >= 0")
         if self.max_pages_hard_cap < 1:

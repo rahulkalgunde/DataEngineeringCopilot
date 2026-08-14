@@ -141,11 +141,15 @@ class SlidingWindowRateLimiter:
     def parse_retry_after(response_headers: dict | None = None) -> float:
         """Extract the ``Retry-After`` value from response headers.
 
-        Defaults to 60s when the header is absent or not parseable.
+        Header keys are matched case-insensitively: ``httpx`` lowercases keys
+        when callers pass ``dict(response.headers)``. Defaults to 60s when the
+        header is absent or not parseable.
         """
         retry_after = 60
         if response_headers:
             raw = response_headers.get("Retry-After")
+            if raw is None:
+                raw = response_headers.get("retry-after")
             if raw is not None:
                 with contextlib.suppress(ValueError, TypeError):
                     retry_after = float(raw)

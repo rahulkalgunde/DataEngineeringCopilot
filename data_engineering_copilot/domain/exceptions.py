@@ -20,6 +20,10 @@ class EmbeddingError(CoreDomainException):
     """Raised when embedding generation fails."""
 
 
+class RerankError(CoreDomainException):
+    """Raised when provider reranking fails."""
+
+
 class VectorStoreError(CoreDomainException):
     """Raised when a vector store operation fails."""
 

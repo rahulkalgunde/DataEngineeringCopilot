@@ -127,27 +127,7 @@ class CrossEncoderReranker:
 
             # Score in batches to avoid memory spikes on large candidate sets.
             # Small batches also keep per-batch latency bounded on CPU-only hosts.
-            _BATCH_SIZE = 12
-            _TIMEOUT_SECONDS = 30
-            all_scores: list[float] = []
-            executor = self._executor
-            if executor is None:
-                executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
-                self._executor = executor
-            loop = asyncio.get_running_loop()
-            for i in range(0, len(pairs), _BATCH_SIZE):
-                batch = pairs[i : i + _BATCH_SIZE]
-                raw_scores = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        executor,
-                        lambda b=batch: self.model.predict(b),  # type: ignore[union-attr]
-                    ),
-                    timeout=_TIMEOUT_SECONDS,
-                )
-                all_scores.extend(float(s) for s in raw_scores)
-
-            # Normalize logits to [0, 1] via sigmoid
-            scores = [1.0 / (1.0 + math.exp(-s)) for s in all_scores]
+            scores = await self._predict_scores(pairs)
 
             # Sort chunks by normalized score (highest first)
             scored_chunks = list(zip(chunks, scores, strict=False))
@@ -181,6 +161,50 @@ class CrossEncoderReranker:
         except Exception as exc:
             logger.exception("Reranking failed; returning original chunks: %s", exc)
             return chunks[:top_k]
+
+    async def _predict_scores(self, pairs: list[list[str]]) -> list[float]:
+        """Score ``[[query, passage], ...]`` pairs in batches, sigmoid-normalized.
+
+        Runs the CPU-bound model in the dedicated thread pool. Callers must
+        ensure ``self.model`` is loaded first.
+        """
+        _BATCH_SIZE = 12
+        _TIMEOUT_SECONDS = 30
+        all_scores: list[float] = []
+        executor = self._executor
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
+            self._executor = executor
+        loop = asyncio.get_running_loop()
+        for i in range(0, len(pairs), _BATCH_SIZE):
+            batch = pairs[i : i + _BATCH_SIZE]
+            raw_scores = await asyncio.wait_for(
+                loop.run_in_executor(
+                    executor,
+                    lambda b=batch: self.model.predict(b),  # type: ignore[union-attr]
+                ),
+                timeout=_TIMEOUT_SECONDS,
+            )
+            all_scores.extend(float(s) for s in raw_scores)
+        # Normalize logits to [0, 1] via sigmoid
+        return [1.0 / (1.0 + math.exp(-s)) for s in all_scores]
+
+    async def score_documents(self, query: str, documents: list[str]) -> list[float]:
+        """Score raw ``(query, document)`` pairs, returning sigmoid-normalized scores.
+
+        Lightweight document-level scoring used by the local provider client in
+        the LLM rerank fallback chain (mirrors the chunk-level ``rerank`` path).
+        """
+        if not documents:
+            return []
+        if not self.model:
+            logger.info("Reranker model not loaded; attempting synchronous init")
+            await asyncio.to_thread(self._init_sync)
+        if not self.model:
+            logger.warning("Reranker model not available; returning zero scores")
+            return [0.0] * len(documents)
+        pairs = [[query, text] for text in documents]
+        return await self._predict_scores(pairs)
 
     def _init_sync(self) -> None:
         """Fallback synchronous model init for CLI/test contexts."""
