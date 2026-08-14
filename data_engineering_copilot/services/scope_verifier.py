@@ -37,7 +37,7 @@ _SCOPE_PROMPT = (
     "documents a DIFFERENT product, technology, or feature, even if it mentions "
     "some related terms.\n"
     "Answer ONLY with a JSON object:\n"
-    '{"verdict": "covers" | "partially" | "does_not_cover", "reason": "..."}\n\n'
+    '{{"verdict": "covers" | "partially" | "does_not_cover", "reason": "..."}}\n\n'
     + SYSTEM_BLOCK_SEPARATOR
     + "QUESTION:\n{question}\n\n"
     "CONTEXT (excerpted from documentation):\n{context}\n\n"
