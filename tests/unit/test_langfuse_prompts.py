@@ -39,6 +39,7 @@ from data_engineering_copilot.services.query_rewriting import (
     QueryRewriter,
 )
 from data_engineering_copilot.services.rag_evaluation import _FAITHFULNESS_PROMPT, FaithfulnessEvaluator
+from data_engineering_copilot.services.scope_verifier import _SCOPE_PROMPT
 from tests.doubles.llm import StubLLM
 
 # nosec: B402 — importing service modules is required to trigger register_fallback.
@@ -57,6 +58,7 @@ _ALL_PROMPTS = {
     "judge-faithfulness",
     "judge-relevance",
     "judge-out-of-scope",
+    "scope-check",
     "rag-json-retry-suffix",
 }
 
@@ -78,6 +80,7 @@ _COMPILE_CASES = {
     "judge-faithfulness": {"output": "the answer", "context": "the context"},
     "judge-relevance": {"input": "the question", "output": "the answer"},
     "judge-out-of-scope": {"input": "the question", "output": "the answer"},
+    "scope-check": {"question": "What is X?", "context": "Some docs."},
     "rag-json-retry-suffix": {},
 }
 
@@ -115,6 +118,7 @@ _FALLBACK_TEMPLATES = {
         "Answer:\n{output}\n\n"
         'Reply with ONLY a JSON object: {{"out_of_scope": <true|false>, "reason": "<brief>"}}'
     ),
+    "scope-check": _SCOPE_PROMPT,
     "rag-json-retry-suffix": _JSON_RETRY_SUFFIX,
 }
 

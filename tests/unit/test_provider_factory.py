@@ -269,7 +269,7 @@ class TestBuildFallbackChain:
             purpose_model="",
         )
         assert client is not None
-        assert client.model == "llama-3.1-8b-instant"
+        assert client.model == "openai/gpt-oss-20b"
 
     def test_empty_purpose_provider_uses_fallback_order(self):
         from data_engineering_copilot.factory import build_llm_fallback_chain
