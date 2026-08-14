@@ -62,7 +62,7 @@ def _diagram_css() -> str:
 
 
 def _edge_names(edges: Sequence[tuple[str, str]], running: set[str]) -> list[bool]:
-    return [(a in running or b in running) for a, b in edges]
+    return [b in running for a, b in edges]
 
 
 def build_diagram_html(
@@ -74,8 +74,8 @@ def build_diagram_html(
 ) -> str:
     """Return a self-contained HTML/CSS pipeline diagram string.
 
-    Node state drives colors and the pulsing animation; edges adjacent to a
-    running node render flowing data packets. Works without JavaScript.
+    Node state drives colors and the pulsing animation; the edge flowing into a
+    running node renders flowing data packets. Works without JavaScript.
     """
     running = {node for node, state in states.items() if state is NodeState.RUNNING}
     flows = _edge_names(edges, running)
