@@ -55,6 +55,25 @@ _CODE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# --- Degenerate-rewrite detection ---------------------------------------------
+# LLM query rewrites occasionally echo prompt boilerplate or emit placeholder
+# SQL templates instead of a real search query. Such strings dominate the fused
+# retrieval pool with irrelevant chunks, so they are rejected and replaced by
+# the original question (general quality guard, not per-query tuning).
+_DEGENERATE_REWRITE_PATTERNS = (
+    # Placeholder SQL templates ("SELECT column_name FROM table_name ...")
+    re.compile(r"\b(column_name|table_name|placeholder)\b", re.IGNORECASE),
+    # Prompt-framing echo ("Here are two different search queries ...",
+    # "Original question:", "Rewritten query:", "Return ONLY the queries ...").
+    re.compile(
+        r"^\s*(here (are|is)|the (queries|search queries|variations) (are|is)|"
+        r"original question:|rewritten query:|return only|you are )",
+        re.IGNORECASE,
+    ),
+    # Numbered / bulleted list artifacts (the prompt forbids numbering).
+    re.compile(r"^\s*(?:[-*] |\d+[.)]\s+|`?\d+\.\s)", re.IGNORECASE),
+)
+
 _CLASSIFY_INTENT_PROMPT = (
     'Classify the user query into exactly one category: "code_example" or "factual".\n'
     '- Choose "code_example" if the user wants code snippets, programming examples, or scripts.\n'
@@ -115,6 +134,19 @@ _MODULE_TERMS: dict[str, tuple[str, ...]] = {
     "row_number": ("pyspark.sql.functions",),
     "col": ("pyspark.sql.functions",),
 }
+
+
+def is_degenerate_query(text: str) -> bool:
+    """Return True when an LLM-generated query is degenerate boilerplate.
+
+    Detects placeholder SQL templates (``column_name``/``table_name``),
+    prompt-framing echo, and numbered/bulleted list artifacts. Used to reject
+    low-quality LLM rewrites before they pollute the fused retrieval pool.
+    """
+    stripped = text.strip()
+    if len(stripped) < 4:
+        return True
+    return any(pattern.search(stripped) for pattern in _DEGENERATE_REWRITE_PATTERNS)
 
 
 def extract_retrieval_constraints(query: str) -> RetrievalFilters:
@@ -299,6 +331,10 @@ class QueryRewriter:
                 logger.warning("LLM rewrite returned empty result, falling back to rule-based")
                 return self.rewrite(query)
 
+            if is_degenerate_query(rewritten):
+                logger.warning("LLM rewrite produced degenerate query %r, falling back to rule-based", rewritten[:80])
+                return self.rewrite(query)
+
             intent = self.classify_intent(query)
             hyde = await self._generate_hyde_async(query) if self._hyde_enabled else ""
 
@@ -378,6 +414,7 @@ class QueryRewriter:
         try:
             result = await self._llm_client.generate(prompt)
             variations = [q.strip() for q in result.strip().split("\n") if q.strip()]
+            variations = [q for q in variations if not is_degenerate_query(q)]
             base = [query] + variations[:max_variations]
         except Exception as exc:
             logger.warning("Query expansion failed, using original: %s", exc)
@@ -436,7 +473,11 @@ class QueryRewriter:
         try:
             prompt = get_langfuse_prompt("query-hyde").compile(query=query)
             result = await self._llm_client.generate(prompt)
-            return str(result).strip() if result else ""
+            text = str(result).strip() if result else ""
+            if not text or is_degenerate_query(text):
+                logger.warning("HyDE produced degenerate text %r, dropping", text[:80])
+                return ""
+            return text
         except Exception as exc:
             logger.warning("HyDE generation failed: %s", exc)
             return ""
@@ -463,7 +504,11 @@ class QueryRewriter:
                 return ""
 
             result = asyncio.run(self._llm_client.generate(prompt))
-            return str(result).strip() if result else ""
+            text = str(result).strip() if result else ""
+            if not text or is_degenerate_query(text):
+                logger.warning("HyDE produced degenerate text %r, dropping", text[:80])
+                return ""
+            return text
         except Exception as exc:
             logger.warning("HyDE generation failed: %s", exc)
             return ""

@@ -227,13 +227,13 @@ def _spark_dataset_rows() -> list[dict]:
     return [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_spark_eval_dataset_every_row_is_spark_or_out_of_scope() -> None:
-    """Gate: every evaluation row is Spark-only or explicitly out of scope."""
+def test_spark_eval_dataset_every_row_is_corpus_or_out_of_scope() -> None:
+    """Gate: every evaluation row targets the pinned corpus or is out of scope."""
     rows = _spark_dataset_rows()
     assert rows, "dataset must not be empty"
     for row in rows:
         if row.get("out_of_scope"):
-            # Out-of-scope rows expect a refusal and carry no Spark evidence.
+            # Out-of-scope rows expect a refusal and carry no evidence.
             assert row["expected_urls"] == [], row["id"]
             assert row["expected_terms"], row["id"]
             continue
@@ -242,16 +242,29 @@ def test_spark_eval_dataset_every_row_is_spark_or_out_of_scope() -> None:
         assert row["expected_doc_types"], f"row {row['id']} must specify expected doc types"
         assert "forbidden_terms" in row, f"row {row['id']} must specify forbidden terms"
         for url in row["expected_urls"]:
-            assert "spark.apache.org" in url or "raw.githubusercontent.com/apache/spark/" in url, row["id"]
-            assert "airflow" not in url.lower(), row["id"]
+            assert any(
+                host in url
+                for host in (
+                    "spark.apache.org",
+                    "raw.githubusercontent.com/apache/spark/",
+                    "raw.githubusercontent.com/apache/airflow/",
+                    "raw.githubusercontent.com/delta-io/delta/",
+                    "platform.claude.com",
+                    "code.claude.com",
+                    "docs.databricks.com",
+                )
+            ), row["id"]
 
 
-def test_spark_eval_dataset_has_no_nonspark_rows() -> None:
-    """The original Airflow row must be gone; Airflow/Delta are out-of-scope only."""
+def test_spark_eval_dataset_covers_corpus_sources() -> None:
+    """Airflow, Delta, Claude, and Databricks rows are in-scope now that the
+    combined pinned generation legitimately answers those topics."""
     rows = _spark_dataset_rows()
-    for row in rows:
-        if "airflow" in (row["question"] or "").lower() or "delta" in (row["question"] or "").lower():
-            assert row.get("out_of_scope") is True, row["id"]
+    in_scope = [row for row in rows if not row.get("out_of_scope")]
+    topics = " ".join((row["question"] or "").lower() for row in in_scope)
+    assert "airflow" in topics, "Airflow rows missing"
+    assert "delta" in topics, "Delta rows missing"
+    assert "claude" in topics, "Claude rows missing"
 
 
 def test_spark_eval_dataset_covers_required_topics() -> None:
