@@ -22,6 +22,7 @@ from data_engineering_copilot.config.logging import setup_logging  # noqa: E402
 from data_engineering_copilot.config.settings import settings  # noqa: E402
 from data_engineering_copilot.domain.models import RawDocument  # noqa: E402
 from data_engineering_copilot.factory import build_pipeline_lab, build_rag_service  # noqa: E402
+from data_engineering_copilot.observability.langfuse_client import build_trace_url  # noqa: E402
 from data_engineering_copilot.services.metrics import MetricsCollector  # noqa: E402
 from data_engineering_copilot.ui.components.animations import (  # noqa: E402
     build_diagram_html,
@@ -1162,8 +1163,7 @@ def render_qa_tab() -> None:
                         st.caption(f"- {claim}")
 
                 if answer.trace_id:
-                    _langfuse_base = settings.langfuse_host.replace("langfuse:", "localhost:").rstrip("/")
-                    st.markdown(f"**Trace:** [`{answer.trace_id}`]({_langfuse_base}/trace/{answer.trace_id})")
+                    st.markdown(f"**Trace:** [`{answer.trace_id}`]({build_trace_url(answer.trace_id)})")
 
 
 def _lab_states(events: list[str]) -> dict[str, NodeState]:
