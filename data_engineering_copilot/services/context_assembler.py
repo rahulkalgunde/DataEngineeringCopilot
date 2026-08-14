@@ -2,16 +2,22 @@
 
 This module handles:
 1. Semantic deduplication of overlapping chunks
-2. Smart truncation respecting max_context_chars
+2. Source-coverage packing: budget-aware selection that guarantees at least one
+   chunk per distinct source URL before filling the remaining budget by rank,
+   capped at ``max_chunks_per_source`` chunks per URL (reference architecture:
+   cross-encoder rerank, then "at most N chunks per document", then select the
+   final evidence set)
 3. Source citations in context
-4. Optimal chunk ordering and composition
+4. Lost-in-the-middle mitigation applied only to the *selected* set
 
 Every indexed segment must already satisfy the per-segment item limit
 (6,000 characters by default, enforced at indexing time by the lossless
 token-budget splitter). Assembly therefore never skips a chunk *because* it is
 oversized: an oversized segment is an invariant violation. When the total
 context budget is exhausted, lower-ranked segments are dropped and recorded in
-provenance with reason ``dropped_due_total_context_budget``.
+provenance with reason ``dropped_due_total_context_budget``. Segments excluded
+because their source URL already contributed ``max_chunks_per_source`` chunks
+are recorded with reason ``dropped_due_per_source_cap``.
 """
 
 import logging
@@ -36,16 +42,25 @@ class ContextAssembler:
     segments to respect the total context budget.
     """
 
-    def __init__(self, max_context_chars: int, item_limit_chars: int = DEFAULT_ITEM_LIMIT_CHARS):
+    def __init__(
+        self,
+        max_context_chars: int,
+        item_limit_chars: int = DEFAULT_ITEM_LIMIT_CHARS,
+        max_chunks_per_source: int = 2,
+    ):
         """Initialize context assembler.
 
         Args:
             max_context_chars: Maximum characters allowed in final context
             item_limit_chars: Per-segment item limit. An indexed segment whose
                 text exceeds this limit raises ``ContextAssemblerError``.
+            max_chunks_per_source: Maximum number of chunks kept per distinct
+                source URL after the coverage guarantee. Reference architecture
+                recommends "at most N chunks per document" as a diversity cap.
         """
         self.max_context_chars = max_context_chars
         self.item_limit_chars = item_limit_chars
+        self.max_chunks_per_source = max_chunks_per_source
 
     def assemble(
         self,
@@ -53,21 +68,33 @@ class ContextAssembler:
         mitigate_lost_in_middle: bool = True,
         deduplicate: bool = True,
     ) -> tuple[str, list[str], list[dict[str, object]]]:
-        """Assemble context from chunks with deduplication and budget-aware drop.
+        """Assemble context with source-coverage packing and budget-aware drop.
+
+        Selection runs in rank order (chunks are assumed sorted by confidence):
+
+        1. Coverage pass — the first (highest-ranked) chunk of every distinct
+           source URL is guaranteed a slot, as long as the budget allows.
+        2. Depth pass — remaining chunks are added by rank, capped at
+           ``max_chunks_per_source`` chunks per URL, until the total budget is
+           exhausted.
+
+        The lost-in-the-middle mitigation is applied only to the *selected*
+        set, so budget drops always remove the lowest-ranked segments.
 
         Args:
             chunks: List of retrieved chunks, already sorted by confidence
-            mitigate_lost_in_middle: When True, reorders chunks so the most
-                relevant ones appear at the beginning AND end of the context,
-                reducing the "lost in the middle" effect.
+            mitigate_lost_in_middle: When True, reorders the selected chunks so
+                the most relevant ones appear at the beginning AND end of the
+                context, reducing the "lost in the middle" effect.
             deduplicate: When True, deduplicate chunks before assembly.
                 Set to False if upstream (ContextCompressor) already deduplicated.
 
         Returns:
             Tuple of ``(context_string, list_of_source_names, dropped_records)``
-            where ``dropped_records`` lists every segment excluded only because
-            the total context budget was exhausted, each with reason
-            ``dropped_due_total_context_budget`` and segment provenance (rank,
+            where ``dropped_records`` lists every segment excluded from the
+            final context, each with reason ``dropped_due_total_context_budget``
+            (budget exhausted) or ``dropped_due_per_source_cap`` (source URL
+            already at ``max_chunks_per_source``) and segment provenance (rank,
             chunk_id, url, segment_index, parent_content_hash).
 
         Raises:
@@ -80,103 +107,20 @@ class ContextAssembler:
         deduped = self._deduplicate_chunks(chunks) if deduplicate else chunks
         logger.info("Deduplication: %d chunks → %d chunks", len(chunks), len(deduped))
 
-        # Step 2: Lost-in-the-middle mitigation — reorder so top chunks
-        # appear at both ends of the context window.
-        if mitigate_lost_in_middle and len(deduped) > 3:
-            rearranged: list[RetrievedChunk] = []
-            left, right = 0, len(deduped) - 1
-            turn_left = True
-            while left <= right:
-                if left == right:
-                    rearranged.append(deduped[left])
-                    break
-                if turn_left:
-                    rearranged.append(deduped[left])
-                    left += 1
-                else:
-                    rearranged.append(deduped[right])
-                    right -= 1
-                turn_left = not turn_left
-            deduped = rearranged
+        # Step 1: Source-coverage budget selection in rank order.
+        selected, dropped_records = self._select_with_source_coverage(deduped)
 
-        # Step 3: Build context until the total budget is full. Every indexed
-        # segment must satisfy the item limit; oversized segments are an
-        # invariant violation. Segments that cannot fit the remaining budget
-        # are dropped and recorded with reason ``dropped_due_total_context_budget``.
+        # Step 2: Lost-in-the-middle mitigation on the selected set only.
+        if mitigate_lost_in_middle and len(selected) > 3:
+            selected = self._reorder_lost_in_middle(selected)
+
+        # Step 3: Build the final context strings with sequential ids.
         context_lines = []
         source_names = []
-        dropped_records: list[dict[str, object]] = []
-        current_length = 0
-
-        # Reserve one slot per available doc_type (guide/api_reference/code_example)
-        # so multi-doc-type queries retain coverage.
-        seen_doc_types: set[str] = set()
-        doc_type_reserved: set[str] = set()
-        for chunk in deduped:
-            dt = chunk.chunk.doc_type
-            if dt:
-                doc_type_reserved.add(dt)
-
-        for i, chunk in enumerate(deduped, start=1):
-            source = chunk.chunk.source_name
-            text = chunk.chunk.text
-            section_header = chunk.chunk.section_header
-
-            if len(text) > self.item_limit_chars:
-                raise ContextAssemblerError(
-                    f"Indexed segment {chunk.chunk.chunk_id!r} is {len(text)} chars, "
-                    f"exceeding the item limit of {self.item_limit_chars}; "
-                    "a valid generation must never produce over-limit segments"
-                )
-
-            section_suffix = f" [{section_header}]" if section_header else ""
-            formatted = (
-                f'<context_doc id="{i}" url="{chunk.chunk.url}">[{source}{section_suffix}]\n{text}\n</context_doc>'
-            )
-
-            new_length = current_length + len(formatted) + 2  # +2 for newlines
-
-            # Keep at least one segment per required doc_type when it can be
-            # accommodated by swapping out a larger included segment.
-            if new_length > self.max_context_chars and context_lines:
-                dt = chunk.chunk.doc_type
-                if (
-                    dt in doc_type_reserved
-                    and dt not in seen_doc_types
-                    and self._try_make_room(
-                        formatted,
-                        context_lines,
-                        source_names,
-                        len(deduped),
-                        current_length,
-                    )
-                ):
-                    current_length = sum(len(line) + 1 for line in context_lines)
-                    continue
-
-                # Budget exhausted: drop this lower-ranked segment and record it.
-                dropped_records.append(
-                    {
-                        "reason": "dropped_due_total_context_budget",
-                        "rank": i - 1,
-                        "chunk_id": chunk.chunk.chunk_id,
-                        "url": chunk.chunk.url,
-                        "segment_index": chunk.chunk.segment_index,
-                        "parent_content_hash": chunk.chunk.parent_content_hash,
-                    }
-                )
-                logger.info(
-                    "Context dropped segment %s (rank=%d): total context budget exhausted",
-                    chunk.chunk.chunk_id,
-                    i - 1,
-                )
-                continue
-
+        for i, chunk in enumerate(selected, start=1):
+            formatted = self._format_chunk(chunk, i)
             context_lines.append(formatted)
-            source_names.append(source)
-            if chunk.chunk.doc_type:
-                seen_doc_types.add(chunk.chunk.doc_type)
-            current_length = new_length
+            source_names.append(chunk.chunk.source_name)
 
         context = "\n".join(context_lines)
 
@@ -190,33 +134,114 @@ class ContextAssembler:
 
         return context, source_names, dropped_records
 
-    @staticmethod
-    def _try_make_room(
-        formatted: str,
-        context_lines: list[str],
-        source_names: list[str],
-        total_chunks: int,
-        current_length: int,
-    ) -> bool:
-        """Try to make room for a required doc-type chunk by dropping the largest.
+    def _select_with_source_coverage(
+        self,
+        chunks: list[RetrievedChunk],
+    ) -> tuple[list[RetrievedChunk], list[dict[str, object]]]:
+        """Select chunks under budget with a per-source coverage guarantee.
 
-        Returns True if a swap was performed.
+        Two passes over the rank-ordered chunks:
+
+        1. Coverage pass — the highest-ranked chunk of every distinct source
+           URL is placed first (evidence-set selection), guaranteeing maximal
+           cross-source coverage before any source can be deepened.
+        2. Depth pass — remaining chunks are added by rank, capped at
+           ``max_chunks_per_source`` chunks per URL, until the total budget is
+           exhausted.
+
+        Returns:
+            Tuple of ``(selected_chunks, dropped_records)``.
         """
-        # Find the largest included formatted chunk and drop it if the required
-        # chunk is smaller, keeping overall size within budget.
-        largest_idx = 0
-        largest_len = 0
-        for idx, line in enumerate(context_lines):
-            if len(line) > largest_len:
-                largest_len = len(line)
-                largest_idx = idx
-        if largest_len <= len(formatted):
-            return False
-        context_lines.pop(largest_idx)
-        source_names.pop(largest_idx)
-        context_lines.append(formatted)
-        source_names.append(source_names[-1] if source_names else "")
-        return True
+        selected: list[RetrievedChunk] = []
+        dropped_records: list[dict[str, object]] = []
+        url_counts: dict[str, int] = {}
+        selected_ids: set[str] = set()
+        current_length = 0
+
+        def try_place(chunk: RetrievedChunk, rank: int, reason: str) -> bool:
+            nonlocal current_length
+            formatted = self._format_chunk(chunk, len(selected) + 1)
+            new_length = current_length + len(formatted) + 2  # +2 for newlines
+            # The very first chunk is always placed even when it exceeds the
+            # total budget, so a single over-budget segment still produces a
+            # usable context.
+            if new_length > self.max_context_chars and selected:
+                dropped_records.append(self._drop_record(chunk, rank, reason))
+                return False
+            selected.append(chunk)
+            selected_ids.add(chunk.chunk.chunk_id)
+            url_counts[chunk.chunk.url] = url_counts.get(chunk.chunk.url, 0) + 1
+            current_length = new_length
+            return True
+
+        # Pass 1: coverage — one slot per distinct source URL.
+        covered_urls: set[str] = set()
+        for rank, chunk in enumerate(chunks):
+            url = chunk.chunk.url
+            if url in covered_urls:
+                continue
+            if try_place(chunk, rank, "dropped_due_total_context_budget"):
+                covered_urls.add(url)
+
+        # Pass 2: depth — fill remaining budget by rank, capped per URL.
+        for rank, chunk in enumerate(chunks):
+            if chunk.chunk.chunk_id in selected_ids:
+                continue
+            url = chunk.chunk.url
+            if url not in covered_urls:
+                continue
+            if url_counts[url] >= self.max_chunks_per_source:
+                dropped_records.append(self._drop_record(chunk, rank, "dropped_due_per_source_cap"))
+                continue
+            try_place(chunk, rank, "dropped_due_total_context_budget")
+
+        return selected, dropped_records
+
+    def _format_chunk(self, chunk: RetrievedChunk, doc_id: int) -> str:
+        """Format a chunk as a context_doc block, enforcing the item limit."""
+        text = chunk.chunk.text
+        if len(text) > self.item_limit_chars:
+            raise ContextAssemblerError(
+                f"Indexed segment {chunk.chunk.chunk_id!r} is {len(text)} chars, "
+                f"exceeding the item limit of {self.item_limit_chars}; "
+                "a valid generation must never produce over-limit segments"
+            )
+
+        source = chunk.chunk.source_name
+        section_header = chunk.chunk.section_header
+        section_suffix = f" [{section_header}]" if section_header else ""
+        return f'<context_doc id="{doc_id}" url="{chunk.chunk.url}">[{source}{section_suffix}]\n{text}\n</context_doc>'
+
+    @staticmethod
+    def _drop_record(chunk: RetrievedChunk, rank: int, reason: str) -> dict[str, object]:
+        """Build a provenance record for a dropped segment."""
+        return {
+            "reason": reason,
+            "rank": rank,
+            "chunk_id": chunk.chunk.chunk_id,
+            "url": chunk.chunk.url,
+            "segment_index": chunk.chunk.segment_index,
+            "parent_content_hash": chunk.chunk.parent_content_hash,
+        }
+
+    @staticmethod
+    def _reorder_lost_in_middle(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Reorder chunks so the most relevant appear at both ends."""
+        rearranged: list[RetrievedChunk] = []
+        left, right = 0, len(chunks) - 1
+        turn_left = True
+        while left <= right:
+            if left == right:
+                rearranged.append(chunks[left])
+                break
+            if turn_left:
+                rearranged.append(chunks[left])
+                left += 1
+            else:
+                rearranged.append(chunks[right])
+                right -= 1
+            turn_left = not turn_left
+        return rearranged
 
     def _deduplicate_chunks(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Remove semantically similar chunks using overlap detection.

@@ -803,6 +803,10 @@ class AppSettings(BaseSettings):
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_top_k: int = 30
     max_context_chars: int = 12000
+    # Diversity cap on final context: at most this many chunks per distinct
+    # source URL, applied after a one-per-source coverage guarantee. Keeps the
+    # context compact (context-rot safe) while ensuring cross-source coverage.
+    max_chunks_per_source: int = 2
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6

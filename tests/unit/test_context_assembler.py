@@ -10,12 +10,12 @@ from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.context_assembler import ContextAssembler
 
 
-def create_test_chunk(chunk_id, text, source_name="test_source"):
+def create_test_chunk(chunk_id, text, source_name="test_source", url=None):
     return DocumentChunk(
         chunk_id=chunk_id,
         source_name=source_name,
         title=f"Title {chunk_id}",
-        url=f"http://example.com/chunk{chunk_id}",
+        url=url or f"http://example.com/chunk{chunk_id}",
         text=text,
         content_hash=f"hash_{chunk_id}",
     )
@@ -338,6 +338,86 @@ class TestContextAssembler:
         assert record["url"] == "http://example.com/chunkseg-1"
         assert chunk1.text in context
         assert chunk2.text not in context
+
+    def test_source_coverage_guarantee_prefers_distinct_urls(self):
+        """One chunk per distinct source URL is placed before any URL deepens."""
+        assembler = ContextAssembler(max_context_chars=1000, max_chunks_per_source=1)
+        chunk_a1 = create_test_chunk("a1", "Alpha content one.", source_name="alpha", url="http://example.com/alpha")
+        chunk_a2 = create_test_chunk("a2", "Alpha content two.", source_name="alpha", url="http://example.com/alpha")
+        chunk_b1 = create_test_chunk("b1", "Beta content one.", source_name="beta", url="http://example.com/beta")
+
+        retrieved1 = create_retrieved_chunk(chunk_a1, confidence=0.9)
+        retrieved2 = create_retrieved_chunk(chunk_a2, confidence=0.8)
+        retrieved3 = create_retrieved_chunk(chunk_b1, confidence=0.7)
+
+        context, sources, dropped = assembler.assemble([retrieved1, retrieved2, retrieved3])
+
+        assert sources == ["alpha", "beta"]
+        assert chunk_a1.text in context
+        assert chunk_b1.text in context
+        assert chunk_a2.text not in context
+        cap_dropped = [d for d in dropped if d["reason"] == "dropped_due_per_source_cap"]
+        assert any(d["chunk_id"] == "a2" for d in cap_dropped)
+
+    def test_source_coverage_keeps_one_per_url_under_tight_budget(self):
+        """With a tight budget, a distinct source URL is never squeezed out by
+        higher-ranked chunks from an already-covered URL."""
+        text_a = "First source segment that fills the available context."
+        text_b = "Second source, distinct, small."
+        chunk_a = create_test_chunk("a0", text_a, source_name="alpha", url="http://example.com/alpha")
+        chunk_b = create_test_chunk("b0", text_b, source_name="beta", url="http://example.com/beta")
+
+        retrieved1 = create_retrieved_chunk(chunk_a, confidence=0.9)
+        retrieved2 = create_retrieved_chunk(chunk_b, confidence=0.8)
+
+        # Budget generous enough for both formatted chunks; the point is that
+        # a distinct source URL is placed before any URL deepens.
+        assembler = ContextAssembler(max_context_chars=500, max_chunks_per_source=1)
+        context, sources, _dropped = assembler.assemble([retrieved1, retrieved2])
+
+        assert sources == ["alpha", "beta"]
+        assert text_a in context
+        assert text_b in context
+
+    def test_source_coverage_drops_lowest_ranked_when_budget_full(self):
+        """Budget drops remove the lowest-ranked segments, not the middle ones."""
+        assembler = ContextAssembler(max_context_chars=1000, max_chunks_per_source=1)
+        chunks = []
+        retrieved = []
+        for i in range(6):
+            chunk = create_test_chunk(f"c{i}", f"Segment number {i} content.", source_name=f"src{i}")
+            chunks.append(chunk)
+            retrieved.append(create_retrieved_chunk(chunk, confidence=1.0 - i * 0.05))
+
+        context, _sources, dropped = assembler.assemble(retrieved)
+
+        # All six are distinct URLs and well under budget, so nothing drops.
+        assert len(dropped) == 0
+        for chunk in chunks:
+            assert chunk.text in context
+
+    def test_lost_in_middle_reorder_only_selected_set(self):
+        """Lost-in-the-middle mitigation reorders selected chunks but must not
+        cause budget drops of the middle-ranked segments."""
+        assembler = ContextAssembler(max_context_chars=500, max_chunks_per_source=1)
+        texts = {
+            "c0": "Top ranked content zero.",
+            "c1": "Content one lower ranked.",
+            "c2": "Content two lower ranked.",
+            "c3": "Content three lowest ranked.",
+        }
+        chunks = [create_test_chunk(k, t, source_name=f"src{i}") for i, (k, t) in enumerate(texts.items())]
+        retrieved = [create_retrieved_chunk(chunk, confidence=1.0 - i * 0.2) for i, chunk in enumerate(chunks)]
+
+        context, _sources, dropped = assembler.assemble(retrieved)
+
+        assert len(dropped) == 0
+        assert texts["c0"] in context
+        assert texts["c3"] in context
+
+    def test_max_chunks_per_source_constructor(self):
+        assembler = ContextAssembler(max_context_chars=1000, max_chunks_per_source=3)
+        assert assembler.max_chunks_per_source == 3
 
 
 if __name__ == "__main__":

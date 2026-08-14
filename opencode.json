@@ -66,7 +66,7 @@
     "4. COMPLETENESS VERIFICATION: Verify that generated files contain all necessary imports, complete function bodies, and return statements. Never accept cut-off or partial code responses.",
     "5. MODEL DEGRADATION FALLBACK: If 2 consecutive retries fail quality checks due to weak model output, halt task execution and write a warning log to `plans/QUALITY_REJECT_<timestamp>.md`.",
     "=== RATE LIMIT RETRY RULE ===",
-    "If any bash tool or API response contains a rate-limit error or 'retry after N seconds' message, then sleep for N+2 seocnds before attempting the tool call again.",
+    "If any bash tool or API response contains a rate-limit error or 'retry after N seconds' message, then sleep for N+2 seconds before attempting the tool call again.",
     "",
     "=== RULE 11: DAILY CI HEALTH CHECK (GITHUB ACTIONS) ===",
     "1. DAILY REQUIREMENT: At the START of the first session each day, and again at least once per day if a session runs long, check GitHub Actions CI health for this repo: `gh run list --limit 15`. If the last run on main is failing or there is any failure on the most recent push/PR, investigate and FIX it before doing other work.",
@@ -78,8 +78,7 @@
     "",
     "=== RULE 12: CI COMMAND SHORTCUT ===",
     "Use the `.opencode/command/check-ci.md` command (`/check-ci`) for on-demand CI health checks. It checks recent GitHub Actions runs, identifies failures, and drives the same fix loop as RULE 11."
-  ]
-  ,
+  ],
   "lsp": {
     "pyright": {
       "command": [
@@ -91,6 +90,7 @@
   "permission": {
     "read": {
       "*": "allow",
+      ".env": "deny",
       "*.env": "deny",
       "*.env.*": "deny",
       "*.pem": "deny",
@@ -100,11 +100,9 @@
     "edit": "allow",
     "bash": {
       "*": "allow",
-
       "git push *": "ask",
       "git push": "ask",
       "docker push *": "ask",
-
       "docker-compose down -v*": "deny",
       "docker-compose down --volumes*": "deny",
       "docker compose down -v*": "deny",
@@ -113,13 +111,13 @@
       "docker volume rm": "deny",
       "docker volume prune *": "deny",
       "docker volume prune": "deny",
-
       "sudo *": "deny",
       "rm -rf /": "deny",
       "rm -rf ~": "deny",
       "rm -rf /*": "deny",
       "git reset --hard *": "deny",
       "git clean -fd*": "deny",
+      "git push * --force*": "deny",
       "mkfs *": "deny",
       "dd *": "deny"
     }

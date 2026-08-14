@@ -760,7 +760,10 @@ class AsyncRagService:
             if rejected is not None:
                 return rejected
 
-            assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
+            assembler = ContextAssembler(
+                max_context_chars=self.config.max_context_chars,
+                max_chunks_per_source=self.config.max_chunks_per_source,
+            )
             context_str, source_names, dropped_records = assembler.assemble(
                 retrieved_chunks,
                 deduplicate=self.context_compressor is None,
@@ -1318,7 +1321,10 @@ class AsyncRagService:
 
         # Context assembly
         sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
-        assembler = ContextAssembler(max_context_chars=self.config.max_context_chars)
+        assembler = ContextAssembler(
+            max_context_chars=self.config.max_context_chars,
+            max_chunks_per_source=self.config.max_chunks_per_source,
+        )
         context_str, _source_names, _dropped_records = assembler.assemble(sorted_chunks)
 
         # Build prompt

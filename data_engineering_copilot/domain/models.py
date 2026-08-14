@@ -203,6 +203,7 @@ class RagConfig:
     # ``confidence_threshold`` (the embedding scale).
     reranker_confidence_threshold: float = 0.10
     max_context_chars: int = 8000
+    max_chunks_per_source: int = 2
     max_expansion_queries: int = 2
     cache_enabled: bool = True
 

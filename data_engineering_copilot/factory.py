@@ -1121,6 +1121,7 @@ def build_rag_service(
         reranker_top_k=app_settings.reranker_top_k,
         reranker_confidence_threshold=app_settings.reranker_confidence_threshold,
         max_context_chars=app_settings.max_context_chars,
+        max_chunks_per_source=app_settings.max_chunks_per_source,
         max_expansion_queries=app_settings.max_expansion_queries,
     )
 
