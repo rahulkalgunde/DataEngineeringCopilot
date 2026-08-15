@@ -132,6 +132,8 @@ async def test_chat_stream_emits_status_sources_token_done():
     done = next(e for e in events if e["type"] == "done")
     assert isinstance(done["text"], str) and len(done["text"]) > 0
     assert isinstance(done["confidence"], float)
+    assert isinstance(done.get("groundedness_score"), float)
+    assert isinstance(done.get("groundedness_claims"), list)
 
     sources = next(e for e in events if e["type"] == "sources")
     assert isinstance(sources["sources"], list) and len(sources["sources"]) >= 1
@@ -155,6 +157,44 @@ async def test_chat_stream_turn1_no_history_in_prompt():
     generation_prompt = gen.prompts[-1]
     assert "## CONVERSATION HISTORY" not in generation_prompt
     await service.close()
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_done_carries_groundedness_verification():
+    """The done event must surface annotate-only groundedness from the verifier."""
+
+    class _Verifier:
+        async def async_verify_with_score(self, answer, context_chunks):
+            return (False, ["spark.dynamicAllocation.shuffleTracking.enabled is a YARN-only feature"], 0.42)
+
+    service = await _build_service(_RecordingLLM(), _RecordingLLM())
+    service.groundedness_verifier = _Verifier()  # type: ignore[assignment]
+    try:
+        events = _collect_events([e async for e in service.chat_stream("What is Apache Spark?")])
+        done = next(e for e in events if e["type"] == "done")
+        assert done["groundedness_score"] == 0.42
+        assert done["groundedness_claims"] == ["spark.dynamicAllocation.shuffleTracking.enabled is a YARN-only feature"]
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_groundedness_fail_open_on_verifier_error():
+    """A verifier crash must not block the turn (fail-open to 1.0)."""
+
+    class _BrokenVerifier:
+        async def async_verify_with_score(self, answer, context_chunks):
+            raise RuntimeError("verifier down")
+
+    service = await _build_service(_RecordingLLM(), _RecordingLLM())
+    service.groundedness_verifier = _BrokenVerifier()  # type: ignore[assignment]
+    try:
+        events = _collect_events([e async for e in service.chat_stream("What is Apache Spark?")])
+        done = next(e for e in events if e["type"] == "done")
+        assert done["groundedness_score"] == 1.0
+        assert done["groundedness_claims"] == []
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

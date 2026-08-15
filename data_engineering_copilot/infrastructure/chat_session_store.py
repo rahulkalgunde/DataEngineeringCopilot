@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content TEXT NOT NULL,
     sources JSONB,
     token_count INTEGER NOT NULL DEFAULT 0,
+    groundedness_score DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    groundedness_claims JSONB,
     created_at DOUBLE PRECISION NOT NULL
 );
 
@@ -81,6 +83,8 @@ class ChatSessionRedisStore:
                 "timestamp": message.timestamp,
                 "sources": list(message.sources),
                 "token_count": message.token_count,
+                "groundedness_score": message.groundedness_score,
+                "groundedness_claims": list(message.groundedness_claims),
             }
         )
 
@@ -95,6 +99,8 @@ class ChatSessionRedisStore:
             timestamp=data.get("timestamp", 0.0),
             sources=tuple(data.get("sources", ())),
             token_count=data.get("token_count", 0),
+            groundedness_score=data.get("groundedness_score", 1.0),
+            groundedness_claims=tuple(data.get("groundedness_claims", ())),
         )
 
     @staticmethod
@@ -238,6 +244,8 @@ class ChatSessionPostgresStore:
             "timestamp": message.timestamp,
             "sources": list(message.sources),
             "token_count": message.token_count,
+            "groundedness_score": message.groundedness_score,
+            "groundedness_claims": list(message.groundedness_claims),
         }
 
     @classmethod
@@ -248,6 +256,12 @@ class ChatSessionPostgresStore:
                 sources = json.loads(sources)
             except json.JSONDecodeError:
                 sources = ()
+        claims = data.get("groundedness_claims", ())
+        if isinstance(claims, str):
+            try:
+                claims = json.loads(claims)
+            except json.JSONDecodeError:
+                claims = ()
         return ChatMessage(
             message_id=data["message_id"],
             session_id=data["session_id"],
@@ -256,6 +270,8 @@ class ChatSessionPostgresStore:
             timestamp=data.get("timestamp", 0.0),
             sources=tuple(sources),
             token_count=data.get("token_count", 0),
+            groundedness_score=data.get("groundedness_score", 1.0),
+            groundedness_claims=tuple(claims),
         )
 
     @staticmethod
@@ -344,8 +360,9 @@ class ChatSessionPostgresStore:
         async with pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO chat_messages
-                   (message_id, session_id, role, content, sources, token_count, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)
+                   (message_id, session_id, role, content, sources, token_count,
+                    groundedness_score, groundedness_claims, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                    ON CONFLICT (message_id) DO NOTHING""",
                 message.message_id,
                 message.session_id,
@@ -353,6 +370,8 @@ class ChatSessionPostgresStore:
                 message.content,
                 json.dumps(list(message.sources)),
                 message.token_count,
+                message.groundedness_score,
+                json.dumps(list(message.groundedness_claims)),
                 message.timestamp,
             )
 

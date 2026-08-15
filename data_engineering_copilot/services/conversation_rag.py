@@ -190,6 +190,8 @@ class ConversationService:
                         content=assistant_text,
                         timestamp=time.time(),
                         token_count=_count_tokens(assistant_text),
+                        groundedness_score=float(payload.get("groundedness_score", 1.0)),
+                        groundedness_claims=tuple(payload.get("groundedness_claims") or ()),
                     )
                 yield payload
         finally:
