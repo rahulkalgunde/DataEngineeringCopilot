@@ -286,3 +286,142 @@ def test_validate_all_detects_conflicts() -> None:
     no_provider = _make_bad(llm_provider="", embedding_provider="")
     with pytest.raises(ValidationError, match="provider"):
         no_provider.validate_all()
+
+
+def test_chat_settings_defaults() -> None:
+    settings = make_settings()
+    assert settings.chat_enabled is True
+    assert settings.chat_session_ttl_seconds == 259200
+    assert settings.chat_history_max_turns == 10
+    assert settings.chat_history_max_tokens == 2048
+    assert settings.chat_db_url == ""
+    assert settings.chat_title_max_chars == 60
+
+
+def test_chat_settings_overridable() -> None:
+    settings = make_settings(
+        chat_enabled=False,
+        chat_session_ttl_seconds=3600,
+        chat_history_max_turns=5,
+        chat_history_max_tokens=1024,
+        chat_db_url="postgresql://user:pass@db:5432/chat",
+        chat_title_max_chars=40,
+    )
+    assert settings.chat_enabled is False
+    assert settings.chat_session_ttl_seconds == 3600
+    assert settings.chat_history_max_turns == 5
+    assert settings.chat_history_max_tokens == 1024
+    assert settings.chat_db_url == "postgresql://user:pass@db:5432/chat"
+    assert settings.chat_title_max_chars == 40
+
+
+def test_chat_settings_validate_all() -> None:
+    from pydantic import ValidationError
+
+    def _make_bad(**overrides) -> AppSettings:
+        base = make_settings()
+        kwargs: dict = {
+            field: getattr(base, field)
+            for field in base.model_fields
+            if field not in {"sources", "skip_provider_check"}
+        }
+        kwargs.update(overrides)
+        return AppSettings(**kwargs)
+
+    bad_ttl = _make_bad(chat_session_ttl_seconds=10)
+    with pytest.raises(ValidationError, match="chat_session_ttl_seconds"):
+        bad_ttl.validate_all()
+
+    bad_turns = _make_bad(chat_history_max_turns=0)
+    with pytest.raises(ValidationError, match="chat_history_max_turns"):
+        bad_turns.validate_all()
+
+    bad_tokens = _make_bad(chat_history_max_tokens=16)
+    with pytest.raises(ValidationError, match="chat_history_max_tokens"):
+        bad_tokens.validate_all()
+
+    bad_title = _make_bad(chat_title_max_chars=2)
+    with pytest.raises(ValidationError, match="chat_title_max_chars"):
+        bad_title.validate_all()
+
+
+def test_chat_speed_settings_defaults() -> None:
+    settings = make_settings()
+    assert settings.chat_rewrite_local is False
+    assert settings.chat_scope_local is False
+    assert settings.chat_answer_local is False
+    assert settings.chat_rerank_local is True
+    assert settings.chat_cache_recall_enabled is False
+    assert settings.chat_cache_top_k == 3
+    assert settings.chat_cache_recall_threshold == 0.70
+    assert settings.chat_cache_max_age_seconds == 86400
+    assert settings.chat_blocked_url_substrings == ["system-prompts.md"]
+    assert settings.chat_domain_sources == []
+    assert settings.chat_suggestions_enabled is True
+    assert settings.chat_suggestions_count == 3
+    assert settings.chat_suggestions_mode == "hybrid"
+
+
+def test_chat_speed_settings_overridable() -> None:
+    settings = make_settings(
+        chat_rewrite_local=False,
+        chat_scope_local=False,
+        chat_answer_local=True,
+        chat_rerank_local=False,
+        chat_cache_recall_enabled=True,
+        chat_cache_top_k=5,
+        chat_cache_recall_threshold=0.60,
+        chat_cache_max_age_seconds=3600,
+        chat_blocked_url_substrings=["blocked-a"],
+        chat_domain_sources=["Apache Spark 4.0.0"],
+        chat_suggestions_enabled=False,
+        chat_suggestions_count=5,
+        chat_suggestions_mode="rule",
+    )
+    assert settings.chat_rewrite_local is False
+    assert settings.chat_scope_local is False
+    assert settings.chat_answer_local is True
+    assert settings.chat_rerank_local is False
+    assert settings.chat_cache_recall_enabled is True
+    assert settings.chat_cache_top_k == 5
+    assert settings.chat_cache_recall_threshold == 0.60
+    assert settings.chat_cache_max_age_seconds == 3600
+    assert settings.chat_blocked_url_substrings == ["blocked-a"]
+    assert settings.chat_domain_sources == ["Apache Spark 4.0.0"]
+    assert settings.chat_suggestions_enabled is False
+    assert settings.chat_suggestions_count == 5
+    assert settings.chat_suggestions_mode == "rule"
+
+
+def test_chat_speed_settings_validate_all() -> None:
+    from pydantic import ValidationError
+
+    def _make_bad(**overrides) -> AppSettings:
+        base = make_settings()
+        kwargs: dict = {
+            field: getattr(base, field)
+            for field in base.model_fields
+            if field not in {"sources", "skip_provider_check"}
+        }
+        kwargs.update(overrides)
+        return AppSettings(**kwargs)
+
+    bad_threshold = _make_bad(chat_cache_recall_threshold=0.0)
+    with pytest.raises(ValidationError, match="chat_cache_recall_threshold"):
+        bad_threshold.validate_all()
+
+    bad_top_k = _make_bad(chat_cache_top_k=0)
+    with pytest.raises(ValidationError, match="chat_cache_top_k"):
+        bad_top_k.validate_all()
+
+    bad_age = _make_bad(chat_cache_max_age_seconds=10)
+    with pytest.raises(ValidationError, match="chat_cache_max_age_seconds"):
+        bad_age.validate_all()
+
+    bad_count = _make_bad(chat_suggestions_count=0)
+    with pytest.raises(ValidationError, match="chat_suggestions_count"):
+        bad_count.validate_all()
+
+    bad_mode = _make_bad(chat_suggestions_mode="bogus")
+    with pytest.raises(ValidationError, match="chat_suggestions_mode"):
+        bad_mode.validate_all()
