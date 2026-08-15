@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from data_engineering_copilot.domain.models import Answer, DocumentChunk, RagConfig
+from data_engineering_copilot.domain.models import Answer, DocumentChunk, RagConfig, RetrievedChunk
 from data_engineering_copilot.services.async_rag import AsyncRagService, _rerank_pool_size
 from tests.doubles.embedder import StubEmbedder
 from tests.doubles.llm import StubLLM
@@ -282,8 +282,8 @@ async def test_provenance_reports_budget_dropped_segments() -> None:
             url=f"https://example.com/big-{i}.html",
             text=f"Segment {i}: " + "x" * 120,
             segment_index=i,
-            segment_total=2,
-            parent_content_hash="parent-hash",
+            segment_total=1,
+            parent_content_hash=f"parent-{i}",
         )
         for i in range(4)
     ]
@@ -375,7 +375,6 @@ async def test_reranker_scores_against_original_question() -> None:
     cross-encoder scores code/API pairs far higher against the original text.
     The rewrite still drives the retrieval variants and the generation prompt.
     """
-    from data_engineering_copilot.domain.models import RetrievedChunk
     from data_engineering_copilot.services.query_rewriting import RewrittenQuery
 
     class _Rewriter:
@@ -541,6 +540,91 @@ async def test_rag_service_does_not_write_cache_when_bypassed() -> None:
         await store.close()
 
     assert cache.set_calls == [], "bypass_cache=True must not write the cache"
+
+
+@pytest.mark.asyncio
+async def test_rejoin_sibling_chunks_collapses_split_parent_blocks() -> None:
+    """Sibling segments sharing a parent hash must rejoin into one block."""
+    from data_engineering_copilot.services.async_rag import AsyncRagService
+    from tests.doubles.embedder import StubEmbedder
+    from tests.doubles.llm import StubLLM
+    from tests.doubles.vector_store import InMemoryVectorStore
+
+    parent_hash = "split-parent"
+    store = InMemoryVectorStore()
+    await store.initialize()
+    chunks = [
+        DocumentChunk(
+            chunk_id="p:seg:0",
+            source_name="Spark Docs",
+            title="Deployment",
+            url="https://spark.apache.org/docs/deployment.html",
+            text="YARN: run the shuffle service on NodeManagers.",
+            parent_content_hash=parent_hash,
+            segment_index=0,
+            segment_total=2,
+        ),
+        DocumentChunk(
+            chunk_id="p:seg:1",
+            source_name="Spark Docs",
+            title="Deployment",
+            url="https://spark.apache.org/docs/deployment.html",
+            text="Kubernetes does not support an external shuffle service.",
+            parent_content_hash=parent_hash,
+            segment_index=1,
+            segment_total=2,
+        ),
+    ]
+    await store.upsert_chunks(chunks, [[0.1] * 768, [0.9] * 768])
+
+    service = AsyncRagService(
+        config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
+        vector_store=store,  # type: ignore[arg-type]
+        llm_client=StubLLM(),
+        embedder=StubEmbedder(dimension=768),
+    )
+    try:
+        # Both segments are in the retrieved set (as if both ranked).
+        retrieved = [
+            RetrievedChunk(chunk=chunks[0], distance=0.1, confidence=0.9),
+            RetrievedChunk(chunk=chunks[1], distance=0.2, confidence=0.8),
+        ]
+        rejoined = await service._rejoin_sibling_chunks(retrieved)
+        assert len(rejoined) == 1, f"expected one rejoined block, got {len(rejoined)}"
+        block = rejoined[0].chunk
+        assert "YARN" in block.text and "Kubernetes" in block.text
+        assert block.parent_content_hash == parent_hash
+        assert block.segment_index == -1
+        assert rejoined[0].confidence == pytest.approx(0.9)
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rejoin_sibling_chunks_fail_open_when_no_parents() -> None:
+    """Chunks without parent metadata must pass through untouched."""
+    from data_engineering_copilot.services.async_rag import AsyncRagService
+    from tests.doubles.embedder import StubEmbedder
+    from tests.doubles.llm import StubLLM
+    from tests.doubles.vector_store import InMemoryVectorStore
+
+    store = InMemoryVectorStore()
+    await store.initialize()
+    chunks = _build_chunks()
+    await store.upsert_chunks(chunks, [[0.1] * 768 for _ in chunks])
+
+    service = AsyncRagService(
+        config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
+        vector_store=store,  # type: ignore[arg-type]
+        llm_client=StubLLM(),
+        embedder=StubEmbedder(dimension=768),
+    )
+    try:
+        retrieved = [RetrievedChunk(chunk=c, distance=0.1, confidence=0.9) for c in chunks[:2]]
+        rejoined = await service._rejoin_sibling_chunks(retrieved)
+        assert [r.chunk.chunk_id for r in rejoined] == [c.chunk_id for c in chunks[:2]]
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

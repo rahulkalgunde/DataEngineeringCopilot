@@ -53,6 +53,9 @@ def chunk_to_payload(chunk: DocumentChunk) -> dict:
         "parser_version": chunk.parser_version,
         "chunker_version": chunk.chunker_version,
         "index_generation": chunk.index_generation,
+        "parent_content_hash": chunk.parent_content_hash,
+        "segment_index": chunk.segment_index,
+        "segment_total": chunk.segment_total,
     }
 
 
@@ -482,6 +485,9 @@ class AsyncQdrantVectorStore:
                     parser_version=payload.get("parser_version", ""),
                     chunker_version=payload.get("chunker_version", ""),
                     index_generation=payload.get("index_generation", ""),
+                    parent_content_hash=payload.get("parent_content_hash", ""),
+                    segment_index=payload.get("segment_index", -1),
+                    segment_total=payload.get("segment_total", 1),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
                 if rrf_confidence_scale is not None and score > 0.0:
@@ -745,6 +751,74 @@ class AsyncQdrantVectorStore:
             logger.info("Deleted all points for url=%s source=%s", url, source_name)
         except Exception as exc:
             logger.warning("Failed to delete points for url=%s source=%s: %s", url, source_name, exc)
+
+    async def scroll_chunks_by_parent_hash(self, parent_hash: str, source_name: str = "") -> list[DocumentChunk]:
+        """Return every sibling chunk sharing *parent_hash*, ordered by segment index.
+
+        Sibling segments were produced by the lossless token-budget splitter, so
+        ``"".join(texts)`` reconstructs the original parent block. Used by the
+        post-retrieval sibling-rejoin step so a retrieved segment's surrounding
+        context (e.g. the YARN paragraph plus its Kubernetes sibling) is
+        restored into the prompt instead of being dropped at index time.
+        """
+        if self._client is None:
+            return []
+        must: list[models.Condition] = [
+            models.FieldCondition(key="parent_content_hash", match=models.MatchValue(value=parent_hash))
+        ]
+        if source_name:
+            must.append(models.FieldCondition(key="source_name", match=models.MatchValue(value=source_name)))
+        siblings: list[DocumentChunk] = []
+        next_offset = None
+        try:
+            while True:
+                points, next_offset = await self._client.scroll(
+                    collection_name=self._collection_name,
+                    scroll_filter=models.Filter(must=must),
+                    limit=100,
+                    offset=next_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    siblings.append(
+                        DocumentChunk(
+                            chunk_id=payload.get("chunk_id", str(point.id)),
+                            source_name=payload.get("source_name", ""),
+                            title=payload.get("title", ""),
+                            url=payload.get("url", ""),
+                            text=payload.get("text", ""),
+                            content_hash=payload.get("content_hash", ""),
+                            section_header=payload.get("section_header", ""),
+                            chunk_type=payload.get("chunk_type", "text"),
+                            word_count=payload.get("word_count", 0),
+                            heading_path=tuple(payload.get("heading_path", [])),
+                            chunk_index=payload.get("chunk_index", 0),
+                            total_chunks=payload.get("total_chunks", 0),
+                            crawled_at=payload.get("crawled_at", ""),
+                            doc_type=payload.get("doc_type", ""),
+                            language=payload.get("language", ""),
+                            spark_version=payload.get("spark_version", ""),
+                            module=payload.get("module", ""),
+                            source_commit=payload.get("source_commit", ""),
+                            file_path=payload.get("file_path", ""),
+                            license=payload.get("license", ""),
+                            parser_version=payload.get("parser_version", ""),
+                            chunker_version=payload.get("chunker_version", ""),
+                            index_generation=payload.get("index_generation", ""),
+                            parent_content_hash=payload.get("parent_content_hash", ""),
+                            segment_index=payload.get("segment_index", -1),
+                            segment_total=payload.get("segment_total", 1),
+                        )
+                    )
+                if next_offset is None or next_offset == "":
+                    break
+            siblings.sort(key=lambda c: c.segment_index)
+            return siblings
+        except Exception as exc:
+            logger.warning("Failed to scroll siblings for parent=%r: %s", parent_hash, exc)
+            return []
 
     async def scroll_urls(self, source_name: str) -> list[str]:
         """Return all distinct URLs stored for a given source."""

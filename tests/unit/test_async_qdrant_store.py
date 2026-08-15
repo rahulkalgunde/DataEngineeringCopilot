@@ -353,6 +353,58 @@ async def test_get_content_hash_returns_none_when_only_empty_payloads(mock_async
     assert result is None
 
 
+async def test_scroll_chunks_by_parent_hash_orders_by_segment_index(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    seg0 = MagicMock()
+    seg0.id = "id-0"
+    seg0.payload = {
+        "chunk_id": "doc:seg:0",
+        "source_name": "spark",
+        "title": "T",
+        "url": "u",
+        "text": "first",
+        "parent_content_hash": "P",
+        "segment_index": 0,
+        "segment_total": 2,
+    }
+    seg1 = MagicMock()
+    seg1.id = "id-1"
+    seg1.payload = {
+        "chunk_id": "doc:seg:1",
+        "source_name": "spark",
+        "title": "T",
+        "url": "u",
+        "text": "second",
+        "parent_content_hash": "P",
+        "segment_index": 1,
+        "segment_total": 2,
+    }
+    # Return out of order to prove ordering is by segment_index.
+    mock_async_qdrant.scroll = AsyncMock(return_value=([seg1, seg0], None))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    siblings = await store.scroll_chunks_by_parent_hash("P", source_name="spark")
+
+    assert [s.chunk_id for s in siblings] == ["doc:seg:0", "doc:seg:1"]
+    assert "".join(s.text for s in siblings) == "firstsecond"
+    # The scroll filter must include the parent hash and source_name.
+    _, kwargs = mock_async_qdrant.scroll.call_args
+    assert kwargs["scroll_filter"].must[0].key == "parent_content_hash"
+    assert kwargs["scroll_filter"].must[1].key == "source_name"
+
+
+async def test_scroll_chunks_by_parent_hash_fail_open_on_error(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_async_qdrant.scroll = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    assert await store.scroll_chunks_by_parent_hash("P") == []
+
+
 async def test_query_404_raises_vector_store_error(mock_async_qdrant):
     from data_engineering_copilot.domain.exceptions import VectorStoreError
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore

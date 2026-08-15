@@ -3,13 +3,14 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 from data_engineering_copilot.config.settings import settings
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
@@ -18,6 +19,7 @@ from data_engineering_copilot.domain.models import (
     CachedAnswer,
     CacheScope,
     ChatMessage,
+    DocumentChunk,
     LLMUsage,
     RagConfig,
     RetrievedChunk,
@@ -745,6 +747,11 @@ class AsyncRagService:
             _prov_pool = len(retrieved_chunks)
             _prov_fused = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(retrieved_chunks)]
 
+            # Parent-doc re-assembly: restore sibling segments so cross-mode
+            # questions see both the YARN and Kubernetes paragraphs of a split
+            # parent instead of a single matched segment.
+            retrieved_chunks = await self._rejoin_sibling_chunks(retrieved_chunks)
+
             _emit_detail(
                 "embed",
                 {
@@ -1437,6 +1444,9 @@ class AsyncRagService:
             source_filter=source_filter,
             fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
         )
+        # Parent-doc re-assembly: restore sibling segments so cross-mode
+        # questions see both the YARN and Kubernetes paragraphs.
+        retrieved_chunks = await self._rejoin_sibling_chunks(retrieved_chunks)
         if retrieval_span:
             retrieval_span.update(
                 input=effective_query,
@@ -1839,6 +1849,10 @@ class AsyncRagService:
                 retrieved_chunks = merge_retrieval_results(per_query_results, safe_question)
             else:
                 retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
+
+            # Parent-doc re-assembly: restore sibling segments so cross-mode
+            # chat questions see both the YARN and Kubernetes paragraphs.
+            retrieved_chunks = await self._rejoin_sibling_chunks(retrieved_chunks)
         except RetrievalError:
             if trace:
                 trace.update(output="RetrievalError")
@@ -2420,6 +2434,92 @@ class AsyncRagService:
             groundedness_score,
         )
         return groundedness_score, tuple(unsupported_claims)
+
+    async def _rejoin_sibling_chunks(
+        self,
+        retrieved_chunks: list[RetrievedChunk],
+        max_sibling_blocks: int = 3,
+    ) -> list[RetrievedChunk]:
+        """Post-retrieval parent-doc re-assembly (sibling rejoin).
+
+        When a retrieved chunk is a segment of a losslessly-split parent, its
+        siblings share the same ``parent_content_hash``. Rejoining them restores
+        the surrounding context so a cross-mode answer sees BOTH the YARN
+        paragraph and its Kubernetes sibling — not just the single matched
+        segment (which is the root cause of mode-confusion hallucination).
+
+        Each distinct parent hash is collapsed into a single rejoined block that
+        replaces its member segments in-place (bounded to ``max_sibling_blocks``
+        parents). Fail-open: any store error or absent parent metadata leaves
+        the retrieved set untouched.
+        """
+        parents: dict[str, list[RetrievedChunk]] = {}
+        for r in retrieved_chunks:
+            parent_hash = r.chunk.parent_content_hash
+            if isinstance(parent_hash, str) and parent_hash:
+                parents.setdefault(parent_hash, []).append(r)
+
+        if not parents:
+            return retrieved_chunks
+
+        # Select the parents to rejoin (highest-confidence group first) so the
+        # scroll cost stays bounded.
+        ordered_parents = sorted(
+            parents.items(),
+            key=lambda item: max(r.confidence for r in item[1]),
+            reverse=True,
+        )
+        selected_hashes = [ph for ph, _ in ordered_parents[:max_sibling_blocks]]
+        selected_ids = {r.chunk.chunk_id for ph in selected_hashes for r in parents[ph]}
+
+        rejoined: list[RetrievedChunk] = []
+        for chunk in retrieved_chunks:
+            parent_hash = chunk.chunk.parent_content_hash
+            if isinstance(parent_hash, str) and parent_hash in selected_hashes:
+                continue
+            rejoined.append(chunk)
+
+        scroll = getattr(self.vector_store, "scroll_chunks_by_parent_hash", None)
+        if not callable(scroll):
+            return retrieved_chunks
+
+        async def _scroll(parent_hash: str, source_name: str) -> list[DocumentChunk]:
+            result = scroll(parent_hash, source_name=source_name)
+            if inspect.isawaitable(result):
+                awaited = await cast(Awaitable[object], result)
+                return list(awaited) if isinstance(awaited, (list, tuple)) else []
+            return list(result) if isinstance(result, (list, tuple)) else []
+
+        for parent_hash in selected_hashes:
+            group = parents[parent_hash]
+            try:
+                siblings = await _scroll(parent_hash, source_name=group[0].chunk.source_name)
+            except Exception:
+                logger.warning("Sibling rejoin scroll failed for parent=%r", parent_hash, exc_info=True)
+                rejoined.extend(group)
+                continue
+            if not siblings or len(siblings) <= 1:
+                rejoined.extend(group)
+                continue
+            block_text = "\n".join(s.text for s in siblings)
+            best = max(group, key=lambda r: r.confidence)
+            rejoined_chunk = replace(
+                best.chunk,
+                text=block_text,
+                word_count=len(block_text.split()),
+                character_count=len(block_text),
+                segment_index=-1,
+                segment_total=1,
+            )
+            rejoined.append(RetrievedChunk(chunk=rejoined_chunk, distance=best.distance, confidence=best.confidence))
+
+        logger.info(
+            "sibling_rejoin parents=%d rejoined=%d segments_merged=%d",
+            len(selected_hashes),
+            len([r for r in rejoined if r.chunk.chunk_id not in selected_ids]),
+            len(selected_ids),
+        )
+        return rejoined
 
     async def _ensure_reranker_ready(self) -> bool:
         """Lazily load the cross-encoder model so reranking actually runs.

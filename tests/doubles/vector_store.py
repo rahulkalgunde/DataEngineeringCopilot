@@ -93,6 +93,15 @@ class InMemoryVectorStore(VectorStoreProtocol):
     async def count_urls(self, source_name: str) -> int:
         return sum(1 for c in self._chunks.values() if c.source_name == source_name)
 
+    async def scroll_chunks_by_parent_hash(self, parent_hash: str, source_name: str = "") -> list[DocumentChunk]:
+        siblings = [
+            c
+            for c in self._chunks.values()
+            if c.parent_content_hash == parent_hash and (not source_name or c.source_name == source_name)
+        ]
+        siblings.sort(key=lambda c: c.segment_index)
+        return siblings
+
     async def get_content_hash_for_url(self, url: str, source_name: str = "") -> str | None:
         for chunk in self._chunks.values():
             if chunk.url == url and (not source_name or chunk.source_name == source_name) and chunk.content_hash:
