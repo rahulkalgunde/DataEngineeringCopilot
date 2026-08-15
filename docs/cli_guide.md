@@ -39,6 +39,8 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec health](#dec-health)
   - [dec status](#dec-status)
   - [dec evaluate](#dec-evaluate)
+  - [dec eval-coverage](#dec-eval-coverage)
+  - [dec gen-synthetic-eval](#dec-gen-synthetic-eval)
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
   - [dec langfuse-seed-prompts](#dec-langfuse-seed-prompts)
@@ -986,16 +988,17 @@ usage: dec evaluate [-h] [--verbose] [--dataset DATASET] [--source SOURCE]
 
 **Behavior**
 - Loads evaluation queries (`question`/`query`) from the dataset file, runs each through the RAG service.
-- `--dataset <path>` points at any JSONL dataset. The repo ships per-source datasets: `eval_dataset.jsonl` (Apache Spark, 12 queries), `eval_dataset_airflow.jsonl` (3), `eval_dataset_databricks.jsonl` (2), `eval_dataset_delta_lake.jsonl` (3).
+- `--dataset <path>` points at any JSONL dataset. The repo ships per-source datasets: `eval_dataset.jsonl` (Apache Spark, 12 queries), `eval_dataset_airflow.jsonl` (3), `eval_dataset_delta_lake.jsonl` (3). Recall-format sets (used with `--spark`) live alongside: `eval_dataset_spark.jsonl`, `recall_claude.jsonl`, `recall_spark_api.jsonl`, `recall_airflow.jsonl`, `recall_delta.jsonl`, `recall_multi_hop.jsonl`, `recall_oos.jsonl`. (`eval_dataset_databricks.jsonl` was removed — Databricks is not in the active generation.)
 - `--source <name>` filters loaded rows by their `source_name` field (e.g. `dec evaluate --source "Apache Airflow Documentation"`). Exit code 1 if no rows match.
 - Prints per-query `Answer` snippet, `Confidence`, and retrieved-context count.
-- Prints summary: total queries, average confidence.
+- Prints summary: total queries, average confidence, **INSUFFICIENT_CONTEXT rate**, and average answer **correctness** (token-F1 vs `ground_truth`) for rows that have ground truth.
+- `--output-dir <dir>` writes `per_question_results.jsonl` (id, question, answer, confidence, correctness, contexts) for drift/bisection.
 - **RAGAS metrics** (if the `ragas` package is installed): `context_recall`, `context_precision`, `faithfulness`, `answer_relevancy`, `overall`. Otherwise prints "RAGAS evaluation skipped".
 - **Langfuse dataset upload** (if Langfuse is reachable): evaluated rows are uploaded to a dataset named `dec-evaluate-{source}-{timestamp}` (override with `--dataset-name`) with `input.query`, `expected_output.answer`, and metadata (confidence, latency_ms, contexts). Prints the dataset name on success.
 - **Drift detection** (if `DRIFT_DETECTION_ENABLED`): records a snapshot into `data/eval_history.jsonl`, compares against the trailing window (`DRIFT_WINDOW_DAYS`, default 7), and prints per-metric deltas, `DRIFT DETECTED`, `No drift detected`, or "First eval recorded".
 
 **`dec evaluate --spark`** runs the Spark retrieval-recall evaluation
-(`tests/evaluation/eval_dataset_spark.jsonl`, 18 queries) and additionally
+(`tests/evaluation/eval_dataset_spark.jsonl`, 51 queries) and additionally
 measures retrieval-stage diagnostics:
 
 - `term_recall` — expected terms present in the assembled context.
@@ -1041,6 +1044,45 @@ dec evaluate --experiment-name "baseline-2026-08"
 ```
 
 **Exit codes**: `0` on completion; `1` if the evaluation dataset is missing, `--source` matches no rows, or (Spark mode) recall is below threshold.
+
+### `dec eval-coverage`
+
+Validates every in-scope recall eval row against the **active generation's**
+indexed corpus (`data/pinned_corpus/<gen>/chunks.jsonl`): each `expected_url`
+must resolve to an indexed chunk and each `expected_term` must occur in the
+corpus. Out-of-scope rows pass by design (they carry no evidence).
+
+```
+usage: dec eval-coverage [--dataset DATASET] [--generation GEN] [--json]
+```
+
+- `--dataset <path>`: validate a single recall file (default: all recall-format
+  files in `tests/evaluation/`).
+- `--generation <gen>`: corpus to validate against (default: active generation).
+- `--json`: machine-readable report.
+- Exit codes: `0` all pass, `1` any row fails, `2` bad input / no corpus.
+
+Additions to a dataset must pass this gate before merge
+(`make eval-coverage`); schema/slug/evidence gates run in CI
+(`make test-eval-data`).
+
+### `dec gen-synthetic-eval`
+
+Generates a corpus-grounded **synthetic recall set** from the active
+generation and filters every row through the coverage validator.
+
+```
+usage: dec gen-synthetic-eval --source NAME [--generation GEN] [--limit N]
+                              [--out PATH] [--testset-size N]
+```
+
+- Deterministic by default (offline): rows are derived from chunk headings and
+  every `expected_term` is verified to appear in the chunk text, so rows pass
+  `dec eval-coverage` by construction.
+- Output: `tests/evaluation/recall_synthetic_<source>.jsonl` (override with
+  `--out`).
+- The Ragas path (`TestsetGenerator.generate_with_langchain_docs`) exists in
+  `evaluation/synthetic_generator.py` and needs factory-wired LLM + embeddings.
 
 **Gotchas**
 - Runs the real RAG pipeline (Qdrant + embedder + LLM) — build the index first with `dec ingest`.

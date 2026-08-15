@@ -223,6 +223,18 @@ test-smoke:
 test-eval:
 	$(PYTEST) tests/evaluation/ -v
 
+# Dataset-quality gates (hermetic — no corpus/infra required). Runs in CI
+# (test-eval job) so schema/slug/evidence violations fail every commit.
+test-eval-data:
+	$(PYTEST) tests/unit/test_eval_datasets_schema.py tests/unit/test_eval_schema.py \
+		tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py \
+		tests/unit/test_synthetic_generator.py -v
+
+# Corpus-coverage gate (local / real-infra): validates every recall eval row
+# against the ACTIVE generation's indexed corpus.
+eval-coverage:
+	dec_venv/bin/dec eval-coverage
+
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
