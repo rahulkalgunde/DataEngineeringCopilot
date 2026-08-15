@@ -118,6 +118,30 @@ def _new_session_identifiers() -> tuple[str, str]:
     return session_id, f"anon-{session_id[:8]}"
 
 
+def _get_chat_user_id() -> str:
+    """Return a stable anonymous user_id for chat session scoping.
+
+    Persisted in ``st.session_state`` once so chat sessions survive Streamlit
+    reruns within a browser tab (the RAG ``session_id``/``user_id`` pair is
+    regenerated per tab and would otherwise orphan chat sessions on reload).
+    """
+    if "chat_user_id" not in st.session_state:
+        st.session_state.chat_user_id = f"anon-{uuid.uuid4().hex[:12]}"
+    return st.session_state.chat_user_id
+
+
+def _init_chat_state() -> None:
+    """Initialize the chat tab's session state (messages + active session)."""
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "chat_session_id" not in st.session_state:
+        st.session_state.chat_session_id = None
+    if "chat_suggestions" not in st.session_state:
+        st.session_state.chat_suggestions = []
+    if "pending_prompt" not in st.session_state:
+        st.session_state.pending_prompt = None
+
+
 # ---------------------------------------------------------------------------
 # Service health checks
 # ---------------------------------------------------------------------------
@@ -859,6 +883,280 @@ def _format_timestamp(ts: float) -> str:
     import datetime
 
     return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+
+
+# ---------------------------------------------------------------------------
+# Conversational RAG (Chat) tab
+# ---------------------------------------------------------------------------
+
+
+def _api_headers() -> dict[str, str]:
+    """Headers for chat API calls (stable anonymous user scoping)."""
+    return {"X-User-ID": _get_chat_user_id()}
+
+
+def _load_chat_sessions() -> list[dict]:
+    """Fetch the caller's chat sessions from the API (fail-open)."""
+    try:
+        req = urllib.request.Request(f"{API_BASE_URL}/api/v1/sessions", headers=_api_headers())
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            return json.loads(resp.read()).get("sessions", [])
+    except Exception:
+        return []
+
+
+def _render_session_manager() -> None:
+    """Sidebar widgets for New Chat, session list, and delete."""
+    sessions = _load_chat_sessions()
+    with st.sidebar:
+        st.markdown("### 💬 Chat Sessions")
+        if st.button("🆕 New Chat", key="chat_new_chat"):
+            st.session_state.chat_session_id = None
+            st.session_state.chat_messages = []
+            st.rerun()
+
+        if sessions:
+            labels = {s["title"]: s["session_id"] for s in sessions}
+            current = st.session_state.get("chat_session_id")
+            current_title = next((t for t, sid in labels.items() if sid == current), None)
+            selected = st.selectbox(
+                "Session",
+                options=list(labels.keys()),
+                index=list(labels.keys()).index(current_title) if current_title in labels else 0,
+                key="chat_session_select",
+            )
+            if selected and labels.get(selected) != st.session_state.get("chat_session_id"):
+                st.session_state.chat_session_id = labels[selected]
+                st.rerun()
+            if st.button("🗑 Delete Session", key="chat_delete_btn"):
+                try:
+                    sid = labels.get(selected)
+                    if sid:
+                        req = urllib.request.Request(
+                            f"{API_BASE_URL}/api/v1/sessions/{sid}",
+                            method="DELETE",
+                            headers=_api_headers(),
+                        )
+                        urllib.request.urlopen(req, timeout=5.0).close()
+                    if sid == st.session_state.get("chat_session_id"):
+                        st.session_state.chat_session_id = None
+                        st.session_state.chat_messages = []
+                except Exception:
+                    st.sidebar.error("Failed to delete session.")
+                st.rerun()
+        else:
+            st.caption("No saved conversations yet.")
+
+
+def _iter_chat_events(message: str, session_id: str | None):
+    """Yield parsed SSE event dicts for one chat turn as they arrive.
+
+    Iterating this generator consumes the streaming response incrementally so
+    the caller can update the UI (progress status + live tokens) between events
+    instead of blocking until the whole turn completes.
+    """
+    import httpx
+
+    body = {"message": message}
+    if session_id:
+        body["session_id"] = session_id
+
+    with httpx.stream(
+        "POST",
+        f"{API_BASE_URL}/api/v1/chat",
+        json=body,
+        headers=_api_headers(),
+        timeout=httpx.Timeout(300.0, connect=10.0),
+    ) as response:
+        response.raise_for_status()
+        buffer = ""
+        for line in response.iter_lines():
+            if not line:
+                continue
+            if not line.startswith("data: "):
+                continue
+            payload_text = line[len("data: ") :]
+            if payload_text == "[DONE]":
+                return
+            try:
+                event = json.loads(payload_text)
+            except json.JSONDecodeError:
+                buffer += payload_text
+                continue
+            yield event
+
+
+def _extract_streaming_answer(buffer: str) -> str | None:
+    """Return the clean answer if *buffer* is complete valid JSON with an answer.
+
+    Returns ``None`` while the streamed JSON is still incomplete so the UI shows
+    the progress status instead of raw ``{"status": ...}`` fragments.
+    """
+    if not buffer or not buffer.strip():
+        return None
+    import re
+
+    text = buffer.strip()
+    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    answer = data.get("answer") or data.get("response") or data.get("text") or data.get("content")
+    if answer is None:
+        return None
+    return str(answer)
+
+
+def _stream_chat_once(message: str, session_id: str | None) -> tuple[list[dict], str, str | None]:
+    """Run one chat turn against the API, returning all events + final text.
+
+    ``(events, full_text, new_session_id)``. Kept for tests/aggregate use; the
+    chat tab consumes ``_iter_chat_events`` directly for live updates.
+    """
+    events = list(_iter_chat_events(message, session_id))
+    full_text = ""
+    resolved_session = session_id
+    for event in events:
+        if event.get("type") == "session_created":
+            resolved_session = event.get("session_id") or resolved_session
+        if event.get("type") == "token":
+            full_text += event.get("content", "")
+        if event.get("type") == "done":
+            full_text = event.get("text", full_text)
+    return events, full_text, resolved_session
+
+
+def _render_suggestion_chips(suggestions: list[str]) -> None:
+    """Render clickable follow-up suggestion chips (ChatGPT-style).
+
+    Each chip is a button that, when clicked, sets ``pending_prompt`` so the
+    unified prompt-resolution block submits it as the next user turn.
+    """
+    if not suggestions:
+        return
+
+    def _set_pending(chip: str) -> None:
+        st.session_state.pending_prompt = chip
+
+    st.markdown("**Suggested follow-ups**")
+    cols = st.columns(len(suggestions))
+    for col, chip in zip(cols, suggestions, strict=False):
+        with col:
+            st.button(
+                chip,
+                key=f"sugg_{hash(chip)}",
+                type="tertiary",
+                width="stretch",
+                on_click=_set_pending,
+                args=(chip,),
+            )
+
+
+def render_chat_tab() -> None:
+    """Conversational RAG tab: multi-turn chat with session memory."""
+    from data_engineering_copilot.ui.chat_theme import apply_chat_theme
+
+    st.subheader("💬 Conversational RAG")
+    apply_chat_theme()
+
+    qdrant_ok, _ = _check_qdrant_reachable()
+    if not qdrant_ok or not settings.chat_enabled:
+        st.info("Conversational chat is unavailable (Qdrant unreachable or chat disabled).")
+        return
+
+    _init_chat_state()
+    _render_session_manager()
+
+    # ChatGPT-style layout: the conversation lives in a scrollable container so
+    # the input box always sits at the bottom of the last message. The height is
+    # kept modest so the chat input below stays within the visible tab area
+    # (inside st.tabs() st.chat_input renders in-flow, not pinned to the page).
+    chat_container = st.container(height=360, border=False, autoscroll=True)
+
+    # Render existing messages.
+    for msg in st.session_state.chat_messages:
+        with chat_container.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
+            st.markdown(msg["content"])
+
+    # ChatGPT-style: clickable follow-up suggestions are rendered BELOW the
+    # freshly generated answer (see the turn block) so chips always reflect the
+    # latest answer — never stale chips from the previous turn.
+    prompt = st.chat_input(
+        "Ask a follow-up about Spark, Airflow, Delta Lake…",
+        submit_mode="stop",
+    )
+    # A suggestion chip click resolves to a prompt just like typing one.
+    pending = st.session_state.pop("pending_prompt", None)
+    if not prompt and pending:
+        prompt = pending
+    if prompt:
+        # New turn clears the previous turn's suggestion chips.
+        st.session_state.chat_suggestions = []
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with chat_container.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
+
+        with chat_container.chat_message("assistant", avatar="🤖"):
+            text_ph = st.empty()
+            status_ph = st.empty()
+            full_text = ""
+            raw_buffer = ""
+            resolved_session = st.session_state.get("chat_session_id")
+            error_msg: str | None = None
+
+            try:
+                with status_ph.status("Connecting to chat API…", expanded=True) as status:
+                    for event in _iter_chat_events(prompt, st.session_state.get("chat_session_id")):
+                        etype = event.get("type")
+                        if etype == "session_created":
+                            resolved_session = event.get("session_id") or resolved_session
+                            status.update(label="Session ready", state="running")
+                        elif etype == "status":
+                            status.update(label=event.get("message", "Working…"), state="running")
+                        elif etype == "token":
+                            raw_buffer += event.get("content", "")
+                            clean = _extract_streaming_answer(raw_buffer)
+                            if clean is not None:
+                                full_text = clean
+                                text_ph.markdown(full_text)
+                        elif etype == "done":
+                            full_text = event.get("text", full_text)
+                            text_ph.markdown(full_text)
+                        elif etype == "suggestions":
+                            st.session_state.chat_suggestions = event.get("suggestions", [])
+                        elif etype == "error":
+                            error_msg = event.get("message", "Unknown error")
+                            status.update(label="Failed", state="error")
+            except Exception as exc:
+                logger.exception("Chat turn failed")
+                error_msg = str(exc)
+
+            st.session_state.chat_session_id = resolved_session
+
+            # Remove the transient progress widget so no "Done" status lingers.
+            if not error_msg:
+                status_ph.empty()
+
+            if error_msg:
+                text_ph.error(f"**Chat failed:** {error_msg}")
+            elif not full_text:
+                text_ph.markdown("…")
+
+        st.session_state.chat_messages.append(
+            {"role": "assistant", "content": full_text or (f"Error: {error_msg}" if error_msg else "(no answer)")}
+        )
+
+        # Render the follow-up chips for THIS answer immediately, inside the
+        # chat container so they appear under the answer but ABOVE the input box.
+        fresh = st.session_state.get("chat_suggestions", [])
+        if fresh and not error_msg:
+            with chat_container:
+                _render_suggestion_chips(fresh)
 
 
 def render_qa_tab() -> None:
@@ -1765,9 +2063,11 @@ def main() -> None:
     if not deps_ok:
         st.error(f"**Docker image is STALE** — ingestion will fail. Run `make docker-dev` to rebuild.\n\n{deps_msg}")
 
-    tab_ask, tab_ingest, tab_lab, tab_health, tab_metrics = st.tabs(
-        ["💬 Ask", "📥 Ingestion", "🧪 Pipeline Lab", "🔧 System Health", "📊 Metrics"]
+    tab_chat, tab_ask, tab_ingest, tab_lab, tab_health, tab_metrics = st.tabs(
+        ["💬 Chat", "💬 Ask", "📥 Ingestion", "🧪 Pipeline Lab", "🔧 System Health", "📊 Metrics"]
     )
+    with tab_chat:
+        render_chat_tab()
     with tab_ask:
         render_qa_tab()
     with tab_ingest:
