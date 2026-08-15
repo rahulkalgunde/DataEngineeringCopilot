@@ -47,7 +47,8 @@ profil*/
 memory-bank/
 .docker-tag
 .ch-backup/
-repomix-output.xml
+repomix-*
 coverage.xml
 RAG_PIPELINE_TRACE.md
 dec_pydocs_venv/
+.rag_eval/
