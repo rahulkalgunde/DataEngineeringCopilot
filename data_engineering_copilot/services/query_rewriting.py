@@ -26,6 +26,16 @@ _CODE_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Cross-mode "X or Y" question: "How does dynamic allocation work when running
+# on YARN or Kubernetes?" names two deployment modes. Such questions must be
+# split into per-mode sub-queries so retrieval covers BOTH modes — otherwise
+# the single fused query matches whichever mode's docs rank higher and the LLM
+# fills in the other mode from memory (the cross-mode hallucination).
+_MODE_OR_SPLIT_PATTERN = re.compile(
+    r"\b(yarn|kubernetes|k8s|standalone)\s+or\s+(yarn|kubernetes|k8s|standalone)\b",
+    re.IGNORECASE,
+)
+
 _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "api_lookup",
@@ -35,7 +45,14 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
     ("code_example", _CODE_INTENT_PATTERN),
-    ("comparative", re.compile(r"\b(compare|vs\.?|versus|difference between|pros and cons)\b", re.IGNORECASE)),
+    (
+        "comparative",
+        re.compile(
+            r"\b(compare|vs\.?|versus|difference between|pros and cons)\b"
+            r"|\b(yarn|kubernetes|k8s|standalone)\s+or\s+(yarn|kubernetes|k8s|standalone)\b",
+            re.IGNORECASE,
+        ),
+    ),
     (
         "debugging",
         re.compile(r"\b(why is|error|fail|bug|oom|exception|not working|broken|crash|issue|problem)\b", re.IGNORECASE),
@@ -401,10 +418,18 @@ class QueryRewriter:
             intent = self.classify_intent(query)
             hyde = await self._generate_hyde_async(query) if self._hyde_enabled else ""
 
+            steps: tuple[str, ...] = (rewritten,)
+            if intent == "comparative":
+                mode_split = self._split_mode_or(rewritten)
+                if len(mode_split) == 1:
+                    mode_split = self._split_mode_or(query)
+                if len(mode_split) > 1:
+                    steps = mode_split
+
             return RewrittenQuery(
                 original_query=query,
                 intent=intent,
-                decomposed_steps=(rewritten,),
+                decomposed_steps=steps,
                 hyde_query=hyde,
                 filters=extract_retrieval_constraints(query),
             )
@@ -576,8 +601,30 @@ class QueryRewriter:
             logger.warning("HyDE generation failed: %s", exc)
             return ""
 
+    def _split_mode_or(self, query: str) -> tuple[str, ...]:
+        """Split a cross-mode 'X or Y' question into per-mode sub-queries.
+
+        Returns the original query untouched when no deployment-mode 'or'
+        pattern is present, so the decomposition is a no-op for ordinary
+        queries. Example: "How does dynamic allocation work when running on
+        YARN or Kubernetes?" → ("... on YARN?", "... on Kubernetes?").
+        """
+        match = _MODE_OR_SPLIT_PATTERN.search(query)
+        if not match:
+            return (query,)
+        left, right = match.group(1), match.group(2)
+        prefix, suffix = query[: match.start()], query[match.end() :]
+        left_q = f"{prefix}{left}{suffix}".strip()
+        right_q = f"{prefix}{right}{suffix}".strip()
+        if left_q == right_q:
+            return (query,)
+        return (left_q, right_q)
+
     def _decompose_comparative(self, query: str) -> tuple[str, ...]:
-        """Split 'Compare X vs Y' into entity-specific sub-queries."""
+        """Split 'Compare X vs Y' or cross-mode 'X or Y' into per-mode sub-queries."""
+        mode_split = self._split_mode_or(query)
+        if len(mode_split) > 1:
+            return mode_split
         m = re.search(
             r"(?:compare|difference between)\s+(.+?)\s+(?:vs\.?|versus|and)\s+(.+?)(?:\?|$)",
             query,
