@@ -1276,16 +1276,16 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 
 | Service | Image | Port(s) |
 |---|---|---|
-| redis | `redis:7-alpine` | 6379 |
+| redis | `redis:7.4.10-alpine` | 6379 |
 | qdrant | `qdrant/qdrant:v1.18.3` | 6333, 6334 |
 | ollama | `ollama/ollama:0.32.4` | 11434 |
-| minio | `minio/minio:RELEASE.2025-09-07` | 9000, 9001 |
-| minio-init | `minio/mc:RELEASE.2025-08-13` | — |
-| clickhouse | `clickhouse/clickhouse-server:26.4-alpine` | 8123, 9000 |
-| langfuse | `langfuse/langfuse:4` | 3000 |
-| langfuse-worker | `langfuse/langfuse-worker:4` | — |
-| postgres (infra) | `postgres:16-alpine` | 5432 |
-| postgres (app) | `postgres:16-alpine` | 5433 |
+| minio | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000, 9001 |
+| minio-init | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | — |
+| clickhouse | `clickhouse/clickhouse-server:26.4.5.143-alpine` | 8123, 9000 |
+| langfuse | `langfuse/langfuse:4.11.0` | 3000 |
+| langfuse-worker | `langfuse/langfuse-worker:4.11.0` | — |
+| postgres (infra) | `postgres:16.15-alpine` | 5432 |
+| postgres (app) | `postgres:16.15-alpine` | 5433 |
 | backend-api | `de_copilot_base_image` (custom) | 8000 |
 | celery_worker | `de_copilot_base_image` (custom) | (none) |
 

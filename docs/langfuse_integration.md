@@ -15,7 +15,7 @@ See also `docs/langfuse_evaluators.md` (evaluators + score configs) and
   (`LangfuseCompat`, `_ObservationCompat`, `get_langfuse_instance`) and the
   tracer factory in `observability/telemetry.py`
   (`build_telemetry_tracer` → `LangfuseTelemetryTracer` / `NoOpTelemetryTracer`).
-- **Server**: `langfuse/langfuse:4` + `langfuse/langfuse-worker:4` with
+- **Server**: `langfuse/langfuse:4.11.0` + `langfuse/langfuse-worker:4.11.0` with
   ClickHouse 26.4. The historic backfill completed successfully and the stack
   now runs in **events-only** mode (`LANGFUSE_MIGRATION_V4_WRITE_MODE=events_only`,
   `LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR=direct`).
@@ -174,7 +174,7 @@ monitor fires.
 
 ## Migration runbook (Phase 1) & rollback
 
-- Phase 1 upgraded ClickHouse to 26.4 and Langfuse server/worker to `:4`.
+- Phase 1 upgraded ClickHouse to 26.4 and Langfuse server/worker to `4.11.0`.
 - Historic v4 backfill completed: root spans, observation rewrite, events
   backfill, and dataset-run-item backfill all completed without errors.
 - Monitor the UI background-migrations page until the v4 backfill completes.

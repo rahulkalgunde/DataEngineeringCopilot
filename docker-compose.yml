@@ -4,7 +4,7 @@ services:
   # For production, use Docker secrets or a secrets manager instead.
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.10-alpine
     container_name: de_copilot_broker
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local_secure_password_123}"]
     deploy:
@@ -115,7 +115,7 @@ services:
       start_period: 40s
 
   clickhouse:
-    image: clickhouse/clickhouse-server:26.4-alpine
+    image: clickhouse/clickhouse-server:26.4.5.143-alpine
     container_name: de_copilot_clickhouse
     cap_add:
       - SYS_NICE
@@ -146,7 +146,7 @@ services:
       start_period: 10s
 
   langfuse-postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     container_name: de_copilot_langfuse_db
     deploy:
       resources:
@@ -172,7 +172,7 @@ services:
       start_period: 10s
 
   langfuse:
-    image: langfuse/langfuse:4
+    image: langfuse/langfuse:4.11.0
     container_name: de_copilot_observability
     deploy:
       resources:
@@ -228,7 +228,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     container_name: de_copilot_postgres
     deploy:
       resources:
@@ -254,7 +254,7 @@ services:
       start_period: 5s
 
   langfuse-worker:
-    image: langfuse/langfuse-worker:4
+    image: langfuse/langfuse-worker:4.11.0
     container_name: de_copilot_langfuse_worker
     deploy:
       resources:

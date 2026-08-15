@@ -64,7 +64,7 @@ On windows machine, Install and start Ollama, then run the models:
 
 ```bash
 ollama serve
-ollama pull nomic-embed-text:latest
+ollama pull nomic-embed-text:v1.5
 ollama pull qwen3.5:9b
 ```
 

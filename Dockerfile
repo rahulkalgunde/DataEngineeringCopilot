@@ -2,7 +2,7 @@
 
 # Stage 1: Build stage — install deps, playwright + chromium, bake fingerprint.
 # Build tools and package caches stay in this stage and are discarded.
-FROM python:3.12-slim AS builder
+FROM python:3.12.14-slim AS builder
 
 # Playwright's Chromium needs the headless browser system libraries at runtime,
 # so they are installed here and copied into the runtime stage's libs dir.
@@ -64,7 +64,7 @@ RUN chown -R appuser:appuser /app
 
 # Stage 2: Runtime stage — slim image containing only the runtime deps,
 # playwright browsers, and application code. No build tools, no package caches.
-FROM python:3.12-slim AS runtime
+FROM python:3.12.14-slim AS runtime
 
 ARG GIT_SHA=unknown
 
