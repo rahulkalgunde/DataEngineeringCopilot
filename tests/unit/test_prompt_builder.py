@@ -111,6 +111,31 @@ class TestSafetyNet:
         assert "Match the language requested by the user" in prompt
 
 
+def test_mode_confusion_constraint_present(monkeypatch):
+    """The rag-answer prompt must carry the mode/entity isolation constraint.
+
+    Hermetic: force the offline fallback template so the test does not depend
+    on a live Langfuse server prompt (which may lag the seeded template).
+    """
+    from data_engineering_copilot.observability.langfuse_prompts import _FallbackPrompt
+    from data_engineering_copilot.services import prompt_builder as pb_module
+
+    monkeypatch.setattr(
+        pb_module,
+        "get_langfuse_prompt",
+        lambda *a, **k: _FallbackPrompt(pb_module._RAG_PROMPT_TEMPLATE),
+    )
+    builder = PromptBuilder()
+    prompt = builder.build_rag_prompt(
+        context="Some context.",
+        question="How does dynamic allocation work on YARN or Kubernetes?",
+        intent="comparative",
+    )
+    assert "Mode/Entity Isolation" in prompt
+    assert "YARN vs Kubernetes" in prompt
+    assert "do NOT transfer behavior from one mode to another" in prompt
+
+
 class TestHistoryInjection:
     def test_no_history_matches_legacy_prompt(self):
         """Without history, the prompt is byte-identical to pre-chat behavior."""
