@@ -327,15 +327,114 @@ class ProviderFallbackChain[T, R]:
         """Generate using the fallback chain (delegates to execute)."""
         return cast(str, await self.execute(cast(T, prompt)))
 
+    async def _call_with_health_stream(
+        self,
+        provider: ProviderConfig,
+        prompt: str,
+        temperature: float | None = None,
+    ):
+        """Stream tokens from a single provider, tracking health on the way.
+
+        Yields individual tokens from ``provider.client.generate_stream`` when
+        available; falls back to a single non-streaming ``call`` result for
+        clients that do not implement streaming. Records provider success after
+        the stream completes and failure (with error categorization) on error.
+        """
+        start = time.monotonic()
+        client = provider.client
+        try:
+            stream_method = getattr(client, "generate_stream", None)
+            if stream_method is None:
+                result = await client.call(prompt)
+                self._health.track_success(provider.name, client.model, time.monotonic() - start)
+                if result:
+                    yield str(result)
+                return
+            async for token in stream_method(prompt, temperature=temperature):
+                yield token
+            self._health.track_success(provider.name, client.model, time.monotonic() - start)
+        except Exception as exc:
+            p_err = self._error_categorizer(exc, provider.name, client.model)
+            self._health.track_failure(provider.name, client.model, p_err.category, p_err.retry_after)
+            logger.warning(
+                "provider_stream_failed",
+                provider=provider.name,
+                model=client.model,
+                category=p_err.category.value,
+                error=str(exc),
+            )
+            raise p_err from exc
+
     async def generate_stream(
         self,
         prompt: str,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ):
-        """Stream tokens — not supported via fallback chain, falls back to generate."""
-        result = await self.generate(prompt, temperature=temperature)
-        yield result
+        """Stream tokens from the fallback chain.
+
+        Mirrors ``execute``'s provider walk: skip providers in cooldown /
+        rate-limited, stream from the first available provider, fall through to
+        the degraded provider when all external providers fail. A provider that
+        fails *before emitting any token* is skipped; a failure *after* tokens
+        were emitted is re-raised — already-sent tokens cannot be retried.
+        """
+        main = [p for p in self._config.providers if p.name.lower() != "ollama"]
+        degraded = self._config.degraded_fallback
+
+        if not main and degraded:
+            main = [degraded]
+            degraded = None
+
+        attempted: list[dict[str, str]] = []
+        self._last_error = None
+
+        for provider in main:
+            available, reason, available_in = self._provider_gate(provider)
+            if not available:
+                attempted.append({"provider": provider.name, "outcome": f"skipped:{reason}"})
+                continue
+            emitted = False
+            try:
+                async for token in self._call_with_health_stream(provider, prompt, temperature):
+                    emitted = True
+                    yield token
+                return  # stream completed on this provider
+            except ProviderError as p_err:
+                self._last_error = p_err
+                attempted.append({"provider": provider.name, "outcome": f"failed:{p_err.category.value}"})
+                if emitted:
+                    raise
+
+        if degraded:
+            available, consecutive = self._degraded_available(degraded)
+            if not available:
+                attempted.append({"provider": degraded.name, "outcome": f"skipped:degraded({consecutive})"})
+            else:
+                emitted = False
+                try:
+                    async for token in self._call_with_health_stream(degraded, prompt, temperature):
+                        emitted = True
+                        yield token
+                    return
+                except ProviderError as p_err:
+                    self._last_error = p_err
+                    attempted.append({"provider": degraded.name, "outcome": f"failed:{p_err.category.value}"})
+                    if emitted:
+                        raise
+
+        logger.error(
+            "all_providers_failed_stream",
+            attempts=attempted,
+            last_error=str(self._last_error) if self._last_error else "no providers configured",
+        )
+        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+
+        raise LLMClientError(
+            f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
+            retry_after=self._last_error.retry_after if isinstance(self._last_error, ProviderError) else None,
+            category=self._last_error.category if isinstance(self._last_error, ProviderError) else None,
+        ) from self._last_error
 
     async def close(self) -> None:
         """Close all provider clients."""

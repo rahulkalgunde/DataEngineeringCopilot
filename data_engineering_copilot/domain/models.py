@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -67,7 +68,9 @@ class CachedAnswer:
 
     Unlike the bare answer string, this preserves sources, confidence, and
     groundedness so a cache hit reconstructs the full ``Answer`` instead of a
-    fabricated ``confidence=1.0`` / empty ``sources``.
+    fabricated ``confidence=1.0`` / empty ``sources``. ``suggestions`` caches
+    the ChatGPT-style follow-up questions so a cache hit is fully instant
+    (answer + chips, no regeneration).
     """
 
     text: str
@@ -75,6 +78,7 @@ class CachedAnswer:
     confidence: float = 1.0
     groundedness_score: float = 1.0
     cached_at: float = 0.0
+    suggestions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -232,6 +236,17 @@ class RagConfig:
     max_chunks_per_source: int = 2
     max_expansion_queries: int = 2
     cache_enabled: bool = True
+    # Phase F: smart-cache recall tier. When enabled, follow-up chat turns try
+    # to reuse similar cached (question→answer) pairs via local synthesis,
+    # gated by scope verify, before falling through to the full pipeline.
+    chat_cache_recall_enabled: bool = False
+    chat_cache_top_k: int = 3
+    chat_cache_recall_threshold: float = 0.70
+    chat_cache_max_age_seconds: int = 86400
+    # ChatGPT-style clickable follow-up suggestions.
+    chat_suggestions_enabled: bool = True
+    chat_suggestions_count: int = 3
+    chat_suggestions_mode: str = "hybrid"
 
 
 @dataclass(frozen=True)
@@ -294,3 +309,33 @@ class IngestRequest(BaseModel):
 
     source_names: list[str] | None = Field(default=None, max_length=20)
     max_pages: int | None = Field(default=None, ge=1, le=settings.max_pages_hard_cap)
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """A single conversational turn within a chat session.
+
+    ``sources`` holds JSON-safe provenance dicts (``_chunk_provenance_ref``
+    shape) rather than full ``DocumentChunk`` objects so the message is
+    directly serializable by both the Redis and Postgres stores.
+    """
+
+    message_id: str
+    session_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    timestamp: float = 0.0
+    sources: tuple[dict, ...] = ()
+    token_count: int = 0
+
+
+@dataclass(frozen=True)
+class ChatSession:
+    """Metadata for a multi-turn conversational RAG session."""
+
+    session_id: str
+    user_id: str = "anonymous"
+    title: str = "New Chat"
+    created_at: float = 0.0
+    updated_at: float = 0.0
+    metadata: dict = field(default_factory=dict)

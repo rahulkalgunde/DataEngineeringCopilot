@@ -47,6 +47,19 @@ async def _lifespan(app: FastAPI):
         except Exception:
             logger.warning("Failed to close RAG service during shutdown", exc_info=True)
 
+        # Close the chat store's Postgres pool if the conversation singleton
+        # was ever constructed.
+        try:
+            from data_engineering_copilot.services.conversation_service_singleton import (
+                get_conversation_service_if_initialized,
+            )
+
+            conversation_service = get_conversation_service_if_initialized()
+            if conversation_service is not None:
+                await conversation_service.close()
+        except Exception:
+            logger.warning("Failed to close conversation service during shutdown", exc_info=True)
+
         # Close the process-wide shared Redis client if it was created.
         try:
             from data_engineering_copilot.factory import get_shared_redis_client
