@@ -26,6 +26,27 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9_]+", text.lower()))
 
 
+def answer_token_f1(reference: str, hypothesis: str) -> float:
+    """Token-level F1 between a reference (ground truth) and a hypothesis.
+
+    Deterministic lexical correctness signal for QA evals — 1.0 when the
+    hypothesis exactly matches the reference tokens, 0.0 with no overlap.
+    Complementary to LLM-judge scores; cheap and CI-stable.
+    """
+    ref_tokens = _tokenize(reference)
+    hyp_tokens = _tokenize(hypothesis)
+    if not ref_tokens:
+        return 0.0
+    if not hyp_tokens:
+        return 0.0
+    overlap = len(ref_tokens & hyp_tokens)
+    precision = overlap / len(hyp_tokens)
+    recall = overlap / len(ref_tokens)
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
 @dataclass
 class EvaluationResult:
     retrieval_precision: float
