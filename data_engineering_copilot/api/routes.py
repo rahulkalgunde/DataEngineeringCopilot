@@ -637,6 +637,8 @@ async def get_session(session_id: str, fastapi_request: Request):
                 "content": m.content,
                 "timestamp": m.timestamp,
                 "sources": list(m.sources),
+                "groundedness_score": m.groundedness_score,
+                "groundedness_claims": list(m.groundedness_claims),
             }
             for m in messages
         ],

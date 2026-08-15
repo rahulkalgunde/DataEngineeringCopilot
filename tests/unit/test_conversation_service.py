@@ -169,6 +169,49 @@ async def test_chat_stream_persists_both_turns_and_emits_session_created():
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_persists_sources_and_groundedness():
+    service, pg, rag = _build_service(
+        [
+            {"type": "token", "content": "Delta Lake "},
+            {
+                "type": "sources",
+                "sources": [
+                    {
+                        "source_name": "Delta Docs",
+                        "title": "Delta Lake Guide",
+                        "url": "https://docs.delta.io/",
+                        "snippet": "ACID transactions.",
+                        "chunk_id": "delta:chunk42",
+                    }
+                ],
+            },
+            {
+                "type": "done",
+                "text": "Delta Lake brings ACID.",
+                "confidence": 0.9,
+                "groundedness_score": 0.55,
+                "groundedness_claims": ["Delta Lake is YARN-only"],
+            },
+        ]
+    )
+    events = await _collect(service.chat_stream(None, "u1", "What is Delta Lake?"))
+    sid = events[0]["session_id"]
+    history = await pg.get_history(sid, 10)
+    assistant = next(m for m in history if m.role == "assistant")
+    assert assistant.sources == (
+        {
+            "source_name": "Delta Docs",
+            "title": "Delta Lake Guide",
+            "url": "https://docs.delta.io/",
+            "snippet": "ACID transactions.",
+            "chunk_id": "delta:chunk42",
+        },
+    )
+    assert assistant.groundedness_score == 0.55
+    assert assistant.groundedness_claims == ("Delta Lake is YARN-only",)
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_passes_history_to_rag():
     service, pg, rag = _build_service([{"type": "done", "text": "answer", "confidence": 0.5}])
     sid = "existing-session"
