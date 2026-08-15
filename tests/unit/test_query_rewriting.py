@@ -197,6 +197,38 @@ class TestDecomposeQuery:
         assert len(steps) >= 2
         assert any("DataFrame" in s for s in steps)
 
+    def test_cross_mode_or_question_classifies_comparative(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        result = rw.classify_intent("How does dynamic allocation work when running on YARN or Kubernetes?")
+        assert result == "comparative"
+
+    def test_cross_mode_or_decomposes_into_per_mode_queries(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        steps = rw.decompose(
+            "How does dynamic allocation work when running on YARN or Kubernetes?",
+            intent="comparative",
+        )
+        assert steps == (
+            "How does dynamic allocation work when running on YARN?",
+            "How does dynamic allocation work when running on Kubernetes?",
+        )
+
+    def test_cross_mode_or_leaves_ordinary_questions_untouched(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        steps = rw.decompose("What is dynamic allocation?", intent="comparative")
+        assert steps == ("What is dynamic allocation?",)
+
+    def test_cross_mode_or_reversed_order_keeps_original_order(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        steps = rw.decompose(
+            "How does shuffle work on Kubernetes or YARN?",
+            intent="comparative",
+        )
+        assert steps == (
+            "How does shuffle work on Kubernetes?",
+            "How does shuffle work on YARN?",
+        )
+
     def test_disabled_returns_original(self):
         rw = QueryRewriter(llm_client=None, enabled=False)
         steps = rw.decompose("Compare X and Y", intent="comparative")
@@ -285,6 +317,38 @@ class TestAsyncRewrite:
 
         assert result.intent == "how_to"
         assert result.original_query == "How to configure Delta Lake with Spark"
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_splits_cross_mode_or_into_per_mode_steps(self):
+        class RewritingLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "How does dynamic allocation work when running on YARN or Kubernetes?"
+
+        rw = QueryRewriter(llm_client=RewritingLLM(), enabled=True, hyde_enabled=False)
+
+        result = await rw.async_rewrite("How does dynamic allocation work when running on YARN or Kubernetes?")
+
+        assert result.intent == "comparative"
+        assert result.decomposed_steps == (
+            "How does dynamic allocation work when running on YARN?",
+            "How does dynamic allocation work when running on Kubernetes?",
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_cross_mode_or_falls_back_to_original_when_rewrite_drops_modes(self):
+        class RewritingLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "dynamic allocation execution"
+
+        rw = QueryRewriter(llm_client=RewritingLLM(), enabled=True, hyde_enabled=False)
+
+        result = await rw.async_rewrite("How does dynamic allocation work when running on YARN or Kubernetes?")
+
+        assert result.intent == "comparative"
+        assert result.decomposed_steps == (
+            "How does dynamic allocation work when running on YARN?",
+            "How does dynamic allocation work when running on Kubernetes?",
+        )
 
 
 class TestDegenerateRewriteFilter:
