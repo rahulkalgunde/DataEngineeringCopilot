@@ -90,6 +90,8 @@ class GithubSourcePreparer:
         chunk_count_by_path: dict[str, int] = {}
         for record in manifest.files:
             parsed = self._parse_record(record)
+            if _is_rst(record.relative_path) and record.doc_type == "guide":
+                parsed = replace(parsed, text=_rst_to_markdown_headings(parsed.text))
             metadata = derive_spark_metadata(record, self._config, title=parsed.title, text=parsed.text)
             doc_chunks = await chunker.chunk(parsed, metadata)
             doc_chunks = [self._attach_spark_metadata(chunk) for chunk in doc_chunks]
