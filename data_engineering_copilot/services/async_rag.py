@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -17,6 +17,7 @@ from data_engineering_copilot.domain.models import (
     Answer,
     CachedAnswer,
     CacheScope,
+    ChatMessage,
     LLMUsage,
     RagConfig,
     RetrievedChunk,
@@ -29,6 +30,7 @@ from data_engineering_copilot.domain.protocols import (
     TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
+from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.context_assembler import ContextAssembler
@@ -36,8 +38,13 @@ from data_engineering_copilot.services.context_compression import ContextCompres
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.input_guardrails import InputGuardrails
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
+from data_engineering_copilot.services.query_cache import _NON_ANSWER_MARKERS
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
-from data_engineering_copilot.services.query_rewriting import QueryRewriter
+from data_engineering_copilot.services.query_rewriting import (
+    QueryRewriter,
+    is_degenerate_query,
+    render_conversation_history,
+)
 from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
@@ -198,6 +205,131 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def _clean_chat_text(raw: str) -> str:
+    """P0-B: unwrap the RAG JSON envelope for user display.
+
+    ``parse_rag_response`` extracts ``answer`` from the
+    ``{"status","answer","missing_info"}`` envelope (doc intents); for code
+    intents or unparseable text it falls back to the raw text unchanged.
+    Handles refusal text that mixes a JSON object with trailing prose.
+    Strips a trailing ``Sources: [...]`` line the LLM appends (UI shows
+    sources separately).
+    """
+    if not raw:
+        return ""
+    result = raw
+    stripped = raw.lstrip()
+    if stripped.startswith("{"):
+        # JSON-prefixed (envelope or refusal-with-prose): strip the leading JSON
+        # object, then parse any remaining prose.
+        depth = 0
+        in_str = False
+        esc = False
+        for i, ch in enumerate(stripped):
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        rest = stripped[i + 1 :].lstrip()
+                        result = rest if rest else raw
+                        break
+    parsed = parse_rag_response(result)
+    if parsed.answer:
+        result = parsed.answer
+    return _strip_sources_line(result)
+
+
+_SOURCES_LINE_RE = re.compile(r"\n\s*Sources:\s*\[.*\]\s*$", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_sources_line(text: str) -> str:
+    """Remove a trailing ``Sources: [...]`` line from an answer (UI shows sources separately)."""
+    if not text:
+        return text
+    cleaned = _SOURCES_LINE_RE.sub("", text)
+    return cleaned.rstrip()
+
+
+# Identity questions: the assistant's identity is fixed and never answered from
+# retrieved documents. These are intercepted before retrieval and answered with
+# the chat persona directly.
+_IDENTITY_QUESTION_RE = re.compile(
+    r"^(who|what)\s+are\s+you|are\s+you\s+(claude|anthropic|gpt|chatgpt|an? (ai )?assistant|a robot)|"
+    r"your\s+name|what('s| is) your (name|identity|role)|identify yourself|say\s+your\s+name",
+    re.IGNORECASE,
+)
+
+_IDENTITY_ANSWER = (
+    "I am DataEngineeringCopilot, an expert data engineering assistant for "
+    "Apache Spark, Apache Airflow, and Delta Lake documentation."
+)
+
+
+# ChatGPT-style follow-up suggestion prompt. Grounded in the RETRIEVED context
+# (the same documentation chunks that grounded the answer) so every suggested
+# follow-up is answerable from the knowledge repo — never invented by the LLM.
+# Uses the conversation trajectory (history), the query intent, and a logical-
+# expansion taxonomy (next step / alternative / edge case) like ChatGPT/Gemini.
+_SUGGESTION_PROMPT = (
+    "You are a documentation assistant. Given the conversation history, the "
+    "retrieved documentation context, the user's question, the answer, and the "
+    "question's intent, suggest {count} short follow-up questions the user might "
+    "logically ask next.\n"
+    "Rules:\n"
+    "- ONLY suggest questions that can be answered from the provided context. "
+    "If the context does not mention a topic, do not suggest it.\n"
+    "- Prefer logical next steps given the conversation trajectory (deepen the "
+    "current topic, alternatives, edge cases, usage examples).\n"
+    "- Use the intent to steer: for 'how_to'/'code_example' suggest examples or "
+    "variations; for 'comparative' suggest the comparison alternatives; for "
+    "'api_lookup' suggest related functions/parameters; for 'debugging' suggest "
+    "causes/fixes; for 'factual' suggest deeper or related topics.\n"
+    "- Vary the kinds of follow-ups (do not repeat the same shape).\n"
+    "- Each must be a standalone question, one per line, no numbering, no "
+    "preamble, max 12 words each.\n\n" + SYSTEM_BLOCK_SEPARATOR + "## CONVERSATION HISTORY\n{history}\n\n"
+    "## RETRIEVED CONTEXT\n{context}\n\n"
+    "## QUESTION\n{question}\n\n"
+    "## INTENT\n{intent}\n\n"
+    "## ANSWER\n{answer}\n\n"
+    "Suggested follow-ups:"
+)
+
+
+# P3: deterministic domain-coherence guard. A question that strongly signals a
+# data-engineering domain must not be answered from an unrelated domain's docs.
+_DE_DOMAIN_TERMS = re.compile(
+    r"\b(spark|pyspark|dataframe|delta|airflow|dag|scala|sql|etl|executor|shuffle)\b", re.IGNORECASE
+)
+_FOREIGN_DOMAIN_MARKERS = re.compile(r"\b(anthropic|claude|prompt cache|mcp connector)\b", re.IGNORECASE)
+
+
+def _domain_mismatch(chunks) -> bool:
+    """Return True when the top retrieved chunks are dominated by a foreign
+    domain (e.g. Anthropic/Claude docs) despite a data-engineering query context.
+
+    Inspects the top-ranked chunks (those that actually reach the prompt), not
+    the full fused candidate pool, so a wide pool that legitimately mixes
+    domains does not falsely trigger the refusal. Used as a cheap fail-safe:
+    if the corpus was cross-tainted (mixed-domain index), refuse rather than
+    answer from irrelevant docs.
+    """
+    if not chunks:
+        return False
+    top = chunks[: min(len(chunks), 8)]
+    foreign_score = sum(1 for c in top if _FOREIGN_DOMAIN_MARKERS.search(c.chunk.source_name or ""))
+    de_score = sum(1 for c in top if _DE_DOMAIN_TERMS.search(c.chunk.text or ""))
+    return foreign_score > 0 and foreign_score >= de_score
+
+
 def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
     """Candidate pool handed to the cross-encoder reranker.
 
@@ -283,12 +415,12 @@ class AsyncRagService:
         """Gate the top chunk against the confidence threshold and, when it
         fails, return the out-of-repository ``Answer`` (else ``None``).
 
-        The cross-encoder reranker is the single generic relevance decision, so
-        when a reranker ran for this query the gate compares its sigmoid score
-        against ``reranker_confidence_threshold`` (relevant pairs commonly land
-        ~0.10-0.15). Without a reranker the gate falls back to the
-        embedding/fused-scale ``confidence_threshold`` so weak but genuinely
-        relevant matches are not rejected before reranking.
+        Reranker scores are min-max normalized within the candidate pool (see
+        ``LLMReranker._apply`` and ``CrossEncoderReranker.rerank``), so the
+        ``reranker_confidence_threshold`` has the same meaning across providers:
+        a uniformly scaled score well below the threshold indicates the best
+        available chunk is weakly relevant. Without a reranker the gate falls
+        back to the embedding/fused ``confidence_threshold``.
         """
         if not retrieved_chunks:
             return None
@@ -1434,6 +1566,757 @@ class AsyncRagService:
                 logger.info("scope_gate_refused_stream topic_not_covered question=%r", safe_question[:80])
                 full_text = _SCOPE_REFUSAL_TEXT
         yield _sse({"type": "done", "text": full_text, "confidence": confidence})
+
+    async def chat_stream(
+        self,
+        question: str,
+        source_filter: list[str] | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_history: Sequence[ChatMessage] | None = None,
+        max_history_tokens: int = 2048,
+        cache_scope: CacheScope | None = None,
+        chat_query_rewriter: QueryRewriter | None = None,
+        chat_scope_verifier: ScopeVerifier | None = None,
+        chat_llm_client: LLMClientProtocol | None = None,
+        chat_reranker: RerankerProtocol | None = None,
+        chat_blocked_url_substrings: Sequence[str] | None = None,
+        chat_domain_sources: Sequence[str] | None = None,
+        chat_system_role: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a conversational RAG answer via SSE events.
+
+        Self-contained multi-turn pipeline (``answer``/``answer_stream`` are
+        untouched): history-aware contextual rewriting, multi-query retrieval
+        with expansion + HyDE + rank fusion, reranking, history-injected
+        prompt, and streaming generation.
+
+        Yields data-only SSE events (``{"type": ...}`` convention):
+        - ``status`` — pipeline progress
+        - ``sources`` — JSON-safe source references (before the first token)
+        - ``token`` — answer deltas
+        - ``done`` — final answer + confidence
+        - ``error`` — terminal failure
+
+        The shared two-tier answer cache is only read/written on **turn 1**
+        (empty history — the question is standalone and cache-safe). Follow-up
+        turns never touch the cache so context-dependent answers are never
+        served stale.
+        """
+        _t0 = time.monotonic()
+        yield _sse({"type": "status", "message": "Sanitizing query"})
+
+        history = list(conversation_history or [])
+        history_text = render_conversation_history(history)
+
+        # Optional local-model routing: the ConversationService may inject a
+        # local Ollama rewriter/scope-verifier so the cheap short steps never
+        # hit the cloud. Defaults to the service's own (cloud) components.
+        query_rewriter = chat_query_rewriter or self.query_rewriter
+        scope_verifier = chat_scope_verifier or self.scope_verifier
+
+        # P0-A: identity questions are answered directly by the fixed persona —
+        # never from retrieved documents or cache (prevents the "I am Claude"
+        # hijack).
+        if _IDENTITY_QUESTION_RE.search(question):
+            yield _sse({"type": "done", "text": _IDENTITY_ANSWER, "confidence": 1.0})
+            return
+
+        # Turn-1 cache: standalone question → safe to read/write the shared
+        # two-tier cache (mirrors ``answer()``). Follow-ups bypass entirely.
+        is_turn_one = not history
+        query_emb_for_cache: list[float] | None = None
+        if is_turn_one and self.cache is not None and self.config.cache_enabled:
+            query_emb_for_cache = None
+            cached = await self.cache.aget(question, scope=cache_scope)
+            if cached is None and self.embedder is not None:
+                with contextlib.suppress(Exception):
+                    query_emb_for_cache = await self.embedder.embed_query(question)
+                cached = await self.cache.aget(question, query_embedding=query_emb_for_cache, scope=cache_scope)
+            if cached is not None:
+                logger.info("chat_cache_hit turn_one question=%r", question[:80])
+                await self._record_cache_hit_trace(
+                    question, cached, cache_scope, semantic=query_emb_for_cache is not None
+                )
+                yield _sse(
+                    {
+                        "type": "done",
+                        "text": _clean_chat_text(cached.text),
+                        "confidence": cached.confidence,
+                    }
+                )
+                # Cache hits surface follow-up suggestions too — either from the
+                # cached envelope (instant, no regeneration) or generated from the
+                # cached sources for older entries without cached suggestions.
+                if self.config.chat_suggestions_enabled:
+                    suggestions = list(cached.suggestions)
+                    if not suggestions:
+                        try:
+                            cache_chunks = [
+                                RetrievedChunk(chunk=src, distance=0.0, confidence=cached.confidence)
+                                for src in cached.sources
+                            ]
+                            suggestions = await self._generate_suggestions(
+                                question,
+                                _clean_chat_text(cached.text),
+                                cache_chunks,
+                                chat_llm_client,
+                                intent="factual",
+                                history=history,
+                            )
+                        except Exception:
+                            logger.warning("Follow-up suggestion generation failed (cache hit)", exc_info=True)
+                            suggestions = []
+                    if suggestions:
+                        yield _sse({"type": "suggestions", "suggestions": suggestions})
+                return
+
+        # Phase F: smart-cache recall tier (follow-up turns only). Reuse similar
+        # cached (question→answer) pairs via local synthesis, gated by scope
+        # verify; on any failure fall through to the full pipeline.
+        if (
+            not is_turn_one
+            and self.config.chat_cache_recall_enabled
+            and self.cache is not None
+            and self.embedder is not None
+        ):
+            recall = await self._smart_cache_recall(
+                question=question,
+                cache_scope=cache_scope,
+                chat_llm_client=chat_llm_client,
+                scope_verifier=scope_verifier,
+            )
+            if recall is not None:
+                yield _sse({"type": "sources", "sources": recall["sources"]})
+                yield _sse(
+                    {"type": "done", "text": _clean_chat_text(recall["text"]), "confidence": recall["confidence"]}
+                )
+                return
+
+        trace = None
+        if self.telemetry:
+            trace_kwargs: dict[str, Any] = {
+                "name": "rag-chat-pipeline",
+                "input": _scrub_pii(question),
+                "as_type": "trace",
+                "tags": ["app:data-engineering-copilot"],
+                "metadata": {
+                    "conversation": True,
+                    "turn_index": len(history) // 2 + 1,
+                    "app_env": settings.langfuse_environment,
+                    "git_sha": settings.image_git_sha,
+                },
+            }
+            if user_id:
+                trace_kwargs["user_id"] = user_id
+            if session_id:
+                trace_kwargs["session_id"] = session_id
+            if settings.langfuse_environment:
+                trace_kwargs["environment"] = settings.langfuse_environment
+            trace = self.telemetry.start_observation(**trace_kwargs)
+
+        # PII redaction on the current message.
+        safe_question = PromptBuilder.sanitize_query(question)
+        if self._pii_redactor is not None:
+            safe_question, _pii_types = self._pii_redactor.redact(safe_question)
+            if _pii_types:
+                yield _sse({"type": "status", "message": f"PII redacted: {', '.join(_pii_types)}"})
+
+        # History-aware query rewriting (turn 1 skips the contextual prompt).
+        rewritten = None
+        intent = "factual"
+        rewrite_span = None
+        if trace:
+            rewrite_span = trace.start_observation(name="query-rewriting", as_type="span")
+        if query_rewriter is not None:
+            yield _sse({"type": "status", "message": "Rewriting query"})
+            try:
+                # P2: anchor terse follow-ups to the session topic (first user turn).
+                session_topic = ""
+                for m in history:
+                    if getattr(m, "role", "") == "user":
+                        session_topic = (m.content or "")[:300]
+                        break
+                rewritten = await query_rewriter.async_rewrite(
+                    safe_question, conversation_history=history, session_topic=session_topic or None
+                )
+            except Exception:
+                logger.warning("Chat query rewrite failed, using raw query", exc_info=True)
+                rewritten = None
+            if rewritten is not None:
+                intent = rewritten.intent
+                yield _sse({"type": "status", "message": f"Intent: {intent}"})
+        if rewrite_span:
+            rewrite_span.update(
+                input=question,
+                output={"intent": intent},
+            )
+            rewrite_span.end()
+
+        # Build the full query set: original + rewrite steps + expansions + HyDE.
+        all_queries: list[str] = [safe_question]
+        effective_query = safe_question
+        if rewritten is not None:
+            if rewritten.decomposed_steps:
+                for step in rewritten.decomposed_steps:
+                    if step not in all_queries:
+                        all_queries.append(step)
+                effective_query = rewritten.decomposed_steps[0]
+            if query_rewriter is not None:
+                expanded = await query_rewriter.expand_queries(
+                    safe_question, max_variations=self.config.max_expansion_queries
+                )
+                for q in expanded:
+                    if q not in all_queries:
+                        all_queries.append(q)
+        if rewritten is not None and rewritten.hyde_query and rewritten.hyde_query not in all_queries:
+            all_queries.append(rewritten.hyde_query)
+
+        # Multi-query retrieval + rank fusion.
+        retrieval_span = None
+        if trace:
+            retrieval_span = trace.start_observation(name="retrieval", as_type="span")
+        yield _sse({"type": "status", "message": "Retrieving documents"})
+        chunk_type_filter = None
+        metadata_filters = None
+        if rewritten is not None and rewritten.intent == "api_lookup":
+            metadata_filters = rewritten.filters
+            if metadata_filters is None or not metadata_filters.modules:
+                chunk_type_filter = "api"
+
+        all_retrieved: list[RetrievedChunk] = []
+        per_query_results: list[list[RetrievedChunk]] = []
+        seen_ids: set[str] = set()
+        any_success = False
+        last_error: Exception | None = None
+        try:
+            for q in all_queries:
+                try:
+                    q_emb = await self.embedder.embed_query(q)
+                    results = await self.vector_store.query(
+                        q_emb,
+                        top_k=self.config.retrieval_top_k,
+                        query_text=q,
+                        source_filter=source_filter,
+                        chunk_type_filter=chunk_type_filter,
+                        metadata_filters=metadata_filters,
+                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                    )
+                    if not results and metadata_filters is not None and not metadata_filters.is_empty:
+                        results = await self.vector_store.query(
+                            q_emb,
+                            top_k=self.config.retrieval_top_k,
+                            query_text=q,
+                            source_filter=source_filter,
+                            chunk_type_filter=chunk_type_filter,
+                            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                        )
+                    any_success = True
+                    per_query_results.append(results)
+                    for r in results:
+                        if r.chunk.chunk_id not in seen_ids:
+                            seen_ids.add(r.chunk.chunk_id)
+                            all_retrieved.append(r)
+                except Exception as sub_exc:
+                    last_error = sub_exc
+                    logger.warning("Failed to retrieve for sub-query %r: %s", q[:50], sub_exc)
+
+            if not any_success and last_error is not None:
+                raise RetrievalError(f"Vector store query failed: {last_error}") from last_error
+
+            if per_query_results:
+                retrieved_chunks = merge_retrieval_results(per_query_results, safe_question)
+            else:
+                retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
+        except RetrievalError:
+            if trace:
+                trace.update(output="RetrievalError")
+                trace.end()
+            yield _sse({"type": "error", "message": "Retrieval failed"})
+            return
+        except Exception as exc:
+            logger.exception("Failed during chat retrieval: %s", exc)
+            if trace:
+                trace.update(output=str(exc))
+                trace.end()
+            yield _sse({"type": "error", "message": "Retrieval failed"})
+            return
+
+        if retrieval_span:
+            retrieval_span.update(
+                input=effective_query,
+                output=f"{len(retrieved_chunks)} chunks retrieved",
+            )
+            retrieval_span.end()
+        yield _sse({"type": "status", "message": f"Retrieved {len(retrieved_chunks)} chunks"})
+
+        if not retrieved_chunks:
+            if trace:
+                trace.update(output="No chunks retrieved")
+                trace.end()
+            yield _sse({"type": "done", "text": "No relevant documents found.", "confidence": 0.0})
+            return
+
+        # P0-A: identity-injection defense — drop chunks whose URL matches a
+        # blocked substring (e.g. Claude's self-identifying system-prompts.md)
+        # before they reach the prompt. P1: restrict to whitelisted sources.
+        blocked = set(chat_blocked_url_substrings or ())
+        allowed_sources = set(chat_domain_sources or ())
+        if blocked or allowed_sources:
+            kept: list[RetrievedChunk] = []
+            for r in retrieved_chunks:
+                if blocked and any(sub in r.chunk.url for sub in blocked):
+                    logger.info(
+                        "chat_blocked_chunk url=%r sub=%r",
+                        r.chunk.url,
+                        next((s for s in blocked if s in r.chunk.url), None),
+                    )
+                    continue
+                if allowed_sources and r.chunk.source_name not in allowed_sources:
+                    logger.info("chat_domain_filtered source=%r", r.chunk.source_name)
+                    continue
+                kept.append(r)
+            retrieved_chunks = kept
+            if not retrieved_chunks:
+                logger.warning("All retrieved chunks filtered out for chat (blocked/domain)")
+                if trace:
+                    trace.update(output="All chunks filtered out (blocked/domain)")
+                    trace.end()
+                yield _sse({"type": "done", "text": "No relevant documents found.", "confidence": 0.0})
+                return
+
+        # P3: domain-coherence fail-safe. If the surviving context is dominated
+        # by a foreign domain (e.g. Claude docs) for a data-engineering query,
+        # refuse cleanly instead of generating an off-topic answer/example.
+        if _domain_mismatch(retrieved_chunks):
+            logger.warning("chat_domain_mismatch refusing topic_not_covered question=%r", safe_question[:80])
+            if trace:
+                trace.update(output="Domain mismatch: refusing")
+                trace.end()
+            yield _sse({"type": "done", "text": _clean_chat_text(_SCOPE_REFUSAL_TEXT), "confidence": 0.0})
+            return
+
+        # Indirect prompt injection guard on retrieved chunks.
+        if self.input_guardrails is not None:
+            scan_result = self.input_guardrails.scan_chunks(retrieved_chunks)
+            retrieved_chunks = scan_result.kept
+            if not retrieved_chunks:
+                logger.warning("All retrieved chunks rejected by input guardrails (chat)")
+                if trace:
+                    trace.update(output="All chunks rejected by input guardrails")
+                    trace.end()
+                yield _sse({"type": "done", "text": "No relevant documents found.", "confidence": 0.0})
+                return
+
+        # Reranking. Chat may inject a local-only reranker (skip the ~5s cloud
+        # LLM rerank chain); defaults to the service's own reranker.
+        reranker = chat_reranker or self.reranker
+        rerank_span = None
+        if trace:
+            rerank_span = trace.start_observation(name="reranking", as_type="span")
+        pre_rerank_count = len(retrieved_chunks)
+        if reranker is not None and self.config.reranker_enabled and pre_rerank_count > 1:
+            yield _sse({"type": "status", "message": "Reranking"})
+            await self._ensure_reranker_ready()
+            if reranker.is_available():
+                rerank_pool = min(
+                    pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                )
+                if pre_rerank_count > rerank_pool:
+                    retrieved_chunks = retrieved_chunks[:rerank_pool]
+                retrieved_chunks = await reranker.rerank(question, retrieved_chunks, top_k=rerank_pool)
+            if len(retrieved_chunks) > self.config.reranker_top_k:
+                retrieved_chunks = retrieved_chunks[: self.config.reranker_top_k]
+        if rerank_span:
+            rerank_span.update(
+                input=f"{len(retrieved_chunks)} chunks before reranking",
+                output=f"{len(retrieved_chunks)} chunks after reranking",
+            )
+            rerank_span.end()
+
+        # P3: domain-coherence fail-safe. After reranking, the TOP chunks that
+        # reach the prompt should not be dominated by a foreign domain (e.g.
+        # Claude docs) for a data-engineering query. Evaluated post-rerank so a
+        # wide fused candidate pool (which legitimately mixes domains) does not
+        # falsely trigger the refusal.
+        if _domain_mismatch(retrieved_chunks):
+            logger.warning("chat_domain_mismatch refusing topic_not_covered question=%r", safe_question[:80])
+            if trace:
+                trace.update(output="Domain mismatch: refusing")
+                trace.end()
+            yield _sse({"type": "done", "text": _clean_chat_text(_SCOPE_REFUSAL_TEXT), "confidence": 0.0})
+            return
+
+        # Context assembly.
+        sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
+        assembler = ContextAssembler(
+            max_context_chars=self.config.max_context_chars,
+            max_chunks_per_source=self.config.max_chunks_per_source,
+        )
+        context_str, _source_names, _dropped = assembler.assemble(sorted_chunks)
+
+        source_refs = [
+            {
+                "source_name": c.chunk.source_name,
+                "title": c.chunk.title,
+                "url": c.chunk.url,
+                "snippet": c.chunk.text[:240],
+            }
+            for c in retrieved_chunks
+        ]
+        yield _sse({"type": "sources", "sources": source_refs})
+
+        # Build prompt with history injected (compile-vars only).
+        prompt = self._prompt_builder.build_rag_prompt(
+            context=context_str,
+            question=safe_question,
+            intent=intent,
+            history=history_text if history_text.strip() else None,
+            max_history_tokens=max_history_tokens,
+            system_role=chat_system_role,
+        )
+        yield _sse({"type": "status", "message": "Generating answer"})
+
+        llm_client = chat_llm_client or self._select_llm_client(intent)
+        generation_span = None
+        if trace:
+            generation_span = trace.start_observation(
+                name="generation",
+                as_type="generation",
+                model=_llm_model_name(llm_client),
+            )
+        full_text = ""
+        try:
+            async for token in llm_client.generate_stream(prompt):
+                full_text += token
+                yield _sse({"type": "token", "content": token})
+        except Exception:
+            logger.exception("Chat streaming generation failed")
+            if generation_span:
+                generation_span.update(output="Generation failed", level="ERROR")
+                generation_span.end()
+            if trace:
+                trace.update(output="Streaming generation failed")
+                trace.end()
+            yield _sse({"type": "error", "message": "Generation failed"})
+            return
+        if generation_span:
+            generation_span.update(input=prompt, output=full_text)
+            generation_span.end()
+
+        # Post-generation: PII redaction + output guardrails.
+        if self._pii_redactor is not None:
+            full_text, _pii_types = self._pii_redactor.redact(full_text)
+            if _pii_types:
+                logger.info("pii_redacted_in_chat types=%s", _pii_types)
+
+        from data_engineering_copilot.services.output_guardrails import OutputGuardrails
+
+        validated = OutputGuardrails.verify(full_text, len(retrieved_chunks))
+        if validated is not None:
+            full_text = validated.answer
+
+        confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
+
+        # Scope gate (fail-open).
+        if scope_verifier is not None and full_text.strip():
+            scope_covered = await scope_verifier.verify(safe_question, context_str)
+            if not scope_covered:
+                logger.info("scope_gate_refused_chat topic_not_covered question=%r", safe_question[:80])
+                full_text = _SCOPE_REFUSAL_TEXT
+
+        if trace:
+            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
+            if trace_id and self.telemetry:
+                with contextlib.suppress(Exception):
+                    self.telemetry.score(trace_id=trace_id, name="confidence", value=confidence)
+            trace.update(
+                output=full_text,
+                metadata={
+                    "intent": intent,
+                    "num_sources": len(retrieved_chunks),
+                    "streaming": True,
+                    "conversation": True,
+                    "total_ms": round((time.monotonic() - _t0) * 1000, 1),
+                },
+            )
+            trace.end()
+
+        if self.telemetry:
+            with contextlib.suppress(Exception):
+                await self.telemetry.flush_async()
+
+        # ChatGPT-style follow-up suggestions (emitted after done so the answer
+        # shows first; chips pop in a moment later). Best-effort/fail-open.
+        # Intent + history give the logical-expansion context (like ChatGPT/Gemini).
+        suggestions: list[str] = []
+        if self.config.chat_suggestions_enabled:
+            try:
+                suggestions = await self._generate_suggestions(
+                    safe_question,
+                    full_text,
+                    retrieved_chunks,
+                    chat_llm_client,
+                    intent=intent,
+                    history=history,
+                )
+            except Exception:
+                logger.warning("Follow-up suggestion generation failed", exc_info=True)
+                suggestions = []
+
+        # Turn-1 cache write: standalone question → safe to cache. Include the
+        # generated suggestions so a later cache hit returns answer + chips
+        # without regeneration.
+        if is_turn_one and self.cache is not None and self.config.cache_enabled and full_text.strip():
+            try:
+                envelope = CachedAnswer(
+                    text=full_text,
+                    sources=tuple(c.chunk for c in retrieved_chunks),
+                    confidence=confidence,
+                    cached_at=time.time(),
+                    suggestions=tuple(suggestions),
+                )
+                await self.cache.aset_exact(question, envelope, scope=cache_scope)
+                if query_emb_for_cache is not None:
+                    await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)
+            except Exception:
+                logger.warning("Chat turn-1 cache write failed", exc_info=True)
+
+        yield _sse({"type": "done", "text": _clean_chat_text(full_text), "confidence": confidence})
+        if suggestions:
+            yield _sse({"type": "suggestions", "suggestions": suggestions})
+
+    async def _generate_suggestions(
+        self,
+        question: str,
+        answer: str,
+        retrieved_chunks: list[RetrievedChunk],
+        chat_llm_client: LLMClientProtocol | None,
+        intent: str = "factual",
+        history: Sequence[ChatMessage] | None = None,
+    ) -> list[str]:
+        """Generate ChatGPT-style follow-up suggestions for the just-answered turn.
+
+        Uses intent + conversation history for logical-expansion steering (the
+        "next step / alternative / edge case" taxonomy). Mode from
+        ``self.config.chat_suggestions_mode``:
+        - ``llm``: prompt an LLM to propose short follow-ups (deduped, filtered).
+        - ``rule``: deterministic suggestions from retrieved source titles/topic.
+        - ``hybrid``: try LLM, fall back to rule on error/empty/degenerate output.
+        """
+        if not self.config.chat_suggestions_enabled:
+            return []
+
+        rule_suggestions = self._rule_suggestions(question, retrieved_chunks, intent=intent)
+        mode = self.config.chat_suggestions_mode
+        if mode == "rule":
+            return rule_suggestions
+
+        llm_suggestions: list[str] = []
+        if mode in ("llm", "hybrid"):
+            llm_suggestions = await self._llm_suggestions(
+                question, answer, retrieved_chunks, chat_llm_client, intent=intent, history=history
+            )
+
+        if mode == "llm" or llm_suggestions:
+            return llm_suggestions
+        return rule_suggestions
+
+    async def _llm_suggestions(
+        self,
+        question: str,
+        answer: str,
+        retrieved_chunks: list[RetrievedChunk],
+        chat_llm_client: LLMClientProtocol | None,
+        intent: str = "factual",
+        history: Sequence[ChatMessage] | None = None,
+    ) -> list[str]:
+        """Ask an LLM for follow-up suggestions grounded in the retrieved context.
+
+        The prompt includes the retrieved documentation chunks (the same ones
+        that grounded the answer), the query intent, and the conversation
+        history, and instructs the LLM to only propose follow-ups answerable
+        from that context — so clicking a chip never leads to an
+        ``INSUFFICIENT_CONTEXT`` turn.
+        """
+        client = chat_llm_client or self._select_llm_client("factual")
+        max_suggestions = self.config.chat_suggestions_count
+        context_text = self._suggestion_context(retrieved_chunks)
+        history_text = render_conversation_history(list(history or [])[-4:])
+        try:
+            prompt = _SUGGESTION_PROMPT.format(
+                count=max_suggestions,
+                history=history_text or "(no prior turns)",
+                context=context_text,
+                question=question[:500],
+                intent=intent or "factual",
+                answer=(answer or "")[:1500],
+            )
+            raw = await client.generate(prompt)
+        except Exception:
+            logger.warning("Follow-up suggestion LLM call failed", exc_info=True)
+            return []
+
+        suggestions: list[str] = []
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            line = line.strip().lstrip("-*0123456789.) ")
+            line = line.strip().strip('"').strip()
+            if not line or is_degenerate_query(line) or line.lower() in seen:
+                continue
+            if len(line) > 200:
+                continue
+            seen.add(line.lower())
+            suggestions.append(line)
+            if len(suggestions) >= max_suggestions:
+                break
+        return suggestions
+
+    @staticmethod
+    def _suggestion_context(retrieved_chunks: list[RetrievedChunk], limit: int = 5) -> str:
+        """Build a bounded context block from retrieved chunks for suggestion grounding."""
+        parts: list[str] = []
+        for chunk in retrieved_chunks[:limit]:
+            title = (chunk.chunk.title or chunk.chunk.source_name or "doc").strip()
+            snippet = (chunk.chunk.text or "").strip()[:400]
+            if snippet:
+                parts.append(f"[{title}] {snippet}")
+        return "\n\n".join(parts) if parts else "(no retrieved context)"
+
+    @staticmethod
+    def _rule_suggestions(
+        question: str,
+        retrieved_chunks: list[RetrievedChunk],
+        intent: str = "factual",
+    ) -> list[str]:
+        """Deterministic follow-up suggestions derived from retrieved source titles.
+
+        Intent-aware: shapes follow-ups toward the user's goal (examples for
+        ``code_example``/``how_to``, alternatives for ``comparative``, related
+        functions for ``api_lookup``, causes/fixes for ``debugging``).
+        """
+        titles: list[str] = []
+        seen: set[str] = set()
+        for chunk in retrieved_chunks:
+            title = (chunk.chunk.title or "").strip()
+            if title and title.lower() not in seen:
+                seen.add(title.lower())
+                titles.append(title)
+        if not titles:
+            return []
+        primary = titles[0]
+        second = titles[1] if len(titles) > 1 else primary
+        third = titles[2] if len(titles) > 2 else second
+        if intent in ("code_example", "api_lookup", "how_to"):
+            suggestions = [
+                f"Show me a code example for {primary}.",
+                f"What are the parameters or options for {primary}?",
+                f"How does {second} work?",
+            ]
+        elif intent == "comparative":
+            suggestions = [
+                f"What are the differences between {primary} and {second}?",
+                f"When should I use {primary} over {second}?",
+                f"Give me an example using {third}.",
+            ]
+        elif intent == "debugging":
+            suggestions = [
+                f"What are common causes of errors with {primary}?",
+                f"How do I fix issues with {primary}?",
+                f"What does the documentation say about {second}?",
+            ]
+        else:  # factual
+            suggestions = [
+                f"What does the documentation say about {primary}?",
+                f"Can you explain {second} in more detail?",
+                f"Give me a code example for {third}.",
+            ]
+        return suggestions[:3]
+
+    async def _smart_cache_recall(
+        self,
+        question: str,
+        cache_scope: CacheScope | None,
+        chat_llm_client: LLMClientProtocol | None,
+        scope_verifier,
+    ) -> dict | None:
+        """Phase F smart-cache recall: synthesize an answer from similar cached pairs.
+
+        Returns ``{"text", "confidence", "sources"}`` when a verified answer can
+        be produced from the cache, else ``None`` (caller falls through to the
+        full pipeline). Stale or below-threshold pairs, generation errors, and a
+        scope-verify rejection all produce ``None``.
+        """
+        try:
+            query_emb = await self.embedder.embed_query(question)
+        except Exception:
+            logger.warning("Smart-cache recall embed failed; falling through", exc_info=True)
+            return None
+
+        cache = self.cache
+        if cache is None:
+            return None
+        pairs = await cache.atop_k(
+            query_emb,
+            scope=cache_scope,
+            k=self.config.chat_cache_top_k,
+            min_similarity=self.config.chat_cache_recall_threshold,
+        )
+        now = time.time()
+        fresh = [
+            (score, envelope)
+            for score, envelope in pairs
+            if envelope.cached_at and (now - envelope.cached_at) <= self.config.chat_cache_max_age_seconds
+        ]
+        if not fresh:
+            logger.info("smart_cache_recall no_fresh_pairs question=%r", question[:80])
+            return None
+
+        blocks: list[str] = []
+        for _score, envelope in fresh:
+            blocks.append(f"Prior grounded answer: {envelope.text}")
+        context = "\n\n".join(blocks)
+
+        if scope_verifier is not None and not await scope_verifier.verify(question, context):
+            logger.info("smart_cache_recall scope_rejected question=%r", question[:80])
+            return None
+
+        prompt = (
+            "You are a documentation assistant. A similar question was answered "
+            "from the documentation before. Using ONLY the prior grounded answers "
+            "below, answer the current question. If they do not cover it, say so.\n\n"
+            + SYSTEM_BLOCK_SEPARATOR
+            + f"## PRIOR GROUNDED ANSWERS\n{context}\n\n"
+            f"## CURRENT QUESTION\n{question}\n\n"
+            "Your answer:"
+        )
+        generator = chat_llm_client or self._select_llm_client("factual")
+        try:
+            answer = await generator.generate(prompt)
+        except Exception:
+            logger.warning("Smart-cache recall generation failed; falling through", exc_info=True)
+            return None
+
+        text = answer.strip()
+        if not text or any(marker.search(text) for marker in _NON_ANSWER_MARKERS):
+            return None
+
+        source_refs: list[dict] = []
+        seen_urls: set[str] = set()
+        for _score, envelope in fresh:
+            for src in envelope.sources:
+                if src.url in seen_urls:
+                    continue
+                seen_urls.add(src.url)
+                source_refs.append(
+                    {
+                        "source_name": src.source_name,
+                        "title": src.title,
+                        "url": src.url,
+                        "snippet": src.text[:240],
+                    }
+                )
+        return {"text": text, "confidence": fresh[0][1].confidence, "sources": source_refs}
 
     def _select_llm_client(self, intent: str) -> LLMClientProtocol:
         """Route code intents to the code-specific LLM if configured."""
