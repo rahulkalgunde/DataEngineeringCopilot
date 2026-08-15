@@ -8,8 +8,8 @@ services:
       watchfiles "celery -A data_engineering_copilot.workers.tasks worker -Q ingestion -c 1 --loglevel=info"
       /app/data_engineering_copilot
 
-  # Floating-tag images: deliberately re-pull on every dev `up` so we never run
-  # month-old cached copies. Pinned images (qdrant, ollama, minio) are untouched.
+  # Pinned-version images: re-pull on every dev `up` so a fresh checkout
+  # always fetches the exact pinned tag instead of a stale local copy.
   redis:
     pull_policy: always
   clickhouse:
