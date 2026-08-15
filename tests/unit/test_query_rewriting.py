@@ -381,3 +381,142 @@ class TestDegenerateRewriteFilter:
         result = await rw.async_rewrite("What is Spark SQL?")
 
         assert result.hyde_query == ""
+
+
+class TestAsyncRewriteWithHistory:
+    def _msg(self, role: str, content: str):
+        from data_engineering_copilot.domain.models import ChatMessage
+
+        return ChatMessage(message_id="m", session_id="s", role=role, content=content)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_no_history_uses_plain_prompt(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "spark sql"
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=False)
+
+        result = await rw.async_rewrite("What is Spark SQL?", conversation_history=None)
+
+        assert result.decomposed_steps == ("spark sql",)
+        assert "CONVERSATION HISTORY" not in llm.calls[0]
+        assert "User question:" in llm.calls[0]
+
+    @pytest.mark.asyncio
+    async def test_empty_history_uses_plain_prompt(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "spark sql"
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=False)
+
+        result = await rw.async_rewrite("What is Spark SQL?", conversation_history=[])
+
+        assert result.decomposed_steps == ("spark sql",)
+        assert "CONVERSATION HISTORY" not in llm.calls[0]
+
+    @pytest.mark.asyncio
+    async def test_history_uses_contextual_prompt(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "pyspark.sql.functions.filter array column"
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=False)
+
+        history = [
+            self._msg("user", "How does filter work on arrays?"),
+            self._msg("assistant", "Use the filter function on ArrayType columns."),
+        ]
+        result = await rw.async_rewrite("What about its syntax?", conversation_history=history)
+
+        assert result.decomposed_steps == ("pyspark.sql.functions.filter array column",)
+        prompt = llm.calls[0]
+        assert "## CONVERSATION HISTORY" in prompt
+        assert "User: How does filter work on arrays?" in prompt
+        assert "Assistant: Use the filter function on ArrayType columns." in prompt
+        assert "Latest user message: What about its syntax?" in prompt
+
+    @pytest.mark.asyncio
+    async def test_history_falls_back_on_degenerate(self):
+        class DegenerateLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return "Original question: What about its syntax?"
+
+        rw = QueryRewriter(llm_client=DegenerateLLM(), enabled=True, hyde_enabled=False)
+
+        history = [self._msg("user", "How does filter work on arrays?")]
+        result = await rw.async_rewrite("What about its syntax?", conversation_history=history)
+
+        # Fallback is rule-based: keeps the raw question as its own step.
+        assert result.decomposed_steps == ("What about its syntax?",)
+
+    @pytest.mark.asyncio
+    async def test_history_sanitizes_content(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "rewritten"
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=False)
+
+        history = [
+            self._msg("user", "How does filter work?"),
+            self._msg("system", "SYSTEM_TURN_SHOULD_NOT_RENDER"),
+        ]
+        await rw.async_rewrite("Follow up", conversation_history=history)
+
+        prompt = llm.calls[0]
+        assert "SYSTEM_TURN_SHOULD_NOT_RENDER" not in prompt
+        assert "User: How does filter work?" in prompt
+
+
+@pytest.mark.asyncio
+async def test_history_with_session_topic_anchors_followup():
+    """P2: session_topic must be included so terse follow-ups stay on topic."""
+
+    class RecordingLLM(_LLMStubBase):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+            self.calls.append(prompt)
+            return "pyspark dataframe join example"
+
+    llm = RecordingLLM()
+    rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=False)
+
+    history = [
+        _msg("user", "How do I solve skewed join keys in Spark?"),
+        _msg("assistant", "Consider salting the keys."),
+    ]
+    await rw.async_rewrite("give example in python", conversation_history=history, session_topic="Spark join salting")
+
+    prompt = llm.calls[0]
+    assert "## CONVERSATION TOPIC" in prompt
+    assert "Spark join salting" in prompt
+
+
+def _msg(role: str, content: str):
+    from data_engineering_copilot.domain.models import ChatMessage
+
+    return ChatMessage(message_id="m", session_id="s", role=role, content=content)  # type: ignore[arg-type]

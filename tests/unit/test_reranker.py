@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,7 +144,7 @@ class TestCrossEncoderReranker:
                 assert 0.0 <= chunk.confidence <= 1.0
 
     async def test_rerank_negative_logits_normalized(self):
-        """Verify raw negative logits from cross-encoder are sigmoid-normalized to [0, 1]."""
+        """Verify raw negative logits are sigmoid-then-min-max normalized to [0, 1]."""
         test_chunks, query = create_test_chunks(num_chunks=5)
         # Realistic ms-marco-MiniLM-L-6-v2 logits (can be negative)
         negative_logits = [-3.0, -1.5, 0.2, 1.8, 4.0]
@@ -163,9 +162,8 @@ class TestCrossEncoderReranker:
             # All confidence values must be in [0, 1]
             for chunk in result:
                 assert 0.0 <= chunk.confidence <= 1.0, f"confidence={chunk.confidence} out of range"
-            # Check sigmoid normalization for the first chunk (highest logit = 4.0)
-            expected_top = 1.0 / (1.0 + math.exp(-4.0))
-            assert abs(result[0].confidence - expected_top) < 1e-6
+            # Min-max normalized within the pool: the highest logit (4.0) → 1.0.
+            assert result[0].confidence == pytest.approx(1.0)
             # Verify descending order
             for i in range(len(result) - 1):
                 assert result[i].confidence >= result[i + 1].confidence
@@ -225,6 +223,18 @@ class TestCrossEncoderReranker:
             assert result[0].confidence >= result[9].confidence
             for chunk in result:
                 assert 0.0 <= chunk.confidence <= 1.0
+
+
+def test_min_max_normalize():
+    """Uniform scaling: different raw score distributions map to [0, 1]."""
+    from data_engineering_copilot.services.reranker import _min_max_normalize
+
+    assert _min_max_normalize([0.95, 0.8, 0.2]) == pytest.approx([1.0, 0.8, 0.0])
+    assert _min_max_normalize([3, 1, 2]) == pytest.approx([1.0, 0.0, 0.5])
+    # Degenerate pools pass through unchanged.
+    assert _min_max_normalize([0.5, 0.5]) == [0.5, 0.5]
+    assert _min_max_normalize([0.0]) == [0.0]
+    assert _min_max_normalize([]) == []
 
 
 if __name__ == "__main__":

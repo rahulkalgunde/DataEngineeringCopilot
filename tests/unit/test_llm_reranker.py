@@ -137,8 +137,11 @@ class TestLLMReranker:
 
         assert len(result) == 3
         assert result[0].chunk.text == "document 2"
-        assert result[0].confidence == pytest.approx(0.95)
-        assert result[0].distance == pytest.approx(0.05)
+        # Scores are min-max normalized within the pool: 0.95 -> 1.0, 0.8 -> 0.8, 0.2 -> 0.0.
+        assert result[0].confidence == pytest.approx(1.0)
+        assert result[0].distance == pytest.approx(0.0)
+        assert result[1].confidence == pytest.approx(0.8)
+        assert result[2].confidence == pytest.approx(0.0)
         assert cloud.calls[0].query == "query"
         assert cloud.calls[0].documents == ["document 0", "document 1", "document 2"]
         assert local.calls == 0  # cloud served; local untouched

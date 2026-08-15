@@ -15,11 +15,13 @@ import inspect
 import pytest
 
 from data_engineering_copilot.domain.protocols import (
+    ChatSessionStoreProtocol,
     ChunkerProtocol,
     EmbedderProtocol,
     LLMClientProtocol,
     VectorStoreProtocol,
 )
+from data_engineering_copilot.infrastructure.chat_session_store import ChatSessionRedisStore
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
@@ -42,6 +44,7 @@ _REAL_PROTOCOL_PAIRS = [
     (DocumentChunker, ChunkerProtocol),
     (SemanticChunker, ChunkerProtocol),
     (HeaderAwareChunker, ChunkerProtocol),
+    (ChatSessionRedisStore, ChatSessionStoreProtocol),
 ]
 
 
@@ -198,6 +201,25 @@ async def test_stub_redis_hash_and_pipeline_semantics():
 
     assert await redis.delete("crawl:url_registry:src") == 1
     assert await redis.hget("crawl:url_registry:src", "https://a") is None
+
+
+@pytest.mark.asyncio
+async def test_stub_redis_string_and_list_semantics():
+    """Pin the string/list ops the chat Redis store relies on."""
+    redis = _StubRedis()
+    await redis.set("chat:session:s1:meta", '{"session_id": "s1"}')
+    assert await redis.get("chat:session:s1:meta") == b'{"session_id": "s1"}'
+
+    await redis.rpush("chat:session:s1:messages", "a", "b", "c")
+    await redis.rpush("chat:session:s1:messages", "d")
+    assert await redis.lrange("chat:session:s1:messages", 0, -1) == [b"a", b"b", b"c", b"d"]
+    assert await redis.lrange("chat:session:s1:messages", -2, -1) == [b"c", b"d"]
+
+    await redis.ltrim("chat:session:s1:messages", -2, -1)
+    assert await redis.lrange("chat:session:s1:messages", 0, -1) == [b"c", b"d"]
+
+    assert await redis.delete("chat:session:s1:messages") == 1
+    assert await redis.lrange("chat:session:s1:messages", 0, -1) == []
 
 
 def _chunk(chunk_id: str, text: str, chunk_type: str = "text"):
