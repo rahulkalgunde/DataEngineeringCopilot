@@ -920,6 +920,15 @@ class AppSettings(BaseSettings):
     # Semantic cache
     semantic_cache_threshold: float = 0.95
     semantic_cache_ttl: int = 3600
+    # Cache toggles (per-type enable/disable). `query_cache_enabled` is the
+    # master switch for the two-tier RAG query cache; the exact/semantic flags
+    # disable individual tiers. `embedding_cache_enabled` and
+    # `crawl_cache_enabled` control the embedder and crawler caches.
+    query_cache_enabled: bool = True
+    query_cache_exact_enabled: bool = True
+    query_cache_semantic_enabled: bool = True
+    embedding_cache_enabled: bool = True
+    crawl_cache_enabled: bool = True
     # Index generation identity and validation. `index_generation` is empty for
     # legacy operation; when set it identifies a reproducible corpus build.
     index_generation: str = ""

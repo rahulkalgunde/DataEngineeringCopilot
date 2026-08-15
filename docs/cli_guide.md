@@ -18,6 +18,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec reset-qdrant](#dec-reset-qdrant)
   - [dec reset-crawler-db](#dec-reset-crawler-db)
   - [dec clear-query-cache](#dec-clear-query-cache)
+  - [dec clear-cache](#dec-clear-cache)
   - [dec spark-config-check](#dec-spark-config-check)
   - [dec spark-manifest](#dec-spark-manifest)
   - [dec spark-render](#dec-spark-render)
@@ -76,6 +77,9 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `reset-index` | No | Yes | Yes | If set | No |
 | `reset-qdrant` | No | Yes | No | No | No |
 | `clear-query-cache` | No | No | Yes | No | No |
+| `clear-cache` | No | No | Yes* | No | No |
+
+\* `dec clear-cache --bm25` needs only disk access (no Redis).
 | `spark-config-check` | No | No | No | No | No |
 | `spark-manifest` | No | No | No | No | No |
 | `spark-render` | No | No | No | No | No |
@@ -300,6 +304,15 @@ rewrites/HyDE to it is slower than cloud; enable only on GPU-backed Ollama),
 `chat_answer_local` (default false), `chat_cache_recall_enabled` (default
 false), `chat_cache_top_k` (3), `chat_cache_recall_threshold` (0.70),
 `chat_cache_max_age_seconds` (86400). See `config/settings.py`.
+
+**Cache toggles** — per-type enable/disable (all default **on**):
+`query_cache_enabled` (master switch for the two-tier RAG query cache),
+`query_cache_exact_enabled` / `query_cache_semantic_enabled` (individual
+tiers), `embedding_cache_enabled` (embedder L1/L2 cache), and
+`crawl_cache_enabled` (crawler HTTP-header cache). When a cache is disabled
+the corresponding store is neither read nor written; the crawler falls back to
+a no-op cache that always re-fetches. `dec clear-cache` clears the stores for
+all of them.
 
 **Gotchas**
 - Requires Qdrant, Redis, Postgres, the embedding provider, and a reachable LLM chain.
@@ -554,6 +567,46 @@ dec clear-query-cache
 **Gotchas**
 - Running API or Streamlit processes keep their own in-memory L1 copy of recently cached answers; restart those services for a fully cold cache.
 - The in-memory caches also expire on their own TTL, so clearing Redis is safe and idempotent.
+
+---
+
+### `dec clear-cache`
+
+Clears one or more cache stores. With no `--type` flag (or `--all`), every cache store is cleared. The RAG query cache (`rag:cache:*`), embedding cache (`embed:cache:*`), and crawl cache (`crawl:*` + `ingest:enrichment_failed:*`) live in Redis; the BM25 cache is a persisted tokenizer under `.bm25_cache/` on disk. Qdrant and PostgreSQL are never touched.
+
+```
+usage: dec clear-cache [-h] [--query] [--embedding] [--crawl] [--bm25] [--all]
+```
+
+**Examples**
+
+```bash
+dec clear-cache              # clear every cache store
+dec clear-cache --all        # same as above
+dec clear-cache --query      # RAG query cache only
+dec clear-cache --embedding  # embedding cache only
+dec clear-cache --crawl      # crawl cache only
+dec clear-cache --bm25       # persisted BM25 tokenizers only
+```
+
+**What gets cleared**
+
+| Store | What | Keys/Files |
+|-------|------|-----------|
+| Redis | RAG query cache | `rag:cache:*` (exact + semantic tiers) |
+| Redis | Embedding cache | `embed:cache:*` |
+| Redis | Crawl cache | `crawl:*` (URL registry + HTTP headers) |
+| Redis | Enrichment failures | `ingest:enrichment_failed:*` |
+| Disk | BM25 tokenizers | `.bm25_cache/*.json` |
+
+**What is preserved**
+- Qdrant vector store (all indexed chunks + content hashes)
+- PostgreSQL frontier tables
+
+**Gotchas**
+- Running API or Streamlit processes keep in-memory L1 copies of the query/embedding caches; restart those services for a fully cold cache.
+- The crawl cache can be re-disabled and re-enabled via `CRAWL_CACHE_ENABLED`; clearing it does not affect Qdrant dedup.
+- See the [Cache toggles](#cache-toggles) settings section for per-type enable/disable.
 
 ---
 

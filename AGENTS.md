@@ -68,6 +68,8 @@ Python 3.12+, Pyright, Ruff, Pytest, `uv` only.
 | `dec retry-failed --source "Name" --category fetch` | Retry failed pages | Qdrant + Redis + PG + Ollama |
 | `dec reset-index` | Full clean rebuild (Qdrant + BM25 + Redis + PG) | Qdrant + Redis + PG |
 | `dec reset-qdrant` | Recreate Qdrant collection + BM25 only | Qdrant |
+| `dec clear-cache [--query|--embedding|--crawl|--bm25|--all]` | Clear cache stores (default all) | Redis (BM25: disk only) |
+| `dec clear-query-cache` | Clear RAG query cache only (alias) | Redis |
 | `dec reset-crawler-db` | Reset Redis/PG crawl state (keep Qdrant) | Redis + PG |
 | `dec spark-build --generation <gen>` | Build Spark gen in Qdrant (no activate) | Qdrant + embedder |
 | `dec spark-validate --generation <gen>` | Validate built generation | Qdrant |
