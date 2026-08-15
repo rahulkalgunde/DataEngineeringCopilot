@@ -15,7 +15,7 @@ dev:
 	@IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) up -d --wait || true
 	@echo "Pulling Ollama models (this may take a few minutes)..."
 	@$(COMPOSE) exec -T ollama ollama pull nomic-embed-text || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
-	@$(COMPOSE) exec -T ollama ollama pull llama3.2:3b || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
+	@$(COMPOSE) exec -T ollama ollama pull phi4-mini:3.8b || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
 	@$(COMPOSE) exec -T ollama ollama pull qwen2.5-coder:7b || echo "⚠ Ollama not ready yet — run 'make pull-models' later"
 	@echo ""
 	@echo "✅ Dev stack ready. Image: $(IMAGE_TAG)"
@@ -67,7 +67,7 @@ status:
 # Pull Ollama models (manual retry after dev)
 pull-models:
 	@$(COMPOSE) exec -T ollama ollama pull nomic-embed-text
-	@$(COMPOSE) exec -T ollama ollama pull llama3.2:3b
+	@$(COMPOSE) exec -T ollama ollama pull phi4-mini:3.8b
 	@$(COMPOSE) exec -T ollama ollama pull qwen2.5-coder:7b
 
 # Health check via CLI
