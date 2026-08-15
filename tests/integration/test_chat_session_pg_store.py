@@ -106,11 +106,32 @@ async def test_sources_and_token_count_roundtrip(pg_store):
             timestamp=2.0,
             sources=({"source_name": "docs", "url": "https://x"},),
             token_count=7,
+            groundedness_score=0.55,
+            groundedness_claims=("claim one", "claim two"),
         )
     )
     history = await pg_store.get_history("s4", 10)
     assert history[0].sources == ({"source_name": "docs", "url": "https://x"},)
     assert history[0].token_count == 7
+    assert history[0].groundedness_score == 0.55
+    assert history[0].groundedness_claims == ("claim one", "claim two")
+
+
+async def test_history_groundedness_defaults_when_missing(pg_store):
+    session = ChatSession(session_id="s4b", user_id="u1", created_at=1.0, updated_at=1.0)
+    await pg_store.create_session(session)
+    await pg_store.append_message(
+        ChatMessage(
+            message_id="m1",
+            session_id="s4b",
+            role="assistant",
+            content="answer",
+            timestamp=2.0,
+        )
+    )
+    history = await pg_store.get_history("s4b", 10)
+    assert history[0].groundedness_score == 1.0
+    assert history[0].groundedness_claims == ()
 
 
 @pytest.mark.asyncio

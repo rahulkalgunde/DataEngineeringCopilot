@@ -94,11 +94,26 @@ async def test_history_with_sources_roundtrip(redis, store):
         content="answer",
         sources=({"source_name": "docs", "url": "https://x"},),
         token_count=12,
+        groundedness_score=0.42,
+        groundedness_claims=("claim one", "claim two"),
     )
     await store.append_message(msg)
     history = await store.get_history("s1", 10)
     assert history[0].sources == ({"source_name": "docs", "url": "https://x"},)
     assert history[0].token_count == 12
+    assert history[0].groundedness_score == 0.42
+    assert history[0].groundedness_claims == ("claim one", "claim two")
+
+
+async def test_history_groundedness_defaults_when_missing(redis, store):
+    """Legacy messages without groundedness fields must deserialize to defaults."""
+    session = _session()
+    await store.create_session(session)
+    raw = '{"message_id":"m1","session_id":"s1","role":"assistant","content":"answer","timestamp":0.0,"sources":[],"token_count":0}'
+    await store._redis.rpush(store._messages_key("s1"), raw)
+    history = await store.get_history("s1", 10)
+    assert history[0].groundedness_score == 1.0
+    assert history[0].groundedness_claims == ()
 
 
 async def test_touch_session_updates_updated_at(redis, store):

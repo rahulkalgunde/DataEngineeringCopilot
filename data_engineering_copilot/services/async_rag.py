@@ -1565,7 +1565,18 @@ class AsyncRagService:
             if not scope_covered:
                 logger.info("scope_gate_refused_stream topic_not_covered question=%r", safe_question[:80])
                 full_text = _SCOPE_REFUSAL_TEXT
-        yield _sse({"type": "done", "text": full_text, "confidence": confidence})
+        groundedness_score, unsupported_claims = await self._verify_stream_groundedness(
+            full_text, retrieved_chunks, trace
+        )
+        yield _sse(
+            {
+                "type": "done",
+                "text": full_text,
+                "confidence": confidence,
+                "groundedness_score": groundedness_score,
+                "groundedness_claims": list(unsupported_claims),
+            }
+        )
 
     async def chat_stream(
         self,
@@ -2025,6 +2036,11 @@ class AsyncRagService:
                 logger.info("scope_gate_refused_chat topic_not_covered question=%r", safe_question[:80])
                 full_text = _SCOPE_REFUSAL_TEXT
 
+        # Annotate-only groundedness verification (never blocks or regenerates).
+        groundedness_score, unsupported_claims = await self._verify_stream_groundedness(
+            full_text, retrieved_chunks, trace
+        )
+
         if trace:
             trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
             if trace_id and self.telemetry:
@@ -2082,7 +2098,15 @@ class AsyncRagService:
             except Exception:
                 logger.warning("Chat turn-1 cache write failed", exc_info=True)
 
-        yield _sse({"type": "done", "text": _clean_chat_text(full_text), "confidence": confidence})
+        yield _sse(
+            {
+                "type": "done",
+                "text": _clean_chat_text(full_text),
+                "confidence": confidence,
+                "groundedness_score": groundedness_score,
+                "groundedness_claims": list(unsupported_claims),
+            }
+        )
         if suggestions:
             yield _sse({"type": "suggestions", "suggestions": suggestions})
 
@@ -2350,6 +2374,51 @@ class AsyncRagService:
             )
             scope_span.end()
         return result
+
+    async def _verify_stream_groundedness(
+        self,
+        text: str,
+        retrieved_chunks: list[RetrievedChunk],
+        trace: TelemetryTracerProtocol | None = None,
+    ) -> tuple[float, tuple[str, ...]]:
+        """Run annotate-only groundedness verification on a streamed answer.
+
+        Returns ``(groundedness_score, unsupported_claims)``. Fail-open: on
+        any error or when the verifier is absent, returns ``(1.0, ())`` so a
+        verifier hiccup never blocks or stalls a streaming turn. Does NOT
+        regenerate or refuse — matches the annotate-only contract of
+        ``answer()`` (see ``groundedness.py``).
+        """
+        if self.groundedness_verifier is None or not text.strip():
+            return 1.0, ()
+        groundedness_span = None
+        if trace:
+            groundedness_span = trace.start_observation(name="groundedness-verification", as_type="span")
+        groundedness_score = 1.0
+        unsupported_claims: list[str] = []
+        try:
+            pseudo = Answer(text=text, sources=(), confidence=0.0)
+            (
+                _supported,
+                unsupported_claims,
+                groundedness_score,
+            ) = await self.groundedness_verifier.async_verify_with_score(pseudo, retrieved_chunks)
+        except Exception:
+            logger.warning("Stream groundedness verification failed", exc_info=True)
+            return 1.0, ()
+        finally:
+            if groundedness_span:
+                groundedness_span.update(
+                    input={"answer_chars": len(text), "context_chunks": len(retrieved_chunks)},
+                    output={"groundedness_score": groundedness_score, "unsupported": len(unsupported_claims)},
+                )
+                groundedness_span.end()
+        logger.info(
+            "stream_groundedness unsupported=%d score=%.2f",
+            len(unsupported_claims),
+            groundedness_score,
+        )
+        return groundedness_score, tuple(unsupported_claims)
 
     async def _ensure_reranker_ready(self) -> bool:
         """Lazily load the cross-encoder model so reranking actually runs.

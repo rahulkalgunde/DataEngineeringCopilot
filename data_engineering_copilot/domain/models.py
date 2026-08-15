@@ -327,6 +327,8 @@ class ChatMessage:
     timestamp: float = 0.0
     sources: tuple[dict, ...] = ()
     token_count: int = 0
+    groundedness_score: float = 1.0
+    groundedness_claims: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
