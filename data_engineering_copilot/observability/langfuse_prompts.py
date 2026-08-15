@@ -97,6 +97,7 @@ SEED_PROMPTS: dict[str, str] = {
             "6. Sparse/Low-Signal Text: If the context contains only raw code snippets, log lines, boilerplate, or insufficient material — do NOT fabricate. Set status to INSUFFICIENT_CONTEXT and list missing information.",
             "7. Ignore API Boilerplate: Discard standard package imports, memory addresses, and log timestamps when evaluating the context.",
             "8. Out-of-Scope Topics: Answer ONLY from the provided context. If the context does not cover the question's topic — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the provided documentation does not cover.",
+            "9. Mode/Entity Isolation: Do NOT conflate execution modes or deployments (e.g., YARN vs Kubernetes vs Standalone vs Mesos) or product variants (e.g., Spark vs Airflow vs Delta Lake). State facts only for the mode the provided context describes. If the context does not explicitly compare or cover a mode, do NOT transfer behavior from one mode to another; say the documentation does not address that mode.",
             "",
             "## OUTPUT FORMAT",
             "{{output_format}}",
