@@ -61,6 +61,47 @@ def test_derive_metadata_guide() -> None:
     assert meta.doc_type == "guide"
     assert meta.language == "conceptual"
     assert meta.module == ""
+    assert meta.deployment_mode == ""
+
+
+def test_derive_deployment_mode_yarn() -> None:
+    meta = derive_spark_metadata(
+        _record("docs/running-on-yarn.md", stream="guides", doc_type="guide", language="conceptual"),
+        _source(),
+        title="Running on YARN",
+        text="",
+    )
+    assert meta.deployment_mode == "yarn"
+
+
+def test_derive_deployment_mode_kubernetes() -> None:
+    meta = derive_spark_metadata(
+        _record("docs/running-on-kubernetes.md", stream="guides", doc_type="guide", language="conceptual"),
+        _source(),
+        title="Running on Kubernetes",
+        text="",
+    )
+    assert meta.deployment_mode == "kubernetes"
+
+
+def test_derive_deployment_mode_standalone() -> None:
+    meta = derive_spark_metadata(
+        _record("docs/spark-standalone.md", stream="guides", doc_type="guide", language="conceptual"),
+        _source(),
+        title="Standalone Mode",
+        text="",
+    )
+    assert meta.deployment_mode == "standalone"
+
+
+def test_derive_deployment_mode_empty_for_code() -> None:
+    meta = derive_spark_metadata(
+        _record("python/pyspark/sql/functions.py"),
+        _source(),
+        title="Functions",
+        text="",
+    )
+    assert meta.deployment_mode == ""
 
 
 def test_derive_metadata_example_language() -> None:

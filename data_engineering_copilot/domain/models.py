@@ -159,6 +159,9 @@ class DocumentChunk:
     parser_version: str = ""
     chunker_version: str = ""
     index_generation: str = ""
+    # Deployment mode the chunk documents (e.g. "yarn", "kubernetes",
+    # "standalone"); empty for non-mode-specific content.
+    deployment_mode: str = ""
     # Lossless token-budget segmentation metadata. Empty parent_content_hash
     # means the chunk was never split (it is its own segment).
     parent_content_hash: str = ""

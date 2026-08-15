@@ -149,6 +149,7 @@ class SparkRenderedChunker:
             source_commit=metadata.source_commit,
             file_path=metadata.file_path,
             license=metadata.license,
+            deployment_mode=metadata.deployment_mode,
         )
 
     @staticmethod
