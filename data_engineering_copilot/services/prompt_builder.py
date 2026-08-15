@@ -11,6 +11,7 @@ import re
 
 from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
+from data_engineering_copilot.services.mode_guardrails import build_mode_guardrail_block
 
 CODE_INTENTS = frozenset({"code_example", "api_lookup"})
 
@@ -197,6 +198,10 @@ class PromptBuilder:
         if history:
             history = self._budget_history(history, max_history_tokens)
             tagged_context = f"## CONVERSATION HISTORY\n{history}\n\n{tagged_context}"
+
+        guardrail = build_mode_guardrail_block(question)
+        if guardrail:
+            system_role = f"{system_role or self.system_role}\n\n{guardrail}"
 
         return get_langfuse_prompt("rag-answer").compile(
             system_role=system_role or self.system_role,
