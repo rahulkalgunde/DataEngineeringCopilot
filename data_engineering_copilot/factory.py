@@ -10,6 +10,7 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import RagConfig, RerankRequest, RerankResult
 
 if TYPE_CHECKING:
+    from data_engineering_copilot.services.conversation_rag import ConversationService
     from data_engineering_copilot.services.pipeline_lab import PipelineLab
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
@@ -1302,6 +1303,13 @@ def build_rag_service(
         max_context_chars=app_settings.max_context_chars,
         max_chunks_per_source=app_settings.max_chunks_per_source,
         max_expansion_queries=app_settings.max_expansion_queries,
+        chat_cache_recall_enabled=app_settings.chat_cache_recall_enabled,
+        chat_cache_top_k=app_settings.chat_cache_top_k,
+        chat_cache_recall_threshold=app_settings.chat_cache_recall_threshold,
+        chat_cache_max_age_seconds=app_settings.chat_cache_max_age_seconds,
+        chat_suggestions_enabled=app_settings.chat_suggestions_enabled,
+        chat_suggestions_count=app_settings.chat_suggestions_count,
+        chat_suggestions_mode=app_settings.chat_suggestions_mode,
     )
 
     provider_rate_limiters = _build_provider_rate_limiters(app_settings)
@@ -1552,4 +1560,89 @@ def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = 
             embedding_dimension=app_settings.get_embedding_dimension(),
         ),
         dry_run=dry_run,
+    )
+
+
+def build_conversation_service(app_settings: AppSettings = settings) -> ConversationService:
+    """Build a :class:`ConversationService` wired to the RAG service + chat store.
+
+    Uses the shared Redis client and the existing ``build_rag_service``
+    singletons so chat turns reuse the same vector store/embedder/LLM chains.
+    The Postgres pool is created lazily by ``ChatSessionPostgresStore`` (its
+    DSN defaults to ``crawl_db_url`` when ``chat_db_url`` is unset).
+    """
+    from data_engineering_copilot.infrastructure.chat_session_store import (
+        ChatSessionPostgresStore,
+        ChatSessionRedisStore,
+        ChatSessionStore,
+    )
+    from data_engineering_copilot.services.conversation_rag import ConversationService
+
+    if not app_settings.chat_enabled:
+        raise RuntimeError("Conversational chat is disabled (chat_enabled=false)")
+
+    dsn = app_settings.chat_db_url or app_settings.crawl_db_url
+    pg_store = ChatSessionPostgresStore(dsn)
+    redis_store = ChatSessionRedisStore(
+        get_shared_redis_client(app_settings.redis_url),
+        ttl_seconds=app_settings.chat_session_ttl_seconds,
+    )
+    store = ChatSessionStore(redis_store, pg_store)
+
+    from data_engineering_copilot.services.rag_service_singleton import get_rag_service_if_initialized
+
+    rag_service = get_rag_service_if_initialized()
+    if rag_service is None:
+        rag_service = build_rag_service(app_settings=app_settings)
+
+    # Phase C: build the local Ollama components used for the cheap short steps
+    # (rewrite/hyde/expand/scope-verify). Only when the settings opt in.
+    local_rewriter = None
+    local_scope = None
+    local_llm_client = None
+    if app_settings.chat_rewrite_local or app_settings.chat_scope_local or app_settings.chat_answer_local:
+        local_llm_client = LLMClient(
+            base_url=f"{app_settings.ollama_base_url}/v1",
+            model=app_settings.ollama_model,
+            api_key="",
+            timeout_seconds=app_settings.ollama_timeout_seconds,
+            max_tokens=app_settings.ollama_num_predict,
+            connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+            pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
+        )
+        if app_settings.chat_rewrite_local:
+            from data_engineering_copilot.services.query_rewriting import QueryRewriter
+
+            local_rewriter = QueryRewriter(
+                llm_client=local_llm_client,
+                enabled=app_settings.query_rewrite_enabled,
+            )
+        if app_settings.chat_scope_local:
+            from data_engineering_copilot.services.scope_verifier import ScopeVerifier
+
+            local_scope = ScopeVerifier(
+                llm_client=local_llm_client,
+                enabled=app_settings.scope_check_enabled,
+            )
+
+    # Chat reranking: prefer the local cross-encoder over the cloud LLM rerank
+    # chain (which costs ~5s/turn). Off unless both reranking is enabled and the
+    # local path is opted in.
+    local_reranker = None
+    if app_settings.chat_rerank_local and app_settings.reranker_enabled:
+        from data_engineering_copilot.services.reranker import CrossEncoderReranker
+
+        local_reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+
+    return ConversationService(
+        rag_service=rag_service,
+        store=store,
+        title_max_chars=app_settings.chat_title_max_chars,
+        local_query_rewriter=local_rewriter,
+        local_scope_verifier=local_scope,
+        local_llm_client=local_llm_client,
+        answer_local=app_settings.chat_answer_local,
+        local_reranker=local_reranker,
+        blocked_url_substrings=app_settings.chat_blocked_url_substrings,
+        domain_sources=app_settings.chat_domain_sources,
     )

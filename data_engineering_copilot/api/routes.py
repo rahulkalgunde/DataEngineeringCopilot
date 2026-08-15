@@ -396,6 +396,40 @@ class AskResponse(BaseModel):
     metrics: dict[str, float] = {}
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    session_id: str | None = Field(default=None, max_length=64)
+    source_filter: list[str] | None = None
+    stream: bool = True
+    max_history_turns: int = Field(default=10, ge=1, le=50)
+
+
+class ChatMessageRef(BaseModel):
+    message_id: str
+    role: str
+    content: str
+    timestamp: float
+    sources: list[dict] = []
+
+
+class ChatSessionRef(BaseModel):
+    session_id: str
+    user_id: str
+    title: str
+    created_at: float
+    updated_at: float
+    metadata: dict = {}
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    message_id: str
+    role: str
+    content: str
+    sources: list[SourceRef] = []
+    metrics: dict[str, float] = {}
+
+
 @router.post("/api/v1/ask", response_model=AskResponse)
 async def ask(request: AskRequest, fastapi_request: Request):
     """Answer a question using the RAG pipeline."""
@@ -501,6 +535,122 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/api/v1/chat")
+async def chat(request: ChatRequest, fastapi_request: Request):
+    """Streaming conversational RAG chat with Server-Sent Events.
+
+    Emits ``data: {...}`` SSE events (``session_created``/``status``/``sources``/
+    ``token``/``done``/``error``) followed by a terminal ``data: [DONE]``. The
+    request body may carry a ``session_id`` to resume an existing conversation.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
+
+    if not settings.chat_enabled:
+        raise HTTPException(status_code=404, detail="Chat is not enabled")
+
+    effective_source_filter = _resolve_source_filter(
+        fastapi_request, request.source_filter, rbac_enabled=settings.rbac_enabled
+    )
+    cache_scope = _build_cache_scope(fastapi_request, effective_source_filter)
+    user_id, _session = _extract_user_session(fastapi_request)
+    effective_user_id = user_id or "anonymous"
+
+    async def event_stream():
+        try:
+            conversation = await get_conversation_service()
+            async for event in conversation.chat_stream(
+                request.session_id,
+                effective_user_id,
+                request.message,
+                source_filter=effective_source_filter,
+                max_history_turns=request.max_history_turns,
+                cache_scope=cache_scope,
+            ):
+                if await fastapi_request.is_disconnected():
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        except TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Request timed out'})}\n\n"
+        except Exception as exc:
+            logger.exception("RAG chat failed: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error'})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/api/v1/sessions")
+async def list_sessions(fastapi_request: Request):
+    """List chat sessions for the caller (from X-User-ID, anonymous fallback)."""
+    from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
+
+    user_id, _session = _extract_user_session(fastapi_request)
+    effective_user_id = user_id or "anonymous"
+    conversation = await get_conversation_service()
+    sessions = await conversation.list_sessions(effective_user_id, limit=50)
+    return {
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "user_id": s.user_id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "metadata": s.metadata,
+            }
+            for s in sessions
+        ]
+    }
+
+
+@router.get("/api/v1/sessions/{session_id}")
+async def get_session(session_id: str, fastapi_request: Request):
+    """Return a chat session's metadata and full message thread."""
+    from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
+
+    conversation = await get_conversation_service()
+    session = await conversation.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    messages = await conversation.get_history(session_id, max_turns=500)
+    return {
+        "session_id": session.session_id,
+        "title": session.title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "messages": [
+            {
+                "message_id": m.message_id,
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "sources": list(m.sources),
+            }
+            for m in messages
+        ],
+    }
+
+
+@router.delete("/api/v1/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a chat session and its messages."""
+    from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
+
+    conversation = await get_conversation_service()
+    await conversation.delete_session(session_id)
+    return {"ok": True}
 
 
 @router.post("/api/v1/feedback")

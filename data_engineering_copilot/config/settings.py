@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
@@ -860,6 +860,50 @@ class AppSettings(BaseSettings):
     store_concurrency: int = 2
     # Async crawler settings
     crawl_db_url: str = ""
+    # Conversational RAG (multi-turn chat). Chat sessions/messages are stored
+    # durably in Postgres (chat_db_url, defaulting to crawl_db_url) with a Redis
+    # hot cache for the recent turns.
+    chat_enabled: bool = True
+    chat_session_ttl_seconds: int = 259200  # 72h
+    chat_history_max_turns: int = 10
+    chat_history_max_tokens: int = 2048
+    chat_db_url: str = ""
+    chat_title_max_chars: int = 60
+    # Chat speed tuning (Phase C): route short LLM steps (rewrite/hyde/expand/
+    # scope-verify) to the local Ollama model. Default OFF: on CPU-only hosts
+    # (no GPU) Ollama is ~6 tok/s, so medium-length rewrites/HyDE are SLOWER
+    # than the cloud chain. Enable only on GPU-backed Ollama or when generating
+    # very short outputs. The answer generation stays on the cloud chain unless
+    # chat_answer_local.
+    chat_rewrite_local: bool = False
+    chat_scope_local: bool = False
+    chat_answer_local: bool = False
+    # Chat reranking: use the local cross-encoder instead of the cloud LLM
+    # rerank chain. The cloud chain costs ~5s/turn; the local model (ms-marco)
+    # is free and near-instant on CPU. Default ON for chat; the single-turn
+    # Ask pipeline is unaffected.
+    chat_rerank_local: bool = True
+    # Chat speed tuning (Phase F): smart-cache recall tier — reuse similar
+    # cached (question→answer) pairs via local synthesis, gated by scope
+    # verify. Opt-in default-off; flip on after measuring cache hit rate.
+    chat_cache_recall_enabled: bool = False
+    chat_cache_top_k: int = 3
+    chat_cache_recall_threshold: float = 0.70
+    chat_cache_max_age_seconds: int = 86400
+    # Anti-hallucination / identity hardening.
+    # URL substrings whose chunks must never be used as context (Claude's
+    # self-identifying system prompts hijack the assistant's identity).
+    chat_blocked_url_substrings: list[str] = field(default_factory=lambda: ["system-prompts.md"])
+    # Optional source-name whitelist for chat retrieval (domain isolation).
+    # Empty = all sources. When set, only these source_names are retrieved.
+    chat_domain_sources: list[str] = field(default_factory=list)
+    # Clickable follow-up suggestions (ChatGPT-style). After each assistant
+    # answer the UI shows N suggested follow-up questions as chips; clicking one
+    # submits it as the next turn. Mode: "llm" | "rule" | "hybrid" (LLM first,
+    # rule-based fallback on failure/empty).
+    chat_suggestions_enabled: bool = True
+    chat_suggestions_count: int = 3
+    chat_suggestions_mode: str = "hybrid"
     crawl_async_concurrency: int = 10
     crawl_async_max_concurrency: int = 40
     crawl_async_per_domain_concurrency: int = 2
@@ -1045,7 +1089,30 @@ class AppSettings(BaseSettings):
             errors.append(f"crawl_attempt_multiplier ({self.crawl_attempt_multiplier}) must be >= 1")
         if self.recovery_max_pages < 1:
             errors.append(f"recovery_max_pages ({self.recovery_max_pages}) must be >= 1")
-
+        if self.chat_session_ttl_seconds < 60:
+            errors.append(f"chat_session_ttl_seconds ({self.chat_session_ttl_seconds}) must be >= 60")
+        if not 1 <= self.chat_history_max_turns <= 100:
+            errors.append(f"chat_history_max_turns ({self.chat_history_max_turns}) must be within [1, 100]")
+        if self.chat_history_max_tokens < 128:
+            errors.append(f"chat_history_max_tokens ({self.chat_history_max_tokens}) must be >= 128")
+        if self.chat_title_max_chars < 10:
+            errors.append(f"chat_title_max_chars ({self.chat_title_max_chars}) must be >= 10")
+        if not 0.0 < self.chat_cache_recall_threshold <= 1.0:
+            errors.append(f"chat_cache_recall_threshold ({self.chat_cache_recall_threshold}) must be within (0.0, 1.0]")
+        if not 1 <= self.chat_cache_top_k <= 20:
+            errors.append(f"chat_cache_top_k ({self.chat_cache_top_k}) must be within [1, 20]")
+        if self.chat_cache_max_age_seconds < 60:
+            errors.append(f"chat_cache_max_age_seconds ({self.chat_cache_max_age_seconds}) must be >= 60")
+        if any(not isinstance(s, str) or not s.strip() for s in self.chat_blocked_url_substrings):
+            errors.append("chat_blocked_url_substrings must be non-empty strings")
+        if any(not isinstance(s, str) or not s.strip() for s in self.chat_domain_sources):
+            errors.append("chat_domain_sources must be non-empty strings")
+        if not 1 <= self.chat_suggestions_count <= 5:
+            errors.append(f"chat_suggestions_count ({self.chat_suggestions_count}) must be within [1, 5]")
+        if self.chat_suggestions_mode not in ("llm", "rule", "hybrid"):
+            errors.append(
+                f"chat_suggestions_mode ({self.chat_suggestions_mode}) must be one of 'llm', 'rule', 'hybrid'"
+            )
         configured_providers = {
             p
             for p in [
