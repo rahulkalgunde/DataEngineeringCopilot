@@ -1972,6 +1972,7 @@ class AsyncRagService:
                 "title": c.chunk.title,
                 "url": c.chunk.url,
                 "snippet": c.chunk.text[:240],
+                "chunk_id": c.chunk.chunk_id,
             }
             for c in retrieved_chunks
         ]

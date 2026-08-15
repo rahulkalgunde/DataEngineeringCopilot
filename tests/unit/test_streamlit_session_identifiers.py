@@ -79,6 +79,50 @@ def test_extract_streaming_answer_ignores_incomplete_json() -> None:
 
 
 @respx.mock
+def test_chat_turn_renders_sources_and_persists_groundedness() -> None:
+    """Sources SSE event must surface as a Sources expander + persist on the message."""
+    import httpx
+    from streamlit.testing.v1 import AppTest
+
+    from data_engineering_copilot.ui import streamlit_app
+
+    respx.post(f"{streamlit_app.API_BASE_URL}/api/v1/chat").mock(
+        return_value=httpx.Response(
+            200,
+            text='data: {"type": "session_created", "session_id": "s1", "title": "t"}\n\n'
+            'data: {"type": "sources", "sources": [{"source_name": "Delta Docs", "title": "Delta Lake Guide", "url": "https://docs.delta.io/", "snippet": "ACID.", "chunk_id": "c42"}]}\n\n'
+            'data: {"type": "token", "content": "ok"}\n\n'
+            'data: {"type": "done", "text": "ok", "confidence": 0.9, "groundedness_score": 0.6, "groundedness_claims": ["Delta is YARN-only"]}\n\n'
+            "data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    at = AppTest.from_file("data_engineering_copilot/ui/streamlit_app.py", default_timeout=30)
+    at.session_state["chat_session_id"] = "s1"
+    at.run()
+    at.chat_input[0].set_value("What is Delta?")
+    at.run()
+
+    assistant = [m for m in at.session_state["chat_messages"] if m["role"] == "assistant"][-1]
+    assert assistant["sources"] == [
+        {
+            "source_name": "Delta Docs",
+            "title": "Delta Lake Guide",
+            "url": "https://docs.delta.io/",
+            "snippet": "ACID.",
+            "chunk_id": "c42",
+        }
+    ]
+    assert assistant["groundedness_score"] == 0.6
+    assert assistant["groundedness_claims"] == ["Delta is YARN-only"]
+
+    # The expander label must be rendered in the DOM.
+    labels = [b.label for b in at.expander]
+    assert any("Sources (1)" in label for label in labels), f"no Sources expander, got {labels}"
+
+
+@respx.mock
 def test_suggestion_chip_click_submits_as_user_message() -> None:
     """Clicking a follow-up chip must submit it as the next user turn."""
     import httpx

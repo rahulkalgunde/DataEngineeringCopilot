@@ -13,6 +13,7 @@ this service owns session lifecycle and persistence only.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import time
@@ -181,6 +182,13 @@ class ConversationService:
                 payload = _parse_sse_payload(sse_line)
                 if payload is None:
                     continue
+                if payload.get("type") == "sources":
+                    assistant_message = ChatMessage(
+                        **{
+                            **dataclasses.asdict(assistant_message),
+                            "sources": tuple(payload.get("sources") or ()),
+                        }
+                    )
                 if payload.get("type") == "done":
                     assistant_text = payload.get("text", "")
                     assistant_message = ChatMessage(
@@ -190,6 +198,7 @@ class ConversationService:
                         content=assistant_text,
                         timestamp=time.time(),
                         token_count=_count_tokens(assistant_text),
+                        sources=assistant_message.sources,
                         groundedness_score=float(payload.get("groundedness_score", 1.0)),
                         groundedness_claims=tuple(payload.get("groundedness_claims") or ()),
                     )

@@ -1082,6 +1082,17 @@ def render_chat_tab() -> None:
     for msg in st.session_state.chat_messages:
         with chat_container.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
             st.markdown(msg["content"])
+            if msg.get("sources"):
+                with st.expander(f"Sources ({len(msg['sources'])})", expanded=False):
+                    for i, source in enumerate(msg["sources"], 1):
+                        st.markdown(f"**{i}. [{source.get('title', 'Source')}]({source.get('url', '#')})**")
+                        st.caption(f"Source: {source.get('source_name')}")
+            claims = msg.get("groundedness_claims") or []
+            if claims:
+                st.caption(
+                    f"Groundedness {float(msg.get('groundedness_score', 1.0)):.2f} — "
+                    f"{len(claims)} claim(s) not directly supported"
+                )
 
     # ChatGPT-style: clickable follow-up suggestions are rendered BELOW the
     # freshly generated answer (see the turn block) so chips always reflect the
@@ -1108,6 +1119,9 @@ def render_chat_tab() -> None:
             raw_buffer = ""
             resolved_session = st.session_state.get("chat_session_id")
             error_msg: str | None = None
+            turn_sources: list[dict] = []
+            groundedness_score = 1.0
+            groundedness_claims: list[str] = []
 
             try:
                 with status_ph.status("Connecting to chat API…", expanded=True) as status:
@@ -1124,8 +1138,12 @@ def render_chat_tab() -> None:
                             if clean is not None:
                                 full_text = clean
                                 text_ph.markdown(full_text)
+                        elif etype == "sources":
+                            turn_sources = event.get("sources", [])
                         elif etype == "done":
                             full_text = event.get("text", full_text)
+                            groundedness_score = float(event.get("groundedness_score", 1.0))
+                            groundedness_claims = event.get("groundedness_claims") or []
                             text_ph.markdown(full_text)
                         elif etype == "suggestions":
                             st.session_state.chat_suggestions = event.get("suggestions", [])
@@ -1147,9 +1165,26 @@ def render_chat_tab() -> None:
             elif not full_text:
                 text_ph.markdown("…")
 
-        st.session_state.chat_messages.append(
-            {"role": "assistant", "content": full_text or (f"Error: {error_msg}" if error_msg else "(no answer)")}
-        )
+        # Citations + groundedness for the freshly generated turn. Sources arrive
+        # as a separate SSE event; render them under the answer just like the QA
+        # tab, then persist them with the assistant message for later renders.
+        assistant_payload: dict = {
+            "role": "assistant",
+            "content": full_text or (f"Error: {error_msg}" if error_msg else "(no answer)"),
+            "sources": turn_sources,
+            "groundedness_score": groundedness_score,
+            "groundedness_claims": groundedness_claims,
+        }
+        st.session_state.chat_messages.append(assistant_payload)
+        if turn_sources and not error_msg:
+            with st.expander(f"Sources ({len(turn_sources)})", expanded=False):
+                for i, source in enumerate(turn_sources, 1):
+                    st.markdown(f"**{i}. [{source.get('title', 'Source')}]({source.get('url', '#')})**")
+                    st.caption(f"Source: {source.get('source_name')}")
+        if groundedness_claims and not error_msg:
+            st.caption(
+                f"Groundedness {groundedness_score:.2f} — {len(groundedness_claims)} claim(s) not directly supported"
+            )
 
         # Render the follow-up chips for THIS answer immediately, inside the
         # chat container so they appear under the answer but ABOVE the input box.
