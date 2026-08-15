@@ -55,6 +55,8 @@ class _StubRedis:
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, bytes]] = {}
+        self._strings: dict[str, bytes] = {}
+        self._lists: dict[str, list[bytes]] = {}
         self._ttls: dict[str, int] = {}
 
     @staticmethod
@@ -87,7 +89,34 @@ class _StubRedis:
         removed = 0
         for key in keys:
             removed += self._data.pop(self._norm(key), None) is not None
+            removed += self._strings.pop(self._norm(key), None) is not None
+            removed += self._lists.pop(self._norm(key), None) is not None
         return removed
+
+    async def set(self, key: str | bytes, value: str | bytes) -> None:
+        self._strings[self._norm(key)] = value.encode("utf-8") if isinstance(value, str) else value
+
+    async def get(self, key: str | bytes) -> bytes | None:
+        return self._strings.get(self._norm(key))
+
+    async def rpush(self, key: str | bytes, *values: str | bytes) -> int:
+        norm = self._norm(key)
+        if norm not in self._lists:
+            self._lists[norm] = []
+        for value in values:
+            self._lists[norm].append(value.encode("utf-8") if isinstance(value, str) else value)
+        return len(self._lists[norm])
+
+    async def ltrim(self, key: str | bytes, start: int, end: int) -> None:
+        norm = self._norm(key)
+        items = self._lists.get(norm, [])
+        self._lists[norm] = items[start : end + 1] if end != -1 else items[start:]
+
+    async def lrange(self, key: str | bytes, start: int, end: int) -> list[bytes]:
+        items = self._lists.get(self._norm(key), [])
+        if end == -1:
+            return items[start:]
+        return items[start : end + 1]
 
     def pipeline(self, transaction: bool = True) -> _StubPipeline:
         return _StubPipeline(self)

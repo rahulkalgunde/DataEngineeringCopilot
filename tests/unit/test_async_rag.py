@@ -441,13 +441,16 @@ class TestAsyncRagService:
 
     @pytest.mark.asyncio
     async def test_answer_reranker_below_reranker_threshold_rejects(self, mock_embedder, mock_vector_store, mock_llm):
-        """When the reranker runs, its score is the gate: a top chunk scored
+        """When a reranker ran, a uniformly-low (min-max normalized) top score
         below ``reranker_confidence_threshold`` rejects the answer."""
         from data_engineering_copilot.services.async_rag import AsyncRagService
 
         mock_reranker = MagicMock()
         mock_reranker.is_available = MagicMock(return_value=True)
-        mock_reranker.rerank = AsyncMock(side_effect=lambda query, chunks, top_k: chunks)
+        # Emulate a normalized reranker: best chunk scores 0.04 (below 0.10 gate).
+        mock_reranker.rerank = AsyncMock(
+            side_effect=lambda query, chunks, top_k: [self._make_chunk(confidence=0.04) for _ in chunks]
+        )
 
         config = RagConfig(
             reranker_enabled=True,
@@ -455,7 +458,6 @@ class TestAsyncRagService:
             confidence_threshold=0.3,
             reranker_confidence_threshold=0.10,
         )
-        # Chunks carry the reranker score (0.04) below the reranker threshold.
         mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(confidence=0.04) for _ in range(3)])
 
         service = AsyncRagService(

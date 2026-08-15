@@ -259,3 +259,85 @@ class TestPoisoningPrevention:
         cache.set_exact("q", _answer("gen A"), scope=gen_a)
         assert cache.get_exact("q", scope=gen_a) is not None
         assert cache.get_exact("q", scope=gen_b) is None, "Generation scope must stay part of cache identity"
+
+
+class TestTopK:
+    def _cache(self):
+        return QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.92)
+
+    def test_empty_returns_none(self):
+        cache = self._cache()
+        assert cache.top_k([0.5] * 768, k=3, min_similarity=0.0) == []
+
+    def test_returns_top_k_sorted_by_score(self):
+        cache = self._cache()
+        q = [1.0, 0.0]
+        # Three cached answers with descending similarity to the query vector.
+        cache.set_semantic("near", [0.95, 0.05], _answer("answer-near"))
+        cache.set_semantic("mid", [0.8, 0.2], _answer("answer-mid"))
+        cache.set_semantic("far", [0.6, 0.4], _answer("answer-far"))
+
+        results = cache.top_k(q, k=3, min_similarity=0.0)
+        assert [a.text for _, a in results] == ["answer-near", "answer-mid", "answer-far"]
+        assert results[0][0] > results[1][0] > results[2][0]
+
+    def test_threshold_filters_below_cutoff(self):
+        cache = self._cache()
+        q = [1.0, 0.0]
+        cache.set_semantic("near", [0.95, 0.05], _answer("answer-near"))
+        cache.set_semantic("far", [0.4, 0.6], _answer("answer-far"))  # cosine ~0.55 < 0.70
+        results = cache.top_k(q, k=3, min_similarity=0.70)
+        assert [a.text for _, a in results] == ["answer-near"]
+
+    def test_k_limits_results(self):
+        cache = self._cache()
+        q = [1.0, 0.0]
+        cache.set_semantic("a", [0.95, 0.05], _answer("answer-a"))
+        cache.set_semantic("b", [0.94, 0.06], _answer("answer-b"))
+        cache.set_semantic("c", [0.93, 0.07], _answer("answer-c"))
+        results = cache.top_k(q, k=2, min_similarity=0.0)
+        assert len(results) == 2
+
+    def test_scope_isolation(self):
+        cache = self._cache()
+        q = [1.0, 0.0]
+        cache.set_semantic("q", [0.95, 0.05], _answer("tenant-a"), scope=_SPARK)
+        results = cache.top_k(q, k=3, min_similarity=0.0, scope=_DELTA)
+        assert results == []
+
+    def test_dimension_mismatch_skipped(self):
+        cache = self._cache()
+        cache.set_semantic("q", [0.5] * 768, _answer("answer-diff-dim"))
+        results = cache.top_k([0.5] * 64, k=3, min_similarity=0.0)
+        assert results == []
+
+
+class TestEnvelopeSerialization:
+    def test_envelope_roundtrip_preserves_suggestions(self):
+        """Suggestions cached with the answer must survive serialize/deserialize."""
+        from data_engineering_copilot.services.query_cache import (
+            _deserialize_envelope,
+            _serialize_envelope,
+        )
+
+        answer = _answer("answer")
+        answer = CachedAnswer(
+            text=answer.text,
+            sources=answer.sources,
+            confidence=answer.confidence,
+            groundedness_score=answer.groundedness_score,
+            cached_at=answer.cached_at,
+            suggestions=("Follow-up one?", "Follow-up two?"),
+        )
+        restored = _deserialize_envelope(_serialize_envelope(answer))
+        assert restored is not None
+        assert restored.suggestions == ("Follow-up one?", "Follow-up two?")
+
+    def test_envelope_deserialize_older_entry_without_suggestions(self):
+        """Older cache entries lacking a 'suggestions' key default to empty."""
+        from data_engineering_copilot.services.query_cache import _deserialize_envelope
+
+        old = '{"text": "answer", "sources": [], "confidence": 0.9, "groundedness_score": 1.0, "cached_at": 0.0}'
+        restored = _deserialize_envelope(old)
+        assert restored is not None
+        assert restored.suggestions == ()

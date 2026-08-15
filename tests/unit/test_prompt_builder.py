@@ -109,3 +109,85 @@ class TestSafetyNet:
         # Should use _CODE_INSTRUCTIONS, not _DOCUMENTATION_INSTRUCTIONS_WITH_CODE
         assert "Provide a brief explanation (1-3 sentences) followed by a complete, runnable code example" in prompt
         assert "Match the language requested by the user" in prompt
+
+
+class TestHistoryInjection:
+    def test_no_history_matches_legacy_prompt(self):
+        """Without history, the prompt is byte-identical to pre-chat behavior."""
+        builder = PromptBuilder()
+        plain = builder.build_rag_prompt(
+            context="Some context.",
+            question="What is Spark?",
+            intent="factual",
+        )
+        no_history = builder.build_rag_prompt(
+            context="Some context.",
+            question="What is Spark?",
+            intent="factual",
+            history=None,
+        )
+        assert plain == no_history
+        assert "## CONVERSATION HISTORY" not in plain
+
+    def test_history_injected_before_context(self):
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="RETRIEVED_CONTEXT_MARKER",
+            question="What about its API?",
+            intent="factual",
+            history="User: How does filter work?\nAssistant: It filters arrays.",
+        )
+        assert "## CONVERSATION HISTORY" in prompt
+        assert "User: How does filter work?" in prompt
+        assert "Assistant: It filters arrays." in prompt
+        # History appears before the retrieved context.
+        assert prompt.index("User: How does filter work?") < prompt.index("RETRIEVED_CONTEXT_MARKER")
+        assert prompt.index("## CONVERSATION HISTORY") < prompt.index("RETRIEVED_CONTEXT_MARKER")
+
+    def test_history_budget_evicts_oldest_first(self):
+        builder = PromptBuilder()
+        # Many turns of identical size; a tiny budget keeps only the most recent.
+        history = "\n".join(f"User: question {i}\nAssistant: answer {i}" for i in range(20))
+        budgeted = builder._budget_history(history, max_history_tokens=20)
+        assert "question 19" in budgeted  # most recent turn kept
+        assert "question 0" not in budgeted  # oldest evicted
+
+    def test_history_under_budget_is_unchanged(self):
+        builder = PromptBuilder()
+        history = "User: hi\nAssistant: hello"
+        assert builder._budget_history(history, max_history_tokens=100) == history
+
+    def test_eviction_never_splits_a_turn(self):
+        """The budget must drop whole turns, never split User/Assistant pairs."""
+        builder = PromptBuilder()
+        history = "\n".join(f"User: q{i}\nAssistant: a{i}" for i in range(10))
+        budgeted = builder._budget_history(history, max_history_tokens=12)
+        lines = budgeted.splitlines()
+        # Any kept User line must have its Assistant line present.
+        for i, line in enumerate(lines):
+            if line.startswith("User:"):
+                assert i + 1 < len(lines)
+                assert lines[i + 1].startswith("Assistant:")
+
+    def test_system_role_separator_preserved_with_history(self):
+        """History injection must not break the SYSTEM_BLOCK_SEPARATOR split."""
+        from data_engineering_copilot.infrastructure.llm_client import (
+            SYSTEM_BLOCK_SEPARATOR,
+            build_chat_messages,
+        )
+
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="Follow up?",
+            intent="factual",
+            history="User: first\nAssistant: reply",
+        )
+        assert SYSTEM_BLOCK_SEPARATOR in prompt
+        messages = build_chat_messages(prompt)
+        assert len(messages) == 2  # system + user
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        # History block landed in the user message, before the context.
+        assert "## CONVERSATION HISTORY" in messages[1]["content"]
+        assert "Some context." in messages[1]["content"]
