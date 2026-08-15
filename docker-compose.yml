@@ -174,6 +174,11 @@ services:
   langfuse:
     image: langfuse/langfuse:4
     container_name: de_copilot_observability
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
     depends_on:
       - langfuse-postgres
       - clickhouse
@@ -254,7 +259,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
           cpus: "1.0"
     depends_on:
       - langfuse-postgres
@@ -311,8 +316,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: "1.0"
+          memory: 2G
+          cpus: "2.0"
     # Profile-gated: start with `--profile app`, or by name (`docker compose up backend-api`).
     # CI (`-f docker-compose.yml -f docker-compose.ci.yml`) omits the profile and skips this.
     profiles: ["app"]

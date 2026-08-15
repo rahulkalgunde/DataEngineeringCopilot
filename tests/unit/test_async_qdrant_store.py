@@ -305,7 +305,9 @@ async def test_get_content_hash_scoped_to_source(mock_async_qdrant):
     result = await store.get_content_hash_for_url("http://example.com/page1", "Source A")
     assert result == "abc123"
 
-    scroll_filter = mock_async_qdrant.scroll.await_args.kwargs["scroll_filter"]
+    call = mock_async_qdrant.scroll.await_args
+    assert call is not None
+    scroll_filter = call.kwargs["scroll_filter"]
     keys = [c.key for c in scroll_filter.must]
     assert keys == ["url", "source_name"]
     match_values = [c.match.value for c in scroll_filter.must]
