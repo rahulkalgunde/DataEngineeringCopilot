@@ -103,6 +103,9 @@ jobs:
       - name: RAG Evaluation
         run: uv run make test-eval
 
+      - name: Eval dataset schema gates
+        run: uv run make test-eval-data
+
   test-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
