@@ -131,6 +131,16 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpm_limit=app_settings.cloudflare_rpm_limit,
                 rpd_limit=app_settings.cloudflare_rpd_limit,
             )
+        elif p == "opencodezen":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.opencodezen_rpm_limit,
+                rpd_limit=app_settings.opencodezen_rpd_limit,
+            )
+        elif p == "opencodego":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.opencodego_rpm_limit,
+                rpd_limit=app_settings.opencodego_rpd_limit,
+            )
         elif p == "huggingface":
             rate_limiters[p] = SlidingWindowRateLimiter(
                 rpm_limit=app_settings.huggingface_rpm_limit,
@@ -335,8 +345,36 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
+    if eff_provider == "opencodezen":
+        api_key = app_settings.opencodezen_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OPENCODEZEN_API_KEY is required when provider='opencodezen'")
+        return LLMClient(
+            base_url=app_settings.opencodezen_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "opencodego":
+        api_key = app_settings.opencodego_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OPENCODEGO_API_KEY is required when provider='opencodego'")
+        return LLMClient(
+            base_url=app_settings.opencodego_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
+            rate_limiter=rate_limiter,
+        )
+
     raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare'."
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego'."
     )
 
 

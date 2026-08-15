@@ -680,6 +680,26 @@ class AppSettings(BaseSettings):
     cloudflare_rpm_limit: int = 60
     cloudflare_rpd_limit: int = 1000
 
+    # OpenCode Zen free models (LLM only). Free models (e.g.
+    # ``deepseek-v4-flash-free``) are only served on the Zen pay-as-you-go
+    # surface (``/zen/v1``), not the Go subscription surface (``/zen/go/v1``).
+    # Free-tier requests are throttled via ``FreeUsageLimitError`` (429) when
+    # the per-key quota is exhausted.
+    opencodezen_api_key: SecretStr = SecretStr("")
+    opencodezen_model: str = "deepseek-v4-flash-free"
+    opencodezen_base_url: str = "https://opencode.ai/zen/v1"
+    opencodezen_rpm_limit: int = 60
+    opencodezen_rpd_limit: int = 5000
+
+    # OpenCode Go subscription models (LLM only). Served on the Go surface
+    # (``/zen/go/v1``) and requires an OpenCode Go subscription; the ``-free``
+    # Zen models are NOT available here.
+    opencodego_api_key: SecretStr = SecretStr("")
+    opencodego_model: str = "deepseek-v4-flash"
+    opencodego_base_url: str = "https://opencode.ai/zen/go/v1"
+    opencodego_rpm_limit: int = 60
+    opencodego_rpd_limit: int = 1000
+
     # Hugging Face Inference Providers (LLM + Embeddings).
     # Serverless embeddings use the native ``feature-extraction`` route (the
     # OpenAI-compatible ``/v1`` surface is chat-completions only). Free-tier
@@ -699,7 +719,16 @@ class AppSettings(BaseSettings):
 
     # LLM fallback chain: ordered list of providers to try on failure
     llm_fallback_order: list[str] = Field(
-        default_factory=lambda: ["cloudflare", "groq", "nvidia", "gemini", "cerebras", "ollama"]
+        default_factory=lambda: [
+            "cloudflare",
+            "groq",
+            "nvidia",
+            "gemini",
+            "cerebras",
+            "opencodezen",
+            "opencodego",
+            "ollama",
+        ]
     )
     llm_fallback_call_timeout: int = 30  # per-attempt timeout for non-primary fallback providers
 
@@ -784,6 +813,20 @@ class AppSettings(BaseSettings):
     cloudflare_enrichment_llm_model: str = ""
     cloudflare_evaluation_llm_model: str = ""
     cloudflare_code_llm_model: str = ""
+    opencodezen_answer_llm_model: str = ""
+    opencodezen_rewrite_llm_model: str = ""
+    opencodezen_groundedness_llm_model: str = ""
+    opencodezen_intent_llm_model: str = ""
+    opencodezen_enrichment_llm_model: str = ""
+    opencodezen_evaluation_llm_model: str = ""
+    opencodezen_code_llm_model: str = ""
+    opencodego_answer_llm_model: str = ""
+    opencodego_rewrite_llm_model: str = ""
+    opencodego_groundedness_llm_model: str = ""
+    opencodego_intent_llm_model: str = ""
+    opencodego_enrichment_llm_model: str = ""
+    opencodego_evaluation_llm_model: str = ""
+    opencodego_code_llm_model: str = ""
 
     ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
@@ -1032,6 +1075,8 @@ class AppSettings(BaseSettings):
             "cerebras": ("cerebras_api_key", "CEREBRAS_API_KEY"),
             "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
             "cloudflare": ("cloudflare_api_key", "CLOUDFLARE_API_KEY"),
+            "opencodezen": ("opencodezen_api_key", "OPENCODEZEN_API_KEY"),
+            "opencodego": ("opencodego_api_key", "OPENCODEGO_API_KEY"),
             "huggingface": ("huggingface_api_key", "HUGGINGFACE_API_KEY or HF_TOKEN"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():

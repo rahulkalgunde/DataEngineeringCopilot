@@ -171,6 +171,58 @@ class TestBuildPurposeLLMClient:
         assert cerebras._max_tokens_field == "max_completion_tokens"
         assert groq._max_tokens == 4096
 
+    def test_opencodezen_uses_base_url_model_and_max_completion_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="opencodezen",
+            opencodezen_api_key="oc-test",
+        )
+        client = _build_purpose_llm_client(provider="opencodezen", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "deepseek-v4-flash-free"
+        assert client.base_url == "https://opencode.ai/zen/v1"
+        assert client._max_tokens_field == "max_completion_tokens"
+        assert client._max_tokens == 4096
+
+    def test_opencodezen_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="opencodezen",
+            opencodezen_api_key="oc-placeholder",
+        )
+        object.__setattr__(s, "opencodezen_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="OPENCODEZEN_API_KEY is required"):
+            _build_purpose_llm_client(provider="opencodezen", model="test", app_settings=s)
+
+    def test_opencodego_uses_base_url_model_and_max_completion_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="opencodego",
+            opencodego_api_key="oc-go-test",
+        )
+        client = _build_purpose_llm_client(provider="opencodego", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "deepseek-v4-flash"
+        assert client.base_url == "https://opencode.ai/zen/go/v1"
+        assert client._max_tokens_field == "max_completion_tokens"
+        assert client._max_tokens == 4096
+
+    def test_opencodego_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="opencodego",
+            opencodego_api_key="oc-go-placeholder",
+        )
+        object.__setattr__(s, "opencodego_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="OPENCODEGO_API_KEY is required"):
+            _build_purpose_llm_client(provider="opencodego", model="test", app_settings=s)
+
     def test_openrouter_delegates(self):
         from data_engineering_copilot.factory import _build_purpose_llm_client
         from data_engineering_copilot.infrastructure.llm_client import LLMClient

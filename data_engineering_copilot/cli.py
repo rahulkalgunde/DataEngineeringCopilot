@@ -1994,6 +1994,10 @@ def health() -> None:
         print(f"  ℹ️  Configured: Gemini ({settings.gemini_model})")
     elif llm_provider == "cloudflare":
         print(f"  ℹ️  Configured: Cloudflare ({settings.cloudflare_model})")
+    elif llm_provider == "opencodezen":
+        print(f"  ℹ️  Configured: OpenCode Zen ({settings.opencodezen_model})")
+    elif llm_provider == "opencodego":
+        print(f"  ℹ️  Configured: OpenCode Go ({settings.opencodego_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health
