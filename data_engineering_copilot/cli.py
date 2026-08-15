@@ -2415,12 +2415,26 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
     return 0
 
 
+def _answer_correctness(answer: str, ground_truth: str) -> float:
+    """Lexical correctness signal: token F1 between answer and ground truth.
+
+    Returns 0.0 when no ground truth is available so it never inflates the
+    aggregate; rows without ground truth are excluded from the average.
+    """
+    if not ground_truth:
+        return 0.0
+    from data_engineering_copilot.services.rag_evaluation import answer_token_f1
+
+    return round(answer_token_f1(ground_truth, answer), 3)
+
+
 def evaluate(
     verbose: bool = False,
     dataset: str | None = None,
     source: str | None = None,
     experiment_name: str | None = None,
     dataset_name: str | None = None,
+    output_dir: str | None = None,
 ) -> None:
     """Run RAG evaluation on golden dataset.
 
@@ -2432,6 +2446,9 @@ def evaluate(
     a RAG experiment over them (``dataset.run_experiment``). When ``dataset_name``
     is also given, the experiment runs directly against that existing Langfuse
     dataset instead of the freshly evaluated rows.
+
+    ``output_dir`` writes a per-question results JSONL (id, question, confidence,
+    correctness, contexts) for drift/bisection.
     """
     import asyncio
 
@@ -2495,11 +2512,13 @@ def evaluate(
 
             results.append(
                 {
+                    "id": item.get("id", f"q{i}"),
                     "query": query,
                     "answer": answer.text,
                     "confidence": answer.confidence,
                     "contexts": contexts,
                     "ground_truth": item.get("ground_truth", ""),
+                    "correctness": _answer_correctness(answer.text, item.get("ground_truth", "")),
                     "latency": latency,
                 }
             )
@@ -2517,12 +2536,30 @@ def evaluate(
 
     results = asyncio.run(run_eval())
 
+    if output_dir:
+        out = pathlib.Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "per_question_results.jsonl", "w", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"\nPer-question results written to {out / 'per_question_results.jsonl'}")
+
     # Summary
     print("\n" + "=" * 40)
     print("Evaluation Complete")
     print(f"Total queries: {len(results)}")
     avg_confidence = sum(r["confidence"] for r in results) / len(results) if results else 0
     print(f"Average confidence: {avg_confidence:.2f}")
+    ic_rate = (
+        sum(1 for r in results if "INSUFFICIENT_CONTEXT" in (r.get("answer") or "")) / len(results) if results else 0
+    )
+    print(f"INSUFFICIENT_CONTEXT rate: {ic_rate:.2f}")
+    scored = [r["correctness"] for r in results if r.get("ground_truth")]
+    if scored:
+        print(
+            f"Average answer correctness (token F1 vs ground truth): {sum(scored) / len(scored):.2f} "
+            f"({len(scored)} rows with ground truth)"
+        )
 
     # RAGAS metrics (context_recall, context_precision, faithfulness, answer_relevancy)
     ragas_report = None
@@ -2618,6 +2655,133 @@ def evaluate(
             print("\n✅ No drift detected (within thresholds)")
         else:
             print("\n📊 First eval recorded — baseline will be established on next run")
+
+
+def eval_coverage_main(
+    dataset: str | None = None,
+    generation: str | None = None,
+    json_output: bool = False,
+) -> int:
+    """Validate evaluation datasets against a generation's indexed corpus.
+
+    Every in-scope ``recall`` row must resolve its ``expected_urls`` to
+    indexed chunks and its ``expected_terms`` to real corpus content. Fails
+    (exit 1) when any row is orphaned/unanswerable; exit 2 on bad input.
+    """
+    from data_engineering_copilot.config.settings import resolve_active_generation
+    from data_engineering_copilot.evaluation.eval_schema import EvalKind, kind_of, parse_eval_rows, validate_eval_row
+    from data_engineering_copilot.services.eval_coverage import CoverageValidator, resolve_generation_root
+
+    project_root = pathlib.Path(__file__).resolve().parents[1]
+    evals_dir = project_root / "tests" / "evaluation"
+
+    gen = generation or settings.active_index_generation or resolve_active_generation()
+    root = resolve_generation_root(gen, project_root / "data")
+    if root is None:
+        print(f"❌ No corpus found for generation {gen!r} (checked data/pinned_corpus, data/spark_corpus)")
+        return 2
+
+    def _is_recall_file(p: pathlib.Path) -> bool:
+        for line in p.read_text(encoding="utf-8").splitlines()[:5]:
+            if not line.strip():
+                continue
+            return kind_of(json.loads(line)) is EvalKind.RECALL
+        return False
+
+    paths = [pathlib.Path(dataset)] if dataset else sorted(p for p in evals_dir.glob("*.jsonl") if _is_recall_file(p))
+    if not paths:
+        print("❌ No recall-format evaluation datasets found")
+        return 2
+
+    validator = CoverageValidator(root)
+    total_rows = total_fail = 0
+    file_reports = []
+    for p in paths:
+        if not p.exists():
+            print(f"❌ Dataset not found: {p}")
+            return 2
+        rows = parse_eval_rows(p)
+        schema_errors = [e for r in rows for e in validate_eval_row(r)]
+        if schema_errors:
+            print(f"❌ Schema errors in {p.name}:")
+            for e in schema_errors[:10]:
+                print(f"  - {e}")
+            return 2
+        report = validator.report(rows)
+        total_rows += report["rows"]
+        total_fail += report["fail"]
+        file_reports.append({"file": p.name, "rows": report["rows"], "pass": report["pass"], "fail": report["fail"]})
+        for fail in report["failures"]:
+            print(
+                f"  ❌ {p.name} {fail['id']}: missing_urls={fail['missing_urls'][:2]} "
+                f"missing_terms={fail['missing_terms'][:3]}"
+            )
+
+    if json_output:
+        print(
+            json.dumps(
+                {
+                    "generation": gen,
+                    "corpus_root": str(root),
+                    "files": file_reports,
+                    "rows": total_rows,
+                    "pass": total_rows - total_fail,
+                    "fail": total_fail,
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"\nGeneration: {gen}  (corpus: {root.name}, {validator.indexed_url_count} indexed URLs)")
+        for fr in file_reports:
+            print(f"  {fr['file']:<36} rows={fr['rows']:>3} pass={fr['pass']:>3} fail={fr['fail']:>3}")
+        print(f"Total: {total_rows} rows, {total_rows - total_fail} pass, {total_fail} fail")
+
+    return 1 if total_fail else 0
+
+
+def gen_synthetic_eval_main(
+    source: str,
+    generation: str | None = None,
+    limit: int = 50,
+    out: str | None = None,
+    testset_size: int = 25,
+) -> int:
+    """Generate + gate a synthetic recall eval set for one source.
+
+    Deterministic by default (offline). Pass ``--ragas`` to route through
+    Ragas ``TestsetGenerator`` (requires ragas + an LLM + embeddings wired
+    through the factory). Every row is filtered by ``CoverageValidator``.
+    """
+    from data_engineering_copilot.config.settings import resolve_active_generation
+    from data_engineering_copilot.evaluation.synthetic_generator import generate
+    from data_engineering_copilot.services.eval_coverage import resolve_generation_root
+
+    project_root = pathlib.Path(__file__).resolve().parents[1]
+    gen = generation or settings.active_index_generation or resolve_active_generation()
+    root = resolve_generation_root(gen, project_root / "data")
+    if root is None:
+        print(f"❌ No corpus found for generation {gen!r}")
+        return 2
+    out_path = pathlib.Path(out) if out else project_root / "tests" / "evaluation" / f"recall_synthetic_{source}.jsonl"
+
+    ragas_llm = ragas_embeddings = None
+    # The Ragas path needs factory-wired LLM/embeddings; default is deterministic.
+    written = generate(
+        root,
+        source,
+        out_path,
+        limit=limit,
+        ragas_llm=ragas_llm,
+        ragas_embeddings=ragas_embeddings,
+        testset_size=testset_size,
+    )
+    print(f"Generation: {gen}  source: {source}")
+    print(f"Wrote {written} synthetic rows -> {out_path}")
+    if written == 0:
+        print("❌ No rows survived the coverage gate")
+        return 1
+    return 0
 
 
 def config() -> None:
@@ -3189,6 +3353,46 @@ def build_parser() -> argparse.ArgumentParser:
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
 
+    # Eval coverage validation
+    coverage_parser = subparsers.add_parser(
+        "eval-coverage",
+        help="Validate eval datasets against a generation's indexed corpus.",
+    )
+    coverage_parser.add_argument(
+        "--dataset",
+        default=None,
+        help="Path to a recall-format JSONL eval dataset (default: all recall files in tests/evaluation).",
+    )
+    coverage_parser.add_argument(
+        "--generation",
+        default=None,
+        help="Generation to validate against (default: active generation).",
+    )
+    coverage_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output the coverage report as JSON.",
+    )
+
+    # Synthetic recall-eval generation
+    synth_parser = subparsers.add_parser(
+        "gen-synthetic-eval",
+        help="Generate a synthetic recall eval set from the active generation's corpus.",
+    )
+    synth_parser.add_argument(
+        "--source", required=True, help="Source name to generate from (e.g. 'Claude Platform Docs')."
+    )
+    synth_parser.add_argument(
+        "--generation", default=None, help="Generation to read the corpus from (default: active)."
+    )
+    synth_parser.add_argument("--limit", type=int, default=50, help="Max deterministic rows to generate (default: 50).")
+    synth_parser.add_argument(
+        "--out", default=None, help="Output JSONL path (default: tests/evaluation/recall_synthetic_<source>.jsonl)."
+    )
+    synth_parser.add_argument(
+        "--testset-size", type=int, default=25, help="Ragas testset size (unused in deterministic mode)."
+    )
+
     # Langfuse prompt seeding
     seed_parser = subparsers.add_parser(
         "langfuse-seed-prompts",
@@ -3476,7 +3680,26 @@ def main() -> None:
                     source=getattr(args, "source", None),
                     experiment_name=getattr(args, "experiment_name", None),
                     dataset_name=getattr(args, "dataset_name", None),
+                    output_dir=getattr(args, "output_dir", None),
                 )
+        elif args.command == "eval-coverage":
+            sys.exit(
+                eval_coverage_main(
+                    dataset=getattr(args, "dataset", None),
+                    generation=getattr(args, "generation", None),
+                    json_output=getattr(args, "json", False),
+                )
+            )
+        elif args.command == "gen-synthetic-eval":
+            sys.exit(
+                gen_synthetic_eval_main(
+                    source=args.source,
+                    generation=getattr(args, "generation", None),
+                    limit=getattr(args, "limit", 50),
+                    out=getattr(args, "out", None),
+                    testset_size=getattr(args, "testset_size", 25),
+                )
+            )
         elif args.command == "config":
             config()
         elif args.command == "langfuse-seed-prompts":
