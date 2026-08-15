@@ -102,3 +102,33 @@ class CrawlCache:
         with contextlib.suppress(redis.exceptions.RedisError):
             await self._redis.close()
             self._redis = None
+
+
+class NoOpCrawlCache(CrawlCache):
+    """Cache-disabled stand-in that never stores or reads crawl headers.
+
+    Used when ``crawl_cache_enabled=False`` so the crawler still receives a
+    valid ``CrawlCache``-shaped object without touching Redis: every operation
+    becomes a no-op (or returns ``None``), forcing a full fetch per URL.
+    """
+
+    def __init__(self, redis_url: str = "", *, redis_client=None) -> None:
+        self.prefix = "crawl:"
+        self.redis_url = redis_url
+        self._redis: aioredis.Redis | None = None
+        self._owns_client = False
+
+    async def ping(self) -> None:
+        return None
+
+    async def get_headers(self, url_hash: str) -> dict[str, str] | None:
+        return None
+
+    async def set_headers(
+        self,
+        url_hash: str,
+        status: int,
+        etag: str | None = None,
+        last_modified: str | None = None,
+    ) -> None:
+        return None

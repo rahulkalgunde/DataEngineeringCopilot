@@ -1803,6 +1803,21 @@ def reset_crawler_db() -> None:
     print("\nNext step: run 'dec ingest --source <name>' to re-crawl.")
 
 
+def _clear_redis_keys(pattern: str) -> int:
+    """Best-effort deletion of all Redis keys matching *pattern*. Returns count."""
+    from data_engineering_copilot.workers.progress import get_redis_client
+
+    try:
+        redis_client = get_redis_client()
+        keys = list(redis_client.scan_iter(pattern))
+        if keys:
+            redis_client.delete(*keys)
+            return len(keys)
+    except Exception as exc:
+        print(f"  Warning: Could not clear Redis keys {pattern}: {exc}")
+    return 0
+
+
 def clear_query_cache() -> None:
     """Clear the RAG query cache (Redis ``rag:cache:*`` keys).
 
@@ -1816,20 +1831,11 @@ def clear_query_cache() -> None:
     """
     print("Clearing RAG query cache...\n")
 
-    from data_engineering_copilot.workers.progress import get_redis_client
-
-    cleared = 0
-    try:
-        redis_client = get_redis_client()
-        cache_keys = list(redis_client.scan_iter("rag:cache:*"))
-        if cache_keys:
-            redis_client.delete(*cache_keys)
-            cleared = len(cache_keys)
-            print(f"  Cleared {cleared} query cache keys (exact + semantic tiers)")
-        else:
-            print("  No query cache keys found (cache already empty)")
-    except Exception as exc:
-        print(f"  Warning: Could not clear Redis keys: {exc}")
+    cleared = _clear_redis_keys("rag:cache:*")
+    if cleared:
+        print(f"  Cleared {cleared} query cache keys (exact + semantic tiers)")
+    else:
+        print("  No query cache keys found (cache already empty)")
 
     print("\nQuery cache clear complete.")
     print(f"  Redis: {cleared} keys cleared")
@@ -1837,6 +1843,72 @@ def clear_query_cache() -> None:
     print(
         "  Note: running API or Streamlit processes still hold an in-memory copy; restart them for a fully cold cache."
     )
+
+
+def clear_cache(
+    *,
+    query: bool = False,
+    embedding: bool = False,
+    crawl: bool = False,
+    bm25: bool = False,
+    all_types: bool = False,
+) -> None:
+    """Clear selected cache stores. With no ``--type`` flags (or ``--all``),
+    every cache store is cleared.
+
+    Query cache (``rag:cache:*``), embedding cache (``embed:cache:*``), and
+    crawl cache (``crawl:*`` + ``ingest:enrichment_failed:*``) live in Redis;
+    the BM25 cache is a persisted tokenizer under ``.bm25_cache/`` on disk.
+    Qdrant and PostgreSQL are never touched. Running API / Streamlit processes
+    hold in-memory L1 copies — restart them for a fully cold cache.
+    """
+    if not (query or embedding or crawl or bm25):
+        all_types = True
+
+    print("Clearing cache...\n")
+    total = 0
+
+    if all_types or query:
+        cleared = _clear_redis_keys("rag:cache:*")
+        print(f"  Query cache: {cleared} key(s) cleared")
+        total += cleared
+    if all_types or embedding:
+        cleared = _clear_redis_keys("embed:cache:*")
+        print(f"  Embedding cache: {cleared} key(s) cleared")
+        total += cleared
+    if all_types or crawl:
+        cleared = _clear_redis_keys("crawl:*")
+        cleared += _clear_redis_keys("ingest:enrichment_failed:*")
+        print(f"  Crawl cache: {cleared} key(s) cleared")
+        total += cleared
+    if all_types or bm25:
+        _purge_bm25_cache_dir()
+
+    print("\nCache clear complete.")
+    print(f"  Redis: {total} keys cleared")
+    print(
+        "  Note: running API or Streamlit processes still hold an in-memory copy; restart them for a fully cold cache."
+    )
+
+
+def _purge_bm25_cache_dir() -> None:
+    """Best-effort removal of every persisted BM25 tokenizer under ``.bm25_cache``."""
+    from data_engineering_copilot.config.settings import PROJECT_ROOT
+
+    cache_dir = PROJECT_ROOT / ".bm25_cache"
+    if not cache_dir.is_dir():
+        print("  No .bm25_cache dir")
+        return
+    removed = 0
+    for path in sorted(cache_dir.glob("*.json")):
+        try:
+            path.unlink()
+            removed += 1
+            print(f"  Deleted {path}")
+        except OSError as exc:
+            print(f"  Warning: could not delete BM25 cache {path}: {exc}")
+    if removed == 0:
+        print("  No BM25 cache files found")
 
 
 def health() -> None:
@@ -2971,6 +3043,35 @@ def build_parser() -> argparse.ArgumentParser:
         "clear-query-cache",
         help="Clear the RAG query cache (Redis rag:cache:* exact + semantic tiers) without touching the index.",
     )
+    clear_cache_parser = subparsers.add_parser(
+        "clear-cache",
+        help="Clear cache stores: --query, --embedding, --crawl, --bm25 (default: all).",
+    )
+    clear_cache_parser.add_argument(
+        "--query",
+        action="store_true",
+        help="Clear the RAG query cache (rag:cache:*).",
+    )
+    clear_cache_parser.add_argument(
+        "--embedding",
+        action="store_true",
+        help="Clear the embedding cache (embed:cache:*).",
+    )
+    clear_cache_parser.add_argument(
+        "--crawl",
+        action="store_true",
+        help="Clear the crawl cache (crawl:* + ingest:enrichment_failed:*).",
+    )
+    clear_cache_parser.add_argument(
+        "--bm25",
+        action="store_true",
+        help="Clear the persisted BM25 tokenizers under .bm25_cache/.",
+    )
+    clear_cache_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Clear every cache store (default when no --type flag is given).",
+    )
     subparsers.add_parser(
         "spark-config-check",
         help="Validate the pinned Spark source configuration without network access.",
@@ -3290,6 +3391,14 @@ def main() -> None:
             reset_crawler_db()
         elif args.command == "clear-query-cache":
             clear_query_cache()
+        elif args.command == "clear-cache":
+            clear_cache(
+                query=args.query,
+                embedding=args.embedding,
+                crawl=args.crawl,
+                bm25=args.bm25,
+                all_types=args.all,
+            )
         elif args.command == "spark-config-check":
             sys.exit(validate_spark_source_config() or validate_spark_rendered_config())
         elif args.command == "spark-manifest":

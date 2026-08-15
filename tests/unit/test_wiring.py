@@ -258,12 +258,13 @@ class TestAsyncFactoryWiring:
     """Verify async factory functions return correctly typed objects."""
 
     @staticmethod
-    def _make_settings():
+    def _make_settings(**overrides):
         """Hermetic settings: no env files, no real API keys, no infra required."""
         from tests.conftest import make_settings
 
         return make_settings(
             crawl_db_url="postgresql://test:test@localhost:5432/test",
+            **overrides,
         )
 
     def test_build_async_crawler_returns_crawler(self):
@@ -306,3 +307,67 @@ class TestAsyncFactoryWiring:
             crawler = build_async_crawler(self._make_settings())
         assert hasattr(crawler, "shutdown")
         assert callable(crawler.shutdown)
+
+    def test_build_async_crawler_uses_real_crawl_cache_by_default(self):
+        from data_engineering_copilot.factory import build_async_crawler
+        from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
+
+        with patch("data_engineering_copilot.factory._validate_redis"):
+            crawler = build_async_crawler(self._make_settings())
+        assert isinstance(crawler.cache, CrawlCache)
+
+    def test_build_async_crawler_disabled_uses_noop_cache(self):
+        from data_engineering_copilot.factory import build_async_crawler
+        from data_engineering_copilot.infrastructure.crawl_cache import NoOpCrawlCache
+
+        settings = self._make_settings(crawl_cache_enabled=False)
+        with patch("data_engineering_copilot.factory._validate_redis") as mock_validate:
+            crawler = build_async_crawler(settings)
+        assert isinstance(crawler.cache, NoOpCrawlCache)
+        # No Redis connectivity check is performed when the cache is disabled.
+        mock_validate.assert_not_called()
+
+    @patch("data_engineering_copilot.factory.build_embedder")
+    @patch("data_engineering_copilot.factory._validate_qdrant")
+    @patch("data_engineering_copilot.factory._validate_redis")
+    def test_build_rag_service_embeds_without_cache_when_disabled(self, mock_redis, mock_qdrant, mock_embedder):
+        from data_engineering_copilot.factory import build_rag_service
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+        settings = self._make_settings(embedding_cache_enabled=False)
+        service = build_rag_service(app_settings=settings)
+        assert not isinstance(service.embedder, CachedEmbedder)
+
+    @patch("data_engineering_copilot.factory.build_embedder")
+    @patch("data_engineering_copilot.factory._validate_qdrant")
+    @patch("data_engineering_copilot.factory._validate_redis")
+    def test_build_rag_service_embeds_with_cache_by_default(self, mock_redis, mock_qdrant, mock_embedder):
+        from data_engineering_copilot.factory import build_rag_service
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+        settings = self._make_settings()
+        service = build_rag_service(app_settings=settings)
+        assert isinstance(service.embedder, CachedEmbedder)
+
+    @patch("data_engineering_copilot.factory.build_embedder")
+    @patch("data_engineering_copilot.factory._validate_qdrant")
+    @patch("data_engineering_copilot.factory._validate_redis")
+    def test_build_rag_service_cache_tiers_follow_settings(self, mock_redis, mock_qdrant, mock_embedder):
+        from data_engineering_copilot.factory import build_rag_service
+
+        settings = self._make_settings(
+            query_cache_enabled=False,
+            query_cache_exact_enabled=False,
+            query_cache_semantic_enabled=False,
+        )
+        service = build_rag_service(app_settings=settings)
+        assert service.config.cache_enabled is False
+        assert service.cache is not None
+        assert service.cache._exact_enabled is False
+        assert service.cache._semantic_enabled is False
+
+        enabled = build_rag_service(app_settings=self._make_settings())
+        assert enabled.config.cache_enabled is True
+        assert enabled.cache is not None
+        assert enabled.cache._exact_enabled is True
+        assert enabled.cache._semantic_enabled is True

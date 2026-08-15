@@ -139,3 +139,104 @@ def test_clear_query_cache_redis_failure_is_graceful(monkeypatch):
     monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
 
     cli.clear_query_cache()  # must not raise
+
+
+def test_clear_cache_all_clears_every_redis_namespace(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.return_value = []
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+    purge_mock = MagicMock()
+    monkeypatch.setattr(cli, "_purge_bm25_cache_dir", purge_mock)
+
+    cli.clear_cache()
+
+    patterns = [call.args[0] for call in redis_client.scan_iter.call_args_list]
+    assert patterns == ["rag:cache:*", "embed:cache:*", "crawl:*", "ingest:enrichment_failed:*"]
+    purge_mock.assert_called_once()
+
+
+def test_clear_cache_single_type_only_clears_that_namespace(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.return_value = []
+    purge_mock = MagicMock()
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+    monkeypatch.setattr(cli, "_purge_bm25_cache_dir", purge_mock)
+
+    cli.clear_cache(query=True)
+
+    patterns = [call.args[0] for call in redis_client.scan_iter.call_args_list]
+    assert patterns == ["rag:cache:*"]
+    purge_mock.assert_not_called()
+
+
+def test_clear_cache_bm25_only_skips_redis(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    purge_mock = MagicMock()
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+    monkeypatch.setattr(cli, "_purge_bm25_cache_dir", purge_mock)
+
+    cli.clear_cache(bm25=True)
+
+    redis_client.scan_iter.assert_not_called()
+    purge_mock.assert_called_once()
+
+
+def test_clear_cache_deletes_matching_keys(monkeypatch):
+    _patch_settings(monkeypatch)
+
+    redis_client = MagicMock()
+    redis_client.scan_iter.side_effect = lambda pattern: iter(
+        {
+            "rag:cache:*": ["rag:cache:exact:fp:h"],
+            "embed:cache:*": ["embed:cache:d768:k"],
+            "crawl:*": ["crawl:header:abc"],
+            "ingest:enrichment_failed:*": [],
+        }[pattern]
+    )
+    import data_engineering_copilot.workers.progress as progress_mod
+
+    monkeypatch.setattr(progress_mod, "get_redis_client", lambda: redis_client)
+    monkeypatch.setattr(cli, "_purge_bm25_cache_dir", MagicMock())
+
+    cli.clear_cache(all_types=True)
+
+    assert redis_client.delete.call_count == 3
+    redis_client.scan_iter.assert_any_call("rag:cache:*")
+    redis_client.scan_iter.assert_any_call("embed:cache:*")
+
+
+def test_purge_bm25_cache_dir_removes_files(monkeypatch, tmp_path):
+    cache_dir = tmp_path / ".bm25_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "data_engineering_docs__a.json").write_text("{}")
+    (cache_dir / "data_engineering_docs__b.json").write_text("{}")
+    (cache_dir / "keep.txt").write_text("not a cache")
+    import data_engineering_copilot.config.settings as settings_mod
+
+    monkeypatch.setattr(settings_mod, "PROJECT_ROOT", tmp_path)
+
+    cli._purge_bm25_cache_dir()
+
+    assert not (cache_dir / "data_engineering_docs__a.json").exists()
+    assert not (cache_dir / "data_engineering_docs__b.json").exists()
+    assert (cache_dir / "keep.txt").exists()
+
+
+def test_purge_bm25_cache_dir_missing_is_noop(monkeypatch, tmp_path):
+    import data_engineering_copilot.config.settings as settings_mod
+
+    monkeypatch.setattr(settings_mod, "PROJECT_ROOT", tmp_path)
+
+    cli._purge_bm25_cache_dir()  # must not raise

@@ -393,6 +393,30 @@ def test_chat_speed_settings_overridable() -> None:
     assert settings.chat_suggestions_mode == "rule"
 
 
+def test_cache_toggle_settings_defaults() -> None:
+    settings = make_settings()
+    assert settings.query_cache_enabled is True
+    assert settings.query_cache_exact_enabled is True
+    assert settings.query_cache_semantic_enabled is True
+    assert settings.embedding_cache_enabled is True
+    assert settings.crawl_cache_enabled is True
+
+
+def test_cache_toggle_settings_overridable() -> None:
+    settings = make_settings(
+        query_cache_enabled=False,
+        query_cache_exact_enabled=False,
+        query_cache_semantic_enabled=False,
+        embedding_cache_enabled=False,
+        crawl_cache_enabled=False,
+    )
+    assert settings.query_cache_enabled is False
+    assert settings.query_cache_exact_enabled is False
+    assert settings.query_cache_semantic_enabled is False
+    assert settings.embedding_cache_enabled is False
+    assert settings.crawl_cache_enabled is False
+
+
 def test_chat_speed_settings_validate_all() -> None:
     from pydantic import ValidationError
 

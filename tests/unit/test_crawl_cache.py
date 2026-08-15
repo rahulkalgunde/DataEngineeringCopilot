@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
+from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache, NoOpCrawlCache
 
 
 @pytest.fixture
@@ -55,3 +55,21 @@ async def test_last_modified_only(cache):
     assert result is not None
     assert result["last_modified"] == "Wed, 01 Jan 2025 00:00:00 GMT"
     assert "etag" not in result
+
+
+@pytest.mark.asyncio
+async def test_noop_cache_never_reads_or_writes():
+    c = NoOpCrawlCache("redis://localhost:6379/1")
+
+    assert await c.get_headers("hash") is None
+    assert await c.ping() is None
+    await c.set_headers("hash", status=200, etag='"abc"')
+    await c.close()
+
+    assert await c.get_headers("hash") is None
+
+
+@pytest.mark.asyncio
+async def test_noop_cache_is_subtype_of_crawl_cache():
+    c = NoOpCrawlCache("redis://localhost:6379/1")
+    assert isinstance(c, CrawlCache)

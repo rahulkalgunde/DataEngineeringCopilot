@@ -17,7 +17,7 @@ from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumenta
 from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
-from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache
+from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache, NoOpCrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.huggingface_serverless_embeddings import (
@@ -1161,8 +1161,12 @@ def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentat
     )
     frontier = PostgresCrawlFrontierDB(db_url)
     cache_url = app_settings.crawl_async_cache_url or app_settings.redis_url
-    cache = CrawlCache(cache_url, redis_client=get_shared_redis_client(app_settings.redis_url))
-    _validate_redis(app_settings.redis_url, "CrawlCache")
+    if app_settings.crawl_cache_enabled:
+        cache = CrawlCache(cache_url, redis_client=get_shared_redis_client(app_settings.redis_url))
+        _validate_redis(app_settings.redis_url, "CrawlCache")
+    else:
+        logger.info("crawl_cache_disabled caching=off")
+        cache = NoOpCrawlCache()
     return AsyncDocumentationCrawler(
         frontier=frontier,
         cache=cache,
@@ -1303,6 +1307,7 @@ def build_rag_service(
         max_context_chars=app_settings.max_context_chars,
         max_chunks_per_source=app_settings.max_chunks_per_source,
         max_expansion_queries=app_settings.max_expansion_queries,
+        cache_enabled=app_settings.query_cache_enabled,
         chat_cache_recall_enabled=app_settings.chat_cache_recall_enabled,
         chat_cache_top_k=app_settings.chat_cache_top_k,
         chat_cache_recall_threshold=app_settings.chat_cache_recall_threshold,
@@ -1397,13 +1402,14 @@ def build_rag_service(
         embedding_dimension=app_settings.get_embedding_dimension(),
     )
     embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
-    from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+    if app_settings.embedding_cache_enabled:
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
 
-    embedder = CachedEmbedder(
-        embedder,
-        redis_client=get_shared_redis_client(app_settings.redis_url),
-        embedding_dimension=app_settings.get_embedding_dimension(),
-    )
+        embedder = CachedEmbedder(
+            embedder,
+            redis_client=get_shared_redis_client(app_settings.redis_url),
+            embedding_dimension=app_settings.get_embedding_dimension(),
+        )
     reranker = None
     if app_settings.reranker_enabled:
         from data_engineering_copilot.services.llm_reranker import LLMReranker
@@ -1476,8 +1482,8 @@ def build_rag_service(
         reranker=reranker,
         telemetry=telemetry,
         cache=TwoTierCache(
-            exact_enabled=True,
-            semantic_enabled=True,
+            exact_enabled=app_settings.query_cache_exact_enabled,
+            semantic_enabled=app_settings.query_cache_semantic_enabled,
             similarity_threshold=app_settings.semantic_cache_threshold,
             ttl_seconds=app_settings.semantic_cache_ttl,
             redis_url=app_settings.redis_url,
