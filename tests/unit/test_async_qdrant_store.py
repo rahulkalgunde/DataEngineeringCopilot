@@ -102,6 +102,75 @@ async def test_query_success(mock_async_qdrant):
     assert results[0].distance == pytest.approx(0.2)
 
 
+async def test_query_deserializes_deployment_mode(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+
+    mock_hit = MagicMock()
+    mock_hit.id = "550e8400-e29b-41d4-a716-446655440000"
+    mock_hit.score = 0.8
+    mock_hit.payload = {
+        "chunk_id": "chunk1",
+        "source_name": "test_source",
+        "title": "Test Title",
+        "url": "http://example.com/1",
+        "text": "Test content",
+        "deployment_mode": "yarn",
+    }
+    mock_response = MagicMock()
+    mock_response.points = [mock_hit]
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    results = await store.query([0.1] * 768, top_k=1)
+
+    assert len(results) == 1
+    assert results[0].chunk.deployment_mode == "yarn"
+
+
+async def test_query_deployment_mode_defaults_empty(mock_async_qdrant):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+
+    mock_hit = MagicMock()
+    mock_hit.id = "550e8400-e29b-41d4-a716-446655440000"
+    mock_hit.score = 0.8
+    mock_hit.payload = {"chunk_id": "chunk1", "text": "legacy point without mode"}
+    mock_response = MagicMock()
+    mock_response.points = [mock_hit]
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    results = await store.query([0.1] * 768, top_k=1)
+
+    assert len(results) == 1
+    assert results[0].chunk.deployment_mode == ""
+
+
+async def test_chunk_to_payload_round_trips_deployment_mode():
+    from data_engineering_copilot.infrastructure.async_qdrant_store import chunk_to_payload
+
+    chunk = DocumentChunk(
+        chunk_id="chunk1",
+        source_name="test_source",
+        title="Title",
+        url="http://example.com",
+        text="content",
+        deployment_mode="kubernetes",
+    )
+    payload = chunk_to_payload(chunk)
+    assert payload["deployment_mode"] == "kubernetes"
+
+
+async def test_chunk_to_payload_deployment_mode_defaults_empty():
+    from data_engineering_copilot.infrastructure.async_qdrant_store import chunk_to_payload
+
+    chunk = DocumentChunk(chunk_id="chunk1", source_name="s", title="t", url="u", text="c")
+    assert chunk_to_payload(chunk)["deployment_mode"] == ""
+
+
 async def test_empty_source_filter_rejected(mock_async_qdrant):
     """An empty source_filter must raise, never silently mean 'all sources'."""
     from data_engineering_copilot.domain.exceptions import VectorStoreError

@@ -24,6 +24,7 @@ class SparkMetadata:
     source_commit: str
     file_path: str
     license: str
+    deployment_mode: str = ""
 
 
 def derive_spark_metadata(
@@ -53,7 +54,23 @@ def derive_spark_metadata(
         source_commit=source.commit,
         file_path=record.relative_path,
         license=source.license,
+        deployment_mode=_derive_deployment_mode(record.relative_path),
     )
+
+
+# Deployment-mode documentation files in the Spark repo; everything else is
+# mode-agnostic and gets an empty deployment_mode.
+_DEPLOYMENT_MODE_FILES: dict[str, str] = {
+    "docs/running-on-yarn.md": "yarn",
+    "docs/running-on-kubernetes.md": "kubernetes",
+    "docs/spark-standalone.md": "standalone",
+}
+
+
+def _derive_deployment_mode(relative_path: str) -> str:
+    """Derive the deployment mode from a docs file path, or '' when not mode-specific."""
+    normalized = relative_path.replace("\\", "/").lower()
+    return _DEPLOYMENT_MODE_FILES.get(normalized, "")
 
 
 def _version_from_ref(ref: str) -> str:

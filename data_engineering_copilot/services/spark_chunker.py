@@ -125,6 +125,7 @@ class SparkChunker:
                     source_commit=metadata.source_commit,
                     file_path=metadata.file_path,
                     license=metadata.license,
+                    deployment_mode=metadata.deployment_mode,
                 )
             )
         return chunks
@@ -146,6 +147,7 @@ class SparkChunker:
             source_commit=metadata.source_commit,
             file_path=metadata.file_path,
             license=metadata.license,
+            deployment_mode=metadata.deployment_mode,
         )
 
     def _number_chunks(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
@@ -197,6 +199,7 @@ def chunk_spark_document(
                     source_commit=metadata.source_commit,
                     file_path=metadata.file_path,
                     license=metadata.license,
+                    deployment_mode=metadata.deployment_mode,
                 )
             )
     elif metadata.doc_type == "api_reference":
@@ -226,6 +229,7 @@ def chunk_spark_document(
                     source_commit=metadata.source_commit,
                     file_path=metadata.file_path,
                     license=metadata.license,
+                    deployment_mode=metadata.deployment_mode,
                 )
             )
     elif metadata.doc_type == "code_example":
@@ -255,6 +259,7 @@ def chunk_spark_document(
                     source_commit=metadata.source_commit,
                     file_path=metadata.file_path,
                     license=metadata.license,
+                    deployment_mode=metadata.deployment_mode,
                 )
             )
     elif metadata.doc_type == "sql_function_ref":
@@ -497,4 +502,5 @@ def _build_chunk(
         source_commit=metadata.source_commit,
         file_path=metadata.file_path,
         license=metadata.license,
+        deployment_mode=metadata.deployment_mode,
     )

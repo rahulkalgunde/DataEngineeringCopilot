@@ -18,6 +18,7 @@ def _metadata(doc_type: str, language: str = "conceptual") -> SparkMetadata:
         source_commit="fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4",
         file_path=f"docs/{doc_type}.md",
         license="Apache-2.0",
+        deployment_mode="yarn" if doc_type == "guide" else "",
     )
 
 
@@ -56,6 +57,14 @@ def test_guide_metadata_propagated() -> None:
     assert chunks[0].language == "conceptual"
     assert chunks[0].spark_version == "4.0.0"
     assert chunks[0].license == "Apache-2.0"
+    assert chunks[0].deployment_mode == "yarn"
+
+
+def test_api_chunk_propagates_empty_deployment_mode() -> None:
+    doc = _document("def foo():\n    return 1\n", "Functions")
+    chunks = chunk_spark_document(doc, _metadata("api_reference", language="python"))
+    assert chunks
+    assert chunks[0].deployment_mode == ""
 
 
 def test_api_chunking_groups_by_function() -> None:
