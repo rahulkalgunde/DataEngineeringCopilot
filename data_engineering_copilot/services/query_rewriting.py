@@ -95,6 +95,25 @@ _REWRITE_PROMPT = (
     + "User question: {question}\n\nRewritten query:"
 )
 
+_REWRITE_CONTEXTUAL_PROMPT = (
+    "You are a search query rewriter for a conversational documentation assistant. "
+    "Given a conversation history and the user's latest message, rewrite the latest "
+    "message into a standalone search query that would retrieve the relevant "
+    "documentation on its own.\n"
+    "Rules:\n"
+    '- Resolve pronouns and references using the history (e.g. "its API" -> the API '
+    "of the previously discussed feature).\n"
+    '- Use the conversation topic to disambiguate terse follow-ups (e.g. "give an '
+    "example in python\" stays about the conversation's subject).\n"
+    "- Preserve the user's intent and expand abbreviations/jargon where helpful.\n"
+    "- Return ONLY the rewritten query, no preamble.\n"
+    "- Output a single line, no more than 40 words.\n\n"
+    + SYSTEM_BLOCK_SEPARATOR
+    + "## CONVERSATION TOPIC\n{session_topic}\n\n"
+    "## CONVERSATION HISTORY\n{conversation_history}\n\n"
+    "Latest user message: {question}\n\nRewritten query:"
+)
+
 _EXPAND_PROMPT = (
     "Generate {max_variations} different search queries that would find "
     "the same information as this question. Return ONLY the queries, "
@@ -108,6 +127,7 @@ _HYDE_PROMPT = (
 
 register_fallback("query-intent-classify", _CLASSIFY_INTENT_PROMPT)
 register_fallback("query-rewrite", _REWRITE_PROMPT)
+register_fallback("query-rewrite-contextual", _REWRITE_CONTEXTUAL_PROMPT)
 register_fallback("query-expand", _EXPAND_PROMPT)
 register_fallback("query-hyde", _HYDE_PROMPT)
 
@@ -147,6 +167,27 @@ def is_degenerate_query(text: str) -> bool:
     if len(stripped) < 4:
         return True
     return any(pattern.search(stripped) for pattern in _DEGENERATE_REWRITE_PATTERNS)
+
+
+def render_conversation_history(messages) -> str:
+    """Render a conversation transcript for prompt injection.
+
+    ``messages`` is an iterable of objects with ``role`` (user/assistant/system)
+    and ``content`` attributes (e.g. ``ChatMessage``). Rendered as alternating
+    ``User:`` / ``Assistant:`` lines, oldest first. Non user/assistant roles
+    (e.g. ``system``) are skipped, and empty history renders an empty string so
+    callers can skip the contextual rewrite entirely.
+    """
+    lines: list[str] = []
+    for message in messages:
+        role = message.role
+        if role not in ("user", "assistant"):
+            continue
+        content = (message.content or "").strip()
+        if not content:
+            continue
+        lines.append(f"{role.capitalize()}: {content}")
+    return "\n".join(lines)
 
 
 def extract_retrieval_constraints(query: str) -> RetrievalFilters:
@@ -314,8 +355,22 @@ class QueryRewriter:
             filters=extract_retrieval_constraints(query),
         )
 
-    async def async_rewrite(self, query: str) -> RewrittenQuery:
+    async def async_rewrite(
+        self, query: str, conversation_history=None, session_topic: str | None = None
+    ) -> RewrittenQuery:
         """LLM-based rewrite: classify intent, produce cleaned query via LLM.
+
+        When ``conversation_history`` (an iterable of ``ChatMessage``-like
+        objects) is non-empty, the rewrite is context-aware: pronouns and
+        references are resolved into a standalone query using the
+        ``query-rewrite-contextual`` prompt. Turn 1 (empty history) uses the
+        plain ``query-rewrite`` prompt — identical to previous behavior, so
+        single-turn latency/quality are unchanged.
+
+        ``session_topic`` (the session's anchor topic, typically the first user
+        message) is appended to the contextual prompt so terse follow-ups
+        (e.g. "give an example in python") stay anchored to the conversation's
+        subject instead of drifting to unrelated retrieved content.
 
         Falls back to rule-based rewrite if LLM is unavailable or errors.
         """
@@ -323,7 +378,15 @@ class QueryRewriter:
             return self.rewrite(query)
 
         try:
-            prompt = get_langfuse_prompt("query-rewrite").compile(question=query)
+            history_text = render_conversation_history(conversation_history) if conversation_history else ""
+            if history_text.strip():
+                prompt = get_langfuse_prompt("query-rewrite-contextual").compile(
+                    conversation_history=history_text,
+                    question=query,
+                    session_topic=session_topic or "",
+                )
+            else:
+                prompt = get_langfuse_prompt("query-rewrite").compile(question=query)
             llm_result = await self._llm_client.generate(prompt)
             rewritten = llm_result.strip()
 

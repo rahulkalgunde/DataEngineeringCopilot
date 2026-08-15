@@ -42,6 +42,22 @@ def clear_reranker_cache() -> None:
         _reranker_cache.clear()
 
 
+def _min_max_normalize(scores: list[float]) -> list[float]:
+    """Min-max normalize scores within a candidate pool to ``[0, 1]``.
+
+    Uniform scaling so the rerank confidence gate has the same meaning across
+    reranker models that score on different raw scales. Returns the input
+    unchanged when the pool has fewer than 2 scores or all scores are equal.
+    """
+    if len(scores) < 2:
+        return scores
+    lo, hi = min(scores), max(scores)
+    if hi <= lo:
+        return scores
+    span = hi - lo
+    return [(s - lo) / span for s in scores]
+
+
 class CrossEncoderReranker:
     """Reranks retrieved chunks using a cross-encoder model.
 
@@ -128,6 +144,12 @@ class CrossEncoderReranker:
             # Score in batches to avoid memory spikes on large candidate sets.
             # Small batches also keep per-batch latency bounded on CPU-only hosts.
             scores = await self._predict_scores(pairs)
+
+            # Uniform scaling: min-max normalize within the candidate pool so the
+            # confidence gate has the same meaning across reranker models (cloud
+            # LLM rerankers and this local cross-encoder score on different raw
+            # scales). The best chunk becomes 1.0, the worst 0.0.
+            scores = _min_max_normalize(scores)
 
             # Sort chunks by normalized score (highest first)
             scored_chunks = list(zip(chunks, scores, strict=False))

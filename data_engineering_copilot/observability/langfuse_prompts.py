@@ -130,6 +130,24 @@ SEED_PROMPTS: dict[str, str] = {
         + SYSTEM_BLOCK_SEPARATOR
         + "User question: {{question}}\n\nRewritten query:"
     ),
+    "query-rewrite-contextual": (
+        "You are a search query rewriter for a conversational documentation assistant. "
+        "Given a conversation history and the user's latest message, rewrite the latest "
+        "message into a standalone search query that would retrieve the relevant "
+        "documentation on its own.\n"
+        "Rules:\n"
+        '- Resolve pronouns and references using the history (e.g. "its API" -> the API '
+        "of the previously discussed feature).\n"
+        '- Use the conversation topic to disambiguate terse follow-ups (e.g. "give an '
+        "example in python\" stays about the conversation's subject).\n"
+        "- Preserve the user's intent and expand abbreviations/jargon where helpful.\n"
+        "- Return ONLY the rewritten query, no preamble.\n"
+        "- Output a single line, no more than 40 words.\n\n"
+        + SYSTEM_BLOCK_SEPARATOR
+        + "## CONVERSATION TOPIC\n{{session_topic}}\n\n"
+        "## CONVERSATION HISTORY\n{{conversation_history}}\n\n"
+        "Latest user message: {{question}}\n\nRewritten query:"
+    ),
     "query-expand": (
         "Generate {{max_variations}} different search queries that would find "
         "the same information as this question. Return ONLY the queries, "

@@ -246,6 +246,99 @@ class QueryCache:
         if len(self._semantic_cache) > self._semantic_max_size:
             self._semantic_cache.popleft()
 
+    def top_k(
+        self,
+        query_embedding: list[float],
+        scope: CacheScope | None = None,
+        k: int = 3,
+        min_similarity: float = 0.70,
+    ) -> list[tuple[float, CachedAnswer]]:
+        """Return up to *k* cached answers with similarity >= *min_similarity*.
+
+        Sorted by similarity descending. Used by the chat smart-cache tier to
+        retrieve similar prior (question→answer) pairs as grounding context.
+        Mirrors ``get_semantic`` scope/dimension/TTL guards.
+        """
+        if not self._semantic_enabled or not self._semantic_cache or not query_embedding:
+            return []
+
+        fp = scope_fingerprint(scope)
+        q_vec = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q_vec)
+        if q_norm == 0:
+            return []
+        q_unit = q_vec / q_norm
+
+        now = time.monotonic()
+        cutoff = now - self._ttl_seconds
+        while self._semantic_cache and self._semantic_cache[0][4] < cutoff:
+            self._semantic_cache.popleft()
+
+        valid = [e for e in self._semantic_cache if e[0] == fp and len(e[1]) == q_vec.shape[0]]
+        if not valid:
+            return []
+
+        matrix = np.vstack([entry[1] for entry in valid])
+        similarities = np.dot(matrix, q_unit)
+        ranked: list[tuple[float, CachedAnswer]] = [
+            (float(similarities[i]), valid[i][3]) for i in range(len(valid)) if similarities[i] >= min_similarity
+        ]
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        return ranked[:k]
+
+    async def atop_k(
+        self,
+        query_embedding: list[float],
+        scope: CacheScope | None = None,
+        k: int = 3,
+        min_similarity: float = 0.70,
+    ) -> list[tuple[float, CachedAnswer]]:
+        """Like :meth:`top_k` but also scans the Redis L2 namespace.
+
+        Merges in-memory + Redis results (deduped by ``text``), sorted by score.
+        """
+        combined: dict[str, tuple[float, CachedAnswer]] = {}
+        for score, envelope in self.top_k(query_embedding, scope, k=k, min_similarity=min_similarity):
+            combined[envelope.text] = (score, envelope)
+
+        if self._redis is not None and query_embedding:
+            try:
+                namespace = self._redis_semantic_namespace(scope)
+                query_vec = np.array(query_embedding, dtype=np.float32)
+                q_norm = np.linalg.norm(query_vec)
+                if q_norm > 0:
+                    cursor = 0
+                    while True:
+                        cursor, keys = await self._redis.scan(cursor=cursor, match=f"{namespace}:*", count=100)
+                        for key in keys:
+                            data = await self._redis.hgetall(key)
+                            emb_raw = data.get("embedding")
+                            ans_raw = data.get("answer")
+                            if not emb_raw or not ans_raw:
+                                continue
+                            stored = np.array(
+                                json.loads(emb_raw if isinstance(emb_raw, str) else emb_raw.decode()), dtype=np.float32
+                            )
+                            if stored.shape[0] != query_vec.shape[0]:
+                                continue
+                            s_norm = np.linalg.norm(stored)
+                            if s_norm == 0:
+                                continue
+                            score = float(np.dot(query_vec, stored) / (q_norm * s_norm))
+                            if score < min_similarity:
+                                continue
+                            envelope = _deserialize_envelope(ans_raw if isinstance(ans_raw, str) else ans_raw.decode())
+                            if envelope is None or envelope.text in combined:
+                                continue
+                            combined[envelope.text] = (score, envelope)
+                        if cursor == 0:
+                            break
+            except Exception:
+                logger.warning("Redis L2 top_k failed", exc_info=True)
+
+        ranked = sorted(combined.values(), key=lambda pair: pair[0], reverse=True)
+        return ranked[:k]
+
     # --- async L2 (Redis) support ---
 
     async def aget(
@@ -394,6 +487,7 @@ def _serialize_envelope(answer: CachedAnswer) -> str:
             "confidence": answer.confidence,
             "groundedness_score": answer.groundedness_score,
             "cached_at": answer.cached_at,
+            "suggestions": list(answer.suggestions),
         }
     )
 
@@ -408,6 +502,7 @@ def _deserialize_envelope(raw: str) -> CachedAnswer | None:
             confidence=float(data.get("confidence", 1.0)),
             groundedness_score=float(data.get("groundedness_score", 1.0)),
             cached_at=float(data.get("cached_at", 0.0)),
+            suggestions=tuple(data.get("suggestions", [])),
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         logger.warning("Stored cache value is not a valid CachedAnswer envelope")

@@ -98,14 +98,27 @@ class LLMReranker:
     def _apply(self, rankings, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
         """Map provider ``(index, score)`` rankings back onto the chunks.
 
-        Unranked chunks (the provider did not cover them) sort after all ranked
-        ones, preserving their original relative order. Scores become
-        ``confidence`` and ``distance = 1 - confidence``.
+        Scores are min-max normalized within the candidate pool so different
+        reranker models (which use different raw scoring systems) produce
+        uniformly comparable ``[0, 1]`` confidence values: the best chunk is 1.0
+        and the worst 0.0. Unranked chunks sort after all ranked ones, keeping
+        their original relative order. ``confidence`` is the normalized score
+        and ``distance = 1 - confidence``.
         """
         if not rankings:
             return chunks[:top_k]
 
         score_by_index = {index: float(score) for index, score in rankings}
+
+        # Uniform scaling: min-max normalize the ranked scores within the pool so
+        # the confidence gate has the same meaning across reranker providers.
+        # When all scores are equal (no discrimination / degraded zero scores),
+        # keep them as-is so the gate still sees a "no signal" 0.0.
+        ranked_scores = [score_by_index[index] for index, _ in rankings]
+        lo, hi = min(ranked_scores), max(ranked_scores)
+        if hi > lo:
+            score_by_index = {index: (score - lo) / (hi - lo) for index, score in score_by_index.items()}
+
         ordered = sorted(range(len(chunks)), key=lambda i: score_by_index.get(i, -1.0), reverse=True)
         result = [
             RetrievedChunk(
