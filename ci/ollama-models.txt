@@ -1,0 +1,3 @@
+nomic-embed-text:v1.5
+llama3.2:3b-instruct-q4_K_M
+qwen2.5-coder:7b-instruct-q4_K_M
