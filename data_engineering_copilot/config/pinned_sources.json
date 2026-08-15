@@ -13,15 +13,29 @@
         {
           "name": "guides",
           "doc_type": "guide",
-          "include": ["docs/**/*.md", "docs/**/*.rst"],
-          "exclude": ["docs/api/**", "docs/vendor/**"],
+          "include": [
+            "docs/**/*.md",
+            "docs/**/*.rst",
+            "python/docs/source/tutorial/**/*.rst",
+            "python/docs/source/tutorial/**/*.md",
+            "python/docs/source/user_guide/**/*.rst",
+            "python/docs/source/getting_started/**/*.rst",
+            "python/docs/source/development/**/*.rst",
+            "python/docs/source/migration_guide/**/*.rst"
+          ],
+          "exclude": [
+            "docs/api/**",
+            "docs/vendor/**"
+          ],
           "language": "conceptual",
           "chunking": "header_aware"
         },
         {
           "name": "api",
           "doc_type": "api_reference",
-          "include": ["python/pyspark/**/*.py"],
+          "include": [
+            "python/pyspark/**/*.py"
+          ],
           "exclude": [
             "**/tests/**",
             "**/*_test.py",
@@ -32,7 +46,6 @@
             "**/cloudpickle/**",
             "**/errors/exceptions/**",
             "**/logger/tests/**",
-            "python/pyspark/sql/pandas/**",
             "**/missing/**",
             "**/data_type_ops/**"
           ],
@@ -49,18 +62,27 @@
             "examples/src/main/**/*.java",
             "examples/src/main/**/*.R"
           ],
-          "exclude": ["**/data/**"],
+          "exclude": [
+            "**/data/**"
+          ],
           "language": "mixed",
           "chunking": "code"
         },
         {
           "name": "sql_functions",
           "doc_type": "sql_function_ref",
-          "include": ["sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/**/*.scala"],
-          "exclude": ["**/codegen/**", "**/test/**"],
+          "include": [
+            "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/**/*.scala"
+          ],
+          "exclude": [
+            "**/codegen/**",
+            "**/test/**"
+          ],
           "language": "scala",
           "chunking": "code",
-          "content_requires": ["ExpressionDescription"]
+          "content_requires": [
+            "ExpressionDescription"
+          ]
         }
       ]
     },
@@ -77,7 +99,9 @@
         {
           "name": "core-docs",
           "doc_type": "guide",
-          "include": ["airflow-core/docs/**/*.rst"],
+          "include": [
+            "airflow-core/docs/**/*.rst"
+          ],
           "exclude": [
             "airflow-core/docs/img/**",
             "airflow-core/docs/static/**",
@@ -102,8 +126,12 @@
         {
           "name": "docs",
           "doc_type": "guide",
-          "include": ["docs/src/content/docs/**/*.mdx"],
-          "exclude": ["docs/src/content/docs/delta-streaming/**"],
+          "include": [
+            "docs/src/content/docs/**/*.mdx"
+          ],
+          "exclude": [
+            "docs/src/content/docs/delta-streaming/**"
+          ],
           "language": "conceptual",
           "chunking": "header_aware"
         }

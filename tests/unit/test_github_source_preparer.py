@@ -92,6 +92,31 @@ def test_chunk_spark_uses_spark_chunker_with_metadata() -> None:
     assert all(record.status == "indexed" for record in coverage)
 
 
+def test_chunk_spark_converts_rst_guide_headings_before_chunking(tmp_path) -> None:
+    config = _config("spark", "Apache Spark 4.0.0")
+    preparer = GithubSourcePreparer(config, tmp_path, _GENERATION)
+    record = _record(
+        tmp_path / "repo",
+        "python/docs/source/tutorial/sql/arrow_pandas.rst",
+        "guide",
+        "conceptual",
+        "Apache Arrow in PySpark\n=======================\n\n"
+        "Real content about Arrow transfers between JVM and Python.\n\n"
+        "Pandas UDFs\n-----------\n\nMore useful body about vectorized operations.\n",
+    )
+    manifest = _manifest(tmp_path / "repo", [record])
+
+    chunks, coverage = asyncio.run(preparer._chunk_manifest(manifest))
+
+    assert chunks
+    for chunk in chunks:
+        assert chunk.source_commit == _COMMIT
+        assert chunk.index_generation == _GENERATION
+        assert chunk.source_name == "Apache Spark 4.0.0"
+        assert chunk.doc_type == "guide"
+    assert coverage[0].status == "indexed"
+
+
 def test_chunk_generic_uses_header_aware_with_attached_metadata(tmp_path) -> None:
     config = _config("airflow", "Apache Airflow Documentation")
     preparer = GithubSourcePreparer(config, tmp_path, _GENERATION)
