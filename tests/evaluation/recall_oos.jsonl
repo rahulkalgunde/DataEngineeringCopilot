@@ -1,0 +1,10 @@
+{"id": "oos-react-101", "question": "What is the difference between the useState and useMemo hooks in React?", "out_of_scope": true, "expected_terms": ["react"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-tensorflow-102", "question": "How do you train a neural network with TensorFlow?", "out_of_scope": true, "expected_terms": ["tensorflow"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-rust-103", "question": "How does Rust ownership ensure memory safety?", "out_of_scope": true, "expected_terms": ["rust"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-golang-104", "question": "How do goroutines and channels work in Go?", "out_of_scope": true, "expected_terms": ["goroutine"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-terraform-105", "question": "How does Terraform manage infrastructure state?", "out_of_scope": true, "expected_terms": ["terraform"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-javascript-106", "question": "What is event delegation in JavaScript?", "out_of_scope": true, "expected_terms": ["javascript"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-django-107", "question": "How do Django ORM queries work?", "out_of_scope": true, "expected_terms": ["django"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-elasticsearch-108", "question": "How do you configure Elasticsearch sharding?", "out_of_scope": true, "expected_terms": ["elasticsearch"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-graphql-109", "question": "How does a GraphQL resolver schema work?", "out_of_scope": true, "expected_terms": ["graphql"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
+{"id": "oos-rails-110", "question": "How does Ruby on Rails handle database migrations?", "out_of_scope": true, "expected_terms": ["ruby"], "expected_urls": [], "forbidden_terms": [], "expected_modules": []}
