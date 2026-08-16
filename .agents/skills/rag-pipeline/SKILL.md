@@ -25,7 +25,8 @@ visualizer (`on_step`/`_emit_detail`) and Langfuse spans (`_record_stage`):
    parent context. `RetrievalError` is re-raised as-is.
 4. **Input guardrails** — `services/input_guardrails.py` (indirect prompt
    injection scan of retrieved chunks, `services/prompt_injection.py`).
-5. **Rerank** — `services/reranker.py` `CrossEncoderReranker` (local ms-marco)
+5. **Rerank** — `services/reranker.py` `CrossEncoderReranker` (local
+   `BAAI/bge-reranker-v2-m3`)
    or `services/llm_reranker.py` `LLMReranker` (cloud `rerank_fallback_order`);
    pool = `max(top_k*4, reranker_top_k*8)`. Then `_reject_low_confidence()`
    drops weak chunks using `reranker_confidence_threshold` (when reranked) or

@@ -776,7 +776,7 @@ Input:  query (str), chunks (list[RetrievedChunk]), top_k
 Output: list[RetrievedChunk] — reranked by cross-encoder score
 ```
 
-**Model:** `cross-encoder/ms-marco-MiniLM-L-6-v2` (`reranker_model`, `settings.py:622`) (~450MB, downloaded on first use). Loaded lazily off the event loop (`_ensure_reranker_ready`) — a cold model cache degrades to "no reranking" instead of failing the answer.
+**Model:** `BAAI/bge-reranker-v2-m3` (`reranker_model`, `settings.py:622`) (~2.2GB, downloaded on first use). Loaded lazily off the event loop (`_ensure_reranker_ready`) — a cold model cache degrades to "no reranking" instead of failing the answer.
 
 **Scoring:**
 1. Prepare `(query, chunk_text)` pairs.
@@ -1206,7 +1206,7 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 |---|---|---|---|
 | `retrieval_top_k` | 50 | 1-100 | `settings.py:620` |
 | `reranker_enabled` | True | — | `settings.py:621` |
-| `reranker_model` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | — | `settings.py:622` |
+| `reranker_model` | `BAAI/bge-reranker-v2-m3` | — | `settings.py:622` |
 | `reranker_top_k` | 30 | 1-100 | `settings.py:623` |
 | `max_context_chars` | 12000 | 500-100000 | `settings.py:624` |
 | `max_context_tokens` | 4096 | — | `settings.py:693` |
