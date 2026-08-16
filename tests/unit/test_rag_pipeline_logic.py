@@ -628,6 +628,62 @@ async def test_rejoin_sibling_chunks_fail_open_when_no_parents() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejoin_sibling_chunks_caps_oversized_parent_block() -> None:
+    """Rejoined siblings must never exceed the per-segment item limit.
+
+    A large parent (e.g. a whole source file split into dozens of segments)
+    would otherwise inflate the block far past ``DEFAULT_ITEM_LIMIT_CHARS`` and
+    trigger ``ContextAssemblerError`` downstream.
+    """
+    from data_engineering_copilot.services.async_rag import AsyncRagService, _cap_rejoined_block
+    from data_engineering_copilot.services.context_assembler import DEFAULT_ITEM_LIMIT_CHARS
+    from tests.doubles.embedder import StubEmbedder
+    from tests.doubles.llm import StubLLM
+    from tests.doubles.vector_store import InMemoryVectorStore
+
+    parent_hash = "huge-parent"
+    store = InMemoryVectorStore()
+    await store.initialize()
+    big_segment = "x" * 6000
+    chunks = [
+        DocumentChunk(
+            chunk_id=f"h:seg:{i}",
+            source_name="Spark Docs",
+            title="DataFrame",
+            url="https://raw.githubusercontent.com/apache/spark/fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4/python/pyspark/sql/dataframe.py",
+            text=big_segment,
+            parent_content_hash=parent_hash,
+            segment_index=i,
+            segment_total=40,
+        )
+        for i in range(40)
+    ]
+    await store.upsert_chunks(chunks, [[0.1] * 768 for _ in chunks])
+
+    service = AsyncRagService(
+        config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
+        vector_store=store,  # type: ignore[arg-type]
+        llm_client=StubLLM(),
+        embedder=StubEmbedder(dimension=768),
+    )
+    try:
+        retrieved = [RetrievedChunk(chunk=c, distance=0.1, confidence=0.9) for c in chunks]
+        rejoined = await service._rejoin_sibling_chunks(retrieved)
+        # The 40 siblings collapse to a single capped block.
+        assert len(rejoined) == 1
+        block = rejoined[0].chunk
+        assert len(block.text) <= DEFAULT_ITEM_LIMIT_CHARS
+        assert block.character_count == len(block.text)
+        assert block.word_count == len(block.text.split())
+        # The cap helper itself truncates without trailing whitespace.
+        capped = _cap_rejoined_block("\n".join(big_segment for _ in range(40)), DEFAULT_ITEM_LIMIT_CHARS)
+        assert len(capped) <= DEFAULT_ITEM_LIMIT_CHARS
+        assert capped == capped.rstrip()
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_rag_service_cache_enabled_false_skips_read_and_write() -> None:
     from data_engineering_copilot.services.async_rag import AsyncRagService
     from tests.doubles.embedder import StubEmbedder
