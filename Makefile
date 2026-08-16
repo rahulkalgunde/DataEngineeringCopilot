@@ -235,6 +235,12 @@ test-eval-data:
 eval-coverage:
 	dec_venv/bin/dec eval-coverage
 
+# Free (zero-LLM) layered integrity evaluation: corpus/chunk/embedding/vector-DB
+# retrieval. Requires Qdrant + local embedder only — no paid LLM calls. Run after
+# every code change.
+eval-fast:
+	dec_venv/bin/dec eval-fast
+
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 

@@ -3,11 +3,24 @@
 ## Tech Stack
 Python 3.12+, Pyright, Ruff, Pytest, `uv` only.
 
-## Verification Loop (Run in order after any code change)
+## Verification Loop (Two-Tier: fast per-change, full only at milestones)
+Do **NOT** run the full suite after every micro-edit — it is a waste of time and goes red on the next edit anyway. Use the cadence below.
+
+### Tier 1 — Per-change (after every edit, ~5–10s)
+Run on **only the files you touched**:
+1. `dec_venv/bin/python -m ruff check <changed_files> --fix`
+2. `dec_venv/bin/python -m ruff format <changed_files>`
+3. `dec_venv/bin/python -m pyright <changed_files>`
+4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v -n 0` (isolated check for the behavior touched)
+
+### Tier 2 — Milestones only (feature/issue complete, before asking to finish/commit, ~1–2 min)
+Full repo gate once:
 1. `dec_venv/bin/python -m ruff check data_engineering_copilot/ tests/ --fix`
 2. `dec_venv/bin/python -m ruff format data_engineering_copilot/ tests/`
 3. `dec_venv/bin/python -m pyright data_engineering_copilot/ tests/`
-4. `dec_venv/bin/python -m pytest tests/unit/<specific_test> -v -n 0` (isolated check)
+4. `dec_venv/bin/python -m pytest tests/unit/ -n 6` (full unit suite)
+
+The full run is the **final gate** — its only job is catching cross-module surprises (import wiring, shared fixtures, cache scope changes). It has zero value between those gates.
 
 ## Environment & Entry Points
 - **VENV**: Always use `dec_venv/bin/python` or `dec_venv/bin/dec`. Never bare `python`.
@@ -91,3 +104,16 @@ Python 3.12+, Pyright, Ruff, Pytest, `uv` only.
 - CLI details: `docs/cli_guide.md`
 - Makefile targets: `docs/makefile_guide.md`
 - Rules: `opencode.json`, `.clinerules/`
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

@@ -330,6 +330,7 @@ class TestRagasEvaluator:
             nvidia_api_key="placeholder",
             opencodezen_api_key="placeholder",
             opencodego_api_key="placeholder",
+            sambanova_api_key="placeholder",
         )
         llm_wrapper, _ = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)

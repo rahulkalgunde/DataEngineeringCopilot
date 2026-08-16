@@ -67,6 +67,9 @@ dec = "main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["data_engineering_copilot"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"data_engineering_copilot/evaluation/fast_sanity_pairs.jsonl" = "data_engineering_copilot/evaluation/fast_sanity_pairs.jsonl"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

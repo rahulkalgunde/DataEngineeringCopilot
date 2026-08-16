@@ -280,6 +280,59 @@ async def test_generate_http_error(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_401_preserves_model_error_body(client):
+    """A 401 from an OpenAI-compatible gateway must carry the server body so the
+    categorizer can tell a bad key from a wrong model (opencodego ModelError)."""
+    with respx.mock:
+        respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                401,
+                json={"error": {"message": 'ModelError: "google/gemma-4-31b-it:free" is not supported'}},
+            )
+        )
+        with pytest.raises(LLMClientError) as excinfo:
+            await client.generate("test")
+        err = excinfo.value
+        assert err.status_code == 401
+        assert "not supported" in err.response_body
+
+
+def test_extract_error_body_structured_envelope():
+    import httpx
+
+    from data_engineering_copilot.infrastructure.llm_client import _extract_error_body
+
+    resp = httpx.Response(
+        401,
+        request=httpx.Request("POST", "http://x"),
+        json={"error": {"message": "Model is not supported"}},
+    )
+    assert _extract_error_body(resp) == "Model is not supported"
+
+
+def test_extract_error_body_flat_string():
+    import httpx
+
+    from data_engineering_copilot.infrastructure.llm_client import _extract_error_body
+
+    resp = httpx.Response(
+        401,
+        request=httpx.Request("POST", "http://x"),
+        text='ModelError: "model-x" is not supported',
+    )
+    assert "not supported" in _extract_error_body(resp)
+
+
+def test_extract_error_body_empty():
+    import httpx
+
+    from data_engineering_copilot.infrastructure.llm_client import _extract_error_body
+
+    resp = httpx.Response(401, request=httpx.Request("POST", "http://x"))
+    assert _extract_error_body(resp) == ""
+
+
+@pytest.mark.asyncio
 async def test_generate_connection_error(client):
     with respx.mock:
         respx.post("https://openrouter.ai/api/v1/chat/completions").mock(

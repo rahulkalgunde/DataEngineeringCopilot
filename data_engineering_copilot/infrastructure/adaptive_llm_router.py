@@ -43,9 +43,38 @@ def _categorize_llm_error(exc: Exception, provider: str, model: str) -> Provider
 
     ``LLMClientError`` carries optional ``status_code`` / ``retry_after``
     attributes so the router does not depend on brittle message matching.
+
+    A 401 from some OpenAI-compatible gateways is a **model-not-supported**
+    error (e.g. opencodego's ``ModelError: "Model X is not supported"``), not
+    an auth failure — the server body distinguishes them. When the body
+    indicates an unsupported/unknown model the error is categorised as
+    ``INVALID_REQUEST`` so the provider is not marked down as an auth failure.
     """
 
+    def _is_model_not_supported(exc: Exception) -> bool:
+        if isinstance(exc, LLMClientError) and exc.response_body:
+            lowered = exc.response_body.lower()
+            return (
+                "not supported" in lowered
+                or "modelerror" in lowered
+                or "does not exist" in lowered
+                or "unknown model" in lowered
+                or ("model" in lowered and "not found" in lowered)
+            )
+        if isinstance(exc, httpx.HTTPStatusError):
+            lowered = (exc.response.text or "").lower()
+            return (
+                "not supported" in lowered
+                or "modelerror" in lowered
+                or "does not exist" in lowered
+                or "unknown model" in lowered
+                or ("model" in lowered and "not found" in lowered)
+            )
+        return False
+
     def _status_category(status: int) -> ProviderErrorCategory:
+        if _is_model_not_supported(exc) and status in (401, 403):
+            return ProviderErrorCategory.INVALID_REQUEST
         if status == 429:
             return ProviderErrorCategory.RATE_LIMITED
         if status in (401, 403):

@@ -62,6 +62,33 @@ class FallbackChainConfig:
     degraded_fallback: ProviderConfig | None = None
     max_degraded_consecutive_failures: int = 3
     error_categorizer: ErrorCategorizer | None = None
+    router_deadline_seconds: float = 45.0
+
+
+class RouterLike(Protocol):
+    """Minimal surface ``ProviderFallbackChain`` needs from the router.
+
+    Declared as a protocol (not a direct import) to keep ``provider_fallback``
+    free of a circular import with ``provider_selector``.
+    """
+
+    async def pick(self, exclude: set[str] | None = None) -> ProviderConfig | None: ...
+
+    async def wait_for_availability(
+        self,
+        deadline_monotonic: float,
+        exclude: set[str] | None = None,
+    ) -> bool: ...
+
+    async def record_success(self, provider: str, model: str, latency: float) -> None: ...
+
+    async def record_failure(
+        self,
+        provider: str,
+        model: str,
+        category: ProviderErrorCategory,
+        retry_after: float | None = None,
+    ) -> None: ...
 
 
 def _default_categorizer(exc: Exception, provider: str, model: str) -> ProviderError:
@@ -133,11 +160,13 @@ class ProviderFallbackChain[T, R]:
         self,
         config: FallbackChainConfig,
         health: ProviderHealthRegistry,
+        router: RouterLike | None = None,
     ) -> None:
         if not config.providers and config.degraded_fallback is None:
             raise ValueError("Fallback chain requires at least one provider or a degraded fallback")
         self._config = config
         self._health = health
+        self._router = router
         self._error_categorizer = config.error_categorizer or _default_categorizer
         self._last_error: ProviderError | None = None
 
@@ -160,6 +189,9 @@ class ProviderFallbackChain[T, R]:
             degraded_fallback=degraded is not None,
             total=total,
         )
+
+        if self._router is not None and main:
+            return await self._execute_with_router(request, main, degraded, total)
 
         attempted: list[dict[str, str]] = []
         self._last_error = None
@@ -202,30 +234,10 @@ class ProviderFallbackChain[T, R]:
                 skipped=attempted,
                 fallback=degraded.name,
             )
-            available, consecutive = self._degraded_available(degraded)
-            if not available:
-                logger.warning(
-                    "degraded_fallback_skipped",
-                    provider=degraded.name,
-                    model=degraded.client.model,
-                    reason="consecutive_failures",
-                    consecutive_failures=consecutive,
-                    max_consecutive_failures=self._config.max_degraded_consecutive_failures,
-                )
-                attempted.append({"provider": degraded.name, "outcome": f"skipped:degraded({consecutive})"})
-            else:
-                logger.info(
-                    "provider_call",
-                    provider=degraded.name,
-                    model=degraded.client.model,
-                    position=f"{len(main) + 1}/{total}",
-                    reason="degraded_no_external",
-                )
-                try:
-                    return await self._call_with_health(degraded, request)
-                except ProviderError as p_err:
-                    self._last_error = p_err
-                    attempted.append({"provider": degraded.name, "outcome": f"failed:{p_err.category.value}"})
+            entries, result = await self._try_degraded(degraded, request, len(main) + 1, total)
+            attempted.extend(entries)
+            if result is not None:
+                return result
 
         logger.error(
             "all_providers_failed",
@@ -267,13 +279,21 @@ class ProviderFallbackChain[T, R]:
         consecutive = mh.consecutive_failures if mh is not None else 0
         return consecutive < self._config.max_degraded_consecutive_failures, consecutive
 
-    async def _call_with_health(self, provider: ProviderConfig, request: T) -> R:
+    async def _call_with_health(
+        self,
+        provider: ProviderConfig,
+        request: T,
+        router: RouterLike | None = None,
+    ) -> R:
         """Single-attempt call. Records health outcome and returns the result."""
         start = time.monotonic()
         try:
             result = await provider.client.call(request)
             latency = time.monotonic() - start
-            self._health.track_success(provider.name, provider.client.model, latency)
+            if router is not None:
+                await router.record_success(provider.name, provider.client.model, latency)
+            else:
+                self._health.track_success(provider.name, provider.client.model, latency)
             logger.info(
                 "provider_success",
                 provider=provider.name,
@@ -283,7 +303,10 @@ class ProviderFallbackChain[T, R]:
             return result
         except Exception as exc:
             p_err = self._error_categorizer(exc, provider.name, provider.client.model)
-            self._health.track_failure(provider.name, provider.client.model, p_err.category, p_err.retry_after)
+            if router is not None:
+                await router.record_failure(provider.name, provider.client.model, p_err.category, p_err.retry_after)
+            else:
+                self._health.track_failure(provider.name, provider.client.model, p_err.category, p_err.retry_after)
             logger.warning(
                 "provider_failed",
                 provider=provider.name,
@@ -293,6 +316,104 @@ class ProviderFallbackChain[T, R]:
                 error=str(exc),
             )
             raise p_err from exc
+
+    async def _execute_with_router(
+        self,
+        request: T,
+        main: list[ProviderConfig],
+        degraded: ProviderConfig | None,
+        total: int,
+    ) -> R:
+        """Router-driven execution: pick → call → re-pick on failure → wait when
+        everything is down, re-looping until the deadline, then degrade."""
+        attempted: list[dict[str, str]] = []
+        self._last_error = None
+        failed: set[str] = set()
+        deadline = time.monotonic() + self._config.router_deadline_seconds
+        assert self._router is not None
+
+        while True:
+            provider = await self._router.pick(exclude=failed)
+            if provider is None:
+                recovered = await self._router.wait_for_availability(deadline, exclude=failed)
+                if not recovered:
+                    break
+                continue
+            logger.info(
+                "provider_call",
+                provider=provider.name,
+                model=provider.client.model,
+                reason="router_selected",
+            )
+            try:
+                return await self._call_with_health(provider, request, self._router)
+            except ProviderError as p_err:
+                self._last_error = p_err
+                failed.add(provider.name)
+                attempted.append({"provider": provider.name, "outcome": f"failed:{p_err.category.value}"})
+                if time.monotonic() >= deadline:
+                    break
+
+        if degraded:
+            logger.warning(
+                "all_external_unavailable",
+                skipped=attempted,
+                fallback=degraded.name,
+            )
+            entries, result = await self._try_degraded(degraded, request, len(main) + 1, total)
+            attempted.extend(entries)
+            if result is not None:
+                return result
+
+        logger.error(
+            "all_providers_failed",
+            attempts=attempted,
+            last_error=str(self._last_error) if self._last_error else "no providers configured",
+        )
+        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+
+        raise LLMClientError(
+            f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
+            retry_after=self._last_error.retry_after if isinstance(self._last_error, ProviderError) else None,
+            category=self._last_error.category if isinstance(self._last_error, ProviderError) else None,
+        ) from self._last_error
+
+    async def _try_degraded(
+        self,
+        degraded: ProviderConfig,
+        request: T,
+        position: int,
+        total: int,
+    ) -> tuple[list[dict[str, str]], R | None]:
+        """Attempt the degraded fallback once.
+
+        Returns ``(attempt_entries, result)`` — ``result`` is the response when
+        the degraded provider succeeded, otherwise ``None``.
+        """
+        available, consecutive = self._degraded_available(degraded)
+        if not available:
+            logger.warning(
+                "degraded_fallback_skipped",
+                provider=degraded.name,
+                model=degraded.client.model,
+                reason="consecutive_failures",
+                consecutive_failures=consecutive,
+                max_consecutive_failures=self._config.max_degraded_consecutive_failures,
+            )
+            return [{"provider": degraded.name, "outcome": f"skipped:degraded({consecutive})"}], None
+        logger.info(
+            "provider_call",
+            provider=degraded.name,
+            model=degraded.client.model,
+            position=f"{position}/{total}",
+            reason="degraded_no_external",
+        )
+        try:
+            result = await self._call_with_health(degraded, request, self._router)
+            return [], result
+        except ProviderError as p_err:
+            self._last_error = p_err
+            return [{"provider": degraded.name, "outcome": f"failed:{p_err.category.value}"}], None
 
     @property
     def last_error(self) -> ProviderError | None:
@@ -332,6 +453,7 @@ class ProviderFallbackChain[T, R]:
         provider: ProviderConfig,
         prompt: str,
         temperature: float | None = None,
+        router: RouterLike | None = None,
     ):
         """Stream tokens from a single provider, tracking health on the way.
 
@@ -346,16 +468,27 @@ class ProviderFallbackChain[T, R]:
             stream_method = getattr(client, "generate_stream", None)
             if stream_method is None:
                 result = await client.call(prompt)
-                self._health.track_success(provider.name, client.model, time.monotonic() - start)
+                latency = time.monotonic() - start
+                if router is not None:
+                    await router.record_success(provider.name, client.model, latency)
+                else:
+                    self._health.track_success(provider.name, client.model, latency)
                 if result:
                     yield str(result)
                 return
             async for token in stream_method(prompt, temperature=temperature):
                 yield token
-            self._health.track_success(provider.name, client.model, time.monotonic() - start)
+            latency = time.monotonic() - start
+            if router is not None:
+                await router.record_success(provider.name, client.model, latency)
+            else:
+                self._health.track_success(provider.name, client.model, latency)
         except Exception as exc:
             p_err = self._error_categorizer(exc, provider.name, client.model)
-            self._health.track_failure(provider.name, client.model, p_err.category, p_err.retry_after)
+            if router is not None:
+                await router.record_failure(provider.name, client.model, p_err.category, p_err.retry_after)
+            else:
+                self._health.track_failure(provider.name, client.model, p_err.category, p_err.retry_after)
             logger.warning(
                 "provider_stream_failed",
                 provider=provider.name,
@@ -386,6 +519,11 @@ class ProviderFallbackChain[T, R]:
             main = [degraded]
             degraded = None
 
+        if self._router is not None and main:
+            async for token in self._generate_stream_with_router(main, degraded, prompt, temperature):
+                yield token
+            return
+
         attempted: list[dict[str, str]] = []
         self._last_error = None
 
@@ -414,6 +552,73 @@ class ProviderFallbackChain[T, R]:
                 emitted = False
                 try:
                     async for token in self._call_with_health_stream(degraded, prompt, temperature):
+                        emitted = True
+                        yield token
+                    return
+                except ProviderError as p_err:
+                    self._last_error = p_err
+                    attempted.append({"provider": degraded.name, "outcome": f"failed:{p_err.category.value}"})
+                    if emitted:
+                        raise
+
+        logger.error(
+            "all_providers_failed_stream",
+            attempts=attempted,
+            last_error=str(self._last_error) if self._last_error else "no providers configured",
+        )
+        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+
+        raise LLMClientError(
+            f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
+            retry_after=self._last_error.retry_after if isinstance(self._last_error, ProviderError) else None,
+            category=self._last_error.category if isinstance(self._last_error, ProviderError) else None,
+        ) from self._last_error
+
+    async def _generate_stream_with_router(
+        self,
+        main: list[ProviderConfig],
+        degraded: ProviderConfig | None,
+        prompt: str,
+        temperature: float | None,
+    ):
+        """Router-driven streaming: pick → stream → re-pick on pre-token
+        failure → wait when everything is down, then degrade."""
+        attempted: list[dict[str, str]] = []
+        self._last_error = None
+        failed: set[str] = set()
+        deadline = time.monotonic() + self._config.router_deadline_seconds
+        assert self._router is not None
+
+        while True:
+            provider = await self._router.pick(exclude=failed)
+            if provider is None:
+                recovered = await self._router.wait_for_availability(deadline, exclude=failed)
+                if not recovered:
+                    break
+                continue
+            emitted = False
+            try:
+                async for token in self._call_with_health_stream(provider, prompt, temperature, self._router):
+                    emitted = True
+                    yield token
+                return
+            except ProviderError as p_err:
+                self._last_error = p_err
+                attempted.append({"provider": provider.name, "outcome": f"failed:{p_err.category.value}"})
+                if emitted:
+                    raise
+                failed.add(provider.name)
+                if time.monotonic() >= deadline:
+                    break
+
+        if degraded:
+            available, consecutive = self._degraded_available(degraded)
+            if not available:
+                attempted.append({"provider": degraded.name, "outcome": f"skipped:degraded({consecutive})"})
+            else:
+                emitted = False
+                try:
+                    async for token in self._call_with_health_stream(degraded, prompt, temperature, self._router):
                         emitted = True
                         yield token
                     return

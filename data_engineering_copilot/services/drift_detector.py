@@ -32,6 +32,14 @@ class EvalSnapshot:
     timestamp: str
     metrics: dict[str, float]
     eval_dataset_hash: str = ""
+    git_commit: str = ""
+    generation: str = ""
+    embedding_model: str = ""
+    reranker: str = ""
+    chunk_size: int = 0
+    chunk_overlap: int = 0
+    retrieval_top_k: int = 0
+    config_fingerprint: str = ""
 
 
 @dataclass(frozen=True)

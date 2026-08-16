@@ -41,6 +41,7 @@ class ModelHealth:
     total_success: int = 0
     total_failures: int = 0
     total_latency: float = 0.0
+    ema_latency: float = 0.0
     last_used_at: float = 0.0
     last_success_at: float = 0.0
     last_failure_at: float = 0.0
@@ -124,6 +125,7 @@ class ProviderHealthRegistry:
             mh.consecutive_failures = 0
             mh.total_success += 1
             mh.total_latency += latency
+            mh.ema_latency = latency if mh.ema_latency <= 0 else 0.3 * latency + 0.7 * mh.ema_latency
             mh.last_used_at = time.monotonic()
             mh.last_success_at = time.monotonic()
             mh.last_error_category = None
@@ -190,8 +192,9 @@ class ProviderHealthRegistry:
 
     def _health_score(self, mh: ModelHealth) -> float:
         score = self.success_rate_weight * mh.success_rate
-        if mh.avg_latency > 0:
-            normalized_latency = 1.0 / (1.0 + mh.avg_latency)
+        latency = mh.ema_latency if mh.ema_latency > 0 else mh.avg_latency
+        if latency > 0:
+            normalized_latency = 1.0 / (1.0 + latency)
             score += self.latency_weight * normalized_latency
         recency = 0.0
         if mh.last_success_at > 0:
@@ -247,6 +250,36 @@ class ProviderHealthRegistry:
     def get_provider_health(self, provider: str) -> ProviderHealth | None:
         with self._lock:
             return self._providers.get(provider)
+
+    def get_provider_score(self, provider: str) -> float:
+        """Public health score for *provider* (max across available models).
+
+        Feeds the availability-aware router's ready-pool ordering.
+        """
+        with self._lock:
+            ph = self._providers.get(provider)
+            if ph is None:
+                return 0.0
+            scores = [self._health_score(mh) for mh in ph.models.values() if mh.is_available]
+            return max(scores, default=0.0)
+
+    def get_last_selected(self, provider: str) -> float:
+        """Monotonic timestamp of the last time *provider* was selected."""
+        with self._lock:
+            return self._last_selected.get(provider, 0.0)
+
+    def get_effective_cooldown_remaining(self, provider: str, model: str) -> float:
+        """Seconds until *model* on *provider* is callable again (0 if clear).
+
+        Takes the max of the provider-level and model-level cooldowns.
+        """
+        with self._lock:
+            ph = self._providers.get(provider)
+            if ph is None:
+                return 0.0
+            mh = ph.models.get(model)
+            until = max(ph.cooldown_until, mh.cooldown_until if mh is not None else 0.0)
+            return max(0.0, until - time.monotonic())
 
     def get_model_health(self, provider: str, model: str) -> ModelHealth | None:
         with self._lock:

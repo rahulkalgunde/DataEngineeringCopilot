@@ -53,6 +53,37 @@ def build_chat_messages(prompt: str) -> list[dict[str, str]]:
     return [{"role": "user", "content": prompt}]
 
 
+def _extract_error_body(response: httpx.Response) -> str:
+    """Best-effort extraction of a human-readable message from an error response.
+
+    Handles the common OpenAI-compatible error envelope
+    ``{"error": {"message": "..."}}`` as well as gateways that return a flat
+    string body (e.g. opencodego's ``ModelError: "Model X is not supported"``).
+    Returns ``""`` when nothing useful can be parsed.
+    """
+    text = (response.text or "").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return text[:300]
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            msg = error.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg[:300]
+            err_type = error.get("type")
+            if isinstance(err_type, str) and err_type.strip():
+                return err_type[:300]
+        message = data.get("message")
+        if isinstance(message, str) and message.strip():
+            return message[:300]
+        return json.dumps(data)[:300]
+    return text[:300]
+
+
 class LLMClientError(CoreDomainException):
     """Raised when the LLM provider cannot return an answer.
 
@@ -67,11 +98,13 @@ class LLMClientError(CoreDomainException):
         status_code: int | None = None,
         retry_after: float | None = None,
         category: ProviderErrorCategory | None = None,
+        response_body: str = "",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
         self.category = category
+        self.response_body = response_body
 
 
 class LLMClient(SafeAsyncClientMixin):
@@ -297,7 +330,17 @@ class LLMClient(SafeAsyncClientMixin):
                 )
             raise httpx.HTTPStatusError("Rate limited by provider", request=response.request, response=response)
         if response.status_code == 401:
-            raise LLMClientError("LLM provider returned 401 Unauthorized. Check your API key.", status_code=401)
+            # A 401 is not always an auth failure: some OpenAI-compatible
+            # gateways (e.g. opencodego) return 401 with a ``ModelError`` body
+            # when the requested model is unsupported. Preserve the server body
+            # so the categorizer can distinguish a bad key from a wrong model.
+            body = _extract_error_body(response)
+            detail = f" — {body}" if body else ""
+            raise LLMClientError(
+                f"LLM provider returned 401 Unauthorized{detail}. Check your API key.",
+                status_code=401,
+                response_body=body,
+            )
         response.raise_for_status()
         return response.json()
 

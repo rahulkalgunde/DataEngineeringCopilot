@@ -1,0 +1,10 @@
+{"query": "How do I configure Spark executor memory?", "relevant": "Configure Spark executor memory with spark.executor.memory property.", "irrelevant": "Spark SQL window functions group rows into partitions."}
+{"query": "What is a DataFrame in Spark?", "relevant": "A DataFrame is a distributed collection of data organized into named columns.", "irrelevant": "Docker containers isolate application processes."}
+{"query": "How do I read a Parquet file?", "relevant": "Use spark.read.parquet to load Parquet files into a DataFrame.", "irrelevant": "Kubernetes schedules pods across a cluster."}
+{"query": "What does coalesce do?", "relevant": "coalesce reduces the number of partitions in a DataFrame.", "irrelevant": "React uses hooks to manage component state."}
+{"query": "How do I cache a DataFrame?", "relevant": "Call .cache() or .persist() to cache a DataFrame in memory.", "irrelevant": "The Nginx reverse proxy balances HTTP traffic."}
+{"query": "How do I join two DataFrames?", "relevant": "Use df1.join(df2, on, how) to combine two DataFrames.", "irrelevant": "PostgreSQL enforces foreign key constraints."}
+{"query": "What is a shuffle in Spark?", "relevant": "A shuffle redistributes data across partitions for wide transformations.", "irrelevant": "Terraform provisions cloud infrastructure as code."}
+{"query": "How do I write a CSV file?", "relevant": "Use df.write.csv('path') to write a DataFrame to CSV.", "irrelevant": "Docker volumes persist data across containers."}
+{"query": "What is broadcast join?", "relevant": "A broadcast join sends a small table to all executors to avoid shuffles.", "irrelevant": "Git rebase rewrites commit history."}
+{"query": "How do I filter a DataFrame?", "relevant": "Use df.filter(condition) or df.where(condition) to filter rows.", "irrelevant": "Airflow DAGs orchestrate scheduled pipelines."}
