@@ -228,7 +228,7 @@ class RagConfig:
     retrieval_top_k: int = 5
     confidence_threshold: float = 0.3
     reranker_enabled: bool = False
-    reranker_model: str = "ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 3
     # Cross-encoder scores sit on a different scale than embedding/fused
     # confidence (relevant pairs often land ~0.10-0.15). Gate on this value

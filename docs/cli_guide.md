@@ -282,7 +282,7 @@ persisted to Postgres (`chat_sessions`/`chat_messages` tables in the
   questions return instantly (measured 0.34s vs ~7s full pipeline). Follow-up
   turns never touch the cache, so context-dependent answers are never stale.
 - **Local reranking** (`chat_rerank_local`, default true): chat reranks with the
-  local `ms-marco-MiniLM-L-6-v2` cross-encoder instead of the ~5s cloud LLM
+  local `BAAI/bge-reranker-v2-m3` cross-encoder instead of the ~5s cloud LLM
   rerank chain. The single-turn Ask pipeline is unaffected.
 - **Smart-cache recall tier** (`chat_cache_recall_enabled`, default **off**):
   on follow-up turns, similar cached (question→answer) pairs are retrieved via

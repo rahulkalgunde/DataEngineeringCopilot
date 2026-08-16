@@ -843,7 +843,7 @@ class AppSettings(BaseSettings):
     # to the final context set after dense+sparse rank fusion.
     retrieval_top_k: int = 50
     reranker_enabled: bool = True
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 30
     max_context_chars: int = 12000
     # Diversity cap on final context: at most this many chunks per distinct
@@ -922,9 +922,9 @@ class AppSettings(BaseSettings):
     chat_scope_local: bool = False
     chat_answer_local: bool = False
     # Chat reranking: use the local cross-encoder instead of the cloud LLM
-    # rerank chain. The cloud chain costs ~5s/turn; the local model (ms-marco)
-    # is free and near-instant on CPU. Default ON for chat; the single-turn
-    # Ask pipeline is unaffected.
+    # rerank chain. The cloud chain costs ~5s/turn; the local model
+    # (bge-reranker-v2-m3) is free and near-instant on CPU. Default ON for chat;
+    # the single-turn Ask pipeline is unaffected.
     chat_rerank_local: bool = True
     # Chat speed tuning (Phase F): smart-cache recall tier — reuse similar
     # cached (question→answer) pairs via local synthesis, gated by scope

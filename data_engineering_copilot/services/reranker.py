@@ -27,7 +27,7 @@ _reranker_cache: dict[str, CrossEncoderReranker] = {}
 _cache_lock = threading.Lock()
 
 
-def get_reranker(model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2") -> CrossEncoderReranker:
+def get_reranker(model_name: str = "BAAI/bge-reranker-v2-m3") -> CrossEncoderReranker:
     """Get or create a singleton CrossEncoderReranker for the given model."""
     if model_name not in _reranker_cache:
         with _cache_lock:
@@ -64,11 +64,11 @@ class CrossEncoderReranker:
     Cross-encoders jointly encode the query and chunk, producing a relevance
     score that is more accurate than embedding similarity for ranking.
 
-    This implementation uses the lightweight 'all-MiniLM-L6-v2' model
+    This implementation uses the multilingual 'BAAI/bge-reranker-v2-m3' model
     via sentence-transformers for local inference.
     """
 
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
         """Initialize the cross-encoder reranker.
 
         Model loading is deferred — call ``await initialize()`` before first use
