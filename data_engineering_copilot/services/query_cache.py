@@ -58,9 +58,13 @@ _NON_ANSWER_MARKERS: tuple[re.Pattern, ...] = (
 def scope_fingerprint(scope: CacheScope | None) -> str:
     """16-hex fingerprint of a scope's canonical JSON + schema version."""
     if scope is None:
-        from data_engineering_copilot.config.settings import resolve_active_generation
+        from data_engineering_copilot.config.settings import resolve_active_generation, settings
+        from data_engineering_copilot.evaluation.provenance import answer_config_fingerprint
 
-        scope = CacheScope(index_generation=resolve_active_generation())
+        scope = CacheScope(
+            index_generation=resolve_active_generation(),
+            config_fingerprint=answer_config_fingerprint(settings),
+        )
     payload = {
         "tenant_id": scope.tenant_id,
         "role": scope.role,
@@ -68,6 +72,7 @@ def scope_fingerprint(scope: CacheScope | None) -> str:
         "embedding_model": scope.embedding_model,
         "collection_name": scope.collection_name,
         "index_generation": scope.index_generation,
+        "config_fingerprint": scope.config_fingerprint,
         "schema": CACHE_SCHEMA_VERSION,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))

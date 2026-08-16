@@ -78,6 +78,43 @@ class TestErrorCategorization:
         err = _categorize_llm_error(exc, "openrouter", "model")
         assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR
 
+    def test_llm_client_error_401_model_not_supported_is_invalid_request(self):
+        """A 401 carrying a ``ModelError`` (wrong model) is NOT an auth failure:
+        it must be categorised ``INVALID_REQUEST`` so the provider is not marked
+        down as an authentication problem (opencodego regression)."""
+        exc = LLMClientError(
+            'LLM provider returned 401 Unauthorized — ModelError: "google/gemma-4-31b-it:free" is not supported. '
+            "Check your API key.",
+            status_code=401,
+            response_body='ModelError: "google/gemma-4-31b-it:free" is not supported',
+        )
+        err = _categorize_llm_error(exc, "opencodego", "google/gemma-4-31b-it:free")
+        assert err.category == ProviderErrorCategory.INVALID_REQUEST
+
+    def test_http_401_model_not_supported_body_is_invalid_request(self):
+        resp = httpx.Response(
+            401,
+            request=httpx.Request("POST", "http://example.com"),
+            text='{"error": {"message": "Model X is not supported"}}',
+        )
+        exc = httpx.HTTPStatusError("401", request=resp.request, response=resp)
+        err = _categorize_llm_error(exc, "opencodego", "model-x")
+        assert err.category == ProviderErrorCategory.INVALID_REQUEST
+
+    def test_llm_client_error_401_real_auth_stays_auth_error(self):
+        exc = LLMClientError(
+            "LLM provider returned 401 Unauthorized. Check your API key.",
+            status_code=401,
+            response_body='{"error": {"message": "Invalid API key"}}',
+        )
+        err = _categorize_llm_error(exc, "openrouter", "model")
+        assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR
+
+    def test_llm_client_error_401_no_body_stays_auth_error(self):
+        exc = LLMClientError("LLM provider returned 401 Unauthorized. Check your API key.", status_code=401)
+        err = _categorize_llm_error(exc, "openrouter", "model")
+        assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR
+
     def test_llm_client_error_connection_text(self):
         exc = LLMClientError("Could not reach LLM provider")
         err = _categorize_llm_error(exc, "openrouter", "model")

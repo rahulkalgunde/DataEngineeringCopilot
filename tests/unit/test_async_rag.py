@@ -396,6 +396,42 @@ class TestAsyncRagService:
         mock_reranker.rerank.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_answer_retrieval_only_skips_generation(self, mock_embedder, mock_vector_store, mock_llm):
+        """``retrieval_only=True`` returns the assembled context and final
+        chunk sources without invoking the LLM, groundedness verifier or scope
+        verifier (used by ``dec evaluate --spark`` to score retrieval recall
+        without paying for answer generation)."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+
+        mock_llm.generate = AsyncMock(return_value="should not be called")
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk(), self._make_chunk()])
+        groundedness = MagicMock()
+        groundedness.async_verify_with_score = AsyncMock(return_value=(True, [], 1.0))
+        scope = MagicMock()
+        scope.verify_scope = AsyncMock(return_value=(True, None))
+
+        service = AsyncRagService(
+            config=RagConfig(),
+            vector_store=mock_vector_store,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            groundedness_verifier=groundedness,
+            scope_verifier=scope,
+        )
+
+        result = await service.answer("what is spark", retrieval_only=True)
+        assert result.text == ""
+        assert len(result.sources) == 2
+        assert result.sources[0].url == "http://test.com"
+        assert result.stage_times["total"] > 0
+        mock_llm.generate.assert_not_called()
+        groundedness.async_verify_with_score.assert_not_called()
+        scope.verify_scope.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_answer_reranker_score_above_reranker_threshold_rescues_answer(
         self, mock_embedder, mock_vector_store, mock_llm
     ):

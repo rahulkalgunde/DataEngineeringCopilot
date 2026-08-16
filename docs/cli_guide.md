@@ -40,6 +40,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec status](#dec-status)
   - [dec evaluate](#dec-evaluate)
   - [dec eval-coverage](#dec-eval-coverage)
+  - [dec eval-fast](#dec-eval-fast)
   - [dec gen-synthetic-eval](#dec-gen-synthetic-eval)
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
@@ -1065,6 +1066,29 @@ usage: dec eval-coverage [--dataset DATASET] [--generation GEN] [--json]
 Additions to a dataset must pass this gate before merge
 (`make eval-coverage`); schema/slug/evidence gates run in CI
 (`make test-eval-data`).
+
+### `dec eval-fast`
+
+Free (zero-LLM) layered integrity gate to run after code changes before paying
+for a full `dec evaluate`. Executes the first five layers of the evaluation
+contract (corpus, chunk, embedding, vector DB, retrieval) with no LLM calls and
+only local embeddings.
+
+```
+usage: dec eval-fast [--dataset DATASET] [--generation GEN] [--output-dir DIR]
+```
+
+- `--dataset <path>`: retrieval recall rows to score (default:
+  `tests/evaluation/recall_fast.jsonl`).
+- `--generation <gen>`: corpus to validate (default: active generation).
+- `--output-dir <dir>`: write the machine-readable `fast_eval.json` report here
+  (prints a summary when omitted).
+- Layers covered: corpus integrity (count/dupes/coverage), chunk size +
+  boundary heuristics, embedding sanity (dims/NaN/consistency/semantic pairs),
+  vector-DB count/metadata/self-retrieval, and retrieval URL-recall + MRR over
+  the fast golden set.
+- Needs Qdrant + a generation corpus + a local embedder (Ollama) — no paid
+  calls (`make eval-fast`).
 
 ### `dec gen-synthetic-eval`
 

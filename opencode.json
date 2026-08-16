@@ -77,7 +77,11 @@
     "6. PRE-PUSH VERIFICATION: Before pushing a commit that touches application code, proactively run `gh run list --limit 5` to confirm the previous CI state was not already red for unrelated reasons; if it was, flag it rather than assuming the push caused it.",
     "",
     "=== RULE 12: CI COMMAND SHORTCUT ===",
-    "Use the `.opencode/command/check-ci.md` command (`/check-ci`) for on-demand CI health checks. It checks recent GitHub Actions runs, identifies failures, and drives the same fix loop as RULE 11."
+    "Use the `.opencode/command/check-ci.md` command (`/check-ci`) for on-demand CI health checks. It checks recent GitHub Actions runs, identifies failures, and drives the same fix loop as RULE 11.",
+    "=== RULE 13: TWO-TIER VERIFICATION CADENCE ===",
+    "1. PER-CHANGE (after every edit, ~5-10s): run ONLY on the files you touched — `ruff check <files> --fix`, `ruff format <files>`, `pyright <files>`, and one targeted `pytest tests/unit/<specific_test> -v -n 0` for the behavior changed.",
+    "2. MILESTONE ONLY (feature/issue complete, before asking to finish/commit, ~1-2 min): full repo gate once — `ruff check data_engineering_copilot/ tests/ --fix`, `ruff format data_engineering_copilot/ tests/`, `pyright data_engineering_copilot/ tests/`, `pytest tests/unit/ -n 6`.",
+    "3. NEVER run the full suite after every micro-edit — it is a waste of time and goes red on the next edit anyway. The full run is the FINAL gate only (catches cross-module surprises: import wiring, shared fixtures, cache scope changes)."
   ],
   "lsp": {
     "pyright": {
@@ -121,5 +125,25 @@
       "mkfs *": "deny",
       "dd *": "deny"
     }
+  },
+  "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
+  "provider": {
+    "sambanova": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "sambanova",
+      "options": {
+        "baseURL": "https://api.sambanova.ai/v1",
+        "apiKey": "{env:SAMBANOVA_API_KEY}"
+      },
+      "models": {
+        "gpt-oss-120b": { "name": "gpt-oss 120B" },
+        "minimax-m2.7": { "name": "MiniMax M2.7" },
+        "deepseek-v3.1": { "name": "DeepSeek V3.1" },
+        "meta-llama-3.3-70b-instruct": { "name": "Meta Llama 3.3 70B Instruct" }
+      }
+    }
+  },
+  "agent": {
+    "plan": { "model": "sambanova/gpt-oss-120b" }
   }
 }

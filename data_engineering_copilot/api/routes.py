@@ -96,6 +96,7 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
     tenant_id = request.headers.get("X-Tenant-ID", "default")
     role = perms.role if perms is not None else "anonymous"
     from data_engineering_copilot.config.settings import resolve_active_generation
+    from data_engineering_copilot.evaluation.provenance import answer_config_fingerprint
 
     active_generation = resolve_active_generation()
     return CacheScope(
@@ -105,6 +106,7 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
         embedding_model=settings.embedding_model_name,
         collection_name=settings.active_collection_name or settings.collection_name,
         index_generation=active_generation,
+        config_fingerprint=answer_config_fingerprint(settings),
     )
 
 

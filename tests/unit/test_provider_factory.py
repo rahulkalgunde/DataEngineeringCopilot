@@ -223,6 +223,61 @@ class TestBuildPurposeLLMClient:
         with pytest.raises(ValueError, match="OPENCODEGO_API_KEY is required"):
             _build_purpose_llm_client(provider="opencodego", model="test", app_settings=s)
 
+    def test_sambanova_uses_base_url_model_and_max_completion_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="sambanova",
+            sambanova_api_key="sn-test",
+        )
+        client = _build_purpose_llm_client(provider="sambanova", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "Meta-Llama-3.3-70B-Instruct"
+        assert client.base_url == "https://api.sambanova.ai/v1"
+        assert client._max_tokens_field == "max_completion_tokens"
+        assert client._max_tokens == 4096
+
+    def test_sambanova_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="sambanova",
+            sambanova_api_key="sn-placeholder",
+        )
+        object.__setattr__(s, "sambanova_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="SAMBANOVA_API_KEY is required"):
+            _build_purpose_llm_client(provider="sambanova", model="test", app_settings=s)
+
+    def test_fallback_provider_uses_own_default_model_not_purpose_override(self):
+        """A fallback provider in a chain must resolve its own ``{provider}_model``
+        (never the per-provider purpose override pinned for the primary), so a
+        purpose model the fallback does not host is never forwarded."""
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="opencodego",
+            opencodego_api_key="oc-go-test",
+            opencodego_model="deepseek-v4-flash",
+            groq_api_key="gsk-test",
+            groq_model="openai/gpt-oss-20b",
+            groq_answer_llm_model="mistral-large-latest",
+        )
+
+        # Purpose override suppressed (fallback) ⇒ resolves to provider default.
+        fallback = _build_purpose_llm_client(
+            provider="groq", model="", purpose="answer", app_settings=s, apply_purpose_model_override=False
+        )
+        assert fallback is not None
+        assert fallback.model == "openai/gpt-oss-20b"
+
+        # Purpose override applied (primary) ⇒ per-provider purpose override wins.
+        primary = _build_purpose_llm_client(
+            provider="groq", model="", purpose="answer", app_settings=s, apply_purpose_model_override=True
+        )
+        assert primary is not None
+        assert primary.model == "mistral-large-latest"
+
     def test_openrouter_delegates(self):
         from data_engineering_copilot.factory import _build_purpose_llm_client
         from data_engineering_copilot.infrastructure.llm_client import LLMClient
@@ -511,3 +566,138 @@ class TestBuildRerankFallbackChain:
         object.__setattr__(s, "rerank_fallback_order", ["bogus"])
         with pytest.raises(ValidationError, match="unknown provider"):
             s.validate_all()
+
+
+class TestRouterWiring:
+    def test_router_wired_into_llm_chain(self):
+        from typing import cast
+
+        from data_engineering_copilot.factory import build_llm_fallback_chain
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+        from data_engineering_copilot.infrastructure.provider_selector import (
+            ProviderSelector,
+            RedisRouterState,
+        )
+
+        s = _make_settings(
+            llm_provider="openrouter",
+            llm_model="openrouter/free",
+            openrouter_api_key="sk-or-v1-test",
+            groq_api_key="gsk-test",
+            router_redis_sharing=False,
+        )
+        chain = build_llm_fallback_chain(purpose="answer", app_settings=s)
+        assert isinstance(chain, ProviderFallbackChain)
+        router = cast(ProviderSelector | None, chain._router)
+        assert router is not None
+        assert type(router.state) is not RedisRouterState
+        assert router.config.purpose == "answer"
+
+    def test_router_redis_sharing_enabled_by_default(self):
+        from typing import cast
+
+        from data_engineering_copilot.factory import build_llm_fallback_chain
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+        from data_engineering_copilot.infrastructure.provider_selector import (
+            ProviderSelector,
+            RedisRouterState,
+        )
+
+        s = _make_settings(
+            llm_provider="openrouter",
+            llm_model="openrouter/free",
+            openrouter_api_key="sk-or-v1-test",
+            groq_api_key="gsk-test",
+        )
+        chain = build_llm_fallback_chain(purpose="answer", app_settings=s)
+        assert isinstance(chain, ProviderFallbackChain)
+        router = cast(ProviderSelector | None, chain._router)
+        assert router is not None
+        assert isinstance(router.state, RedisRouterState)
+
+    def test_router_prefers_pinned_purpose_provider(self):
+        from typing import cast
+
+        from data_engineering_copilot.factory import build_llm_fallback_chain
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+        from data_engineering_copilot.infrastructure.provider_selector import ProviderSelector
+
+        s = _make_settings(
+            llm_provider="openrouter",
+            llm_model="openrouter/free",
+            openrouter_api_key="sk-or-v1-test",
+            groq_api_key="gsk-test",
+            router_redis_sharing=False,
+        )
+        chain = build_llm_fallback_chain(
+            purpose="answer",
+            app_settings=s,
+            purpose_provider="groq",
+        )
+        assert isinstance(chain, ProviderFallbackChain)
+        router = cast(ProviderSelector | None, chain._router)
+        assert router is not None
+        assert router.config.preference_provider == "groq"
+        assert router.config.preference_weight == s.router_purpose_preference_weight
+
+
+class TestErrorCategorization:
+    def test_embedding_401_model_not_supported_is_invalid_request(self):
+        import httpx
+
+        from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+        from data_engineering_copilot.factory import _categorize_embedding_error
+
+        resp = httpx.Response(
+            401,
+            request=httpx.Request("POST", "http://example.com"),
+            text='{"error": {"message": "Model X is not supported"}}',
+        )
+        exc = httpx.HTTPStatusError("401", request=resp.request, response=resp)
+        err = _categorize_embedding_error(exc, "nvidia", "model-x")
+        assert err.category == ProviderErrorCategory.INVALID_REQUEST
+
+    def test_embedding_401_real_auth_stays_auth_error(self):
+        import httpx
+
+        from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+        from data_engineering_copilot.factory import _categorize_embedding_error
+
+        resp = httpx.Response(
+            401,
+            request=httpx.Request("POST", "http://example.com"),
+            text='{"error": {"message": "Invalid API key"}}',
+        )
+        exc = httpx.HTTPStatusError("401", request=resp.request, response=resp)
+        err = _categorize_embedding_error(exc, "nvidia", "model")
+        assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR
+
+    def test_rerank_401_model_not_supported_is_invalid_request(self):
+        import httpx
+
+        from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+        from data_engineering_copilot.factory import _categorize_rerank_error
+
+        resp = httpx.Response(
+            403,
+            request=httpx.Request("POST", "http://example.com"),
+            text='ModelError: "rerank-model" is not supported',
+        )
+        exc = httpx.HTTPStatusError("403", request=resp.request, response=resp)
+        err = _categorize_rerank_error(exc, "nvidia", "rerank-model")
+        assert err.category == ProviderErrorCategory.INVALID_REQUEST
+
+    def test_rerank_401_real_auth_stays_auth_error(self):
+        import httpx
+
+        from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+        from data_engineering_copilot.factory import _categorize_rerank_error
+
+        resp = httpx.Response(
+            401,
+            request=httpx.Request("POST", "http://example.com"),
+            text='{"error": {"message": "Invalid API key"}}',
+        )
+        exc = httpx.HTTPStatusError("401", request=resp.request, response=resp)
+        err = _categorize_rerank_error(exc, "nvidia", "model")
+        assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR

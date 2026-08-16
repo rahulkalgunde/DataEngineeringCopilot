@@ -21,6 +21,42 @@ class TestEvalSnapshot:
         assert snap.timestamp == "2026-07-29T00:00:00Z"
         assert snap.metrics["faithfulness"] == 0.85
 
+    def test_provenance_defaults(self) -> None:
+        snap = EvalSnapshot(timestamp="t", metrics={})
+        assert snap.git_commit == ""
+        assert snap.generation == ""
+        assert snap.config_fingerprint == ""
+
+    def test_provenance_fields_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.jsonl"
+            detector = DriftDetector(storage_path=path)
+            snap = EvalSnapshot(
+                timestamp="2026-07-29T00:00:00Z",
+                metrics={"confidence": 0.9},
+                eval_dataset_hash="abc123",
+                git_commit="deadbeefcafe",
+                generation="pinned-test-123",
+                embedding_model="nomic-embed-text",
+                reranker="nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+                chunk_size=375,
+                chunk_overlap=90,
+                retrieval_top_k=50,
+                config_fingerprint="0123456789abcdef",
+            )
+            detector.record(snap)
+            loaded = detector.load_history()
+            assert len(loaded) == 1
+            restored = loaded[0]
+            assert restored.git_commit == "deadbeefcafe"
+            assert restored.generation == "pinned-test-123"
+            assert restored.embedding_model == "nomic-embed-text"
+            assert restored.reranker == "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
+            assert restored.chunk_size == 375
+            assert restored.chunk_overlap == 90
+            assert restored.retrieval_top_k == 50
+            assert restored.config_fingerprint == "0123456789abcdef"
+
 
 class TestDriftDetectorRecord:
     def test_record_creates_file(self) -> None:

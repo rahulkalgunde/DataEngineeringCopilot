@@ -504,6 +504,7 @@ class AsyncRagService:
         provenance: list[dict] | None = None,
         bypass_cache: bool = False,
         expected_urls: list[str] | None = None,
+        retrieval_only: bool = False,
     ) -> Answer:
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
@@ -963,6 +964,26 @@ class AsyncRagService:
             _prov_dropped_ids = {record["chunk_id"] for record in dropped_records}
             _final_chunks = [c for c in retrieved_chunks if c.chunk.chunk_id not in _prov_dropped_ids]
             _prov_final = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(_final_chunks)]
+
+            if retrieval_only:
+                # Retrieval-only mode short-circuits before generation: the caller
+                # (e.g. ``dec evaluate --spark``) needs the assembled context and
+                # final chunk sources to score retrieval recall, without paying for
+                # answer generation, groundedness verification or scope checks.
+                _record_stage("total")
+                _emit_provenance()
+                return self._build_retrieval_only_answer(
+                    _final_chunks=_final_chunks,
+                    retrieved_chunks=retrieved_chunks,
+                    effective_query=effective_query,
+                    all_queries=all_queries,
+                    rewritten=rewritten,
+                    trace=trace,
+                    context_str=context_str,
+                    _stage_times=_stage_times,
+                    _prov_rerank=_prov_rerank,
+                    dropped_records=dropped_records,
+                )
 
             if on_step:
                 on_step("Generating answer")
@@ -2228,6 +2249,41 @@ class AsyncRagService:
             if len(suggestions) >= max_suggestions:
                 break
         return suggestions
+
+    def _build_retrieval_only_answer(
+        self,
+        *,
+        _final_chunks: list[RetrievedChunk],
+        retrieved_chunks: list[RetrievedChunk],
+        effective_query: str | None,
+        all_queries: Sequence[str],
+        rewritten,
+        trace,
+        context_str: str,
+        _stage_times: dict[str, float],
+        _prov_rerank: dict[str, object] | None,
+        dropped_records: list[dict[str, object]],
+    ) -> Answer:
+        """Build the Answer for ``retrieval_only`` mode (no generation).
+
+        Returns sources and context for retrieval-stage scoring (used by
+        ``dec evaluate --spark``) without paying for answer generation,
+        groundedness verification or scope checks.
+        """
+        trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None) if trace else None
+        return Answer(
+            text="",
+            sources=tuple(c.chunk for c in _final_chunks),
+            confidence=retrieved_chunks[0].confidence if retrieved_chunks else 0.0,
+            stage_times=_stage_times,
+            trace_id=trace_id,
+            rewritten_query=effective_query,
+            query_variants=tuple(all_queries),
+            intent=rewritten.intent if rewritten else "factual",
+            retrieval_details=_retrieval_details(retrieved_chunks),
+            rerank_details={**(_prov_rerank or {}), "compressed_dropped": len(dropped_records)},
+            context=context_str,
+        )
 
     @staticmethod
     def _suggestion_context(retrieved_chunks: list[RetrievedChunk], limit: int = 5) -> str:

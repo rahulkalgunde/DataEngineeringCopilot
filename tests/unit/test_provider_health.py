@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
 from data_engineering_copilot.infrastructure.provider_health import (
     ModelHealth,
@@ -278,3 +280,50 @@ def test_get_provider_health_unknown():
 def test_get_model_health_unknown():
     reg = ProviderHealthRegistry()
     assert reg.get_model_health("unknown", "unknown") is None
+
+
+def test_track_success_updates_ema_latency():
+    reg = ProviderHealthRegistry()
+    reg.register_provider("openrouter", ["model-a"])
+    reg.track_success("openrouter", "model-a", 2.0)
+    mh = reg.get_model_health("openrouter", "model-a")
+    assert mh is not None
+    assert mh.ema_latency == 2.0
+    reg.track_success("openrouter", "model-a", 10.0)
+    assert mh.ema_latency == pytest.approx(0.3 * 10.0 + 0.7 * 2.0)
+
+
+def test_get_provider_score_reflects_health():
+    reg = ProviderHealthRegistry()
+    reg.register_provider("a", ["m1"])
+    reg.register_provider("b", ["m2"])
+    reg.track_success("a", "m1", 0.1)
+    reg.track_failure("b", "m2", ProviderErrorCategory.PERMANENT_ERROR)
+    assert reg.get_provider_score("a") > reg.get_provider_score("b")
+
+
+def test_get_provider_score_unknown_provider():
+    reg = ProviderHealthRegistry()
+    assert reg.get_provider_score("unknown") == 0.0
+
+
+def test_get_last_selected_defaults_to_zero():
+    reg = ProviderHealthRegistry()
+    reg.register_provider("a", ["m1"])
+    assert reg.get_last_selected("a") == 0.0
+    reg.mark_selected("a")
+    assert reg.get_last_selected("a") > 0.0
+
+
+def test_get_effective_cooldown_remaining():
+    reg = ProviderHealthRegistry()
+    reg.register_provider("openrouter", ["model-a"])
+    assert reg.get_effective_cooldown_remaining("openrouter", "model-a") == 0.0
+    reg.track_failure("openrouter", "model-a", ProviderErrorCategory.RATE_LIMITED, retry_after=60.0)
+    remaining = reg.get_effective_cooldown_remaining("openrouter", "model-a")
+    assert 55.0 <= remaining <= 61.0
+
+
+def test_get_effective_cooldown_remaining_unknown():
+    reg = ProviderHealthRegistry()
+    assert reg.get_effective_cooldown_remaining("unknown", "model-a") == 0.0

@@ -700,6 +700,17 @@ class AppSettings(BaseSettings):
     opencodego_rpm_limit: int = 60
     opencodego_rpd_limit: int = 1000
 
+    # SambaNova Cloud settings (LLM only). OpenAI-compatible
+    # ``/v1/chat/completions`` surface. Meta-Llama-3.3-70B-Instruct is the
+    # default (fast, non-reasoning); gpt-oss-120b, MiniMax-M2.7 and
+    # DeepSeek-V3.1 are also hosted (gpt-oss-120b is a reasoning model and
+    # needs a larger max_tokens budget to emit its final answer).
+    sambanova_api_key: SecretStr = SecretStr("")
+    sambanova_model: str = "Meta-Llama-3.3-70B-Instruct"
+    sambanova_base_url: str = "https://api.sambanova.ai/v1"
+    sambanova_rpm_limit: int = 30
+    sambanova_rpd_limit: int = 1000
+
     # Hugging Face Inference Providers (LLM + Embeddings).
     # Serverless embeddings use the native ``feature-extraction`` route (the
     # OpenAI-compatible ``/v1`` surface is chat-completions only). Free-tier
@@ -727,6 +738,7 @@ class AppSettings(BaseSettings):
             "cerebras",
             "opencodezen",
             "opencodego",
+            "sambanova",
             "ollama",
         ]
     )
@@ -741,6 +753,23 @@ class AppSettings(BaseSettings):
     health_latency_weight: float = 0.2
     health_recency_weight: float = 0.2
     health_consecutive_failure_penalty: float = 0.3
+
+    # Availability-aware priority router
+    # When enabled, provider cooldowns + the cached best provider are shared
+    # across processes via Redis (falls back to in-memory if Redis is down).
+    router_redis_sharing: bool = True
+    # All-down wait policy: keep waiting (sleeping at most
+    # router_wait_max_seconds per iteration) until at least this fraction of
+    # external providers have exited cooldown, up to router_deadline_seconds,
+    # then degrade to the local fallback.
+    router_wait_min_available_fraction: float = 0.5
+    router_wait_max_seconds: float = 15.0
+    router_deadline_seconds: float = 45.0
+    # How long the cached "best provider" stays authoritative per purpose.
+    router_best_cache_ttl_seconds: float = 15.0
+    # Bonus score applied to the purpose-pinned provider so it is preferred
+    # (not hard-pinned) when its recent health is competitive.
+    router_purpose_preference_weight: float = 0.05
 
     # After this many consecutive failures the degraded Ollama fallback is
     # skipped (fail fast) instead of stalling the request on a broken local
@@ -827,6 +856,13 @@ class AppSettings(BaseSettings):
     opencodego_enrichment_llm_model: str = ""
     opencodego_evaluation_llm_model: str = ""
     opencodego_code_llm_model: str = ""
+    sambanova_answer_llm_model: str = ""
+    sambanova_rewrite_llm_model: str = ""
+    sambanova_groundedness_llm_model: str = ""
+    sambanova_intent_llm_model: str = ""
+    sambanova_enrichment_llm_model: str = ""
+    sambanova_evaluation_llm_model: str = ""
+    sambanova_code_llm_model: str = ""
 
     ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
@@ -1077,6 +1113,7 @@ class AppSettings(BaseSettings):
             "cloudflare": ("cloudflare_api_key", "CLOUDFLARE_API_KEY"),
             "opencodezen": ("opencodezen_api_key", "OPENCODEZEN_API_KEY"),
             "opencodego": ("opencodego_api_key", "OPENCODEGO_API_KEY"),
+            "sambanova": ("sambanova_api_key", "SAMBANOVA_API_KEY"),
             "huggingface": ("huggingface_api_key", "HUGGINGFACE_API_KEY or HF_TOKEN"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():

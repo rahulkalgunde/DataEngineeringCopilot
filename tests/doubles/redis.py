@@ -93,8 +93,10 @@ class _StubRedis:
             removed += self._lists.pop(self._norm(key), None) is not None
         return removed
 
-    async def set(self, key: str | bytes, value: str | bytes) -> None:
+    async def set(self, key: str | bytes, value: str | bytes, ex: int | None = None) -> None:
         self._strings[self._norm(key)] = value.encode("utf-8") if isinstance(value, str) else value
+        if ex is not None:
+            self._ttls[self._norm(key)] = ex
 
     async def get(self, key: str | bytes) -> bytes | None:
         return self._strings.get(self._norm(key))

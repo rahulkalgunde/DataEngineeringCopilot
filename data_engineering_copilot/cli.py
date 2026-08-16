@@ -1998,6 +1998,8 @@ def health() -> None:
         print(f"  ℹ️  Configured: OpenCode Zen ({settings.opencodezen_model})")
     elif llm_provider == "opencodego":
         print(f"  ℹ️  Configured: OpenCode Go ({settings.opencodego_model})")
+    elif llm_provider == "sambanova":
+        print(f"  ℹ️  Configured: SambaNova ({settings.sambanova_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health
@@ -2331,12 +2333,24 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
             if not query:
                 continue
             prov: list[dict] = []
+            # Only rows that need the generated answer text pay for generation:
+            # out-of-scope rows must produce a scope refusal, and rows carrying
+            # forbidden terms are checked against the final answer. Every other
+            # in-scope row is scored on retrieval alone (recall gates depend only
+            # on the assembled context and final chunk sources).
+            out_of_scope = bool(item.get("out_of_scope", False))
+            forbidden_terms = item.get("forbidden_terms") or []
+            needs_answer = out_of_scope or bool(forbidden_terms)
             try:
                 # Evaluation must measure actual retrieval/answer quality, never
                 # cached answers from earlier runs (which could be stale across
                 # generations). Bypass the cache entirely.
                 answer = await service.answer(
-                    query, provenance=prov, bypass_cache=True, expected_urls=item.get("expected_urls", [])
+                    query,
+                    provenance=prov,
+                    bypass_cache=True,
+                    expected_urls=item.get("expected_urls", []),
+                    retrieval_only=not needs_answer,
                 )
             except Exception as exc:
                 print(f"[{i}/{len(queries)}] {item.get('id', '')}: ERROR {exc}")
@@ -2358,7 +2372,7 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
                 f"term_recall={result['term_recall']:.2f} "
                 f"source_recall={result['source_recall']:.2f} "
                 f"candidate_recall={result['candidate_source_recall']:.2f} "
-                f"(sources={len(sources)})"
+                f"(sources={len(sources)}" + ("" if needs_answer else ", retrieval-only)") + ")"
             )
         return results
 
@@ -2374,6 +2388,9 @@ def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path 
             json.dumps(provenance_records, indent=2, default=str), encoding="utf-8"
         )
         metrics = _compute_spark_eval_metrics(results)
+        from data_engineering_copilot.evaluation.provenance import config_fingerprint, eval_environment
+
+        metrics["provenance"] = {**eval_environment(settings), "config_fingerprint": config_fingerprint(settings)}
         (output_dir / "retrieval_metrics.json").write_text(json.dumps(metrics, indent=2, default=str), encoding="utf-8")
         print(f"\nRetrieval diagnostics written to {output_dir}")
 
@@ -2630,16 +2647,19 @@ def evaluate(
 
     # Drift detection
     if settings.drift_detection_enabled and results:
+        from data_engineering_copilot.evaluation.provenance import eval_environment
         from data_engineering_copilot.services.drift_detector import DriftDetector, EvalSnapshot, hash_eval_dataset
 
         detector = DriftDetector(
             storage_path=settings.drift_eval_history_path,
             window_days=settings.drift_window_days,
         )
+        env = eval_environment(settings)
         snapshot = EvalSnapshot(
             timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
             metrics={"confidence": avg_confidence},
             eval_dataset_hash=hash_eval_dataset(eval_path),
+            **env,
         )
         detector.record(snapshot)
         report = detector.compare(snapshot)
@@ -2738,6 +2758,140 @@ def eval_coverage_main(
         print(f"Total: {total_rows} rows, {total_rows - total_fail} pass, {total_fail} fail")
 
     return 1 if total_fail else 0
+
+
+def eval_fast_main(
+    generation: str | None = None,
+    dataset: str | None = None,
+    output_dir: str | None = None,
+) -> int:
+    """Run the free (zero-LLM) layered integrity evaluation.
+
+    Executes the deterministic corpus / chunk / embedding / vector-DB /
+    retrieval layers against the active generation's corpus and Qdrant index.
+    No LLM calls, no cloud rerank — only the local embedder. Exits 0 on pass,
+    1 when any integrity layer reports failures, 2 on infra/corpus problems.
+    """
+    import asyncio
+
+    from data_engineering_copilot.config.settings import resolve_active_generation
+    from data_engineering_copilot.evaluation.eval_schema import EvalKind, kind_of, parse_eval_rows, validate_eval_row
+    from data_engineering_copilot.evaluation.fast_eval import run_fast_eval
+    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.eval_coverage import resolve_generation_root
+
+    project_root = pathlib.Path(__file__).resolve().parents[1]
+
+    gen = generation or settings.active_index_generation or resolve_active_generation()
+    root = resolve_generation_root(gen, project_root / "data")
+    if root is None:
+        print(f"❌ No corpus found for generation {gen!r} (checked data/pinned_corpus, data/spark_corpus)")
+        return 2
+
+    if dataset:
+        dataset_path = pathlib.Path(dataset)
+        if not dataset_path.exists():
+            print(f"❌ Dataset not found: {dataset}")
+            return 2
+        recall_rows = parse_eval_rows(dataset_path)
+        schema_errors = [e for r in recall_rows for e in validate_eval_row(r)]
+        if schema_errors:
+            print(f"❌ Schema errors in {dataset_path.name}:")
+            for e in schema_errors[:10]:
+                print(f"  - {e}")
+            return 2
+        recall_rows = [r for r in recall_rows if kind_of(r) is EvalKind.RECALL]
+    else:
+        fast_dataset = project_root / "tests" / "evaluation" / "recall_fast.jsonl"
+        recall_rows = parse_eval_rows(fast_dataset) if fast_dataset.exists() else []
+
+    # Sanity pairs for the semantic-ordering check.
+    sanity_pairs: list[dict] = []
+    pairs_path = pathlib.Path(__file__).resolve().parent / "evaluation" / "fast_sanity_pairs.jsonl"
+    if pairs_path.exists():
+        sanity_pairs = parse_eval_rows(pairs_path)
+
+    service = build_rag_service()
+    embedder = service.embedder
+    store = service.vector_store
+
+    async def _run() -> dict:
+        return await run_fast_eval(
+            generation=gen,
+            embedder=embedder,
+            store=store,
+            sanity_pairs=sanity_pairs,
+            recall_rows=recall_rows,
+        )
+
+    try:
+        report = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 - surface infra failures cleanly
+        print(f"❌ eval-fast failed: {exc}")
+        return 2
+
+    if report.get("status") == "error":
+        print(f"❌ {report.get('error')}")
+        return 2
+
+    if output_dir:
+        out = pathlib.Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "fast_eval.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+
+    _print_fast_eval(report)
+
+    failed = bool(
+        (report["layers"].get("coverage") or {}).get("fail")
+        or (report["layers"].get("chunk") or {}).get("over_token_budget")
+        or (report["layers"].get("chunk") or {}).get("oversized")
+        or (report["layers"].get("chunk") or {}).get("boundary_issues")
+    )
+    return 1 if failed else 0
+
+
+def _print_fast_eval(report: dict) -> None:
+    layers = report["layers"]
+    print("\n" + "=" * 40)
+    print(f"FAST EVAL — generation {report.get('generation')}")
+    print("=" * 40)
+
+    corpus = layers.get("corpus", {})
+    print(
+        f"Corpus:       {corpus.get('chunk_count')} chunks, {corpus.get('source_count')} sources, "
+        f"{corpus.get('content_hash_duplicates')} content-hash dupes, {corpus.get('empty_chunks')} empty"
+    )
+
+    chunk = layers.get("chunk", {})
+    if chunk.get("count"):
+        print(
+            f"Chunks:       mean={chunk.get('mean_chars')} chars p95={chunk.get('p95_chars')} "
+            f"p99={chunk.get('p99_chars')} oversized={chunk.get('oversized')} "
+            f"over_token_budget={chunk.get('over_token_budget')} boundary_issues={chunk.get('boundary_issues')}"
+        )
+
+    cov = layers.get("coverage", {})
+    print(f"Coverage:     {cov.get('pass')}/{cov.get('rows')} rows pass")
+
+    emb = layers.get("embedding", {})
+    consistency = emb.get("consistency", {})
+    sanity = emb.get("semantic_sanity", {})
+    print(
+        f"Embedding:    consistency={consistency.get('similarity')} "
+        f"semantic_sanity={sanity.get('passed')}/{sanity.get('pairs')}"
+    )
+
+    vdb = layers.get("vectordb", {})
+    if "error" in vdb:
+        print(f"Vector DB:    error — {vdb['error']}")
+    else:
+        print(
+            f"Vector DB:    {vdb.get('point_count')} points vs {vdb.get('chunk_count')} chunks "
+            f"(match={vdb.get('count_matches')}) self_retrieval={vdb.get('self_retrieval_hits')}/{len(vdb.get('self_retrieval', []))}"
+        )
+
+    ret = layers.get("retrieval", {})
+    print(f"Retrieval:    source_recall={ret.get('source_recall')} MRR={ret.get('mrr')} rows={ret.get('rows')}")
 
 
 def gen_synthetic_eval_main(
@@ -3374,6 +3528,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output the coverage report as JSON.",
     )
 
+    # Fast (free, zero-LLM) layered integrity evaluation
+    fast_parser = subparsers.add_parser(
+        "eval-fast",
+        help="Run the free deterministic integrity layers (corpus/chunk/embedding/vector-DB/retrieval).",
+    )
+    fast_parser.add_argument(
+        "--generation",
+        default=None,
+        help="Generation to validate against (default: active generation).",
+    )
+    fast_parser.add_argument(
+        "--dataset",
+        default=None,
+        help="Path to a recall-format JSONL eval dataset (default: tests/evaluation/recall_fast.jsonl).",
+    )
+    fast_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Write the machine-readable fast_eval.json report to this directory.",
+    )
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -3688,6 +3863,14 @@ def main() -> None:
                     dataset=getattr(args, "dataset", None),
                     generation=getattr(args, "generation", None),
                     json_output=getattr(args, "json", False),
+                )
+            )
+        elif args.command == "eval-fast":
+            sys.exit(
+                eval_fast_main(
+                    generation=getattr(args, "generation", None),
+                    dataset=getattr(args, "dataset", None),
+                    output_dir=getattr(args, "output_dir", None),
                 )
             )
         elif args.command == "gen-synthetic-eval":

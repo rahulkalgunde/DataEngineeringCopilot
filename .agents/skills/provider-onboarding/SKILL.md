@@ -81,6 +81,17 @@ global client.
 
 ## Gotchas
 
+- **401 is not always an auth failure.** opencodego (and other OpenAI-compatible
+  gateways) return HTTP 401 with `ModelError: "Model X is not supported"` for
+  an unsupported model — not a bad key. `factory.py:198` /
+  `adaptive_llm_router.py:87` map any 401 → `AUTHENTICATION_ERROR`, so logs show
+  `provider_cooldown_set ... category=authentication_error` misleadingly. Verify
+  by probing the same key with the provider's own default model (200) vs the
+  offending model (401 `ModelError`).
+- **Pinning a provider via env must pin its model too.** Model resolution
+  priority (above) puts an explicit `purpose_model` before `{provider}_model`,
+  so `*_LLM_PROVIDER=opencodego` without `*_LLM_MODEL=deepseek-v4-flash` sends
+  the old purpose model to opencodego → 401 `ModelError`.
 - OpenAI-compatible vs native endpoints: not every surface is chat-completions
   (HF embeddings use `feature-extraction`; Ollama native uses `/api/chat`).
 - Two OpenCode surfaces serve **disjoint model lists**: Zen `/zen/v1`

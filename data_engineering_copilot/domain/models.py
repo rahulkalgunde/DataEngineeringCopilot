@@ -49,9 +49,10 @@ class CacheScope:
     """Identifies the isolation scope a cache entry belongs to.
 
     Two scopes differing in any field (tenant, role, source filter, embedding
-    model, collection, or index generation) must never share cached answers.
-    The fingerprint is embedded in every cache key so cross-tenant /
-    cross-filter / cross-generation leakage is structurally impossible.
+    model, collection, index generation, or answer-config fingerprint) must
+    never share cached answers. The fingerprint is embedded in every cache key
+    so cross-tenant / cross-filter / cross-generation / cross-config leakage is
+    structurally impossible.
     """
 
     tenant_id: str = "default"
@@ -60,6 +61,7 @@ class CacheScope:
     embedding_model: str = ""
     collection_name: str = ""
     index_generation: str = ""
+    config_fingerprint: str = ""
 
 
 @dataclass(frozen=True)

@@ -95,13 +95,58 @@ embedding chain. Requires infra for real runs; unit tests mock the adapters.
 surface in `dec langfuse-metrics` / review tooling. Run drift checks when an
 eval metric moves across releases.
 
+Every `EvalSnapshot` now records provenance: `git_commit`, `generation`,
+`embedding_model`, `reranker`, `chunk_size`, `chunk_overlap`,
+`retrieval_top_k`, and `config_fingerprint`
+(`evaluation/provenance.py`, `config_fingerprint()`). A metric change that
+coincides with a fingerprint change is an environment/config change, not a
+regression — diff the fingerprint before calling drift.
+
+## Layered contract (cost control)
+
+Eval is layered; each layer must stay in its lane:
+
+| Layer | Gate | LLM? |
+|---|---|---|
+| 1. Corpus integrity | `dec eval-fast` (chunks, dupes, coverage) | no |
+| 2. Chunk quality | `dec eval-fast` (size/boundary heuristics) | no |
+| 3. Embedding | `dec eval-fast` (dims, NaN, sanity pairs) | no |
+| 4. Vector DB | `dec eval-fast` (count, ID↔metadata, self-retrieval) | no |
+| 5. Retrieval | `dec eval-fast` (recall_fast.jsonl) + `dec evaluate --spark` | no* |
+| 6. Generation | `dec evaluate` (qa rows, faithfulness, judge) | yes |
+
+\* Retrieval-only rows use the `retrieval_only` short-circuit in
+`AsyncRagService.answer()` — no answer generation, groundedness, or scope LLM
+calls; only rewrite/HyDE + rerank (inherent) remain. Only rows needing the
+answer text (out-of-scope refusals, forbidden-term checks) run full generation.
+
+- Layers 1–5 are **free** ($0, no LLM). Do not add LLM calls to them.
+- Generation is the **only** LLM layer. Gate new eval work behind a cost check.
+- Never rebuild the eval framework inside the live RAG path (judge LLM and
+  eval only run offline).
+- Never auto-edit golden datasets; a changed row must pass the schema gate and
+  `dec eval-coverage` before it lands.
+- Run `dec eval-fast` after code changes to prove the index is intact before
+  paying for a full `dec evaluate` (a full live run is an approved, expensive
+  action).
+
 ## Operating notes
 
 - Basic `dec evaluate` needs **no infra** (mocked embedder) — the `evaluation`
   marker tests are hermetic. `--spark` / experiment modes need Qdrant +
   embedder + LLM.
+- `dec eval-fast` needs Qdrant + a generation's corpus + a local embedder
+  (Ollama) — a $0 integrity check after code changes. It runs layers 1–5 of the
+  Layered contract (no LLM) and writes `fast_eval.json` + a human summary.
 - The `evaluation` LLM chain is its own per-purpose chain
   (`build_llm_fallback_chain(purpose="evaluation")`) — do not reuse `answer`.
+- The `evaluation` chain is the **judge LLM**; it is injected into
+  `AsyncRagService` (`factory.py:1518`) but **not called in the live answer
+  path** — it is only used offline by `RagasEvaluator` and the Langfuse
+  `judge-*` evaluators. Changing `EVALUATION_LLM_PROVIDER/MODEL` never affects
+  production answers. When pinning it via env, pin the model too (see
+  `provider-onboarding` Gotchas) — a mismatched model yields a misleading
+  401 `ModelError`.
 - Golden datasets are the source of truth for regression gates; when behavior
   intentionally changes, update the dataset + expect metric deltas, don't
   silently accept drift.

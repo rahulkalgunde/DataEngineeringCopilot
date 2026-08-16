@@ -260,6 +260,19 @@ class TestPoisoningPrevention:
         assert cache.get_exact("q", scope=gen_a) is not None
         assert cache.get_exact("q", scope=gen_b) is None, "Generation scope must stay part of cache identity"
 
+    def test_config_fingerprint_differs_cache_identity(self):
+        cfg_a = CacheScope(collection_name="docs", config_fingerprint="aaaaaaaaaaaaaaaa")
+        cfg_b = CacheScope(collection_name="docs", config_fingerprint="bbbbbbbbbbbbbbbb")
+        cache = QueryCache(exact_enabled=True, semantic_enabled=False, similarity_threshold=0.9)
+        cache.set_exact("q", _answer("cfg A answer"), scope=cfg_a)
+        assert cache.get_exact("q", scope=cfg_a) is not None
+        assert cache.get_exact("q", scope=cfg_b) is None, "Different answer-config must not share cached answers"
+
+    def test_scope_fingerprint_differs_by_config_fingerprint(self):
+        a = CacheScope(collection_name="docs", config_fingerprint="aaaaaaaaaaaaaaaa")
+        b = CacheScope(collection_name="docs", config_fingerprint="bbbbbbbbbbbbbbbb")
+        assert scope_fingerprint(a) != scope_fingerprint(b)
+
 
 class TestTopK:
     def _cache(self):

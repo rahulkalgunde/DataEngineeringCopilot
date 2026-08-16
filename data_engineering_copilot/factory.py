@@ -33,6 +33,13 @@ from data_engineering_copilot.infrastructure.provider_fallback import (
     ProviderFallbackChain,
 )
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
+from data_engineering_copilot.infrastructure.provider_selector import (
+    InMemoryRouterState,
+    ProviderRouterConfig,
+    ProviderSelector,
+    RedisRouterState,
+    RouterStateBackend,
+)
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 from data_engineering_copilot.infrastructure.rst_parser import RstParser
 from data_engineering_copilot.infrastructure.tokenizer_registry import declared_input_limit, token_counter_for
@@ -141,6 +148,11 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpm_limit=app_settings.opencodego_rpm_limit,
                 rpd_limit=app_settings.opencodego_rpd_limit,
             )
+        elif p == "sambanova":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.sambanova_rpm_limit,
+                rpd_limit=app_settings.sambanova_rpd_limit,
+            )
         elif p == "huggingface":
             rate_limiters[p] = SlidingWindowRateLimiter(
                 rpm_limit=app_settings.huggingface_rpm_limit,
@@ -159,13 +171,30 @@ def _build_provider_health_registry(app_settings: AppSettings = settings) -> Pro
     )
 
 
+def _is_model_not_supported_text(text: str) -> bool:
+    """Heuristic for model-not-supported error bodies (e.g. opencodego's
+    ``ModelError: "Model X is not supported"``), which some gateways report as
+    HTTP 401. A 401 carrying this body is a wrong-model error, not an auth
+    failure, so it must be categorised as ``INVALID_REQUEST``."""
+    lowered = (text or "").lower()
+    return (
+        "not supported" in lowered
+        or "modelerror" in lowered
+        or "does not exist" in lowered
+        or "unknown model" in lowered
+        or ("model" in lowered and "not found" in lowered)
+    )
+
+
 def _categorize_embedding_error(exc: Exception, provider: str, model: str):
     """Categorize embedding provider errors for the unified fallback chain."""
     import httpx
 
     from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
 
-    def _status_category(status: int) -> ProviderErrorCategory:
+    def _status_category(status: int, response_text: str = "") -> ProviderErrorCategory:
+        if _is_model_not_supported_text(response_text) and status in (401, 403):
+            return ProviderErrorCategory.INVALID_REQUEST
         if status == 429:
             return ProviderErrorCategory.RATE_LIMITED
         if status in (401, 403):
@@ -180,7 +209,7 @@ def _categorize_embedding_error(exc: Exception, provider: str, model: str):
         status = exc.response.status_code
         retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
         return ProviderError(
-            _status_category(status),
+            _status_category(status, exc.response.text),
             provider,
             model,
             retry_after=retry_after if status == 429 else None,
@@ -195,6 +224,8 @@ def _categorize_embedding_error(exc: Exception, provider: str, model: str):
         return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
     if "quota" in lower_msg or "exceeded" in lower_msg:
         return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
+    if _is_model_not_supported_text(lower_msg) and ("401" in lower_msg or "unauthorized" in lower_msg):
+        return ProviderError(ProviderErrorCategory.INVALID_REQUEST, provider, model, original=exc)
     if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
         return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
     if "timed out" in lower_msg or "timeout" in lower_msg:
@@ -212,6 +243,7 @@ def _build_purpose_llm_client(
     provider_rate_limiters: dict[str, SlidingWindowRateLimiter] | None = None,
     timeout_seconds: int | None = None,
     purpose: str | None = None,
+    apply_purpose_model_override: bool = True,
 ) -> LLMClient | None:
     """Build an LLM client for a specific purpose.
 
@@ -222,14 +254,20 @@ def _build_purpose_llm_client(
     Model resolution priority:
         1. *model* — explicit purpose-level override
         2. ``{provider}_{purpose}_llm_model`` — per-provider purpose override
+           (only when *apply_purpose_model_override* is True, i.e. the primary
+           provider in a fallback chain)
         3. ``{provider}_model`` — provider default model
         4. ``llm_model`` — global default model
+
+    Fallback providers in a chain always resolve to their own ``{provider}_model``
+    default — a purpose-specific model that happens to be pinned for the primary
+    provider must never be forwarded to a provider that does not host it.
     """
     eff_provider = (provider or app_settings.llm_provider).lower()
 
     # Model resolution: explicit > per-provider purpose > provider default > global
     eff_model = model or ""
-    if not eff_model and purpose:
+    if not eff_model and purpose and apply_purpose_model_override:
         purpose_override = getattr(app_settings, f"{eff_provider}_{purpose}_llm_model", "")
         if purpose_override:
             eff_model = purpose_override
@@ -373,8 +411,22 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
+    if eff_provider == "sambanova":
+        api_key = app_settings.sambanova_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("SAMBANOVA_API_KEY is required when provider='sambanova'")
+        return LLMClient(
+            base_url=app_settings.sambanova_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
+            rate_limiter=rate_limiter,
+        )
+
     raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego'."
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego', 'sambanova'."
     )
 
 
@@ -390,7 +442,9 @@ def _build_chain_clients(
 
     Providers without a configured API key, or that cannot be resolved, are
     skipped. ``purpose_model`` is only applied to the first entry (the primary);
-    every other provider falls back to its own default model.
+    every other provider falls back to its own default model (the per-provider
+    purpose override is suppressed for fallbacks so a purpose model pinned for
+    the primary is never forwarded to a provider that does not host it).
     """
     clients: list[tuple[str, LLMClient]] = []
     client_timeout = app_settings.llm_fallback_call_timeout
@@ -408,6 +462,7 @@ def _build_chain_clients(
                 provider_rate_limiters=provider_rate_limiters,
                 timeout_seconds=timeout,
                 purpose=purpose,
+                apply_purpose_model_override=(idx == 0),
             )
             if client is not None:
                 clients.append((provider, client))
@@ -494,6 +549,54 @@ def _build_llm_chain_config(
         providers=main_providers,
         degraded_fallback=degraded,
         max_degraded_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
+        router_deadline_seconds=app_settings.router_deadline_seconds,
+    )
+
+
+def _build_llm_router(
+    config: FallbackChainConfig,
+    health: ProviderHealthRegistry,
+    app_settings: AppSettings,
+    purpose: str,
+    preference_provider: str | None = None,
+) -> ProviderSelector | None:
+    """Build the availability-aware router for an LLM chain.
+
+    The selector uses a Redis-backed state when ``router_redis_sharing`` is
+    enabled (cooldowns + cached best provider shared across processes) and an
+    in-memory state otherwise.  Returns ``None`` when there is nothing to route
+    (no external providers), in which case the chain falls back to its legacy
+    serial behaviour.
+    """
+    from data_engineering_copilot.infrastructure.provider_selector import ProviderSelector
+
+    external = [p for p in config.providers if p.name.lower() != "ollama"]
+    if not external:
+        return None
+
+    state: RouterStateBackend
+    if app_settings.router_redis_sharing:
+        try:
+            from data_engineering_copilot.factory import get_shared_redis_client
+
+            state = RedisRouterState(redis_client=get_shared_redis_client())
+        except Exception:
+            state = InMemoryRouterState()
+    else:
+        state = InMemoryRouterState()
+
+    return ProviderSelector(
+        providers=external,
+        health=health,
+        state=state,
+        config=ProviderRouterConfig(
+            purpose=purpose,
+            preference_provider=preference_provider,
+            preference_weight=app_settings.router_purpose_preference_weight,
+            best_cache_ttl_seconds=app_settings.router_best_cache_ttl_seconds,
+            wait_min_available_fraction=app_settings.router_wait_min_available_fraction,
+            wait_max_seconds=app_settings.router_wait_max_seconds,
+        ),
     )
 
 
@@ -545,7 +648,17 @@ def build_llm_fallback_chain(
         logger.info("llm_fallback_chain_built", purpose=purpose, chain="single", provider=client.model)
         return client  # type: ignore[return-value]
 
-    chain = ProviderFallbackChain(config, health)
+    chain = ProviderFallbackChain(
+        config,
+        health,
+        router=_build_llm_router(
+            config,
+            health,
+            app_settings,
+            purpose=purpose,
+            preference_provider=purpose_provider,
+        ),
+    )
     logger.info(
         "llm_fallback_chain_built",
         purpose=purpose,
@@ -781,7 +894,9 @@ def _categorize_rerank_error(exc: Exception, provider: str, model: str):
 
     from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
 
-    def _status_category(status: int) -> ProviderErrorCategory:
+    def _status_category(status: int, response_text: str = "") -> ProviderErrorCategory:
+        if _is_model_not_supported_text(response_text) and status in (401, 403):
+            return ProviderErrorCategory.INVALID_REQUEST
         if status == 429:
             return ProviderErrorCategory.RATE_LIMITED
         if status in (401, 403):
@@ -796,7 +911,7 @@ def _categorize_rerank_error(exc: Exception, provider: str, model: str):
         status = exc.response.status_code
         retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
         return ProviderError(
-            _status_category(status),
+            _status_category(status, exc.response.text),
             provider,
             model,
             retry_after=retry_after if status == 429 else None,
@@ -811,6 +926,8 @@ def _categorize_rerank_error(exc: Exception, provider: str, model: str):
         return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
     if "quota" in lower_msg or "exceeded" in lower_msg:
         return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
+    if _is_model_not_supported_text(lower_msg) and ("401" in lower_msg or "unauthorized" in lower_msg):
+        return ProviderError(ProviderErrorCategory.INVALID_REQUEST, provider, model, original=exc)
     if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
         return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
     if "timed out" in lower_msg or "timeout" in lower_msg:

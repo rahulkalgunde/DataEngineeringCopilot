@@ -172,7 +172,7 @@ def test_spark_eval_initializes_reranker(monkeypatch, tmp_path) -> None:
     class _Service:
         reranker = _Reranker()
 
-        async def answer(self, query, provenance=None, bypass_cache=False):
+        async def answer(self, query, provenance=None, bypass_cache=False, retrieval_only=False):
             assert provenance is not None
             provenance.append(
                 {
@@ -195,6 +195,78 @@ def test_spark_eval_initializes_reranker(monkeypatch, tmp_path) -> None:
     # that the harness initialized the reranker before running queries.
     assert evaluate_spark_dataset(dataset) == 1
     assert initialized["called"] is True
+
+
+def test_spark_eval_splits_retrieval_only_and_full_generation(monkeypatch, tmp_path) -> None:
+    """In-scope rows without forbidden terms are scored retrieval-only (no
+    generation), while out-of-scope and forbidden-term rows run full generation."""
+    import json
+
+    from data_engineering_copilot.cli import evaluate_spark_dataset
+
+    dataset = tmp_path / "eval.jsonl"
+    rows = [
+        {
+            "id": "in_scope",
+            "question": "What is filter?",
+            "expected_terms": ["filter"],
+            "expected_urls": ["https://docs/filter.html"],
+        },
+        {
+            "id": "oos",
+            "question": "How does Kubernetes autoscale?",
+            "expected_terms": ["kubernetes"],
+            "expected_urls": [],
+            "out_of_scope": True,
+        },
+        {
+            "id": "forbidden",
+            "question": "Delta time travel",
+            "expected_terms": ["delta"],
+            "expected_urls": ["https://docs/delta.html"],
+            "forbidden_terms": ["delta"],
+        },
+    ]
+    dataset.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    calls: list[tuple[str, bool]] = []
+
+    class _Reranker:
+        async def initialize(self) -> None:
+            return None
+
+    class _Service:
+        reranker = _Reranker()
+
+        async def answer(self, query, provenance=None, bypass_cache=False, expected_urls=None, retrieval_only=False):
+            calls.append((query, retrieval_only))
+            assert provenance is not None
+            provenance.append(
+                {
+                    "fused": [{"rank": 0, "chunk_id": "c1", "url": "https://docs/filter.html", "confidence": 0.9}],
+                    "final_context": [
+                        {"rank": 0, "chunk_id": "c1", "url": "https://docs/filter.html", "confidence": 0.9}
+                    ],
+                    "rerank": {"enabled": True, "pool_size": 1, "top_k": 1, "final_top_k": 1},
+                    "stage_times": {"retrieval": 1.0, "rerank": 1.0, "total": 2.0},
+                }
+            )
+            return _Answer()
+
+    class _Answer:
+        text = "filter docs"
+        sources = (_chunk("c1", "https://docs/filter.html"),)
+        stage_times = {"retrieval": 1.0, "rerank": 1.0, "total": 2.0}
+
+    monkeypatch.setattr("data_engineering_copilot.factory.build_rag_service", lambda: _Service())
+
+    evaluate_spark_dataset(dataset)
+
+    by_id = {row["id"]: row["question"] for row in rows}
+    call_map = {question: retrieval_only for question, retrieval_only in calls}
+    assert call_map[by_id["in_scope"]] is True
+    assert call_map[by_id["oos"]] is False
+    assert call_map[by_id["forbidden"]] is False
 
 
 def test_spark_eval_dataset_sql_function_rows_target_scala_source() -> None:
