@@ -35,7 +35,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
-from data_engineering_copilot.services.context_assembler import ContextAssembler
+from data_engineering_copilot.services.context_assembler import DEFAULT_ITEM_LIMIT_CHARS, ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.input_guardrails import InputGuardrails
@@ -347,6 +347,23 @@ def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
     return max(retrieval_top_k * 4, reranker_top_k * 8)
 
 
+def _cap_rejoined_block(text: str, limit_chars: int) -> str:
+    """Truncate a rejoined sibling block to ``limit_chars``.
+
+    Sibling rejoin restores surrounding context around a matched segment, but a
+    large parent (e.g. a whole source file split into dozens of segments) can
+    inflate the block far beyond the per-segment item limit. Capping preserves
+    the rejoin's coverage benefit without ever producing an over-limit segment,
+    which would violate the ``ContextAssembler`` item-limit invariant.
+    """
+    if len(text) <= limit_chars:
+        return text
+    truncated = text[:limit_chars].rstrip()
+    if not truncated:
+        return text[:limit_chars]
+    return truncated
+
+
 class AsyncRagService:
     def __init__(
         self,
@@ -388,6 +405,7 @@ class AsyncRagService:
         self.input_guardrails = input_guardrails
         self.review_dataset_hook = review_dataset_hook
         self._prompt_builder = PromptBuilder()
+        self._rejoin_item_limit_chars = DEFAULT_ITEM_LIMIT_CHARS
 
     async def _record_low_confidence_review(self, trace, question: str, answer_text: str) -> None:
         """Phase 6 (Task 6.3): queue low-confidence answers into the review dataset.
@@ -2502,6 +2520,8 @@ class AsyncRagService:
                 rejoined.extend(group)
                 continue
             block_text = "\n".join(s.text for s in siblings)
+            if len(block_text) > self._rejoin_item_limit_chars:
+                block_text = _cap_rejoined_block(block_text, self._rejoin_item_limit_chars)
             best = max(group, key=lambda r: r.confidence)
             rejoined_chunk = replace(
                 best.chunk,

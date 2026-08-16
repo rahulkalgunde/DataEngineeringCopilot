@@ -41,6 +41,19 @@ def _mock_result(values: dict[str, float]) -> MagicMock:
     return mock_result
 
 
+def _mock_result_lists(values: dict[str, list[float]]) -> MagicMock:
+    mock_result = MagicMock()
+
+    def _getitem(key):
+        if key not in values:
+            raise KeyError(key)
+        return values[key]
+
+    mock_result._scores_dict = {k: list(v) for k, v in values.items()}
+    mock_result.__getitem__ = MagicMock(side_effect=_getitem)
+    return mock_result
+
+
 class TestVertexaiShim:
     def test_vertexai_shim_makes_module_importable(self):
         _install_vertexai_shim()
@@ -111,6 +124,88 @@ class TestRagasEvaluator:
         assert result.context_recall == 0.0
         assert result.faithfulness == 0.0
         assert result.answer_relevancy == 0.0
+
+    def test_nan_samples_are_dropped_not_poisoned(self):
+        """A single per-sample NaN must not make the whole metric NaN.
+
+        Regression for the baseline run where the strict ragas output parser
+        rejected one LLM response (e.g. ``verdict`` for ``attributed``), turning
+        faithfulness/context_recall into nan for the entire batch.
+        """
+        import math
+
+        ev = RagasEvaluator()
+        with (
+            patch.object(ev, "_lazy_init", return_value=True),
+            patch.object(ev, "_build_runtime", return_value=(MagicMock(), MagicMock())),
+            patch.object(
+                ev,
+                "_evaluate",
+                return_value=_mock_result_lists(
+                    {
+                        "context_recall": [0.8, math.nan, 1.0],
+                        "context_precision": [0.9, 0.9],
+                        "faithfulness": [math.nan, math.nan, 0.6],
+                        "answer_relevancy": [0.85, 0.85, 0.85],
+                    }
+                ),
+            ),
+        ):
+            result = ev.evaluate(
+                questions=["q1", "q2", "q3"],
+                answers=["a1", "a2", "a3"],
+                contexts=[["c"], ["c"], ["c"]],
+            )
+
+        assert result is not None
+        assert result.context_recall == pytest.approx(0.9)  # (0.8 + 1.0) / 2
+        assert result.context_precision == pytest.approx(0.9)
+        assert result.faithfulness == pytest.approx(0.6)  # only the valid sample
+        assert result.answer_relevancy == pytest.approx(0.85)
+        expected_overall = round(0.9 * 0.3 + 0.6 * 0.4 + 0.85 * 0.3, 4)
+        assert result.overall == expected_overall
+
+    def test_all_nan_metric_scores_zero(self):
+        """When every sample of a metric is NaN, score 0.0 instead of NaN."""
+        import math
+
+        ev = RagasEvaluator()
+        with (
+            patch.object(ev, "_lazy_init", return_value=True),
+            patch.object(ev, "_build_runtime", return_value=(MagicMock(), MagicMock())),
+            patch.object(
+                ev,
+                "_evaluate",
+                return_value=_mock_result_lists(
+                    {
+                        "context_recall": [math.nan, math.nan],
+                        "context_precision": [0.9, 0.9],
+                        "faithfulness": [math.nan, math.nan],
+                        "answer_relevancy": [0.85, 0.85],
+                    }
+                ),
+            ),
+        ):
+            result = ev.evaluate(
+                questions=["q1", "q2"],
+                answers=["a1", "a2"],
+                contexts=[["c"], ["c"]],
+            )
+
+        assert result is not None
+        assert result.context_recall == 0.0
+        assert result.faithfulness == 0.0
+        assert result.overall == pytest.approx(0.85 * 0.3)
+
+    def test_aggregate_ragas_scores_helper(self):
+        import math
+
+        from data_engineering_copilot.services.ragas_evaluation import _aggregate_ragas_scores
+
+        assert _aggregate_ragas_scores([0.5, 0.7], "m") == pytest.approx(0.6)
+        assert _aggregate_ragas_scores([math.nan, 0.8, math.nan], "m") == pytest.approx(0.8)
+        assert _aggregate_ragas_scores([None, None], "m") == 0.0
+        assert _aggregate_ragas_scores([], "m") == 0.0
 
     def test_lazy_init_caches_success(self):
         ev = RagasEvaluator()

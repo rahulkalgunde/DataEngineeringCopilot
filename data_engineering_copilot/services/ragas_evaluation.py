@@ -26,6 +26,7 @@ Compatibility notes:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 import types
@@ -54,6 +55,26 @@ def _install_vertexai_shim() -> None:
         module = types.ModuleType("langchain_community.chat_models.vertexai")
         module.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[reportAttributeAccessIssue]
         sys.modules["langchain_community.chat_models.vertexai"] = module
+
+
+def _aggregate_ragas_scores(scores: list[Any], key: str) -> float:
+    """Average a RAGAS per-sample score list, ignoring NaN samples.
+
+    ragas can emit per-sample NaN (e.g. an LLM response that the strict output
+    parser rejected, or a statement generator that produced no claims). A single
+    NaN must not poison the aggregate — drop those samples and average the valid
+    scores. Returns 0.0 when no valid scores remain.
+    """
+    valid = [s for s in scores if s is not None and not (isinstance(s, float) and math.isnan(s))]
+    if len(valid) < len(scores):
+        logger.warning(
+            "RAGAS metric %r dropped %d/%d NaN sample(s); averaging %d valid",
+            key,
+            len(scores) - len(valid),
+            len(scores),
+            len(valid),
+        )
+    return float(sum(valid) / len(valid)) if valid else 0.0
 
 
 @dataclass
@@ -247,7 +268,7 @@ class RagasEvaluator:
             except KeyError:
                 logger.warning("RAGAS metric %r did not run — scoring 0.0", key)
                 return 0.0
-            return float(sum(scores) / len(scores)) if scores else 0.0
+            return _aggregate_ragas_scores(scores, key)
 
         recall = _score("context_recall")
         precision = _score("context_precision")
