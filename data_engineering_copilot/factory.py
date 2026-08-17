@@ -153,6 +153,61 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpm_limit=app_settings.sambanova_rpm_limit,
                 rpd_limit=app_settings.sambanova_rpd_limit,
             )
+        elif p == "mistral":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.mistral_rpm_limit,
+                rpd_limit=app_settings.mistral_rpd_limit,
+            )
+        elif p == "deepseek":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.deepseek_rpm_limit,
+                rpd_limit=app_settings.deepseek_rpd_limit,
+            )
+        elif p == "zai":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.zai_rpm_limit,
+                rpd_limit=app_settings.zai_rpd_limit,
+            )
+        elif p == "siliconflow":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.siliconflow_rpm_limit,
+                rpd_limit=app_settings.siliconflow_rpd_limit,
+            )
+        elif p == "together":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.together_rpm_limit,
+                rpd_limit=app_settings.together_rpd_limit,
+            )
+        elif p == "fireworks":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.fireworks_rpm_limit,
+                rpd_limit=app_settings.fireworks_rpd_limit,
+            )
+        elif p == "llm7":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.llm7_rpm_limit,
+                rpd_limit=app_settings.llm7_rpd_limit,
+            )
+        elif p == "agnes":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.agnes_rpm_limit,
+                rpd_limit=app_settings.agnes_rpd_limit,
+            )
+        elif p == "ollama_cloud":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.ollama_cloud_rpm_limit,
+                rpd_limit=app_settings.ollama_cloud_rpd_limit,
+            )
+        elif p == "helyx":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.helyx_rpm_limit,
+                rpd_limit=app_settings.helyx_rpd_limit,
+            )
+        elif p == "anyapi":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.anyapi_rpm_limit,
+                rpd_limit=app_settings.anyapi_rpd_limit,
+            )
         elif p == "huggingface":
             rate_limiters[p] = SlidingWindowRateLimiter(
                 rpm_limit=app_settings.huggingface_rpm_limit,
@@ -425,8 +480,163 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
+    if eff_provider == "mistral":
+        api_key = app_settings.mistral_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("MISTRAL_API_KEY is required when provider='mistral'")
+        return LLMClient(
+            base_url=app_settings.mistral_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_completion_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "deepseek":
+        api_key = app_settings.deepseek_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY is required when provider='deepseek'")
+        return LLMClient(
+            base_url=app_settings.deepseek_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "zai":
+        api_key = app_settings.zai_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("ZAI_API_KEY is required when provider='zai'")
+        return LLMClient(
+            base_url=app_settings.zai_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "siliconflow":
+        api_key = app_settings.siliconflow_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("SILICONFLOW_API_KEY is required when provider='siliconflow'")
+        return LLMClient(
+            base_url=app_settings.siliconflow_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "together":
+        api_key = app_settings.together_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("TOGETHER_API_KEY is required when provider='together'")
+        return LLMClient(
+            base_url=app_settings.together_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "fireworks":
+        api_key = app_settings.fireworks_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("FIREWORKS_API_KEY is required when provider='fireworks'")
+        return LLMClient(
+            base_url=app_settings.fireworks_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "ollama_cloud":
+        api_key = app_settings.ollama_cloud_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("OLLAMA_API_KEY is required when provider='ollama_cloud'")
+        return LLMClient(
+            base_url=f"{app_settings.ollama_cloud_base_url}/v1",
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=app_settings.ollama_num_predict,
+            connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+            pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "llm7":
+        api_key = app_settings.llm7_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("LLM7_API_KEY is required when provider='llm7'")
+        return LLMClient(
+            base_url=app_settings.llm7_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "agnes":
+        api_key = app_settings.agnes_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("AGNES_API_KEY is required when provider='agnes'")
+        return LLMClient(
+            base_url=app_settings.agnes_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "helyx":
+        api_key = app_settings.helyx_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("HELYX_API_KEY is required when provider='helyx'")
+        return LLMClient(
+            base_url=app_settings.helyx_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
+    if eff_provider == "anyapi":
+        api_key = app_settings.anyapi_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("ANYAPI_API_KEY is required when provider='anyapi'")
+        return LLMClient(
+            base_url=app_settings.anyapi_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
     raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego', 'sambanova'."
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego', 'sambanova', 'mistral', 'deepseek', 'zai', 'siliconflow', 'together', 'fireworks', 'llm7', 'agnes', 'ollama_cloud', 'helyx', 'anyapi'."
     )
 
 
@@ -637,16 +847,6 @@ def build_llm_fallback_chain(
         raise ValueError(
             f"No LLM client could be built for purpose '{purpose}'. Check API keys and LLM_FALLBACK_ORDER configuration."
         )
-
-    if len(config.providers) + (1 if config.degraded_fallback else 0) == 1:
-        # At this point we know exactly one of providers or degraded_fallback exists
-        if config.providers:
-            client = config.providers[0].client
-        else:
-            assert config.degraded_fallback is not None
-            client = config.degraded_fallback.client
-        logger.info("llm_fallback_chain_built", purpose=purpose, chain="single", provider=client.model)
-        return client  # type: ignore[return-value]
 
     chain = ProviderFallbackChain(
         config,

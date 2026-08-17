@@ -16,6 +16,7 @@ from typing import Any, Protocol, TypeVar, cast
 import structlog
 
 from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
@@ -92,12 +93,45 @@ class RouterLike(Protocol):
 
 
 def _default_categorizer(exc: Exception, provider: str, model: str) -> ProviderError:
-    """Default error categorizer — treats everything as RETRYABLE."""
+    """Categorise a provider failure, preferring structured error metadata.
+
+    ``LLMClientError`` carries optional ``status_code`` / ``retry_after``
+    attributes so the router does not depend on brittle message matching.
+
+    A 401 from some OpenAI-compatible gateways is a **model-not-supported**
+    error (e.g. opencodego's ``ModelError: "Model X is not supported"``), not
+    an auth failure — the server body distinguishes them. When the body
+    indicates an unsupported/unknown model the error is categorised as
+    ``INVALID_REQUEST`` so the provider is not marked down as an auth failure.
+    """
     import httpx
 
     from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
+    def _is_model_not_supported(exc: Exception) -> bool:
+        if isinstance(exc, LLMClientError) and exc.response_body:
+            lowered = exc.response_body.lower()
+            return (
+                "not supported" in lowered
+                or "modelerror" in lowered
+                or "does not exist" in lowered
+                or "unknown model" in lowered
+                or ("model" in lowered and "not found" in lowered)
+            )
+        if isinstance(exc, httpx.HTTPStatusError):
+            lowered = (exc.response.text or "").lower()
+            return (
+                "not supported" in lowered
+                or "modelerror" in lowered
+                or "does not exist" in lowered
+                or "unknown model" in lowered
+                or ("model" in lowered and "not found" in lowered)
+            )
+        return False
+
     def _status_category(status: int) -> ProviderErrorCategory:
+        if _is_model_not_supported(exc) and status in (401, 403):
+            return ProviderErrorCategory.INVALID_REQUEST
         if status == 429:
             return ProviderErrorCategory.RATE_LIMITED
         if status in (401, 403):
@@ -116,6 +150,15 @@ def _default_categorizer(exc: Exception, provider: str, model: str) -> ProviderE
             provider,
             model,
             retry_after=retry_after if status == 429 else None,
+            original=exc,
+        )
+
+    if isinstance(exc, LLMClientError) and exc.status_code is not None:
+        return ProviderError(
+            _status_category(exc.status_code),
+            provider,
+            model,
+            retry_after=exc.retry_after,
             original=exc,
         )
 
@@ -144,7 +187,7 @@ class ProviderFallbackChain[T, R]:
         chain = ProviderFallbackChain(
             providers=[ProviderConfig("openrouter", client1), ...],
             degraded_fallback=ProviderConfig("ollama", ollama_client),
-            error_categorizer=categorize_llm_error,
+            error_categorizer=_default_categorizer,
         )
         result = await chain.execute(request)
 

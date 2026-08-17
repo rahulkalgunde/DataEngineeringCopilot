@@ -2000,6 +2000,28 @@ def health() -> None:
         print(f"  ℹ️  Configured: OpenCode Go ({settings.opencodego_model})")
     elif llm_provider == "sambanova":
         print(f"  ℹ️  Configured: SambaNova ({settings.sambanova_model})")
+    elif llm_provider == "mistral":
+        print(f"  ℹ️  Configured: Mistral ({settings.mistral_model})")
+    elif llm_provider == "deepseek":
+        print(f"  ℹ️  Configured: DeepSeek ({settings.deepseek_model})")
+    elif llm_provider == "zai":
+        print(f"  ℹ️  Configured: Z.AI ({settings.zai_model})")
+    elif llm_provider == "siliconflow":
+        print(f"  ℹ️  Configured: SiliconFlow ({settings.siliconflow_model})")
+    elif llm_provider == "together":
+        print(f"  ℹ️  Configured: Together AI ({settings.together_model})")
+    elif llm_provider == "fireworks":
+        print(f"  ℹ️  Configured: Fireworks AI ({settings.fireworks_model})")
+    elif llm_provider == "llm7":
+        print(f"  ℹ️  Configured: LLM7.io ({settings.llm7_model})")
+    elif llm_provider == "agnes":
+        print(f"  ℹ️  Configured: Agnes AI ({settings.agnes_model})")
+    elif llm_provider == "ollama_cloud":
+        print(f"  ℹ️  Configured: Ollama Cloud ({settings.ollama_cloud_model})")
+    elif llm_provider == "helyx":
+        print(f"  ℹ️  Configured: Helyx AI ({settings.helyx_model})")
+    elif llm_provider == "anyapi":
+        print(f"  ℹ️  Configured: AnyAPI.ai ({settings.anyapi_model})")
     elif llm_provider == "ollama":
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health
