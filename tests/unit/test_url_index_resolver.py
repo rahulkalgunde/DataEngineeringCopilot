@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 
 import httpx
 import pytest
 
 from data_engineering_copilot.config.settings import PinnedSourceConfig
 from data_engineering_copilot.services.url_index_resolver import (
+    LocalMirrorResolver,
     UrlIndexManifest,
     UrlIndexResolver,
     _url_to_relpath,
@@ -131,3 +133,72 @@ def test_resolve_rejects_non_url_index_config(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="url_index"):
         UrlIndexResolver(github, tmp_path)
+
+
+def _mirror_config(commit: str = "c2c813e171cb8d8c5f76bf1034aaf94304c267c8") -> PinnedSourceConfig:
+    return PinnedSourceConfig(
+        type="local_mirror",
+        name="Claude Platform Docs",
+        slug="claude-platform",
+        version="2026-08-17",
+        license="MIT",
+        mirror_dir="platform",
+        commit=commit,
+        url_prefix="https://platform.claude.com/docs/en/",
+        base_url="https://platform.claude.com/docs",
+        doc_type="guide",
+    )
+
+
+def _init_git(tmp_path) -> None:
+    """Turn tmp_path into a git repo (LocalMirrorResolver validates HEAD)."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+    proc = subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "m"],
+        check=True,
+        capture_output=True,
+    )
+    _ = proc
+
+
+def test_local_mirror_resolves_from_disk(tmp_path) -> None:
+    root = tmp_path / "mirror" / "platform"
+    root.mkdir(parents=True)
+    (root / "llms.txt").write_text(
+        "- [Working with messages](https://platform.claude.com/docs/en/build-with-claude/working-with-messages.md)\n"
+        "- [Tool use](https://platform.claude.com/docs/en/build-with-claude/tool-use.md)\n"
+    )
+    (root / "build-with-claude").mkdir()
+    (root / "build-with-claude" / "working-with-messages.md").write_text("# Messages\n")
+    (root / "build-with-claude" / "tool-use.md").write_text("# Tool use\n")
+    _init_git(tmp_path / "mirror")
+
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path / "mirror"), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    resolver = LocalMirrorResolver(_mirror_config(commit=head), tmp_path / "mirror")
+    manifest = resolver.resolve()
+    assert manifest.root == root
+    assert len(manifest.entries) == 2
+    assert manifest.entries[0].relative_path == "build-with-claude/working-with-messages.md"
+
+
+def test_local_mirror_rejects_pinned_commit_mismatch(tmp_path) -> None:
+    root = tmp_path / "mirror" / "platform"
+    root.mkdir(parents=True)
+    (root / "llms.txt").write_text("")
+    _init_git(tmp_path / "mirror")
+
+    resolver = LocalMirrorResolver(_mirror_config(commit="a" * 40), tmp_path / "mirror")
+    with pytest.raises(ValueError, match="HEAD"):
+        resolver.resolve()
+
+
+def test_local_mirror_rejects_non_local_mirror_config(tmp_path) -> None:
+    with pytest.raises(ValueError, match="local_mirror"):
+        LocalMirrorResolver(_config(), tmp_path)

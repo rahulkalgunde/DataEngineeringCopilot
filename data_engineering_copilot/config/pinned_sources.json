@@ -138,25 +138,27 @@
       ]
     },
     {
-      "type": "url_index",
+      "type": "local_mirror",
       "name": "Claude Platform Docs",
       "slug": "claude-platform",
-      "version": "unpinned",
-      "index_url": "https://platform.claude.com/docs/llms.txt",
+      "version": "2026-08-17",
+      "license": "MIT",
+      "mirror_dir": "platform",
+      "commit": "c2c813e171cb8d8c5f76bf1034aaf94304c267c8",
       "url_prefix": "https://platform.claude.com/docs/en/",
       "base_url": "https://platform.claude.com/docs",
-      "cache_dir": "claude-platform",
       "doc_type": "guide"
     },
     {
-      "type": "url_index",
+      "type": "local_mirror",
       "name": "Claude Code Docs",
       "slug": "claude-code",
-      "version": "unpinned",
-      "index_url": "https://code.claude.com/docs/llms.txt",
+      "version": "2026-08-17",
+      "license": "MIT",
+      "mirror_dir": "code",
+      "commit": "339fdc31b01104c2b6357603464d26fc3ff77a03",
       "url_prefix": "https://code.claude.com/docs/en/",
       "base_url": "https://code.claude.com/docs",
-      "cache_dir": "claude-code",
       "doc_type": "guide"
     }
   ]

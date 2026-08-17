@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,22 +14,33 @@ from data_engineering_copilot.services.claude_docs_ingestion import strip_frontm
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.prepared_source import PreparedSource
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord
-from data_engineering_copilot.services.url_index_resolver import UrlIndexManifest, UrlIndexResolver
+from data_engineering_copilot.services.url_index_resolver import (
+    LocalMirrorResolver,
+    UrlIndexManifest,
+    UrlIndexResolver,
+)
 
 _MIN_DOC_CHARS = 100
 
 
 class UrlIndexPreparer:
-    """Fetch a pinned ``url_index`` source and chunk it into a ``PreparedSource``.
+    """Fetch a pinned ``url_index`` or ``local_mirror`` source and chunk it.
+
+    ``url_index`` sources are resolved over the network into a cache
+    directory; ``local_mirror`` sources are resolved from a local git mirror
+    (no network) and stamp the pinned commit + license onto every chunk.
 
     Parameters
     ----------
     config:
-        A ``PinnedSourceConfig`` of type ``url_index``.
+        A ``PinnedSourceConfig`` of type ``url_index`` or ``local_mirror``.
     cache_dir:
         Directory under which the source's ``cache_dir`` subtree is materialized.
     generation:
         Generation ID stamped on every produced chunk.
+    mirror_root:
+        Directory containing the local git mirror subdirectories (used only for
+        ``local_mirror`` sources).
     header_chunker:
         Injected header chunker (defaults to ``HeaderAwareChunker``).
     """
@@ -38,17 +50,26 @@ class UrlIndexPreparer:
         config: PinnedSourceConfig,
         cache_dir: Path,
         generation: str,
+        mirror_root: Path | None = None,
         header_chunker: HeaderAwareChunker | None = None,
     ) -> None:
         self._config = config
         self._cache_dir = Path(cache_dir)
         self._generation = generation
+        self._mirror_root = Path(mirror_root) if mirror_root is not None else None
         self._header_chunker = header_chunker or HeaderAwareChunker()
 
     async def prepare(self, client: httpx.AsyncClient | None = None) -> PreparedSource:
         """Resolve the index, parse every page, and chunk the corpus."""
-        resolver = UrlIndexResolver(self._config, self._cache_dir)
-        manifest = await resolver.resolve(client=client)
+        if self._config.type == "local_mirror":
+            if self._mirror_root is None:
+                raise ValueError("local_mirror source requires mirror_root")
+            manifest = LocalMirrorResolver(self._config, self._mirror_root).resolve()
+            commit = self._config.commit
+        else:
+            resolver = UrlIndexResolver(self._config, self._cache_dir)
+            manifest = await resolver.resolve(client=client)
+            commit = ""
         documents = self._build_documents(manifest)
         chunks: list[DocumentChunk] = []
         coverage: list[CoverageRecord] = []
@@ -64,7 +85,7 @@ class UrlIndexPreparer:
                     canonical_url=doc.url,
                     status="indexed" if doc_chunks else "no_content",
                     chunk_count=len(doc_chunks),
-                    content_hash="",
+                    content_hash=_file_content_hash(manifest.root / doc.file_path),
                     failure_reason="" if doc_chunks else "parsed to empty text",
                 )
             )
@@ -72,7 +93,7 @@ class UrlIndexPreparer:
             slug=self._config.slug,
             source_name=self._config.name,
             generation=self._generation,
-            commit="",
+            commit=commit,
             chunks=tuple(chunks),
             coverage=tuple(coverage),
         )
@@ -109,9 +130,18 @@ class UrlIndexPreparer:
             chunk,
             doc_type=chunk.doc_type or self._config.doc_type,
             language=chunk.language or "conceptual",
-            source_commit="",
+            source_commit=self._config.commit if self._config.type == "local_mirror" else "",
             file_path=chunk.file_path,
-            license="",
+            license=self._config.license if self._config.type == "local_mirror" else "",
             index_generation=self._generation,
             chunker_version="header-aware-v1",
+            parser_version="mdx-parser-v1",
         )
+
+
+def _file_content_hash(path: Path) -> str:
+    """SHA-256 of a source file's raw bytes for coverage drift detection."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""

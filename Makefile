@@ -244,6 +244,11 @@ eval-fast:
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
+# Refresh the local Claude docs git mirror (network required). After running,
+# paste the printed commit SHAs into pinned_sources.json `local_mirror` entries.
+mirror-claude-docs:
+	$(PYTHON) scripts/mirror_claude_docs.py
+
 lint:
 	$(PYTHON) -m ruff check data_engineering_copilot/ tests/
 
