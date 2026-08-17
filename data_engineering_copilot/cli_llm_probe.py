@@ -11,9 +11,9 @@ import httpx
 
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.factory import _build_purpose_llm_client, build_embedder
-from data_engineering_copilot.infrastructure.adaptive_llm_router import _categorize_llm_error
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.llm_client import LLMClient, build_chat_messages
+from data_engineering_copilot.infrastructure.provider_fallback import _default_categorizer as _categorize_llm_error
 
 _PURPOSES = ["answer", "rewrite", "groundedness", "intent", "enrichment", "evaluation", "code"]
 

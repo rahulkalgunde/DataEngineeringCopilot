@@ -267,7 +267,6 @@ class TestRagasEvaluator:
         assert result.context_recall == 0.8
 
     def test_build_runtime_defaults_use_adaptive_routing(self):
-        from data_engineering_copilot.infrastructure.llm_client import LLMClient
         from data_engineering_copilot.services.ragas_adapters import (
             AdaptiveRagasEmbeddings,
             AdaptiveRagasLLM,
@@ -279,9 +278,10 @@ class TestRagasEvaluator:
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)
         assert isinstance(embeddings_wrapper, AdaptiveRagasEmbeddings)
         # LLM: purpose='evaluation' fallback chain. No provider keys in the
-        # hermetic settings -> degrades to a bare local Ollama LLMClient.
-        assert isinstance(llm_wrapper.client, LLMClient)
-        assert llm_wrapper.client.model == (app_settings.ollama_model or "llama3.2:3b")
+        # hermetic settings -> degrades to a chain with only local Ollama.
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+
+        assert isinstance(llm_wrapper.client, ProviderFallbackChain)
         # Embeddings: external nvidia/openrouter preferred, skipped without
         # keys -> local Ollama degraded fallback (never a paid provider).
         from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
@@ -331,6 +331,17 @@ class TestRagasEvaluator:
             opencodezen_api_key="placeholder",
             opencodego_api_key="placeholder",
             sambanova_api_key="placeholder",
+            mistral_api_key="placeholder",
+            deepseek_api_key="placeholder",
+            zai_api_key="placeholder",
+            siliconflow_api_key="placeholder",
+            together_api_key="placeholder",
+            fireworks_api_key="placeholder",
+            llm7_api_key="placeholder",
+            agnes_api_key="placeholder",
+            ollama_cloud_api_key="placeholder",
+            helyx_api_key="placeholder",
+            anyapi_api_key="placeholder",
         )
         llm_wrapper, _ = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)

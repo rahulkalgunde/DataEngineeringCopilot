@@ -49,6 +49,17 @@ on violation), and rejects non-Ollama providers unless
 - `make_settings()` defaults every provider to Ollama with **empty** keys; add
   placeholder keys only for providers the test actually routes to.
 - Never real keys/secrets in tests (pre-commit scans staged files).
+- **When adding a new LLM provider**, you MUST also update `tests/conftest.py`:
+  add `"{provider}_api_key": ""` to `make_settings()` defaults AND add
+  `"{PROVIDER}_API_KEY"` to `_AMBIENT_PROVIDER_VARS` in `pytest_configure()`.
+  Without this, ambient API keys silently leak into tests (the test passes
+  but exercises the wrong provider). See provider-onboarding skill step 5.
+- **`.env` overrides class defaults.** The global `settings` singleton is
+  created at import time from `.env`/`.env.secrets`. If `.env` has a hardcoded
+  `LLM_FALLBACK_ORDER`, it overrides the class-level default in `settings.py`.
+  Tests using `make_settings()` are immune (they bypass env files), but the
+  probe CLI and runtime code use the global singleton — always verify the
+  actual fallback order at runtime, not just the class default.
 
 ## Concurrency / xdist
 

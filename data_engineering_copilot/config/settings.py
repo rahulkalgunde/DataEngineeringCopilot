@@ -552,6 +552,18 @@ class AppSettings(BaseSettings):
     embedding_ollama_base_url: str = ""
     llm_ollama_base_url: str = ""
 
+    # Ollama Cloud (LLM only). Same Ollama protocol as local, but hosted at
+    # ollama.com. Requires OLLAMA_API_KEY. Separate provider so local Ollama
+    # remains the degraded fallback even when cloud is unreachable.
+    ollama_cloud_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"),
+    )
+    ollama_cloud_base_url: str = "https://ollama.com"
+    ollama_cloud_model: str = "gpt-oss:20b"
+    ollama_cloud_rpm_limit: int = 30
+    ollama_cloud_rpd_limit: int = 1000
+
     # URLs accessed within docker
     redis_url: str = "redis://:local_secure_password_123@localhost:6379/0"
     langfuse_url: str = "http://langfuse:3000"
@@ -711,6 +723,90 @@ class AppSettings(BaseSettings):
     sambanova_rpm_limit: int = 30
     sambanova_rpd_limit: int = 1000
 
+    # Mistral AI settings (LLM only). OpenAI-compatible
+    # ``/v1/chat/completions`` surface. Free tier includes $10/mo API
+    # credits; models are priced per million tokens (input + output).
+    mistral_api_key: SecretStr = SecretStr("")
+    mistral_model: str = "mistral-small-latest"
+    mistral_base_url: str = "https://api.mistral.ai/v1"
+    mistral_rpm_limit: int = 30
+    mistral_rpd_limit: int = 1000
+
+    # DeepSeek (LLM only). OpenAI-compatible ``/v1/chat/completions`` surface.
+    # Very cheap pay-as-you-go ($0.14/M input for V4 Flash); concurrency-based
+    # rate limits (2500 Flash, 500 Pro). No permanently free tier.
+    deepseek_api_key: SecretStr = SecretStr("")
+    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_rpm_limit: int = 60
+    deepseek_rpd_limit: int = 1000
+
+    # Z.AI / Zhipu AI (LLM only). OpenAI-compatible surface. GLM-4.5-Flash is
+    # free forever ($0 input/output); GLM-5.2 is the paid flagship.
+    # Rate limits are undocumented (~60 RPM, ~1K RPD from 3rd-party reports).
+    zai_api_key: SecretStr = SecretStr("")
+    zai_model: str = "glm-4.7-flash"
+    zai_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    zai_rpm_limit: int = 60
+    zai_rpd_limit: int = 1000
+
+    # SiliconFlow (LLM only). OpenAI-compatible multi-model inference platform.
+    # $1 starter credit + permanently free models (Qwen3-8B, DeepSeek-R1-Distill).
+    # Use global (.com) endpoint — .cn is China-only.
+    siliconflow_api_key: SecretStr = SecretStr("")
+    siliconflow_model: str = "Qwen/Qwen3-8B"
+    siliconflow_base_url: str = "https://api.siliconflow.com/v1"
+    siliconflow_rpm_limit: int = 100
+    siliconflow_rpd_limit: int = 1000
+
+    # Together AI (LLM only). OpenAI-compatible surface. 50+ models (Llama,
+    # DeepSeek, Qwen). $1 starter credit; dynamic rate limits scale with usage.
+    together_api_key: SecretStr = SecretStr("")
+    together_model: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    together_base_url: str = "https://api.together.xyz/v1"
+    together_rpm_limit: int = 600
+    together_rpd_limit: int = 10000
+
+    # Fireworks AI (LLM only). OpenAI-compatible surface. 50+ models.
+    # $1 starter credit; 10 RPM without payment method.
+    fireworks_api_key: SecretStr = SecretStr("")
+    fireworks_model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct"
+    fireworks_base_url: str = "https://api.fireworks.ai/inference/v1"
+    fireworks_rpm_limit: int = 10
+    fireworks_rpd_limit: int = 500
+
+    # LLM7.io (LLM only). OpenAI-compatible aggregator. Free 30 RPM (120 with
+    # token registration); 1M tokens/day. Small independent provider.
+    llm7_api_key: SecretStr = SecretStr("")
+    llm7_model: str = "default"
+    llm7_base_url: str = "https://api.llm7.io/v1"
+    llm7_rpm_limit: int = 120
+    llm7_rpd_limit: int = 1000
+
+    # Agnes AI (LLM only). OpenAI-compatible surface. Free 20 RPM text;
+    # agnes-2.5-flash with 512K context. Singapore-based, multimodal focus.
+    agnes_api_key: SecretStr = SecretStr("")
+    agnes_model: str = "agnes-2.5-flash"
+    agnes_base_url: str = "https://apihub.agnes-ai.com/v1"
+    agnes_rpm_limit: int = 20
+    agnes_rpd_limit: int = 500
+
+    # Helyx AI (LLM only). OpenAI-compatible aggregator. Free 100K tokens/day,
+    # 50+ models (Llama 4, Qwen 3.6, DeepSeek V4, Mistral). Aggregator.
+    helyx_api_key: SecretStr = SecretStr("")
+    helyx_model: str = "deepseek-chat"
+    helyx_base_url: str = "https://helyxai.space/v1"
+    helyx_rpm_limit: int = 30
+    helyx_rpd_limit: int = 1000
+
+    # AnyAPI.ai (LLM only). OpenAI-compatible aggregator. Free 20 RPM,
+    # BYOK proxy with zero markup. Aggregator.
+    anyapi_api_key: SecretStr = SecretStr("")
+    anyapi_model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
+    anyapi_base_url: str = "https://api.anyapi.ai/v1"
+    anyapi_rpm_limit: int = 20
+    anyapi_rpd_limit: int = 500
+
     # Hugging Face Inference Providers (LLM + Embeddings).
     # Serverless embeddings use the native ``feature-extraction`` route (the
     # OpenAI-compatible ``/v1`` surface is chat-completions only). Free-tier
@@ -739,6 +835,12 @@ class AppSettings(BaseSettings):
             "opencodezen",
             "opencodego",
             "sambanova",
+            "mistral",
+            "zai",
+            "llm7",
+            "agnes",
+            "anyapi",
+            "ollama_cloud",
             "ollama",
         ]
     )
@@ -769,7 +871,7 @@ class AppSettings(BaseSettings):
     router_best_cache_ttl_seconds: float = 15.0
     # Bonus score applied to the purpose-pinned provider so it is preferred
     # (not hard-pinned) when its recent health is competitive.
-    router_purpose_preference_weight: float = 0.05
+    router_purpose_preference_weight: float = 0.15
 
     # After this many consecutive failures the degraded Ollama fallback is
     # skipped (fail fast) instead of stalling the request on a broken local
@@ -863,6 +965,83 @@ class AppSettings(BaseSettings):
     sambanova_enrichment_llm_model: str = ""
     sambanova_evaluation_llm_model: str = ""
     sambanova_code_llm_model: str = ""
+    mistral_answer_llm_model: str = ""
+    mistral_rewrite_llm_model: str = ""
+    mistral_groundedness_llm_model: str = ""
+    mistral_intent_llm_model: str = ""
+    mistral_enrichment_llm_model: str = ""
+    mistral_evaluation_llm_model: str = ""
+    mistral_code_llm_model: str = ""
+    deepseek_answer_llm_model: str = ""
+    deepseek_rewrite_llm_model: str = ""
+    deepseek_groundedness_llm_model: str = ""
+    deepseek_intent_llm_model: str = ""
+    deepseek_enrichment_llm_model: str = ""
+    deepseek_evaluation_llm_model: str = ""
+    deepseek_code_llm_model: str = ""
+    zai_answer_llm_model: str = ""
+    zai_rewrite_llm_model: str = ""
+    zai_groundedness_llm_model: str = ""
+    zai_intent_llm_model: str = ""
+    zai_enrichment_llm_model: str = ""
+    zai_evaluation_llm_model: str = ""
+    zai_code_llm_model: str = ""
+    siliconflow_answer_llm_model: str = ""
+    siliconflow_rewrite_llm_model: str = ""
+    siliconflow_groundedness_llm_model: str = ""
+    siliconflow_intent_llm_model: str = ""
+    siliconflow_enrichment_llm_model: str = ""
+    siliconflow_evaluation_llm_model: str = ""
+    siliconflow_code_llm_model: str = ""
+    together_answer_llm_model: str = ""
+    together_rewrite_llm_model: str = ""
+    together_groundedness_llm_model: str = ""
+    together_intent_llm_model: str = ""
+    together_enrichment_llm_model: str = ""
+    together_evaluation_llm_model: str = ""
+    together_code_llm_model: str = ""
+    fireworks_answer_llm_model: str = ""
+    fireworks_rewrite_llm_model: str = ""
+    fireworks_groundedness_llm_model: str = ""
+    fireworks_intent_llm_model: str = ""
+    fireworks_enrichment_llm_model: str = ""
+    fireworks_evaluation_llm_model: str = ""
+    fireworks_code_llm_model: str = ""
+    llm7_answer_llm_model: str = ""
+    llm7_rewrite_llm_model: str = ""
+    llm7_groundedness_llm_model: str = ""
+    llm7_intent_llm_model: str = ""
+    llm7_enrichment_llm_model: str = ""
+    llm7_evaluation_llm_model: str = ""
+    llm7_code_llm_model: str = ""
+    agnes_answer_llm_model: str = ""
+    agnes_rewrite_llm_model: str = ""
+    agnes_groundedness_llm_model: str = ""
+    agnes_intent_llm_model: str = ""
+    agnes_enrichment_llm_model: str = ""
+    agnes_evaluation_llm_model: str = ""
+    agnes_code_llm_model: str = ""
+    ollama_cloud_answer_llm_model: str = ""
+    ollama_cloud_rewrite_llm_model: str = ""
+    ollama_cloud_groundedness_llm_model: str = ""
+    ollama_cloud_intent_llm_model: str = ""
+    ollama_cloud_enrichment_llm_model: str = ""
+    ollama_cloud_evaluation_llm_model: str = ""
+    ollama_cloud_code_llm_model: str = ""
+    helyx_answer_llm_model: str = ""
+    helyx_rewrite_llm_model: str = ""
+    helyx_groundedness_llm_model: str = ""
+    helyx_intent_llm_model: str = ""
+    helyx_enrichment_llm_model: str = ""
+    helyx_evaluation_llm_model: str = ""
+    helyx_code_llm_model: str = ""
+    anyapi_answer_llm_model: str = ""
+    anyapi_rewrite_llm_model: str = ""
+    anyapi_groundedness_llm_model: str = ""
+    anyapi_intent_llm_model: str = ""
+    anyapi_enrichment_llm_model: str = ""
+    anyapi_evaluation_llm_model: str = ""
+    anyapi_code_llm_model: str = ""
 
     ollama_code_llm_model: str = "qwen2.5-coder:7b"
 
@@ -1114,6 +1293,17 @@ class AppSettings(BaseSettings):
             "opencodezen": ("opencodezen_api_key", "OPENCODEZEN_API_KEY"),
             "opencodego": ("opencodego_api_key", "OPENCODEGO_API_KEY"),
             "sambanova": ("sambanova_api_key", "SAMBANOVA_API_KEY"),
+            "mistral": ("mistral_api_key", "MISTRAL_API_KEY"),
+            "deepseek": ("deepseek_api_key", "DEEPSEEK_API_KEY"),
+            "zai": ("zai_api_key", "ZAI_API_KEY"),
+            "siliconflow": ("siliconflow_api_key", "SILICONFLOW_API_KEY"),
+            "together": ("together_api_key", "TOGETHER_API_KEY"),
+            "fireworks": ("fireworks_api_key", "FIREWORKS_API_KEY"),
+            "llm7": ("llm7_api_key", "LLM7_API_KEY"),
+            "agnes": ("agnes_api_key", "AGNES_API_KEY"),
+            "ollama_cloud": ("ollama_cloud_api_key", "OLLAMA_API_KEY"),
+            "helyx": ("helyx_api_key", "HELYX_API_KEY"),
+            "anyapi": ("anyapi_api_key", "ANYAPI_API_KEY"),
             "huggingface": ("huggingface_api_key", "HUGGINGFACE_API_KEY or HF_TOKEN"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():

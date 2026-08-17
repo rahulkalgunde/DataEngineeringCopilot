@@ -141,6 +141,20 @@
         "deepseek-v3.1": { "name": "DeepSeek V3.1" },
         "meta-llama-3.3-70b-instruct": { "name": "Meta Llama 3.3 70B Instruct" }
       }
+    },
+    "mistral": {
+      "npm": "@ai-sdk/mistral",
+      "name": "mistral",
+      "options": {
+        "baseURL": "https://api.mistral.ai/v1",
+        "apiKey": "{env:MISTRAL_API_KEY}"
+      },
+      "models": {
+        "mistral-large-latest": { "name": "Mistral Large (latest)" },
+        "mistral-medium-3.5": { "name": "Mistral Medium 3.5" },
+        "mistral-small-4": { "name": "Mistral Small 4" },
+        "mistral-small-latest": { "name": "Mistral Small (latest)" }
+      }
     }
   },
   "agent": {

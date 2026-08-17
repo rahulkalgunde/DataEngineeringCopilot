@@ -50,12 +50,11 @@ def _make_settings_empty_key(provider: str, key_type: str = "llm") -> AppSetting
 class TestBuildGlobalLLMClient:
     def test_ollama_default(self):
         from data_engineering_copilot.factory import build_global_llm_client
-        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
 
         s = _make_settings(llm_provider="ollama", llm_model="llama3.2:3b")
         client = build_global_llm_client(s)
-        assert isinstance(client, LLMClient)
-        assert client.model == "llama3.2:3b"
+        assert isinstance(client, ProviderFallbackChain)
 
     def test_openrouter(self):
         from data_engineering_copilot.factory import build_global_llm_client
@@ -248,6 +247,162 @@ class TestBuildPurposeLLMClient:
         object.__setattr__(s, "sambanova_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="SAMBANOVA_API_KEY is required"):
             _build_purpose_llm_client(provider="sambanova", model="test", app_settings=s)
+
+    def test_mistral_uses_base_url_model_and_max_completion_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="mistral",
+            mistral_api_key="mistral-test-key",
+        )
+        client = _build_purpose_llm_client(provider="mistral", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "mistral-small-latest"
+        assert client.base_url == "https://api.mistral.ai/v1"
+        assert client._max_tokens_field == "max_completion_tokens"
+        assert client._max_tokens == 4096
+
+    def test_mistral_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="mistral",
+            mistral_api_key="mistral-placeholder",
+        )
+        object.__setattr__(s, "mistral_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="MISTRAL_API_KEY is required"):
+            _build_purpose_llm_client(provider="mistral", model="test", app_settings=s)
+
+    def test_deepseek_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="deepseek",
+            deepseek_api_key="ds-test-key",
+        )
+        client = _build_purpose_llm_client(provider="deepseek", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "deepseek-chat"
+        assert client.base_url == "https://api.deepseek.com/v1"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_deepseek_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="deepseek",
+            deepseek_api_key="ds-placeholder",
+        )
+        object.__setattr__(s, "deepseek_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="DEEPSEEK_API_KEY is required"):
+            _build_purpose_llm_client(provider="deepseek", model="test", app_settings=s)
+
+    def test_zai_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="zai",
+            zai_api_key="zai-test-key",
+        )
+        client = _build_purpose_llm_client(provider="zai", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "glm-4.7-flash"
+        assert client.base_url == "https://open.bigmodel.cn/api/paas/v4"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_zai_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="zai",
+            zai_api_key="zai-placeholder",
+        )
+        object.__setattr__(s, "zai_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="ZAI_API_KEY is required"):
+            _build_purpose_llm_client(provider="zai", model="test", app_settings=s)
+
+    def test_siliconflow_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="siliconflow",
+            siliconflow_api_key="sf-test-key",
+        )
+        client = _build_purpose_llm_client(provider="siliconflow", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "Qwen/Qwen3-8B"
+        assert client.base_url == "https://api.siliconflow.com/v1"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_siliconflow_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="siliconflow",
+            siliconflow_api_key="sf-placeholder",
+        )
+        object.__setattr__(s, "siliconflow_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="SILICONFLOW_API_KEY is required"):
+            _build_purpose_llm_client(provider="siliconflow", model="test", app_settings=s)
+
+    def test_together_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="together",
+            together_api_key="together-test-key",
+        )
+        client = _build_purpose_llm_client(provider="together", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        assert client.base_url == "https://api.together.xyz/v1"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_together_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="together",
+            together_api_key="together-placeholder",
+        )
+        object.__setattr__(s, "together_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="TOGETHER_API_KEY is required"):
+            _build_purpose_llm_client(provider="together", model="test", app_settings=s)
+
+    def test_fireworks_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="fireworks",
+            fireworks_api_key="fw-test-key",
+        )
+        client = _build_purpose_llm_client(provider="fireworks", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "accounts/fireworks/models/llama-v3p3-70b-instruct"
+        assert client.base_url == "https://api.fireworks.ai/inference/v1"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_fireworks_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="fireworks",
+            fireworks_api_key="fw-placeholder",
+        )
+        object.__setattr__(s, "fireworks_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="FIREWORKS_API_KEY is required"):
+            _build_purpose_llm_client(provider="fireworks", model="test", app_settings=s)
 
     def test_fallback_provider_uses_own_default_model_not_purpose_override(self):
         """A fallback provider in a chain must resolve its own ``{provider}_model``
@@ -701,3 +856,152 @@ class TestErrorCategorization:
         exc = httpx.HTTPStatusError("401", request=resp.request, response=resp)
         err = _categorize_rerank_error(exc, "nvidia", "model")
         assert err.category == ProviderErrorCategory.AUTHENTICATION_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Batch 2 providers: ollama_cloud, llm7, agnes
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaCloudProvider:
+    def test_ollama_cloud_uses_cloud_base_url_and_api_key(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="ollama_cloud",
+            ollama_cloud_api_key="oc-key-123",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="ollama_cloud", model="test", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert "ollama.com" in client.base_url
+        assert client.api_key == "oc-key-123"
+
+    def test_ollama_cloud_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="ollama_cloud",
+            llm_fallback_order=["ollama_cloud"],
+            ollama_cloud_api_key="placeholder",
+        )
+        object.__setattr__(s, "ollama_cloud_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="OLLAMA_API_KEY is required"):
+            _build_purpose_llm_client(provider="ollama_cloud", model="test", app_settings=s)
+
+
+class TestLLM7Provider:
+    def test_llm7_uses_correct_base_url_and_model(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="llm7",
+            llm7_api_key="llm7-key-123",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="llm7", model="test", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.base_url == "https://api.llm7.io/v1"
+        assert client.model == "test"
+        assert client.api_key == "llm7-key-123"
+
+    def test_llm7_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="llm7",
+            llm_fallback_order=["llm7"],
+            llm7_api_key="placeholder",
+        )
+        object.__setattr__(s, "llm7_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="LLM7_API_KEY is required"):
+            _build_purpose_llm_client(provider="llm7", model="test", app_settings=s)
+
+
+class TestAgnesProvider:
+    def test_agnes_uses_correct_base_url_and_model(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="agnes",
+            agnes_api_key="agnes-key-123",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="agnes", model="test", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.base_url == "https://apihub.agnes-ai.com/v1"
+        assert client.model == "test"
+        assert client.api_key == "agnes-key-123"
+
+    def test_agnes_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="agnes",
+            llm_fallback_order=["agnes"],
+            agnes_api_key="placeholder",
+        )
+        object.__setattr__(s, "agnes_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="AGNES_API_KEY is required"):
+            _build_purpose_llm_client(provider="agnes", model="test", app_settings=s)
+
+
+class TestHelyxProvider:
+    def test_helyx_uses_correct_base_url_and_model(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="helyx",
+            helyx_api_key="hx-key-123",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="helyx", model="test", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.base_url == "https://helyxai.space/v1"
+        assert client.model == "test"
+        assert client.api_key == "hx-key-123"
+
+    def test_helyx_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="helyx",
+            llm_fallback_order=["helyx"],
+            helyx_api_key="placeholder",
+        )
+        object.__setattr__(s, "helyx_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="HELYX_API_KEY is required"):
+            _build_purpose_llm_client(provider="helyx", model="test", app_settings=s)
+
+
+class TestAnyAPIProvider:
+    def test_anyapi_uses_correct_base_url_and_model(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="anyapi",
+            anyapi_api_key="anyapi-key-123",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="anyapi", model="test", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.base_url == "https://api.anyapi.ai/v1"
+        assert client.model == "test"
+        assert client.api_key == "anyapi-key-123"
+
+    def test_anyapi_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="anyapi",
+            llm_fallback_order=["anyapi"],
+            anyapi_api_key="placeholder",
+        )
+        object.__setattr__(s, "anyapi_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="ANYAPI_API_KEY is required"):
+            _build_purpose_llm_client(provider="anyapi", model="test", app_settings=s)
