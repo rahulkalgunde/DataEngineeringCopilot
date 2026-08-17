@@ -27,6 +27,7 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 
 ## Testing
 - Tests are hermetic: conftest no-ops `load_dotenv` and **raises** on ambient provider env vars/API keys. Build settings only via `make_settings()` (Ollama-only, no env files); provider-routing tests pass `_test_allow_non_ollama=True` with placeholder keys.
+- **`make_settings()` hardcodes provider keys to `""`.** Tests that need env-file aliasing (e.g. `HF_TOKEN` → `huggingface_api_key`) must construct `AppSettings(_env_file=...)` directly — `make_settings` overrides the env file with explicit empty strings.
 - **When adding a new LLM provider**, update `tests/conftest.py`: add `"{provider}_api_key": ""` to `make_settings()` defaults AND `"{PROVIDER}_API_KEY"` to `_AMBIENT_PROVIDER_VARS`. Skipping this causes silent env-var leakage into tests.
 - **`.env` overrides class defaults.** `pydantic-settings` reads env vars from `os.environ` first; if `.env` has a hardcoded `LLM_FALLBACK_ORDER`, it overrides the class-level default in `settings.py`. Always verify the actual runtime fallback order when adding providers.
 - xdist default is `-n 6`; never `-n auto` (destabilizes the machine). Use `-n 0` (`make test-unit-serial`) to debug xdist-order or shared-resource failures.
@@ -44,6 +45,7 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 - No LangChain/LlamaIndex (except `langchain-text-splitters`).
 - DI via `factory.py` (`build_rag_service()`, …) — never hand-instantiate services.
 - All LLM/embedding/rerank calls route through `ProviderFallbackChain` (`infrastructure/provider_fallback.py`); obtain via `build_llm_fallback_chain()` / `build_embedding_fallback_chain()`. The factory builds separate per-purpose LLM chains (`answer`, `rewrite`, `groundedness`, `intent`, `enrichment`, `evaluation`, `code`) — don't override globally.
+- **Provider selection**: `ProviderFallbackChain` uses `ProviderSelector` (health-scored, Redis-backed, cached best 15s). Error categorizer (`_default_categorizer`) inspects `LLMClientError.response_body` for model-not-supported patterns (401 → `INVALID_REQUEST` not `AUTH_ERROR`). Ollama is always `degraded_fallback` (last resort, max 2 consecutive failures). Single-provider chains still get `ProviderFallbackChain` wrapping for health tracking.
 - Redis connections: always `get_shared_redis_client()`.
 - Three-valued returns: e.g. `extract_sentences` returns `None` (unsupported) vs `[]` (empty) vs list — check `is None` explicitly.
 - Non-test code: call `settings.validate_all()` after constructing `AppSettings`.

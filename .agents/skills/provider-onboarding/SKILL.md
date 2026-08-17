@@ -132,11 +132,13 @@ global client.
   fallback chain includes unexpected providers.
 - **401 is not always an auth failure.** opencodego (and other OpenAI-compatible
   gateways) return HTTP 401 with `ModelError: "Model X is not supported"` for
-  an unsupported model — not a bad key. `factory.py:198` /
-  `adaptive_llm_router.py:87` map any 401 → `AUTHENTICATION_ERROR`, so logs show
-  `provider_cooldown_set ... category=authentication_error` misleadingly. Verify
-  by probing the same key with the provider's own default model (200) vs the
-  offending model (401 `ModelError`).
+  an unsupported model — not a bad key. `_default_categorizer` in
+  `provider_fallback.py` inspects `LLMClientError.response_body` and
+  `httpx.HTTPStatusError.response.text` for model-not-supported patterns,
+  classifying them as `INVALID_REQUEST` (short cooldown) instead of
+  `AUTHENTICATION_ERROR` (60s cooldown). Verify by probing the same key with
+  the provider's own default model (200) vs the offending model (401
+  `ModelError`).
 - **Pinning a provider via env must pin its model too.** Model resolution
   priority (above) puts an explicit `purpose_model` before `{provider}_model`,
   so `*_LLM_PROVIDER=opencodego` without `*_LLM_MODEL=deepseek-v4-flash` sends
@@ -165,3 +167,13 @@ global client.
   means the rate limiter silently uses defaults (or `None`).
 - After changing `opencode.json`/skills: opencode config is not hot-reloaded —
   restart opencode.
+- **SiliconFlow base URL is `.com`, not `.cn`.** `api.siliconflow.cn` rejects
+  valid keys (401). Use `https://api.siliconflow.com/v1`. No free tier —
+  requires paid credits.
+- **AnyAPI.ai free tier uses `:free` suffix models.** Paid models (e.g.
+  `gpt-4o-mini`) return 403 `key_model_access_denied`. Use
+  `nvidia/nemotron-3-nano-30b-a3b:free` or similar. Some `:free` models
+  return 404 (no provider routing) — test with curl first.
+- **Ollama Cloud uses cloud-only models.** `llama3.2:3b` is a local-only model.
+  Use cloud-available models like `gpt-oss:20b`. Check available models via
+  `curl https://ollama.com/api/tags`.

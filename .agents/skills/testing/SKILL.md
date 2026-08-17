@@ -48,6 +48,10 @@ on violation), and rejects non-Ollama providers unless
   `make_settings(**overrides)` from `tests.conftest`.
 - `make_settings()` defaults every provider to Ollama with **empty** keys; add
   placeholder keys only for providers the test actually routes to.
+- **`make_settings()` hardcodes provider keys to `""`.** Tests that need
+  env-file aliasing (e.g. `HF_TOKEN` → `huggingface_api_key`) must construct
+  `AppSettings(_env_file=...)` directly — `make_settings` overrides the env
+  file with explicit empty strings.
 - Never real keys/secrets in tests (pre-commit scans staged files).
 - **When adding a new LLM provider**, you MUST also update `tests/conftest.py`:
   add `"{provider}_api_key": ""` to `make_settings()` defaults AND add
