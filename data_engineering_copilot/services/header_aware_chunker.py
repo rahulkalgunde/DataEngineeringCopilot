@@ -18,6 +18,22 @@ logger = logging.getLogger(__name__)
 
 _HEADER_RE = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
 _FENCE_RE = re.compile(r"^```(\w*)\n(.*?)^```", re.MULTILINE | re.DOTALL)
+# Leading YAML frontmatter block (Jekyll ``---\n...\n---``) stripped before
+# sectioning so license/title boilerplate never leaks into chunk text.
+_FRONTMATTER_RE = re.compile(r"^\ufeff?---\r?\n.*?\r?\n---\r?\n?", re.DOTALL)
+# Navigation-only stub markers. Heading-less pages whose *entire* body matches
+# one of these redirect/moved notices carry no retrieval content and stay
+# ``no_content`` (matching the ``redirect_stub`` classification).
+_NAV_STUB_MARKERS = (
+    "has moved",
+    "has been moved",
+    "moved to",
+    "is now archived",
+    "under construction",
+    "work in progress",
+    "broken apart",
+    "page is moved",
+)
 
 
 @dataclass
@@ -94,12 +110,66 @@ class HeaderAwareChunker:
     # Section splitting
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _split_into_sections(text: str) -> list[_RawSection]:
+    def _split_heading_less_paragraphs(self, text: str) -> list[_RawSection]:
+        """Split heading-less *text* into paragraph-sized level-0 sections.
+
+        Returns an empty list for blank input. Paragraphs longer than
+        ``chunk_size_words`` are further split into word windows so the
+        downstream merge never accumulates an oversized chunk.
+        """
+        body = text.strip()
+        if not body:
+            return []
+
+        # Redirect / moved / under-construction notices have no retrieval
+        # value and must stay ``no_content``.
+        lower = body.lower()
+        if len(lower.split()) <= 40 and any(marker in lower for marker in _NAV_STUB_MARKERS):
+            return []
+
+        sections: list[_RawSection] = []
+        for paragraph in re.split(r"\n\s*\n", body):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+            words = paragraph.split()
+            if len(words) <= self.chunk_size_words:
+                sections.append(
+                    _RawSection(
+                        header="",
+                        level=0,
+                        heading_path=(),
+                        text=paragraph,
+                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(paragraph)),
+                    )
+                )
+                continue
+            # Oversized paragraph: emit word windows so each section stays
+            # within the budget. Windows share no heading path.
+            for start in range(0, len(words), self.chunk_size_words):
+                window = " ".join(words[start : start + self.chunk_size_words])
+                sections.append(
+                    _RawSection(
+                        header="",
+                        level=0,
+                        heading_path=(),
+                        text=window,
+                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(window)),
+                    )
+                )
+        return sections
+
+    def _split_into_sections(self, text: str) -> list[_RawSection]:
         """Split markdown *text* into sections at header boundaries."""
+        text = _FRONTMATTER_RE.sub("", text, count=1)
         matches = list(_HEADER_RE.finditer(text))
         if not matches:
-            return []
+            # No markdown headings (table-heavy reference pages, TOC lists,
+            # prose-only docs). Split on blank-line paragraphs so
+            # ``_merge_sections`` can chunk by word budget instead of
+            # silently dropping the page. Oversized single paragraphs are
+            # further split into word windows.
+            return self._split_heading_less_paragraphs(text)
 
         sections: list[_RawSection] = []
 

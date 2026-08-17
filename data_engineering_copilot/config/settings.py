@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,6 +91,13 @@ def _optional_string_tuple(raw_source: dict, field_name: str, index: int) -> tup
     if not all(isinstance(item, str) and item.strip() for item in value):
         raise ValueError(f"Documentation source #{index} field `{field_name}` must contain only non-empty strings.")
     return tuple(item.strip() for item in value)
+
+
+def _optional_string(raw_source: dict, field_name: str) -> str:
+    value = raw_source.get(field_name, "")
+    if not isinstance(value, str):
+        raise ValueError(f"pinned source config field `{field_name}` must be a string")
+    return value.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +232,10 @@ class PinnedStreamConfig:
 class PinnedSourceConfig:
     """An immutable pinned source: a GitHub repo release or an llms.txt index.
 
-    ``type`` is ``"github"`` (uses ``repository``/``ref``/``commit``/``streams``)
-    or ``"url_index"`` (uses ``index_url``/``url_prefix``/``cache_dir``/``doc_type``).
+    ``type`` is ``"github"`` (uses ``repository``/``ref``/``commit``/``streams``),
+    ``"url_index"`` (uses ``index_url``/``url_prefix``/``cache_dir``/``doc_type``),
+    or ``"local_mirror"`` (uses ``mirror_dir``/``url_prefix``/``doc_type`` —
+    resolves against a local git mirror instead of the network).
     ``slug`` is a short stable identifier used in generation IDs and CLI source
     selection.
     """
@@ -243,10 +253,11 @@ class PinnedSourceConfig:
     url_prefix: str = ""
     base_url: str = ""
     cache_dir: str = ""
+    mirror_dir: str = ""
     doc_type: str = "guide"
 
 
-_VALID_PINNED_SOURCE_TYPES = frozenset({"github", "url_index"})
+_VALID_PINNED_SOURCE_TYPES = frozenset({"github", "url_index", "local_mirror"})
 
 
 def load_pinned_sources(path: Path) -> tuple[PinnedSourceConfig, ...]:
@@ -297,7 +308,6 @@ def load_pinned_sources(path: Path) -> tuple[PinnedSourceConfig, ...]:
             license_name = _require_str(raw_source, "license")
             if not (repository.startswith("https://") and (repository.endswith(".git") or "github.com" in repository)):
                 raise ValueError(f"pinned source config `sources[{idx}].repository` must be an HTTPS GitHub repository")
-            import re
 
             if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
                 raise ValueError(f"pinned source config `sources[{idx}].commit` must be a 40-character hexadecimal SHA")
@@ -354,28 +364,48 @@ def load_pinned_sources(path: Path) -> tuple[PinnedSourceConfig, ...]:
                 )
             )
         else:
-            index_url = _require_str(raw_source, "index_url")
             url_prefix = _require_str(raw_source, "url_prefix")
-            base_url = _require_str(raw_source, "base_url")
-            cache_dir = _require_str(raw_source, "cache_dir")
             doc_type = _require_str(raw_source, "doc_type")
             if doc_type not in _VALID_DOC_TYPES:
                 raise ValueError(
                     f"pinned source config `sources[{idx}].doc_type` must be one of {sorted(_VALID_DOC_TYPES)}"
                 )
-            sources.append(
-                PinnedSourceConfig(
-                    type=source_type,
-                    name=name,
-                    slug=slug,
-                    version=version,
-                    index_url=index_url,
-                    url_prefix=url_prefix,
-                    base_url=base_url,
-                    cache_dir=cache_dir,
-                    doc_type=doc_type,
+            if source_type == "url_index":
+                sources.append(
+                    PinnedSourceConfig(
+                        type=source_type,
+                        name=name,
+                        slug=slug,
+                        version=version,
+                        index_url=_require_str(raw_source, "index_url"),
+                        url_prefix=url_prefix,
+                        base_url=_require_str(raw_source, "base_url"),
+                        cache_dir=_require_str(raw_source, "cache_dir"),
+                        doc_type=doc_type,
+                    )
                 )
-            )
+            else:
+                mirror_dir = _require_str(raw_source, "mirror_dir")
+                commit = _require_str(raw_source, "commit")
+                if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+                    raise ValueError(
+                        f"pinned source config `sources[{idx}].commit` must be a 40-character hexadecimal SHA"
+                    )
+                license_name = _require_str(raw_source, "license")
+                sources.append(
+                    PinnedSourceConfig(
+                        type=source_type,
+                        name=name,
+                        slug=slug,
+                        version=version,
+                        license=license_name,
+                        commit=commit,
+                        url_prefix=url_prefix,
+                        base_url=_optional_string(raw_source, "base_url"),
+                        mirror_dir=mirror_dir,
+                        doc_type=doc_type,
+                    )
+                )
 
     return tuple(sources)
 
@@ -536,6 +566,8 @@ class AppSettings(BaseSettings):
     spark_corpus_dir: Path = PROJECT_ROOT / "data" / "spark_corpus"
     pinned_cache_dir: Path = PROJECT_ROOT / "data" / "pinned_src"
     pinned_corpus_dir: Path = PROJECT_ROOT / "data" / "pinned_corpus"
+    # Local git mirror of Claude docs (populated by ``scripts/mirror_claude_docs.py``).
+    claude_docs_mirror_dir: Path = PROJECT_ROOT / "data" / "claude_docs_mirror"
     index_state_dir: Path = PROJECT_ROOT / ".index_state"
     active_collection_alias: str = "data_engineering_docs"
     collection_name: str = "data_engineering_docs"
@@ -1060,7 +1092,7 @@ class AppSettings(BaseSettings):
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 30
-    max_context_chars: int = 12000
+    max_context_chars: int = 16000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.

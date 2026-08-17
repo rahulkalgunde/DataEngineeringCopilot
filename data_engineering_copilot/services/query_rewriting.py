@@ -415,7 +415,7 @@ class QueryRewriter:
                 logger.warning("LLM rewrite produced degenerate query %r, falling back to rule-based", rewritten[:80])
                 return self.rewrite(query)
 
-            intent = self.classify_intent(query)
+            intent = await self.async_classify_intent(query)
             hyde = await self._generate_hyde_async(query) if self._hyde_enabled else ""
 
             steps: tuple[str, ...] = (rewritten,)
@@ -507,6 +507,13 @@ class QueryRewriter:
         except Exception as exc:
             logger.warning("Query expansion failed, using original: %s", exc)
             base = [query]
+
+        # Deterministic step-back variant: an abstract/general version of a
+        # specific query broadens retrieval for version-qualified or
+        # deeply-qualified queries.
+        step_back = self._step_back(query)
+        if step_back and step_back not in base:
+            base.append(step_back)
 
         # Deterministic Spark-specific variants using terms present in the
         # indexed Spark source docs.
@@ -619,6 +626,34 @@ class QueryRewriter:
         if left_q == right_q:
             return (query,)
         return (left_q, right_q)
+
+    def _step_back(self, query: str) -> str | None:
+        """Generate an abstract/general version of a specific query.
+
+        Returns None when the query is not specific enough to benefit.
+        """
+        # Trigger: version numbers (e.g. "4.0.0"), dotted identifiers (e.g.
+        # "pyspark.sql.functions.array_sort"), or very short queries (< 5 words).
+        has_version = bool(re.search(r"\d+\.\d+", query))
+        has_dotted_id = bool(re.search(r"\b[a-z]+\.[a-z]+\.[a-z]+", query))
+        is_short = len(query.split()) < 5
+
+        if not (has_version or has_dotted_id or is_short):
+            return None
+
+        # Strip version numbers and shrink dotted identifiers to their final
+        # segment to create the abstract query.
+        abstract = re.sub(r"\d+\.\d+(\.\d+)?", "", query)
+        abstract = re.sub(
+            r"\b[a-z]+\.[a-z]+(?:\.[a-z]+)*",
+            lambda m: m.group().split(".")[-1],
+            abstract,
+        )
+        abstract = re.sub(r"\s+", " ", abstract).strip()
+
+        if len(abstract) < 10 or abstract.lower() == query.lower():
+            return None
+        return abstract
 
     def _decompose_comparative(self, query: str) -> tuple[str, ...]:
         """Split 'Compare X vs Y' or cross-mode 'X or Y' into per-mode sub-queries."""
