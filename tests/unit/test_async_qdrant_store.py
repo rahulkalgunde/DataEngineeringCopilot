@@ -159,16 +159,26 @@ async def test_chunk_to_payload_round_trips_deployment_mode():
         url="http://example.com",
         text="content",
         deployment_mode="kubernetes",
+        token_count=42,
+        character_count=7,
+        representation="native",
     )
     payload = chunk_to_payload(chunk)
     assert payload["deployment_mode"] == "kubernetes"
+    assert payload["token_count"] == 42
+    assert payload["character_count"] == 7
+    assert payload["representation"] == "native"
 
 
 async def test_chunk_to_payload_deployment_mode_defaults_empty():
     from data_engineering_copilot.infrastructure.async_qdrant_store import chunk_to_payload
 
     chunk = DocumentChunk(chunk_id="chunk1", source_name="s", title="t", url="u", text="c")
-    assert chunk_to_payload(chunk)["deployment_mode"] == ""
+    payload = chunk_to_payload(chunk)
+    assert payload["deployment_mode"] == ""
+    assert payload["token_count"] == 0
+    assert payload["character_count"] == 0
+    assert payload["representation"] == ""
 
 
 async def test_empty_source_filter_rejected(mock_async_qdrant):
@@ -549,3 +559,83 @@ async def test_client_not_initialized_returns_safe_defaults():
         pytest.raises(Exception, match="Connection refused"),
     ):
         AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+
+
+async def test_chunk_to_payload_round_trips_parent_chunk_id():
+    from data_engineering_copilot.infrastructure.async_qdrant_store import chunk_to_payload
+
+    chunk = DocumentChunk(
+        chunk_id="child1",
+        source_name="s",
+        title="t",
+        url="u",
+        text="c",
+        parent_chunk_id="parent1",
+    )
+    payload = chunk_to_payload(chunk)
+    assert payload["parent_chunk_id"] == "parent1"
+
+    no_parent = DocumentChunk(chunk_id="p", source_name="s", title="t", url="u", text="c")
+    assert chunk_to_payload(no_parent)["parent_chunk_id"] == ""
+
+
+async def test_query_substitutes_parent_context(mock_async_qdrant):
+    """A retrieved child chunk must carry its parent's text when available."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    child_hit = MagicMock()
+    child_hit.id = "child-uuid"
+    child_hit.score = 0.8
+    child_hit.payload = {
+        "chunk_id": "doc:p0:c0",
+        "source_name": "test_source",
+        "title": "Title",
+        "url": "http://example.com/1",
+        "text": "child text",
+        "parent_chunk_id": "doc:p0",
+    }
+    mock_response = MagicMock()
+    mock_response.points = [child_hit]
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    parent_hit = MagicMock()
+    parent_hit.id = str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_DNS, "doc:p0"))
+    parent_hit.payload = {"text": "PARENT CONTEXT TEXT"}
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    store._client.retrieve = AsyncMock(return_value=[parent_hit])
+
+    results = await store.query([0.1] * 768, top_k=1, query_text="apache spark")
+
+    assert len(results) == 1
+    assert results[0].chunk.text == "PARENT CONTEXT TEXT"
+    assert results[0].chunk.parent_chunk_id == "doc:p0"
+
+
+async def test_query_keeps_child_text_when_parent_missing(mock_async_qdrant):
+    """If the parent point cannot be fetched, the child text is kept."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    child_hit = MagicMock()
+    child_hit.id = "child-uuid"
+    child_hit.score = 0.8
+    child_hit.payload = {
+        "chunk_id": "doc:p0:c0",
+        "source_name": "test_source",
+        "title": "Title",
+        "url": "http://example.com/1",
+        "text": "child text",
+        "parent_chunk_id": "doc:p0",
+    }
+    mock_response = MagicMock()
+    mock_response.points = [child_hit]
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+    mock_async_qdrant.retrieve = AsyncMock(return_value=[])
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    results = await store.query([0.1] * 768, top_k=1, query_text="apache spark")
+
+    assert len(results) == 1
+    assert results[0].chunk.text == "child text"

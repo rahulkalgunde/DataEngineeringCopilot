@@ -174,6 +174,10 @@ class DocumentChunk:
     # Source representation for the hybrid corpus: "native" (raw repo file) or
     # "rendered" (locally built HTML). Empty for legacy/non-Spark chunks.
     representation: str = ""
+    # Hierarchical parent-child link: chunk_id of the parent context chunk this
+    # child was split from. Empty for parent chunks and for corpora built
+    # without hierarchical chunking.
+    parent_chunk_id: str = ""
 
 
 @dataclass(frozen=True)

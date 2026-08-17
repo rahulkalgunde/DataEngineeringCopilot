@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Self, cast
 
@@ -57,6 +58,10 @@ def chunk_to_payload(chunk: DocumentChunk) -> dict:
         "parent_content_hash": chunk.parent_content_hash,
         "segment_index": chunk.segment_index,
         "segment_total": chunk.segment_total,
+        "token_count": chunk.token_count,
+        "character_count": chunk.character_count,
+        "representation": chunk.representation,
+        "parent_chunk_id": chunk.parent_chunk_id,
     }
 
 
@@ -228,6 +233,27 @@ class AsyncQdrantVectorStore:
                     _metadata_field,
                     exc_info=True,
                 )
+        for _metadata_field in ("index_generation", "source_commit"):
+            try:
+                await self._client.create_payload_index(
+                    collection_name=self._collection_name,
+                    field_name=_metadata_field,
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                logger.info(
+                    "Payload index on %r already exists or could not be created.",
+                    _metadata_field,
+                    exc_info=True,
+                )
+        try:
+            await self._client.create_payload_index(
+                collection_name=self._collection_name,
+                field_name="parent_chunk_id",
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            logger.info("Payload index on 'parent_chunk_id' already exists or could not be created.", exc_info=True)
 
     def _embedding_dim(self) -> int:
         if self._embedding_dimension_override is not None:
@@ -490,6 +516,10 @@ class AsyncQdrantVectorStore:
                     parent_content_hash=payload.get("parent_content_hash", ""),
                     segment_index=payload.get("segment_index", -1),
                     segment_total=payload.get("segment_total", 1),
+                    token_count=payload.get("token_count", 0),
+                    character_count=payload.get("character_count", 0),
+                    representation=payload.get("representation", ""),
+                    parent_chunk_id=payload.get("parent_chunk_id", ""),
                 )
                 score = float(hit.score) if hit.score is not None else 0.0
                 if rrf_confidence_scale is not None and score > 0.0:
@@ -498,6 +528,9 @@ class AsyncQdrantVectorStore:
                     confidence = max(0.0, min(1.0, score))
                 distance = 1.0 - confidence
                 retrieved.append(RetrievedChunk(chunk=chunk, distance=distance, confidence=confidence))
+
+            if any(r.chunk.parent_chunk_id for r in retrieved):
+                retrieved = await self._substitute_parent_context(retrieved)
 
             return retrieved
         except Exception as exc:
@@ -509,6 +542,48 @@ class AsyncQdrantVectorStore:
                 ) from exc
             logger.exception("Failed to async query Qdrant: %s", exc)
             raise
+
+    async def _substitute_parent_context(self, retrieved: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Replace child-chunk text with its parent context.
+
+        In a hierarchical corpus, retrieved points are small child chunks. The
+        LLM needs the broader parent context, so fetch each referenced parent
+        point by ID and swap the child's ``text`` for the parent's. Children
+        whose parent cannot be fetched keep their own (child) text.
+        """
+        if self._client is None:
+            return retrieved
+        parent_ids = sorted({r.chunk.parent_chunk_id for r in retrieved if r.chunk.parent_chunk_id})
+        if not parent_ids:
+            return retrieved
+        try:
+            parent_points = await self._client.retrieve(
+                collection_name=self._collection_name,
+                ids=[self._chunk_id_to_uuid(pid) for pid in parent_ids],
+                with_payload=True,
+            )
+        except Exception as exc:
+            logger.warning("Parent context fetch failed, keeping child text: %s", exc)
+            return retrieved
+        parent_text = {str(p.id): (p.payload or {}).get("text", "") for p in parent_points}
+        substituted: list[RetrievedChunk] = []
+        for item in retrieved:
+            pid = item.chunk.parent_chunk_id
+            if not pid:
+                substituted.append(item)
+                continue
+            text = parent_text.get(self._chunk_id_to_uuid(pid))
+            if not text:
+                substituted.append(item)
+                continue
+            substituted.append(
+                RetrievedChunk(
+                    chunk=replace(item.chunk, text=text),
+                    distance=item.distance,
+                    confidence=item.confidence,
+                )
+            )
+        return substituted
 
     def set_query_sparse(self, sparse_vector) -> None:
         """Set the sparse vector for the next hybrid query.

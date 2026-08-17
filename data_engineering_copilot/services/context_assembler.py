@@ -249,6 +249,10 @@ class ContextAssembler:
         A simple heuristic: if two chunks share >70% of their words, deduplicate.
         Keeps the first (highest confidence) version.
 
+        In a hierarchical corpus, multiple children of the same parent already
+        carry identical (substituted) parent text, so siblings are collapsed to
+        the single highest-confidence child.
+
         Args:
             chunks: List of retrieved chunks
 
@@ -258,9 +262,17 @@ class ContextAssembler:
         if len(chunks) <= 1:
             return chunks
 
-        deduped = [chunks[0]]
+        deduped: list[RetrievedChunk] = []
+        seen_parents: set[str] = set()
 
-        for current_chunk in chunks[1:]:
+        for current_chunk in chunks:
+            parent_id = current_chunk.chunk.parent_chunk_id
+            if parent_id:
+                if parent_id in seen_parents:
+                    logger.debug("Deduplication: skipped sibling child of parent %s (already included)", parent_id)
+                    continue
+                seen_parents.add(parent_id)
+
             # Check if current chunk is similar to any in deduped
             is_duplicate = False
 

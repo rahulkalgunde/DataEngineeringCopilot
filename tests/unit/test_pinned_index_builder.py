@@ -163,6 +163,116 @@ def test_build_writes_artifacts(tmp_path) -> None:
     assert (tmp_path / "build_report.json").is_file()
 
 
+def test_build_produces_parent_and_child_chunks() -> None:
+    """Hierarchical chunking must persist parents and children in the store."""
+    store = InMemoryVectorStore()
+    embedder = _StubEmbedder()
+    generation = "gen-x"
+    # A chunk large enough to exceed the child budget (256 tokens).
+    big_text = "# Heading\n\n" + " ".join(f"word{i}" for i in range(1500)) + "\n"
+    package = _package("airflow", "Apache Airflow Documentation", "a" * 40, generation, [big_text])
+
+    report = asyncio.run(_builder(store, embedder, generation).build([package]))
+
+    chunks = list(store._chunks.values())
+    parents = [c for c in chunks if not c.parent_chunk_id]
+    children = [c for c in chunks if c.parent_chunk_id]
+    assert parents, "expected parent chunks in store"
+    assert children, "expected child chunks in store"
+    assert report.chunk_count == len(chunks)
+
+    parent_ids = {c.chunk_id for c in parents}
+    for child in children:
+        assert child.parent_chunk_id in parent_ids
+
+
+def test_build_validate_artifacts_parent_child_referential_integrity() -> None:
+    """Validation must reject a child whose parent is missing."""
+    generation = "gen-x"
+    child = replace(
+        _artifacts_chunk(generation, "a" * 40, "child-1"),
+        parent_chunk_id="missing-parent",
+    )
+    coverage = [_coverage_record("docs/doc.md")]
+
+    failures = validate_pinned_generation_artifacts(
+        generation=generation,
+        expected_commits={"a" * 40, ""},
+        chunks=[child],
+        coverage=coverage,
+        qdrant_point_count=None,
+        bm25_ready=True,
+        sparse_configured=True,
+    )
+
+    assert any("parent" in f and "not found" in f for f in failures)
+
+
+def test_build_report_per_source_counts_match_normalized_chunks(tmp_path) -> None:
+    import json
+
+    store = InMemoryVectorStore()
+    embedder = _StubEmbedder()
+    generation = "gen-x"
+
+    def _distinct_package(slug: str, name: str, commit: str, texts: list[str]) -> PreparedSource:
+        chunks: list[DocumentChunk] = []
+        coverage: list[CoverageRecord] = []
+        for i, text in enumerate(texts):
+            parsed = ParsedDocument(
+                source_name=name,
+                title=f"Doc {i}",
+                url=f"https://example.com/{slug}/{i}",
+                text=text,
+                doc_type="guide",
+                language="conceptual",
+                source_commit=commit,
+                file_path=f"docs/{slug}-{i}.md",
+                license="Apache-2.0",
+            )
+            chunk = asyncio.run(HeaderAwareChunker().chunk(parsed))[0]
+            chunks.append(
+                replace(
+                    chunk,
+                    source_commit=commit,
+                    index_generation=generation,
+                    file_path=f"docs/{slug}-{i}.md",
+                )
+            )
+            coverage.append(
+                CoverageRecord(
+                    relative_path=f"docs/{slug}-{i}.md",
+                    representation="native",
+                    doc_type="guide",
+                    canonical_url=f"https://example.com/{slug}/{i}",
+                    status="indexed",
+                    chunk_count=1,
+                    content_hash="",
+                )
+            )
+        return PreparedSource(
+            slug=slug,
+            source_name=name,
+            generation=generation,
+            commit=commit,
+            chunks=tuple(chunks),
+            coverage=tuple(coverage),
+        )
+
+    airflow = _distinct_package(
+        "airflow", "Apache Airflow Documentation", "a" * 40, [_long("Airflow A"), _long("Airflow B")]
+    )
+    delta = _distinct_package("delta", "Delta Lake Documentation", "b" * 40, [_LONG_BODY])
+
+    asyncio.run(_builder(store, embedder, generation, output_dir=tmp_path).build([airflow, delta]))
+
+    report = json.loads((tmp_path / "build_report.json").read_text(encoding="utf-8"))
+    by_slug = {entry["slug"]: entry["chunk_count"] for entry in report["sources"]}
+    assert report["final_chunk_count"] == sum(by_slug.values())
+    assert by_slug["airflow"] == 2
+    assert by_slug["delta"] == 1
+
+
 def _coverage_record(relative_path: str, **kwargs) -> CoverageRecord:
     defaults = {
         "relative_path": relative_path,
