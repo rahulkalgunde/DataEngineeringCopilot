@@ -446,6 +446,23 @@ class TestDegenerateRewriteFilter:
 
         assert result.hyde_query == ""
 
+    @pytest.mark.asyncio
+    async def test_async_rewrite_uses_async_llm_intent_classification(self):
+        """async_rewrite must use the async intent classifier (no asyncio.run
+        deadlock) when intent_llm_enabled=True and regex has no match."""
+
+        class IntentLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                if "intent" in prompt:
+                    return '{"intent": "code_example"}'
+                return "spark sql structured data"
+
+        rw = QueryRewriter(llm_client=IntentLLM(), enabled=True, hyde_enabled=False, intent_llm_enabled=True)
+
+        result = await rw.async_rewrite("Give me something to read")
+
+        assert result.intent == "code_example"
+
 
 class TestAsyncRewriteWithHistory:
     def _msg(self, role: str, content: str):
@@ -578,6 +595,51 @@ async def test_history_with_session_topic_anchors_followup():
     prompt = llm.calls[0]
     assert "## CONVERSATION TOPIC" in prompt
     assert "Spark join salting" in prompt
+
+
+class TestStepBack:
+    def test_step_back_triggers_on_version_number(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        step = rw._step_back("Spark 4.0.0 array_sort example")
+        assert step is not None
+        assert "4.0.0" not in step
+        assert "array_sort" in step
+
+    def test_step_back_triggers_on_dotted_identifier(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        step = rw._step_back("pyspark.sql.functions.array_sort usage")
+        assert step is not None
+        assert "pyspark.sql.functions" not in step
+        assert "array_sort" in step
+
+    def test_step_back_skips_generic_query(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        assert rw._step_back("How do I install Spark?") is None
+
+    def test_step_back_returns_none_when_unchanged(self):
+        rw = QueryRewriter(llm_client=None, enabled=True)
+        # Short but with nothing to abstract away — must not emit a no-op.
+        assert rw._step_back("Spark filter example") is None
+
+    @pytest.mark.asyncio
+    async def test_expand_queries_includes_step_back(self):
+        class EmptyLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return ""
+
+        rw = QueryRewriter(llm_client=EmptyLLM(), enabled=True)
+        result = await rw.expand_queries("Spark 4.0.0 array_sort syntax", max_variations=3)
+        assert any("4.0.0" not in q for q in result if q != "Spark 4.0.0 array_sort syntax")
+
+    @pytest.mark.asyncio
+    async def test_expand_queries_no_step_back_for_generic(self):
+        class EmptyLLM(_LLMStubBase):
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                return ""
+
+        rw = QueryRewriter(llm_client=EmptyLLM(), enabled=True)
+        result = await rw.expand_queries("How do I install Spark?", max_variations=3)
+        assert result == ["How do I install Spark?"]
 
 
 def _msg(role: str, content: str):

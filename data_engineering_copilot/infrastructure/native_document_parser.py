@@ -32,6 +32,10 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 
+# Leading YAML frontmatter block (Jekyll ``---\n...\n---``). Stripped so
+# license/title boilerplate never leaks into parsed text or chunk content.
+_FRONTMATTER_RE = re.compile(r"^\ufeff?---\r?\n.*?\r?\n---\r?\n?", re.DOTALL)
+
 
 @dataclass(frozen=True)
 class NativeParsedDocument:
@@ -72,7 +76,8 @@ class NativeDocumentParser:
     def parse_markdown(self, text: str, path: str) -> NativeParsedDocument:
         """Normalize Markdown, preserving headings and fenced code blocks."""
         normalized = self._normalize_newlines(text)
-        cleaned = self._strip_liquid(normalized)
+        cleaned = self._strip_frontmatter(normalized)
+        cleaned = self._strip_liquid(cleaned)
         title = self._markdown_title(cleaned, path)
         sections = self._split_sections_markdown(cleaned)
         return NativeParsedDocument(
@@ -132,6 +137,11 @@ class NativeDocumentParser:
         # Collapse runs of blank lines left by directive removal to two.
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip() + "\n" if text.strip() else text
+
+    @staticmethod
+    def _strip_frontmatter(text: str) -> str:
+        """Remove a leading YAML frontmatter block from *text* if present."""
+        return _FRONTMATTER_RE.sub("", text, count=1)
 
     @staticmethod
     def _markdown_title(text: str, path: str) -> str:

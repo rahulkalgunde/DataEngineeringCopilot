@@ -73,6 +73,32 @@ def test_html_comments_removed(parser) -> None:
     assert "body" in doc.text
 
 
+def test_frontmatter_stripped_from_markdown(parser) -> None:
+    md = """---
+layout: global
+title: Spark SQL Reference
+license: |
+  Licensed to the Apache Software Foundation...
+---
+# Spark SQL Reference
+
+Some body text.
+"""
+    doc = parser.parse_markdown(md, "docs/sql-ref.md")
+    assert "layout: global" not in doc.text
+    assert "Licensed to the Apache Software Foundation" not in doc.text
+    assert "# Spark SQL Reference" in doc.text
+    assert "Some body text." in doc.text
+    # Title derives from the markdown heading, not frontmatter.
+    assert doc.title == "Spark SQL Reference"
+
+
+def test_frontmatter_absent_is_noop(parser) -> None:
+    md = "# Plain\n\nJust body.\n"
+    doc = parser.parse_markdown(md, "docs/plain.md")
+    assert "# Plain" in doc.text
+
+
 # ------------------------------------------------------------------
 # RST parsing
 # ------------------------------------------------------------------

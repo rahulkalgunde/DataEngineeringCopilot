@@ -8,6 +8,7 @@ attached post-chunking (its ``chunk()`` takes no metadata parameter).
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -139,6 +140,7 @@ class GithubSourcePreparer:
             license=self._config.license,
             index_generation=self._generation,
             chunker_version="header-aware-v1",
+            parser_version="native-document-parser-v1",
         )
 
     def _attach_spark_metadata(self, chunk: DocumentChunk) -> DocumentChunk:
@@ -146,6 +148,7 @@ class GithubSourcePreparer:
             chunk,
             index_generation=self._generation,
             chunker_version="spark-chunker-v1",
+            parser_version="native-document-parser-v1",
         )
 
     @staticmethod
@@ -171,7 +174,7 @@ class GithubSourcePreparer:
                     canonical_url=record.source_url,
                     status="indexed" if chunk_count > 0 else "no_content",
                     chunk_count=chunk_count,
-                    content_hash="",
+                    content_hash=_file_content_hash(record.absolute_path),
                     failure_reason="" if chunk_count > 0 else "parsed to empty text",
                 )
             )
@@ -206,3 +209,11 @@ def _rst_to_markdown_headings(text: str) -> str:
         out.append(lines[i])
         i += 1
     return "\n".join(out)
+
+
+def _file_content_hash(path: Path) -> str:
+    """SHA-256 of a source file's raw bytes for coverage drift detection."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""

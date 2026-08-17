@@ -59,7 +59,29 @@ class TestHeaderAwareChunker:
 
     def test_no_headers_returns_empty(self):
         chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=3)
-        chunks = chunker._sync_chunk(_doc("Just plain text without any headers."))
+        chunks = chunker._sync_chunk(_doc(""))
+        assert chunks == []
+
+    def test_heading_less_content_is_chunked(self):
+        # Regression: documents with no ``#`` markdown headings (table-heavy
+        # reference pages, prose-only docs) were silently dropped. They must be
+        # split into paragraph-sized chunks instead.
+        text = (
+            "Spark SQL supports operating on a variety of data sources through the DataFrame interface.\n\n"
+            "Registering a DataFrame as a temporary view allows you to run SQL queries over its data."
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=3)
+        chunks = chunker._sync_chunk(_doc(text))
+        assert chunks, "heading-less content must produce chunks, not be dropped"
+        joined = " ".join(c.text for c in chunks)
+        assert "DataFrame interface" in joined
+        assert "temporary view" in joined
+
+    def test_redirect_stub_stays_no_content(self):
+        # Nav-only stubs (moved / under-construction notices) keep yielding
+        # zero chunks so coverage marks them ``no_content``.
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=10, min_chunk_words=3)
+        chunks = chunker._sync_chunk(_doc("This document has moved [here](rdd-programming-guide.html)."))
         assert chunks == []
 
     def test_min_chunk_words_filter(self):
