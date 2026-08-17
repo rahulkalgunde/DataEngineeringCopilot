@@ -12,6 +12,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -92,12 +93,27 @@ class PinnedIndexBuilder:
             normalized.extend(self._normalize_chunk(chunk))
         _reject_duplicate_ids(normalized)
 
+        # Hierarchical pass: split each normalized segment into a parent chunk
+        # plus smaller children for precise retrieval. The output carries
+        # ``parent_chunk_id`` links and satisfies segment-budget validation.
+        from data_engineering_copilot.services.hierarchical_chunker import hierarchical_chunk
+
+        hierarchical: list[DocumentChunk] = []
+        for chunk in normalized:
+            hierarchical.extend(hierarchical_chunk(chunk))
+        normalized = hierarchical
+        _reject_duplicate_ids(normalized)
+
         segment_failures = _validate_segment_budgets(normalized)
         if segment_failures:
             raise ValueError(f"pinned build segment validation failed: {segment_failures[:3]}")
 
         self._write_chunks_jsonl(normalized)
         self._write_coverage([record for package in packages for record in package.coverage])
+
+        per_source_chunk_counts = {
+            package.slug: sum(1 for c in normalized if c.source_name == package.source_name) for package in packages
+        }
 
         corpus_texts = [c.text for c in normalized]
         self._store.fit_bm25_corpus(corpus_texts)
@@ -110,7 +126,7 @@ class PinnedIndexBuilder:
         if getattr(self._store, "_bm25", None) is not None:
             bm25_vocab = self._store._bm25.vocab_size  # type: ignore[attr-defined]
 
-        self._write_build_report(normalized, packages, validation, bm25_vocab)
+        self._write_build_report(normalized, packages, validation, bm25_vocab, per_source_chunk_counts)
 
         return IndexBuildReport(
             generation=self._generation,
@@ -169,6 +185,7 @@ class PinnedIndexBuilder:
                     segment_total=len(segment_texts),
                     token_count=count_tokens(text),
                     character_count=len(text),
+                    crawled_at=datetime.now(UTC).isoformat(),
                 )
             )
         return normalized
@@ -205,6 +222,7 @@ class PinnedIndexBuilder:
         packages: Sequence[PreparedSource],
         validation: dict[str, object],
         bm25_vocab: int,
+        per_source_chunk_counts: dict[str, int],
     ) -> None:
         if self._output_dir is None:
             return
@@ -215,7 +233,7 @@ class PinnedIndexBuilder:
                     "slug": package.slug,
                     "source_name": package.source_name,
                     "commit": package.commit,
-                    "chunk_count": len(package.chunks),
+                    "chunk_count": per_source_chunk_counts.get(package.slug, 0),
                     "coverage_count": len(package.coverage),
                 }
                 for package in packages
@@ -271,6 +289,12 @@ def validate_pinned_generation_artifacts(
             failures.append(f"chunk {chunk.chunk_id}: file_path {chunk.file_path!r} missing from coverage")
     if len(set(chunk_ids)) != len(chunk_ids):
         failures.append("duplicate chunk ids")
+    # Parent-child referential integrity: every child's parent_chunk_id must
+    # resolve to a persisted parent chunk in the generation.
+    parent_ids = {c.chunk_id for c in chunks if not c.parent_chunk_id}
+    for chunk in chunks:
+        if chunk.parent_chunk_id and chunk.parent_chunk_id not in parent_ids:
+            failures.append(f"chunk {chunk.chunk_id}: parent {chunk.parent_chunk_id!r} not found in generation")
     if qdrant_point_count is not None and qdrant_point_count != len(chunks):
         failures.append(f"qdrant point count {qdrant_point_count} != chunks {len(chunks)}")
     if not bm25_ready:

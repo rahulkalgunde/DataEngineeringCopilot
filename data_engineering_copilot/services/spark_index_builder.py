@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -225,6 +226,17 @@ class SparkIndexBuilder:
         normalized: list[DocumentChunk] = []
         for chunk in chunks:
             normalized.extend(self._normalize_chunk(chunk))
+        self._reject_duplicate_chunk_ids(normalized)
+
+        # Hierarchical pass: split each normalized segment into a parent chunk
+        # plus smaller children for precise retrieval. The output carries
+        # ``parent_chunk_id`` links and satisfies segment-budget validation.
+        from data_engineering_copilot.services.hierarchical_chunker import hierarchical_chunk
+
+        hierarchical: list[DocumentChunk] = []
+        for chunk in normalized:
+            hierarchical.extend(hierarchical_chunk(chunk))
+        normalized = hierarchical
         self._reject_duplicate_chunk_ids(normalized)
 
         # Persist the exact segment list BEFORE embedding so validation can
@@ -517,7 +529,7 @@ class SparkIndexBuilder:
                         canonical_url=key,
                         status="replaced",
                         chunk_count=chunk_count_by_key.get(key, 0),
-                        content_hash="",
+                        content_hash=_file_content_hash(record.absolute_path),
                         failure_reason="superseded by rendered page",
                     )
                 )
@@ -532,7 +544,7 @@ class SparkIndexBuilder:
                         canonical_url=key,
                         status="indexed",
                         chunk_count=chunk_count,
-                        content_hash="",
+                        content_hash=_file_content_hash(record.absolute_path),
                     )
                 )
             elif doc is not None and not doc.parsed.text.strip():
@@ -544,7 +556,7 @@ class SparkIndexBuilder:
                         canonical_url=key,
                         status="no_content",
                         chunk_count=0,
-                        content_hash="",
+                        content_hash=_file_content_hash(record.absolute_path),
                         failure_reason="parsed to empty text",
                     )
                 )
@@ -557,7 +569,7 @@ class SparkIndexBuilder:
                         canonical_url=key,
                         status="no_content",
                         chunk_count=0,
-                        content_hash="",
+                        content_hash=_file_content_hash(record.absolute_path),
                         failure_reason="redirect or under-construction stub page",
                     )
                 )
@@ -570,7 +582,7 @@ class SparkIndexBuilder:
                         canonical_url=key,
                         status="zero_chunks",
                         chunk_count=0,
-                        content_hash="",
+                        content_hash=_file_content_hash(record.absolute_path),
                         failure_reason="selected non-empty file produced no chunks",
                     )
                 )
@@ -602,7 +614,7 @@ class SparkIndexBuilder:
                             canonical_url=rendered.canonical_url,
                             status="indexed",
                             chunk_count=chunk_count,
-                            content_hash="",
+                            content_hash=_file_content_hash(rendered.absolute_path),
                         )
                     )
                 elif doc is not None and not doc.parsed.text.strip():
@@ -614,7 +626,7 @@ class SparkIndexBuilder:
                             canonical_url=rendered.canonical_url,
                             status="no_content",
                             chunk_count=0,
-                            content_hash="",
+                            content_hash=_file_content_hash(rendered.absolute_path),
                             failure_reason="parsed to empty text",
                         )
                     )
@@ -630,7 +642,7 @@ class SparkIndexBuilder:
                             canonical_url=rendered.canonical_url,
                             status="no_content",
                             chunk_count=0,
-                            content_hash="",
+                            content_hash=_file_content_hash(rendered.absolute_path),
                             failure_reason="navigation-only or redirect page (no main content)",
                         )
                     )
@@ -643,7 +655,7 @@ class SparkIndexBuilder:
                             canonical_url=rendered.canonical_url,
                             status="zero_chunks",
                             chunk_count=0,
-                            content_hash="",
+                            content_hash=_file_content_hash(rendered.absolute_path),
                             failure_reason="selected non-empty file produced no chunks",
                         )
                     )
@@ -773,6 +785,7 @@ class SparkIndexBuilder:
                     segment_total=len(segment_texts),
                     token_count=count_tokens(text),
                     character_count=len(text),
+                    crawled_at=datetime.now(UTC).isoformat(),
                 )
             )
         return normalized
@@ -823,6 +836,14 @@ def _chunk_to_dict(chunk: DocumentChunk) -> dict[str, object]:
     return data
 
 
+def _file_content_hash(path: Path) -> str:
+    """SHA-256 of a source file's raw bytes for coverage drift detection."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def validate_generation_artifacts(
     *,
     generation: str,
@@ -857,6 +878,7 @@ def validate_generation_artifacts(
     failures.extend(_validate_chunk_ids(chunks))
     failures.extend(_validate_chunk_metadata(chunks, generation, expected_commit))
     failures.extend(_validate_segment_budgets(chunks))
+    failures.extend(_validate_parent_child_references(chunks))
 
     if qdrant_point_count is not None and qdrant_point_count != len(chunks):
         failures.append(f"Qdrant point count {qdrant_point_count} differs from chunks.jsonl count {len(chunks)}")
@@ -919,6 +941,21 @@ def _validate_chunk_metadata(chunks: list[DocumentChunk], generation: str, expec
             )
         if not chunk.doc_type:
             failures.append(f"chunk {chunk.chunk_id!r} lacks doc_type metadata")
+    return failures
+
+
+def _validate_parent_child_references(chunks: list[DocumentChunk]) -> list[str]:
+    """Check hierarchical referential integrity (parent-child chunking).
+
+    Every chunk with a non-empty ``parent_chunk_id`` must reference a persisted
+    parent chunk in the same generation. Chunks without ``parent_chunk_id`` are
+    themselves parents.
+    """
+    failures: list[str] = []
+    parent_ids = {c.chunk_id for c in chunks if not c.parent_chunk_id}
+    for chunk in chunks:
+        if chunk.parent_chunk_id and chunk.parent_chunk_id not in parent_ids:
+            failures.append(f"chunk {chunk.chunk_id!r}: parent {chunk.parent_chunk_id!r} not found in generation")
     return failures
 
 
