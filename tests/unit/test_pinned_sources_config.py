@@ -58,10 +58,28 @@ def _url_index_source() -> dict:
     }
 
 
+def _local_mirror_source() -> dict:
+    return {
+        "type": "local_mirror",
+        "name": "Claude Platform Docs",
+        "slug": "claude-platform",
+        "version": "2026-08-17",
+        "license": "MIT",
+        "mirror_dir": "platform",
+        "commit": "c2c813e171cb8d8c5f76bf1034aaf94304c267c8",
+        "url_prefix": "https://platform.claude.com/docs/en/",
+        "base_url": "https://platform.claude.com/docs",
+        "doc_type": "guide",
+    }
+
+
 def test_load_valid_mixed_config(tmp_path) -> None:
-    path = _write_config(tmp_path, {"sources": [_github_source(), _url_index_source()]})
+    mirror = _local_mirror_source()
+    mirror["name"] = "Claude Platform Docs (mirror)"
+    mirror["slug"] = "claude-platform-mirror"
+    path = _write_config(tmp_path, {"sources": [_github_source(), _url_index_source(), mirror]})
     sources = load_pinned_sources(path)
-    assert len(sources) == 2
+    assert len(sources) == 3
 
     github = sources[0]
     assert isinstance(github, PinnedSourceConfig)
@@ -76,6 +94,30 @@ def test_load_valid_mixed_config(tmp_path) -> None:
     assert url_index.type == "url_index"
     assert url_index.index_url == "https://platform.claude.com/docs/llms.txt"
     assert url_index.cache_dir == "claude-platform"
+
+    mirror = sources[2]
+    assert mirror.type == "local_mirror"
+    assert mirror.mirror_dir == "platform"
+    assert mirror.commit == "c2c813e171cb8d8c5f76bf1034aaf94304c267c8"
+    assert mirror.license == "MIT"
+
+
+def test_local_mirror_requires_40hex_commit(tmp_path) -> None:
+    src = _local_mirror_source()
+    src["commit"] = "not-a-sha"
+    with pytest.raises(ValueError, match="commit"):
+        load_pinned_sources(_write_config(tmp_path, {"sources": [src]}))
+
+
+def test_local_mirror_requires_mirror_dir_and_license(tmp_path) -> None:
+    src = _local_mirror_source()
+    del src["mirror_dir"]
+    with pytest.raises(ValueError, match="mirror_dir"):
+        load_pinned_sources(_write_config(tmp_path, {"sources": [src]}))
+    src = _local_mirror_source()
+    del src["license"]
+    with pytest.raises(ValueError, match="license"):
+        load_pinned_sources(_write_config(tmp_path, {"sources": [src]}))
 
 
 def test_duplicate_slugs_raise(tmp_path) -> None:

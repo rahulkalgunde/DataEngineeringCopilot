@@ -1237,9 +1237,14 @@ def gen_config_check() -> int:
                     f"language={stream.language} chunking={stream.chunking}"
                 )
         else:
-            print(f"    index_url:  {source.index_url}")
             print(f"    url_prefix: {source.url_prefix}")
             print(f"    doc_type:   {source.doc_type}")
+            if source.type == "local_mirror":
+                print(f"    mirror_dir: {source.mirror_dir}")
+                print(f"    commit:     {source.commit}")
+                print(f"    license:    {source.license}")
+            else:
+                print(f"    index_url:  {source.index_url}")
     print("✅ Pinned sources config valid")
     return 0
 
@@ -1263,7 +1268,7 @@ def _default_generation() -> str:
 def _resolve_pinned_sources() -> list[dict[str, object]]:
     """Materialize every pinned source and return per-source manifest dicts."""
     from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
-    from data_engineering_copilot.services.url_index_resolver import UrlIndexResolver
+    from data_engineering_copilot.services.url_index_resolver import LocalMirrorResolver, UrlIndexResolver
 
     results: list[dict[str, object]] = []
     for config in _load_pinned_sources_or_exit():
@@ -1284,6 +1289,20 @@ def _resolve_pinned_sources() -> list[dict[str, object]]:
                             "source_url": record.source_url,
                         }
                         for record in manifest.files
+                    ],
+                }
+            )
+        elif config.type == "local_mirror":
+            manifest = LocalMirrorResolver(config, settings.claude_docs_mirror_dir).resolve()
+            results.append(
+                {
+                    "slug": config.slug,
+                    "type": config.type,
+                    "name": config.name,
+                    "commit": config.commit,
+                    "files": [
+                        {"relative_path": entry.relative_path, "title": entry.title, "url": entry.url}
+                        for entry in manifest.entries
                     ],
                 }
             )
@@ -1362,7 +1381,14 @@ def gen_build(generation: str | None = None) -> int:
                 GithubSourcePreparer(config, settings.pinned_cache_dir, gen, header_chunker=header_chunker).prepare()
             )
         else:
-            package = asyncio.run(UrlIndexPreparer(config, settings.pinned_cache_dir, gen).prepare())
+            package = asyncio.run(
+                UrlIndexPreparer(
+                    config,
+                    settings.pinned_cache_dir,
+                    gen,
+                    mirror_root=settings.claude_docs_mirror_dir,
+                ).prepare()
+            )
         packages.append(package)
         print(f"  {config.slug}: {len(package.chunks)} chunks, {len(package.coverage)} files")
 
@@ -1420,7 +1446,7 @@ def gen_validate(generation: str) -> int:
         print(f"❌ Validation failed: {store_report['error']}")
         return 3
 
-    expected_commits = {config.commit for config in _load_pinned_sources_or_exit() if config.type == "github"}
+    expected_commits = {config.commit for config in _load_pinned_sources_or_exit() if config.commit}
     expected_commits.add("")
     point_count_value = store_report.get("point_count")
     failures = validate_pinned_generation_artifacts(

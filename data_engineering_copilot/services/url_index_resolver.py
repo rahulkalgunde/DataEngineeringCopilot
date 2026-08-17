@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -177,6 +178,88 @@ class UrlIndexResolver:
     def _hash_entries(self, entries: list[UrlIndexEntry]) -> str:
         canonical = [{"title": e.title, "url": e.url, "relative_path": e.relative_path} for e in entries]
         return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+class LocalMirrorResolver:
+    """Resolve a pinned ``local_mirror`` source from a local git mirror.
+
+    Unlike ``UrlIndexResolver`` this never touches the network: the mirror
+    root (a committed snapshot of the docs, e.g. ``data/claude_docs_mirror/``)
+    already holds ``llms.txt`` plus every ``.md`` file. The pinned commit is
+    validated against the mirror's ``HEAD`` so builds stay reproducible.
+
+    Parameters
+    ----------
+    config:
+        A ``PinnedSourceConfig`` of type ``local_mirror``.
+    mirror_root:
+        Directory containing one subdirectory per ``mirror_dir``.
+    """
+
+    def __init__(self, config: PinnedSourceConfig, mirror_root: Path) -> None:
+        if config.type != "local_mirror":
+            raise ValueError(f"LocalMirrorResolver requires type='local_mirror', got {config.type!r}")
+        self._config = config
+        self._root = Path(mirror_root) / config.mirror_dir
+
+    def resolve(self) -> UrlIndexManifest:
+        """Build a manifest from the local mirror (no network access)."""
+        if not self._root.is_dir():
+            raise FileNotFoundError(f"local_mirror root missing: {self._root}")
+        head = _git_head(self._root)
+        if head and head != self._config.commit:
+            raise ValueError(
+                f"local_mirror {self._config.slug}: pinned commit {self._config.commit!r} "
+                f"!= mirror HEAD {head!r}; re-run scripts/mirror_claude_docs.py"
+            )
+        index_path = self._root / "llms.txt"
+        if not index_path.is_file():
+            raise FileNotFoundError(f"local_mirror index missing: {index_path}")
+        pairs = parse_llms_index(index_path.read_text(encoding="utf-8"), self._config.url_prefix)
+        entries = [
+            UrlIndexEntry(
+                title=title,
+                url=url,
+                relative_path=_url_to_relpath(url, self._config.url_prefix),
+            )
+            for title, url in pairs
+        ]
+        manifest = UrlIndexManifest(
+            source_name=self._config.name,
+            slug=self._config.slug,
+            index_url=str(self._root / "llms.txt"),
+            url_prefix=self._config.url_prefix,
+            root=self._root,
+            entries=tuple(entries),
+            manifest_hash=self._hash_entries(entries),
+        )
+        logger.info(
+            "url_index_resolver.resolve_local source=%s entries=%d root=%s",
+            self._config.name,
+            len(entries),
+            self._root,
+        )
+        return manifest
+
+    @staticmethod
+    def _hash_entries(entries: list[UrlIndexEntry]) -> str:
+        canonical = [{"title": e.title, "url": e.url, "relative_path": e.relative_path} for e in entries]
+        return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _git_head(repo_root: Path) -> str:
+    """Return the current ``HEAD`` commit SHA of *repo_root*, or ``""`` if not a git repo."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        return proc.stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
 
 
 def _backoff(attempt: int, retry_after: str | None = None) -> float:
