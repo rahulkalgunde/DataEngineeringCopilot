@@ -173,3 +173,33 @@ def test_custom_separators_honored() -> None:
 def test_default_budgets() -> None:
     assert DEFAULT_MAX_TOKENS == 3800
     assert DEFAULT_MAX_CHARS == 6000
+
+
+def test_char_fallback_prefers_line_boundaries() -> None:
+    """When a text can't be split at paragraphs/lists/sentences, cuts must land
+    at line boundaries (not mid-line) so list items and code-like lines stay
+    intact retrieval units."""
+    lines = [f"plain line of text without any punctuation number {i:03d} here" for i in range(40)]
+    text = "\n".join(lines)
+    segments = split_text_losslessly(text, max_tokens=30, max_chars=4000)
+    assert len(segments) > 1
+    for segment in segments:
+        assert count_tokens(segment) <= 30
+        assert len(segment) <= 4000
+    assert "".join(segments).strip() == text.strip()
+    for segment in segments:
+        tail = segment.rstrip("\n")
+        for line in tail.split("\n"):
+            assert not line or line in lines, f"segment must be whole lines only, got {line!r}"
+
+
+def test_char_fallback_splits_single_overlong_line_by_whitespace() -> None:
+    """A single line longer than the budget must still be split losslessly by
+    whitespace; reconstruction and budgets must hold."""
+    text = " ".join(["word"] * 3000)
+    segments = split_text_losslessly(text, max_tokens=300, max_chars=2000)
+    assert len(segments) > 1
+    for segment in segments:
+        assert count_tokens(segment) <= 300
+        assert len(segment) <= 2000
+    assert "".join(segments).strip() == text.strip()
