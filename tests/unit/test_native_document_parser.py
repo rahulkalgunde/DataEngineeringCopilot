@@ -2,14 +2,35 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from data_engineering_copilot.infrastructure.native_document_parser import NativeDocumentParser
+
+_FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "html_markdown"
 
 
 @pytest.fixture
 def parser() -> NativeDocumentParser:
     return NativeDocumentParser()
+
+
+def test_markdown_structure_fixture_sections(parser) -> None:
+    """The structural fixture keeps ATX headings, tables and fenced code."""
+    text = (_FIXTURES / "structure.md").read_text(encoding="utf-8")
+    doc = parser.parse_markdown(text, "docs/structure.md")
+    assert doc.title == "Window Functions"
+    assert doc.language == "conceptual"
+    assert "## Ranking" in doc.text
+    assert "### Example Output" in doc.text
+    assert "| row_number | 1, 2, 3 |" in doc.text
+    assert "```python" in doc.text
+    assert 'w = Window.partitionBy("dept").orderBy("salary")' in doc.text
+    assert "```sql" in doc.text
+    assert "ROWS BETWEEN 5 PRECEDING" in doc.text
+    # Four headings: title, Ranking, Example Output, Frames.
+    assert len(doc.sections) >= 4
 
 
 # ------------------------------------------------------------------
