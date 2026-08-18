@@ -4,6 +4,7 @@ from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.factory import build_chunker
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.services.sentence_preserving_chunker import SentencePreservingChunker
 
 
 class TestSettingsValidation:
@@ -37,7 +38,7 @@ class TestFactoryFunctionBehavior:
     def test_build_chunker_with_sentence_preserving_strategy(self):
         settings = AppSettings(chunking_strategy="sentence_preserving")
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
+        assert isinstance(chunker, SentencePreservingChunker)
 
     def test_build_chunker_with_fixed_size_strategy(self):
         settings = AppSettings(chunking_strategy="fixed_size")
@@ -50,7 +51,7 @@ class TestFactoryFunctionBehavior:
             enable_semantic_chunking=False,
         )
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
+        assert isinstance(chunker, SentencePreservingChunker)
 
     def test_build_chunker_with_semantic_enabled(self):
         settings = AppSettings(
@@ -64,7 +65,7 @@ class TestFactoryFunctionBehavior:
     def test_build_chunker_with_invalid_strategy_defaults(self):
         settings = AppSettings(chunking_strategy="invalid_strategy_xyz")
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
+        assert isinstance(chunker, SentencePreservingChunker)
 
     def test_build_chunker_respects_chunk_size(self):
         settings = AppSettings(
@@ -72,9 +73,8 @@ class TestFactoryFunctionBehavior:
             chunk_overlap_words=60,
         )
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size_chars == 300 * 5
-        assert chunker.chunk_overlap_chars == 60 * 5
+        assert isinstance(chunker, SentencePreservingChunker)
+        assert chunker.max_chars == 300 * 5
 
     def test_build_chunker_respects_similarity_threshold(self):
         settings = AppSettings(
@@ -125,7 +125,7 @@ class TestStrategySelection:
         for strategy in ["SENTENCE_PRESERVING", "Sentence_Preserving", "sentence_preserving"]:
             settings = AppSettings(chunking_strategy=strategy)
             chunker = build_chunker(settings)
-            assert isinstance(chunker, DocumentChunker)
+            assert isinstance(chunker, SentencePreservingChunker)
 
     def test_semantic_strategy_case_insensitive(self):
         for strategy in ["SEMANTIC", "Semantic", "semantic"]:
@@ -193,16 +193,15 @@ class TestDocumentChunkerConfiguration:
     def test_document_chunker_with_sentence_preserving(self):
         settings = AppSettings(chunking_strategy="sentence_preserving", chunk_size_words=300, chunk_overlap_words=60)
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size_chars == 300 * 5
-        assert chunker.chunk_overlap_chars == 60 * 5
+        assert isinstance(chunker, SentencePreservingChunker)
+        assert chunker.max_chars == 300 * 5
 
 
 class TestBackwardCompatibility:
-    def test_default_settings_produce_document_chunker(self):
+    def test_default_settings_produce_sentence_preserving_chunker(self):
         settings = AppSettings()
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
+        assert isinstance(chunker, SentencePreservingChunker)
 
     def test_existing_code_unaffected_by_semantic_flag(self):
         settings = AppSettings()
@@ -243,6 +242,5 @@ class TestIntegration:
             enable_semantic_chunking=False,
         )
         chunker = build_chunker(settings)
-        assert isinstance(chunker, DocumentChunker)
-        assert chunker.chunk_size_chars == 250 * 5
-        assert chunker.chunk_overlap_chars == 50 * 5
+        assert isinstance(chunker, SentencePreservingChunker)
+        assert chunker.max_chars == 250 * 5
