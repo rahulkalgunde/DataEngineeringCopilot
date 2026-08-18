@@ -1097,6 +1097,136 @@ class TestAsyncRagService:
         assert details["rewrite"][0]["hyde_reason"] == ""
 
     @pytest.mark.asyncio
+    async def test_rrf_profile_defaults_to_equal_when_disabled(self, mock_embedder, mock_llm, config):
+        """Weighted RRF is off by default: every query uses the equal profile."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+        from data_engineering_copilot.services.query_signals import RRF_EQUAL_PROFILE
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query=query,
+                    intent="factual",
+                    decomposed_steps=(),
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return []
+
+        service = AsyncRagService(
+            config=config,  # identifier_sparse_rrf_enabled defaults to False
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        await service.answer("what does pyspark.sql.functions.col do")
+
+        for call in mock_vs.query.await_args_list:
+            assert call.kwargs["rrf_profile"] == RRF_EQUAL_PROFILE
+
+    @pytest.mark.asyncio
+    async def test_rrf_profile_identifier_sparse_when_enabled(self, mock_embedder, mock_llm, config):
+        """A technical query selects the identifier-sparse profile and records it
+        in retrieval provenance when weighted RRF is enabled."""
+        from dataclasses import replace
+
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+        from data_engineering_copilot.services.query_signals import RRF_IDENTIFIER_SPARSE_PROFILE
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query=query,
+                    intent="factual",
+                    decomposed_steps=(),
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return []
+
+        enabled_config = replace(config, identifier_sparse_rrf_enabled=True)
+        service = AsyncRagService(
+            config=enabled_config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        details: dict[str, list[dict]] = {}
+
+        def on_step_detail(kind: str, payload: dict) -> None:
+            details.setdefault(kind, []).append(payload)
+
+        await service.answer("what does pyspark.sql.functions.col do", on_step_detail=on_step_detail)
+
+        for call in mock_vs.query.await_args_list:
+            assert call.kwargs["rrf_profile"] == RRF_IDENTIFIER_SPARSE_PROFILE
+        assert details["retrieve"][0]["rrf_profiles"] == [RRF_IDENTIFIER_SPARSE_PROFILE]
+
+    @pytest.mark.asyncio
+    async def test_rrf_profile_prose_uses_equal_when_enabled(self, mock_embedder, mock_llm, config):
+        """Even with weighted RRF enabled, a broad prose query stays on equal."""
+        from dataclasses import replace
+
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+        from data_engineering_copilot.services.query_signals import RRF_EQUAL_PROFILE
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query=query,
+                    intent="how_to",
+                    decomposed_steps=(),
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return []
+
+        enabled_config = replace(config, identifier_sparse_rrf_enabled=True)
+        service = AsyncRagService(
+            config=enabled_config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        await service.answer("how does spark memory management work")
+
+        for call in mock_vs.query.await_args_list:
+            assert call.kwargs["rrf_profile"] == RRF_EQUAL_PROFILE
+
+    @pytest.mark.asyncio
     async def test_service_close_is_idempotent(self, config):
         """close() closes every closable component exactly once across repeated calls."""
         from typing import cast

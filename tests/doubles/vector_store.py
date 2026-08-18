@@ -69,6 +69,7 @@ class InMemoryVectorStore(VectorStoreProtocol):
         chunk_type_filter: str | None = None,
         metadata_filters: object | None = None,
         fused_limit: int | None = None,
+        rrf_profile: str = "equal_rrf",
     ) -> list[RetrievedChunk]:
         scored: list[tuple[float, DocumentChunk]] = []
         for chunk_id, vector in self._vectors.items():
