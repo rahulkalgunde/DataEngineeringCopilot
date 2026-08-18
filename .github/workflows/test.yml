@@ -160,13 +160,13 @@ jobs:
 
       - name: Pull Ollama models
         run: |
-          docker exec de_copilot_ollama ollama pull nomic-embed-text:v1.5
-          docker exec de_copilot_ollama ollama pull llama3.2:3b-instruct-q4_K_M
-          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b-instruct-q4_K_M
+          docker exec de_copilot_ollama ollama pull nomic-embed-text
+          docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
 
       - name: Verify Ollama models
         run: |
-          for model in nomic-embed-text:v1.5 llama3.2:3b-instruct-q4_K_M qwen2.5-coder:7b-instruct-q4_K_M; do
+          for model in nomic-embed-text llama3.2:3b qwen2.5-coder:7b; do
             docker exec de_copilot_ollama ollama list | grep -q "$model" || {
               echo "::error::missing ollama model $model"
               exit 1
@@ -231,13 +231,13 @@ jobs:
 
       - name: Pull Ollama models
         run: |
-          docker exec de_copilot_ollama ollama pull nomic-embed-text:v1.5
-          docker exec de_copilot_ollama ollama pull llama3.2:3b-instruct-q4_K_M
-          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b-instruct-q4_K_M
+          docker exec de_copilot_ollama ollama pull nomic-embed-text
+          docker exec de_copilot_ollama ollama pull llama3.2:3b
+          docker exec de_copilot_ollama ollama pull qwen2.5-coder:7b
 
       - name: Verify Ollama models
         run: |
-          for model in nomic-embed-text:v1.5 llama3.2:3b-instruct-q4_K_M qwen2.5-coder:7b-instruct-q4_K_M; do
+          for model in nomic-embed-text llama3.2:3b qwen2.5-coder:7b; do
             docker exec de_copilot_ollama ollama list | grep -q "$model" || {
               echo "::error::missing ollama model $model"
               exit 1
