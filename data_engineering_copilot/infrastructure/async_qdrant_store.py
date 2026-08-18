@@ -109,11 +109,16 @@ class AsyncQdrantVectorStore:
         hybrid_rrf_k: int = 60,
         embedding_dimension: int | None = None,
         bm25_persist_path: Path | None = None,
+        bm25_namespace: bool = False,
     ) -> None:
         self._url = url
         self._collection_name = collection_name
         self._hybrid_search = hybrid_search
         self._hybrid_rrf_k = hybrid_rrf_k
+        self._bm25_namespace = bm25_namespace
+        self._expected_bm25_version = (
+            BM25Tokenizer.TOKENIZER_VERSION if bm25_namespace else BM25Tokenizer.LEGACY_TOKENIZER_VERSION
+        )
         if bm25_persist_path is not None:
             self._bm25_persist_path = bm25_persist_path
         else:
@@ -125,17 +130,37 @@ class AsyncQdrantVectorStore:
             self._bm25_persist_path = _resolve_bm25_cache_path(collection_name)
         self._bm25 = None
         self._bm25_loaded_from_disk = False
+        self._bm25_version_mismatch = False
         if hybrid_search:
             if self._bm25_persist_path.exists():
                 try:
                     self._bm25 = BM25Tokenizer.load(self._bm25_persist_path)
-                    self._bm25_loaded_from_disk = True
-                    logger.info("Loaded persisted BM25 tokenizer from %s", self._bm25_persist_path)
+                    if self._bm25.version != self._expected_bm25_version:
+                        logger.error(
+                            "BM25 tokenizer version mismatch: cache at %s is %r but %r is required. "
+                            "Rebuild the index before querying or ingesting.",
+                            self._bm25_persist_path,
+                            self._bm25.version,
+                            self._expected_bm25_version,
+                        )
+                        self._bm25 = None
+                        self._bm25_version_mismatch = True
+                    else:
+                        self._bm25_loaded_from_disk = True
+                        logger.info("Loaded persisted BM25 tokenizer from %s", self._bm25_persist_path)
+                except ValueError as exc:
+                    logger.error(
+                        "Unsupported BM25 tokenizer version in %s: %s. Rebuild the index.",
+                        self._bm25_persist_path,
+                        exc,
+                    )
+                    self._bm25 = None
+                    self._bm25_version_mismatch = True
                 except Exception:
                     logger.warning("Failed to load BM25 from %s, creating fresh", self._bm25_persist_path)
-                    self._bm25 = BM25Tokenizer()
+                    self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
             else:
-                self._bm25 = BM25Tokenizer()
+                self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
         self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
         self._last_query_sparse = None
         self._embedding_dimension_override = embedding_dimension
@@ -284,6 +309,7 @@ class AsyncQdrantVectorStore:
         vectors_list = list(vectors)
         if not chunks_list:
             return
+        self._require_no_bm25_version_mismatch()
 
         for i in range(0, len(chunks_list), _sub_batch_size):
             sub_chunks = chunks_list[i : i + _sub_batch_size]
@@ -391,6 +417,7 @@ class AsyncQdrantVectorStore:
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
             return []
+        self._require_no_bm25_version_mismatch()
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
 
@@ -440,6 +467,7 @@ class AsyncQdrantVectorStore:
             )
 
             if use_hybrid:
+                self._require_frozen_bm25()
                 assert self._bm25 is not None
                 sparse = self._last_query_sparse
                 if sparse is None and query_text is not None:
@@ -623,6 +651,27 @@ class AsyncQdrantVectorStore:
         """
         return bool(self._hybrid_search and self._bm25 is not None and self._bm25._frozen)
 
+    def _require_no_bm25_version_mismatch(self) -> None:
+        """Fail fast when a persisted tokenizer version does not match the
+        configured namespace mode.
+
+        Sparse vectors stored in Qdrant were produced by the tokenizer version
+        persisted with the cache; tokenizing with a different version would
+        silently return wrong or empty results. Called before every hybrid
+        query/upsert (plan Task 7 Step 3).
+        """
+        if self._bm25_version_mismatch:
+            raise VectorStoreError(
+                f"BM25 tokenizer version mismatch at {self._bm25_persist_path}: expected "
+                f"{self._expected_bm25_version!r}. Rebuild the index before querying or ingesting."
+            )
+
+    def _require_frozen_bm25(self) -> None:
+        """Raise when the BM25 tokenizer is missing or not yet fitted."""
+        self._require_no_bm25_version_mismatch()
+        if self._bm25 is None or not self._bm25._frozen:
+            raise VectorStoreError("BM25 tokenizer is not ready")
+
     def clear_query_sparse(self) -> None:
         """Clear the sparse vector set by ``set_query_sparse``."""
         self._last_query_sparse = None
@@ -672,6 +721,7 @@ class AsyncQdrantVectorStore:
         tokenizer, breaking hybrid search.  Only a fresh build (no persisted
         tokenizer) fits and persists.
         """
+        self._require_no_bm25_version_mismatch()
         if self._bm25 is None:
             return
         if self._bm25_loaded_from_disk:
@@ -680,6 +730,7 @@ class AsyncQdrantVectorStore:
                 self._bm25_persist_path,
             )
             return
+        self._require_no_bm25_version_mismatch()
         self._bm25.fit(texts)
         try:
             self._bm25.save(self._bm25_persist_path)
@@ -706,8 +757,9 @@ class AsyncQdrantVectorStore:
         texts_list = list(texts)
         if not texts_list:
             raise ValueError("fit_bm25_corpus requires a non-empty corpus")
+        self._require_no_bm25_version_mismatch()
         # Fresh tokenizer for every new generation; never reuse an active one.
-        self._bm25 = BM25Tokenizer()
+        self._bm25 = BM25Tokenizer(namespace=self._bm25_namespace)
         self._bm25.fit(texts_list)
         self._bm25.save(self._bm25_persist_path)
         self._bm25_loaded_from_disk = True
@@ -735,6 +787,7 @@ class AsyncQdrantVectorStore:
             raise ValueError("chunks and vectors must have equal lengths")
         if not chunks_list:
             raise ValueError("upsert_frozen_chunks requires a non-empty chunk list")
+        self._require_no_bm25_version_mismatch()
         if self._bm25 is None or not self._bm25._frozen:
             raise ValueError("upsert_frozen_chunks requires a frozen BM25 tokenizer")
         for chunk in chunks_list:

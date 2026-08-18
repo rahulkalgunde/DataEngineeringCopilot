@@ -661,3 +661,183 @@ async def test_query_keeps_child_text_when_parent_missing(mock_async_qdrant):
 
     assert len(results) == 1
     assert results[0].chunk.text == "child text"
+
+
+# ------------------------------------------------------------------
+# BM25 namespace mode + tokenizer version enforcement (plan Task 7)
+# ------------------------------------------------------------------
+
+
+async def test_store_namespace_mode_creates_namespace_tokenizer(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=tmp_path / "bm25.json",
+        bm25_namespace=True,
+    )
+    assert store._bm25 is not None
+    assert store._bm25.namespace_enabled is True
+    assert store._bm25.version == BM25Tokenizer.TOKENIZER_VERSION
+    assert store._bm25_version_mismatch is False
+
+
+async def test_store_loads_matching_namespace_cache(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer(namespace=True)
+    tok.fit(["spark.sql.functions"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=True,
+    )
+    assert store._bm25 is not None
+    assert store._bm25_loaded_from_disk is True
+    assert store._bm25_version_mismatch is False
+
+
+async def test_store_legacy_cache_with_namespace_mode_marks_mismatch(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import (
+        AsyncQdrantVectorStore,
+    )
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer()
+    tok.fit(["apache spark"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=True,
+    )
+    assert store._bm25 is None
+    assert store._bm25_version_mismatch is True
+    assert store.is_hybrid_ready() is False
+
+
+async def test_store_version_mismatch_fails_before_query(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import (
+        AsyncQdrantVectorStore,
+        VectorStoreError,
+    )
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer()
+    tok.fit(["apache spark"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=True,
+    )
+    with pytest.raises(VectorStoreError, match="version mismatch"):
+        await store.query([0.1] * 768, top_k=1, query_text="spark.sql.functions")
+    mock_async_qdrant.query_points.assert_not_awaited()
+
+
+async def test_store_version_mismatch_fails_before_upsert(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.domain.models import DocumentChunk
+    from data_engineering_copilot.infrastructure.async_qdrant_store import (
+        AsyncQdrantVectorStore,
+        VectorStoreError,
+    )
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer()
+    tok.fit(["apache spark"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=True,
+    )
+    chunk = DocumentChunk(
+        chunk_id="c1",
+        source_name="s",
+        title="t",
+        url="http://example.com/1",
+        text="spark.sql.functions",
+        content_hash="hash",
+        index_generation="gen-1",
+    )
+    with pytest.raises(VectorStoreError, match="version mismatch"):
+        await store.upsert_frozen_chunks([chunk], [[0.1] * 768])
+    mock_async_qdrant.upsert.assert_not_awaited()
+
+
+async def test_store_unsupported_version_cache_marks_mismatch(mock_async_qdrant, tmp_path):
+    import json
+
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    cache = tmp_path / "bm25.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "tokenizer_version": "namespace-v2",
+                "k1": 1.2,
+                "b": 0.75,
+                "vocab": {},
+                "doc_freq": {},
+                "corpus_size": 0,
+                "avg_doc_len": 0.0,
+                "frozen": True,
+            }
+        )
+    )
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=True,
+    )
+    assert store._bm25_version_mismatch is True
+    assert store.is_hybrid_ready() is False
+
+
+async def test_store_namespace_mismatch_fails_before_fit(mock_async_qdrant, tmp_path):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import (
+        AsyncQdrantVectorStore,
+        VectorStoreError,
+    )
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer(namespace=True)
+    tok.fit(["spark.sql.functions"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+        bm25_namespace=False,
+    )
+    assert store._bm25_version_mismatch is True
+    with pytest.raises(VectorStoreError, match="version mismatch"):
+        store.fit_bm25(["apache spark"])

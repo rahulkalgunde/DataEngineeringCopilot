@@ -17,6 +17,7 @@ import structlog
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import MAX_SAFE_TOKENS
+from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
 from data_engineering_copilot.infrastructure.native_document_parser import NativeDocumentParser
 from data_engineering_copilot.infrastructure.spark_html_parser import RenderedParseResult, SparkHtmlParser
 from data_engineering_copilot.infrastructure.spark_rendered_builder import (
@@ -134,6 +135,7 @@ class IndexBuildReport:
     validation_passed: bool
     rendered_file_count: int = 0
     coverage_count: int = 0
+    bm25_tokenizer_version: str | None = None
 
 
 class SparkIndexBuilder:
@@ -256,7 +258,16 @@ class SparkIndexBuilder:
             bm25_vocab = self._store._bm25.vocab_size
 
         rendered_file_count = len(self._rendered_manifest.files) if self._rendered_manifest is not None else 0
-        self._write_build_report(manifest, normalized, validation, len(coverage), rendered_file_count, bm25_vocab)
+        bm25_tokenizer_version = self._store._bm25.version if isinstance(self._store._bm25, BM25Tokenizer) else None
+        self._write_build_report(
+            manifest,
+            normalized,
+            validation,
+            len(coverage),
+            rendered_file_count,
+            bm25_vocab,
+            bm25_tokenizer_version,
+        )
 
         return IndexBuildReport(
             generation=self._generation,
@@ -268,6 +279,7 @@ class SparkIndexBuilder:
             validation_passed=bool(validation.get("passed")),
             rendered_file_count=rendered_file_count,
             coverage_count=len(coverage),
+            bm25_tokenizer_version=bm25_tokenizer_version,
         )
 
     async def _chunk_all(self, manifest: SparkManifest) -> tuple[list[DocumentChunk], list[CoverageRecord]]:
@@ -476,6 +488,7 @@ class SparkIndexBuilder:
         coverage_count: int,
         rendered_file_count: int,
         bm25_vocab: int,
+        bm25_tokenizer_version: str | None = None,
     ) -> None:
         """Persist the build report artifact (``build_report.json``)."""
         if self._chunks_path is None:
@@ -492,6 +505,7 @@ class SparkIndexBuilder:
             "final_chunk_count": len(chunks),
             "qdrant_point_count": validation.get("point_count"),
             "bm25_vocabulary_size": bm25_vocab,
+            "bm25_tokenizer_version": bm25_tokenizer_version,
             "embedding_dimension": self._store._embedding_dim(),
             "validation_result": bool(validation.get("passed")),
             "coverage_count": coverage_count,
@@ -855,6 +869,8 @@ def validate_generation_artifacts(
     qdrant_point_count: int | None = None,
     bm25_ready: bool | None = None,
     sparse_configured: bool | None = None,
+    bm25_tokenizer_version: str | None = None,
+    expected_bm25_tokenizer_version: str | None = None,
 ) -> list[str]:
     """Return a list of validation failures for a built Spark generation.
 
@@ -886,6 +902,17 @@ def validate_generation_artifacts(
         failures.append("BM25 tokenizer is not ready")
     if sparse_configured is False:
         failures.append("Sparse vectors are not configured")
+    if bm25_tokenizer_version is not None and bm25_tokenizer_version not in BM25Tokenizer.SUPPORTED_VERSIONS:
+        failures.append(f"Unsupported BM25 tokenizer version {bm25_tokenizer_version!r}")
+    if (
+        expected_bm25_tokenizer_version is not None
+        and bm25_tokenizer_version is not None
+        and bm25_tokenizer_version != expected_bm25_tokenizer_version
+    ):
+        failures.append(
+            f"BM25 tokenizer version mismatch: expected {expected_bm25_tokenizer_version!r}, "
+            f"built with {bm25_tokenizer_version!r}"
+        )
 
     return failures
 

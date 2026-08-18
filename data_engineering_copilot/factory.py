@@ -1665,6 +1665,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
             hybrid_search=app_settings.hybrid_search_enabled,
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
             embedding_dimension=app_settings.get_embedding_dimension(),
+            bm25_namespace=app_settings.namespace_bm25_enabled,
         ),
         redis_client=redis_client,  # type: ignore[arg-type]  # aioredis stubs return Awaitable not Coroutine; runtime-conformant
         contextual_enricher=contextual_enricher,
@@ -1800,6 +1801,7 @@ def build_rag_service(
         hybrid_search=app_settings.hybrid_search_enabled,
         hybrid_rrf_k=app_settings.hybrid_rrf_k,
         embedding_dimension=app_settings.get_embedding_dimension(),
+        bm25_namespace=app_settings.namespace_bm25_enabled,
     )
     embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
     if app_settings.embedding_cache_enabled:
@@ -1964,6 +1966,7 @@ def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = 
             hybrid_search=app_settings.hybrid_search_enabled,
             hybrid_rrf_k=app_settings.hybrid_rrf_k,
             embedding_dimension=app_settings.get_embedding_dimension(),
+            bm25_namespace=app_settings.namespace_bm25_enabled,
         ),
         dry_run=dry_run,
     )
