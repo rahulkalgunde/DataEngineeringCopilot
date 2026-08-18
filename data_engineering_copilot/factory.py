@@ -48,6 +48,7 @@ from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.async_ingestion import AsyncIngestionService
 from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.chunker import DocumentChunker
+from data_engineering_copilot.services.chunker_router import ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
@@ -1457,6 +1458,38 @@ def build_chunker(app_settings: AppSettings = settings):
     )
 
 
+def build_chunker_router(app_settings: AppSettings = settings) -> ChunkerRouter:
+    """Build the metadata-based chunker router with all strategy instances.
+
+    The configured generic strategy is the fallback for unknown metadata; the
+    structured, code, and guide strategies are always-available alternatives.
+    No SparkChunker is wired here — the Spark path is handled by the dedicated
+    Spark pipelines, mirroring the previous behavior.
+    """
+    from data_engineering_copilot.services.structured_data_chunker import StructuredDataChunker
+
+    logger.info(
+        "building_chunker_router",
+        generic_strategy=app_settings.chunking_strategy,
+        chunk_size=app_settings.chunk_size_words,
+        overlap=app_settings.chunk_overlap_words,
+    )
+
+    return ChunkerRouter(
+        generic_strategy=build_chunker(app_settings),
+        structured_strategy=StructuredDataChunker(),
+        code_strategy=DocumentChunker(
+            chunk_size_chars=app_settings.chunk_size_words * 5,
+            chunk_overlap_chars=app_settings.chunk_overlap_words * 5,
+        ),
+        guide_strategy=HeaderAwareChunker(
+            chunk_size_words=app_settings.chunk_size_words,
+            overlap_words=app_settings.chunk_overlap_words,
+            min_chunk_words=int(app_settings.chunk_size_words * 0.1),
+        ),
+    )
+
+
 def _validate_redis(redis_url: str, component: str) -> None:
     """Synchronous Redis connectivity check. Fails fast with clear message."""
     import redis as sync_redis
@@ -1628,6 +1661,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         code_block_parser=CodeBlockParser(enabled=getattr(app_settings, "code_block_parsing_enabled", True)),
         chunk_filter=ChunkFilter(enabled=getattr(app_settings, "chunk_filtering_enabled", True)),
         telemetry=build_telemetry_tracer(),
+        chunker_router=build_chunker_router(app_settings),
     )
 
 
