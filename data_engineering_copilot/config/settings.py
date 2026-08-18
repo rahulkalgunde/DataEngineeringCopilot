@@ -1237,10 +1237,10 @@ class AppSettings(BaseSettings):
     query_rewrite_enabled: bool = True
     # Deterministic HyDE policy (``default_hyde_policy``): suppress HyDE for
     # non-factual intents and for identifier/version-qualified, code, or
-    # debugging queries. Off by default (HyDE runs as before) until the
-    # benchmark gate (API/code/debugging provider-call reduction >= 20% within
-    # fixed recall/MRR thresholds) passes.
-    hyde_policy_enabled: bool = False
+    # debugging queries. Enabled after the benchmark gate passed: it cut
+    # API/code/debugging provider calls by >= 20% (36 -> 26, 27.8%) with no
+    # recall/MRR regression on ``technical_queries.jsonl`` (2026-08-18).
+    hyde_policy_enabled: bool = True
     groundedness_enabled: bool = True
     # Post-answer topic-scope gate (fail-open): refuses answers when the retrieved
     # context does not cover the question's topic, converting them to

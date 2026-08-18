@@ -1219,6 +1219,18 @@ dec config
 
 ---
 
+### RAG feature toggles (runtime settings)
+
+These settings in `config/settings.py` (set via `.env` or `.env.local`) control features added by the RAG optimization plan (2026-08-18). Only `hyde_policy_enabled` was enabled after its gate passed; the others were rejected.
+
+| Setting | Default | Description | Gate result |
+|---|---|---|---|
+| `hyde_policy_enabled` | `True` | Suppress HyDE for non-factual intents and identifier/code/debug queries. | **Enabled** (27.8% identifier-intent call reduction, no recall regression) |
+| `namespace_bm25_enabled` | `False` | Use namespace-aware BM25 tokenizer (preserves dotted identifiers, paths, versions). | **Rejected** (identifier recall +0.0, needs ≥+0.05) |
+| `identifier_sparse_rrf_enabled` | `False` | Weighted RRF (sparse 1.25 / dense 1.0) for technical queries. | **Rejected** (identifier recall +0.0, needs ≥+0.05) |
+
+---
+
 ### `dec langfuse-seed-prompts`
 
 Idempotently creates (or creates a new version of) every Langfuse-managed prompt via the public API, labeled `production` by default. Requires a reachable, authenticated Langfuse instance.
