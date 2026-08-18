@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as md
 
 from data_engineering_copilot.domain.models import ParsedDocument, RawDocument
@@ -25,6 +25,7 @@ def html_to_markdown(html: str, min_words: int = 40) -> str | None:
         str(content),
         heading_style="ATX",
         strip=["img", "script", "style", "noscript", "nav", "footer", "header", "aside"],
+        code_language_callback=_code_language,
     )
 
     markdown_text = _clean_markdown(markdown_text)
@@ -36,10 +37,41 @@ def html_to_markdown(html: str, min_words: int = 40) -> str | None:
     return markdown_text
 
 
+def _code_language(el: Tag) -> str:
+    """Return the ``language-*`` class of a ``<pre><code>`` block.
+
+    ``markdownify`` otherwise emits an unlabeled fence, which drops the syntax
+    hint the HTML carries. Unknown or absent languages fall back to empty.
+    """
+    code = el.find("code")
+    if code is not None:
+        classes = code.get("class") or []
+        for cls in classes:
+            if cls.startswith("language-"):
+                return cls[len("language-") :]
+    return ""
+
+
+_FENCE_RE = re.compile(r"(?ms)^(`{3,}|~{3,}).*?^\1\s*$")
+
+
 def _clean_markdown(text: str) -> str:
+    # Collapse runs of blank lines and of spaces/tabs, but never inside fenced
+    # code blocks: indentation and blank lines there are semantically loaded.
+    parts: list[str] = []
+    cursor = 0
+    for match in _FENCE_RE.finditer(text):
+        parts.append(_collapse(text[cursor : match.start()]))
+        parts.append(match.group(0))
+        cursor = match.end()
+    parts.append(_collapse(text[cursor:]))
+    return "".join(parts).strip()
+
+
+def _collapse(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
-    return text.strip()
+    return text
 
 
 class MarkdownParser:
