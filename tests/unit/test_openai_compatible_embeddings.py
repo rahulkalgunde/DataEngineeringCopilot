@@ -266,6 +266,19 @@ def test_reject_over_budget_text():
         embs._reject_over_budget(["hello world " * 100])
 
 
+def test_reject_blank_input_text():
+    """Whitespace-only input must fail loudly, not surface as a cryptic
+    provider HTTP 400 (OpenRouter/NVIDIA reject blank strings)."""
+    from data_engineering_copilot.domain.exceptions import EmbeddingError
+    from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+        OpenAICompatibleEmbeddings,
+    )
+
+    embs = OpenAICompatibleEmbeddings(api_key="key", max_tokens_per_input=100)
+    with pytest.raises(EmbeddingError, match="blank"):
+        embs._reject_over_budget(["valid text", "\n\n", ""])
+
+
 def test_accepts_within_budget_text():
     from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
         OpenAICompatibleEmbeddings,

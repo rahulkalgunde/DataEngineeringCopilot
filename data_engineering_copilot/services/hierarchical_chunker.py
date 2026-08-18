@@ -18,6 +18,38 @@ from data_engineering_copilot.infrastructure.token_budget import (
 )
 
 
+def _merge_blank_pieces(pieces: list[str]) -> list[str]:
+    """Fold whitespace-only pieces into a content neighbor.
+
+    Lossless splitting can emit a piece that is only the whitespace between
+    two blocks (e.g. the ``"\\n\\n"`` paragraph separator preceding an atomic
+    code fence). Embedding providers reject blank input strings with HTTP 400
+    (``input must not be blank or empty``), and a blank chunk carries no
+    retrieval value, so fold such pieces into an adjacent content piece.
+
+    Every character is preserved and ordering is unchanged, so
+    ``"".join(merged) == "".join(pieces)``: lossless reconstruction still
+    holds and segment-budget validation is unaffected.
+    """
+    merged: list[str] = []
+    pending_blank = ""
+    for piece in pieces:
+        if not piece.strip():
+            pending_blank += piece
+            continue
+        if pending_blank:
+            merged.append(pending_blank + piece)
+            pending_blank = ""
+        else:
+            merged.append(piece)
+    if pending_blank:
+        if merged:
+            merged[-1] += pending_blank
+        else:
+            merged.append(pending_blank)
+    return merged
+
+
 def _split_children(
     text: str,
     child_max_tokens: int,
@@ -34,10 +66,12 @@ def _split_children(
     """
     for budget in (child_max_tokens, parent_max_tokens, DEFAULT_MAX_TOKENS):
         try:
-            return split_text_losslessly(text, max_tokens=budget, max_chars=budget * 4)
+            pieces = split_text_losslessly(text, max_tokens=budget, max_chars=budget * 4)
         except ValueError:
             continue
-    return split_text_losslessly(text, max_tokens=parent_max_tokens, max_chars=parent_max_tokens * 4)
+        return _merge_blank_pieces(pieces)
+    pieces = split_text_losslessly(text, max_tokens=parent_max_tokens, max_chars=parent_max_tokens * 4)
+    return _merge_blank_pieces(pieces)
 
 
 def hierarchical_chunk(
@@ -73,10 +107,12 @@ def hierarchical_chunk(
             )
         ]
 
-    parent_texts = split_text_losslessly(
-        chunk.text,
-        max_tokens=parent_max_tokens,
-        max_chars=parent_max_tokens * 4,
+    parent_texts = _merge_blank_pieces(
+        split_text_losslessly(
+            chunk.text,
+            max_tokens=parent_max_tokens,
+            max_chars=parent_max_tokens * 4,
+        )
     )
 
     result: list[DocumentChunk] = []
