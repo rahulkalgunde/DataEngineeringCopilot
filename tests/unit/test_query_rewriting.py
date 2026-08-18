@@ -646,3 +646,151 @@ def _msg(role: str, content: str):
     from data_engineering_copilot.domain.models import ChatMessage
 
     return ChatMessage(message_id="m", session_id="s", role=role, content=content)  # type: ignore[arg-type]
+
+
+class TestHydePolicy:
+    """Deterministic HyDE policy: intent + query-signal suppression."""
+
+    def test_default_policy_enables_broad_factual_and_how_to(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert should_use_hyde("What is Spark SQL?", "factual", policy)
+        assert should_use_hyde("How does dynamic allocation work?", "how_to", policy)
+
+    def test_default_policy_disables_lookup_debug_code_intents(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert not should_use_hyde("What does DataFrame.filter do?", "api_lookup", policy)
+        assert not should_use_hyde("Write a script to read parquet", "code_example", policy)
+        assert not should_use_hyde("Why is my job failing with OOM?", "debugging", policy)
+        assert not should_use_hyde("Compare YARN vs Kubernetes", "comparative", policy)
+
+    def test_dotted_identifier_suppresses_hyde(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert not should_use_hyde("What is pyspark.sql.functions.col?", "factual", policy)
+
+    def test_version_qualified_lookup_suppresses_hyde(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert not should_use_hyde("How does Spark 4.0 handle shuffling?", "factual", policy)
+
+    def test_code_fence_and_inline_code_suppress_hyde(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert not should_use_hyde("Explain this: ```python\nspark.sql('SELECT 1')\n```", "factual", policy)
+        assert not should_use_hyde("What does `df.groupBy('x')` return?", "factual", policy)
+
+    def test_stack_trace_suppresses_hyde(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            default_hyde_policy,
+            should_use_hyde,
+        )
+
+        policy = default_hyde_policy()
+        assert not should_use_hyde('Spark throws "File \\"app.py\\", line 12 KeyError: bucket"', "factual", policy)
+        assert not should_use_hyde("Traceback (most recent call last): at main in run", "factual", policy)
+
+    def test_suppression_flags_can_be_disabled(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            HydePolicy,
+            should_use_hyde,
+        )
+
+        permissive = HydePolicy(
+            enabled_intents=frozenset({"factual", "how_to"}),
+            suppress_identifier_queries=False,
+            suppress_code_queries=False,
+            suppress_debugging_queries=False,
+        )
+        assert should_use_hyde("What is pyspark.sql.functions.col?", "factual", permissive)
+        assert should_use_hyde("Explain ```python\nx = 1\n```", "factual", permissive)
+        assert should_use_hyde("Traceback KeyError in my job", "factual", permissive)
+
+    def test_reason_recorded_for_provenance(self):
+        from data_engineering_copilot.services.query_rewriting import (
+            _hyde_suppression_reason,
+            default_hyde_policy,
+        )
+
+        policy = default_hyde_policy()
+        assert _hyde_suppression_reason("What is DataFrame.filter?", "api_lookup", policy) == "intent:api_lookup"
+        assert _hyde_suppression_reason("What is pyspark.sql.col?", "factual", policy) == "identifier_query"
+        assert _hyde_suppression_reason("Explain ```python\nx=1\n```", "factual", policy) == "code_query"
+        assert _hyde_suppression_reason("Traceback KeyError", "factual", policy) == "debugging_query"
+        assert _hyde_suppression_reason("What is Spark?", "factual", policy) is None
+
+    def test_policy_none_keeps_legacy_behavior(self):
+        rw = QueryRewriter(llm_client=None, enabled=True, hyde_enabled=True)
+        assert rw._policy_hyde_reason("What is DataFrame.filter?", "api_lookup") is None
+
+    def test_rewrite_gates_hyde_before_llm_call(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.hyde_calls = 0
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                if "hypothetical" in prompt or "perfectly answer" in prompt:
+                    self.hyde_calls += 1
+                return "Spark SQL is a module for structured data."
+
+        from data_engineering_copilot.services.query_rewriting import default_hyde_policy
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=True, hyde_policy=default_hyde_policy())
+
+        suppressed = rw.rewrite("What does DataFrame.filter do?")
+        assert suppressed.hyde_query == ""
+        assert suppressed.hyde_reason == "intent:api_lookup"
+
+        allowed = rw.rewrite("What is Spark SQL?")
+        assert allowed.hyde_reason == ""
+        assert "Spark SQL" in allowed.hyde_query
+        assert llm.hyde_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_async_rewrite_gates_hyde_before_llm_call(self):
+        class RecordingLLM(_LLMStubBase):
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def generate(self, prompt: str, **kwargs: object) -> str:  # noqa: ARG001
+                self.calls.append(prompt)
+                return "spark sql structured data"
+
+        from data_engineering_copilot.services.query_rewriting import default_hyde_policy
+
+        llm = RecordingLLM()
+        rw = QueryRewriter(llm_client=llm, enabled=True, hyde_enabled=True, hyde_policy=default_hyde_policy())
+
+        suppressed = await rw.async_rewrite("What does DataFrame.filter do?")
+        assert suppressed.hyde_query == ""
+        assert suppressed.hyde_reason == "intent:api_lookup"
+
+        allowed = await rw.async_rewrite("How does dynamic allocation work?")
+        assert allowed.hyde_reason == ""
+        assert allowed.hyde_query
+        # One hyde LLM call only (for the allowed query); the suppressed query
+        # never triggers a hyde call.
+        hyde_calls = [p for p in llm.calls if "perfectly answer" in p]
+        assert len(hyde_calls) == 1

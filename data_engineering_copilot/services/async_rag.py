@@ -657,6 +657,7 @@ class AsyncRagService:
                 "rewritten_query": effective_query,
                 "intent": rewritten.intent if rewritten is not None else None,
                 "hyde_query": rewritten.hyde_query if rewritten is not None else None,
+                "hyde_reason": rewritten.hyde_reason if rewritten is not None else None,
                 "decomposed_steps": list(rewritten.decomposed_steps) if rewritten is not None else [],
                 "expansions": list(all_queries),
             },

@@ -1686,7 +1686,7 @@ def build_rag_service(
     from data_engineering_copilot.services.context_compression import ContextCompressor
     from data_engineering_copilot.services.groundedness import GroundednessVerifier
     from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
-    from data_engineering_copilot.services.query_rewriting import QueryRewriter
+    from data_engineering_copilot.services.query_rewriting import QueryRewriter, default_hyde_policy
     from data_engineering_copilot.services.reranker import CrossEncoderReranker
     from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 
@@ -1838,6 +1838,7 @@ def build_rag_service(
     query_rewriter = QueryRewriter(
         llm_client=rewrite_client or llm_client,
         enabled=app_settings.query_rewrite_enabled,
+        hyde_policy=default_hyde_policy() if app_settings.hyde_policy_enabled else None,
         intent_llm_enabled=app_settings.intent_classification_llm_enabled,
         intent_llm_client=intent_client,
     )
@@ -2020,11 +2021,12 @@ def build_conversation_service(app_settings: AppSettings = settings) -> Conversa
             pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
         )
         if app_settings.chat_rewrite_local:
-            from data_engineering_copilot.services.query_rewriting import QueryRewriter
+            from data_engineering_copilot.services.query_rewriting import QueryRewriter, default_hyde_policy
 
             local_rewriter = QueryRewriter(
                 llm_client=local_llm_client,
                 enabled=app_settings.query_rewrite_enabled,
+                hyde_policy=default_hyde_policy() if app_settings.hyde_policy_enabled else None,
             )
         if app_settings.chat_scope_local:
             from data_engineering_copilot.services.scope_verifier import ScopeVerifier
