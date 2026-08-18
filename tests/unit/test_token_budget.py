@@ -99,6 +99,56 @@ def test_oversized_code_fence_split_losslessly() -> None:
     assert "line79" in "".join(segments)
 
 
+def test_fence_continuation_piece_at_max_chars_does_not_overflow() -> None:
+    """Regression: an intermediate fence piece that packs to exactly max_chars
+    was rejected once its trailing newline was attached (piece became
+    max_chars+1). The packer must reserve the newline (and closer) up front.
+
+    Lines here pack so that ``opener + line_a + line_b`` is exactly
+    ``max_chars``; the next line then forces a flush, and the flushed piece
+    (previous content + trailing newline) must still fit.
+    """
+    max_chars = 1024
+    opener = "```"
+    closer = "```"
+    sep = 2  # two "\n" join separators inside the three-line candidate
+    line_a = "a" * ((max_chars - len(opener) - sep) // 2)
+    line_b = "b" * (max_chars - len(opener) - sep - len(line_a))
+    line_c = "c"
+    fence = f"{opener}\n{line_a}\n{line_b}\n{line_c}\n{closer}"
+
+    assert len(f"{opener}\n{line_a}\n{line_b}") == max_chars  # the tight candidate
+
+    segments = split_text_losslessly(fence, max_tokens=4000, max_chars=max_chars)
+    assert len(segments) > 1
+    for segment in segments:
+        assert len(segment) <= max_chars, f"piece of {len(segment)} chars > {max_chars}"
+    assert "".join(segments).strip() == fence.strip()
+
+
+@pytest.mark.parametrize("max_chars", [256, 384, 512, 768, 1024, 1536, 2048])
+def test_fence_pieces_never_exceed_max_chars_across_boundaries(max_chars: int) -> None:
+    """Deterministic property sweep: for several budgets, no emitted fence
+    piece (including its trailing newline or closer) may exceed ``max_chars``,
+    and reconstruction must be lossless. Mirrors the original off-by-one bug
+    (a piece of exactly ``max_chars`` became ``max_chars + 1`` once its
+    trailing newline was attached) across multiple boundaries."""
+    opener = "```"
+    closer = "```"
+    sep = 2  # two "\n" join separators inside a three-line candidate
+    line_a = "a" * ((max_chars - len(opener) - sep) // 2)
+    line_b = "b" * (max_chars - len(opener) - sep - len(line_a))
+    fence = f"{opener}\n{line_a}\n{line_b}\n{closer}"
+
+    assert len(f"{opener}\n{line_a}\n{line_b}") == max_chars  # tightest candidate
+
+    segments = split_text_losslessly(fence, max_tokens=4000, max_chars=max_chars)
+    assert len(segments) > 1
+    for segment in segments:
+        assert len(segment) <= max_chars, f"piece of {len(segment)} chars > {max_chars}"
+    assert "".join(segments).strip() == fence.strip()
+
+
 def test_validate_segments_mismatch_raises() -> None:
     with pytest.raises(ValueError, match="reconstruction"):
         validate_segments("original text here", ["original", " text", " HERE"])

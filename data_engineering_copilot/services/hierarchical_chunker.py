@@ -11,7 +11,33 @@ import hashlib
 from dataclasses import replace
 
 from data_engineering_copilot.domain.models import DocumentChunk
-from data_engineering_copilot.infrastructure.token_budget import count_tokens, split_text_losslessly
+from data_engineering_copilot.infrastructure.token_budget import (
+    DEFAULT_MAX_TOKENS,
+    count_tokens,
+    split_text_losslessly,
+)
+
+
+def _split_children(
+    text: str,
+    child_max_tokens: int,
+    parent_max_tokens: int,
+) -> list[str]:
+    """Split *text* into child sub-splits, falling back to larger budgets.
+
+    The child token budget is a retrieval-quality target, not a hard
+    embedding limit. Rare atomic pieces (a single long code line or URL
+    longer than ``child_max_tokens * 4`` characters) cannot be split
+    further without losing characters; failing the whole build over them
+    would drop otherwise-good documents. Retry at the parent budget, then
+    at the provider hard cap, before giving up.
+    """
+    for budget in (child_max_tokens, parent_max_tokens, DEFAULT_MAX_TOKENS):
+        try:
+            return split_text_losslessly(text, max_tokens=budget, max_chars=budget * 4)
+        except ValueError:
+            continue
+    return split_text_losslessly(text, max_tokens=parent_max_tokens, max_chars=parent_max_tokens * 4)
 
 
 def hierarchical_chunk(
@@ -75,11 +101,7 @@ def hierarchical_chunk(
             )
         )
 
-        child_texts = split_text_losslessly(
-            parent_text,
-            max_tokens=child_max_tokens,
-            max_chars=child_max_tokens * 4,
-        )
+        child_texts = _split_children(parent_text, child_max_tokens, parent_max_tokens)
         for c_idx, child_text in enumerate(child_texts):
             result.append(
                 replace(

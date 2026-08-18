@@ -100,3 +100,31 @@ def test_child_ids_are_unique() -> None:
     result = hierarchical_chunk(_chunk(text))
     ids = [c.chunk_id for c in result]
     assert len(ids) == len(set(ids))
+
+
+def test_oversized_atomic_piece_falls_back_to_larger_child_budget() -> None:
+    """A single atomic line/URL longer than the child budget must not fail the
+    build; the child split falls back to the parent budget / hard cap."""
+    # One fenced line exceeds the 256-token child char budget (1024 chars)
+    # but is a single atomic piece that cannot be split losslessly.
+    fence = "```python\n" + "y" * 1500 + "\n```"
+    result = hierarchical_chunk(_chunk(fence))
+    # No ValueError; parents + children produced, still lossless.
+    parents = [c for c in result if not c.parent_chunk_id]
+    children = [c for c in result if c.parent_chunk_id]
+    assert parents and children
+    for parent in parents:
+        siblings = sorted(
+            (c for c in result if c.parent_chunk_id == parent.chunk_id),
+            key=lambda c: c.segment_index,
+        )
+        assert siblings
+        assert "".join(s.text for s in siblings).strip() == parent.text.strip()
+
+
+def test_oversized_plain_token_falls_back_to_larger_budget() -> None:
+    """A single plain (non-fenced) token longer than the child budget must not
+    raise; the fallback splits at the provider hard cap."""
+    text = "before " + "z" * 1500 + " after"
+    result = hierarchical_chunk(_chunk(text))
+    assert result, "must not raise for an oversized atomic token"
