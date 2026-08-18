@@ -22,8 +22,14 @@ CORPUS_DOCS = Path(__file__).resolve().parents[2] / "data" / "spark_src" / "v4.0
 
 
 def test_every_fact_is_byte_exact_substring_of_corpus() -> None:
+    corpus_root = CORPUS_DOCS
+    if not any((corpus_root / Path(doc_file).name).is_file() for _, doc_file in _MODE_FACTS.values()):
+        pytest.skip(
+            "Spark corpus not materialized (data/spark_src is gitignored); "
+            "run `dec spark-manifest`/`dec gen-manifest` locally to verify facts"
+        )
     for mode, (fact, doc_file) in _MODE_FACTS.items():
-        doc_path = CORPUS_DOCS / Path(doc_file).name
+        doc_path = corpus_root / Path(doc_file).name
         assert doc_path.is_file(), f"corpus doc missing: {doc_path}"
         corpus = doc_path.read_text(encoding="utf-8")
         assert fact in corpus, f"fact for {mode!r} is not a byte-exact substring of {doc_file}"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -148,7 +149,15 @@ def _init_chat_state() -> None:
 
 
 def _check_qdrant_reachable(timeout: float = 2.0) -> tuple[bool, str]:
-    """Check if Qdrant is reachable. Returns (ok, message)."""
+    """Check if Qdrant is reachable. Returns (ok, message).
+
+    Honors the ``STREAMLIT_ASSUME_QDRANT_UP`` env var: when set to a truthy
+    value, assumes Qdrant is reachable without a network probe. This lets the
+    AppTest-based UI tests render the chat tab hermetically (AppTest re-imports
+    the module, so a test-process monkeypatch would not propagate).
+    """
+    if os.environ.get("STREAMLIT_ASSUME_QDRANT_UP", "").strip().lower() in {"1", "true", "yes"}:
+        return True, "Qdrant assumed reachable (test override)"
     try:
         url = f"{settings.qdrant_url}/healthz"
         req = urllib.request.Request(url, method="GET")
