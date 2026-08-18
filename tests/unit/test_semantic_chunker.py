@@ -681,3 +681,62 @@ class TestIntegration:
             assert chunk.url == document.url
             assert chunk.chunk_index >= 0
             assert chunk.total_chunks == len(chunks)
+
+
+class RecordingEmbeddingModel:
+    """Deterministic embedder that records every batch it is asked to embed."""
+
+    def __init__(self, embedding_dim: int = 8):
+        self.embedding_dim = embedding_dim
+        self.embedded_batches: list[list[str]] = []
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.embedded_batches.append(list(texts))
+        return [[1.0] + [0.0] * (self.embedding_dim - 1) for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_texts([text])[0]
+
+
+class TestCodeMaskingInSemanticChunker:
+    async def test_embedder_receives_masked_tokenization_and_chunks_have_original_code(self):
+        """Code spans must never be split across sentences, and output chunks
+        must contain the original code (unmasked)."""
+        model = RecordingEmbeddingModel()
+        chunker = SemanticChunker(
+            chunk_size_words=100,
+            overlap_words=10,
+            embedding_model=model,
+            min_semantic_similarity=0.1,
+            min_chunk_words=1,
+        )
+
+        document = ParsedDocument(
+            source_name="Test",
+            title="Test",
+            url="https://example.com/code",
+            text=(
+                "Python is used for data. "
+                "```python\ndef foo():\n    return 42\n```\n"
+                "Spark is a cluster engine. "
+                'Use `spark.sql("select 1")` for SQL. '
+                "Done here."
+            ),
+        )
+
+        chunks = await chunker.chunk(document)
+        assert chunks, "semantic chunking must not drop a valid document"
+
+        # The embedder receives sentences from masked tokenization: code stays
+        # atomic in one sentence (never fragmented by its own punctuation).
+        embedded = [s for batch in model.embedded_batches for s in batch]
+        assert embedded, "embedder must be invoked"
+        code_sentences = [s for s in embedded if "def foo()" in s]
+        assert code_sentences, "the code sentence must be embedded"
+        assert all("return 42" in s for s in code_sentences), "code block must stay in one sentence"
+
+        # Output chunks must contain the original code (unmasked).
+        joined = "".join(c.text for c in chunks)
+        assert "def foo():" in joined
+        assert "return 42" in joined
+        assert "spark.sql" in joined

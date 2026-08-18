@@ -20,6 +20,7 @@ import numpy as np
 from nltk.tokenize import sent_tokenize
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
+from data_engineering_copilot.services.code_span_masker import mask_code_spans, unmask_code_spans
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,12 @@ class SemanticChunker:
     def extract_sentences(text: str) -> list[str] | None:
         try:
             _ensure_punkt_tab()
-            sentences = sent_tokenize(text)
+            masked = mask_code_spans(text)
+            masked_sentences = sent_tokenize(masked.text)
+            return [unmask_code_spans(sentence, masked) for sentence in masked_sentences]
         except Exception as e:
             logger.warning("Sentence tokenization failed: %s", str(e))
             return None
-        return sentences
 
     async def chunk(
         self,
@@ -172,7 +174,7 @@ class SemanticChunker:
         sentence_groups = self._cluster_sentences(sentences, embeddings)
 
         # Merge clusters into chunks respecting size constraints
-        chunks = self._merge_clusters_into_chunks(document, sentence_groups)
+        chunks = self._merge_clusters_into_chunks(document, sentence_groups, sentences)
 
         logger.info(
             "Chunked document (semantic) source=%s url=%s title=%r sentences=%s clusters=%s chunks=%s",
@@ -248,6 +250,7 @@ class SemanticChunker:
         self,
         document: ParsedDocument,
         sentence_groups: list[list[int]],
+        sentences: list[str],
     ) -> list[DocumentChunk]:
         """
         Merge semantic clusters into chunks respecting size constraints.
@@ -257,9 +260,14 @@ class SemanticChunker:
         2. Validate chunk quality before inclusion
         3. For overlap: keep semantically similar sentences from previous chunk
 
+        *sentences* must be the same list the embeddings were computed over
+        (``extract_sentences`` output) so cluster indices stay consistent; the
+        source is never re-tokenized here, which keeps code spans intact.
+
         Args:
             document: Source document
             sentence_groups: List of sentence index clusters
+            sentences: The sentence list used for clustering and embeddings
 
         Returns:
             List of DocumentChunk objects
@@ -268,7 +276,6 @@ class SemanticChunker:
             return []
 
         # Group sentences by their cluster
-        sentences = sent_tokenize(document.text)
         sentences_by_cluster = [[sentences[i] for i in cluster] for cluster in sentence_groups]
 
         chunks: list[DocumentChunk] = []
