@@ -97,9 +97,31 @@ async def test_query_success(mock_async_qdrant):
     results = await store.query([0.1] * 768, top_k=1)
 
     assert len(results) == 1
-    assert results[0].chunk.chunk_id == "550e8400-e29b-41d4-a716-446655440000"
+    assert results[0].chunk.chunk_id == "chunk1"
     assert results[0].confidence == pytest.approx(0.8)
     assert results[0].distance == pytest.approx(0.2)
+
+
+async def test_query_falls_back_to_point_id_when_payload_lacks_chunk_id(mock_async_qdrant):
+    """Retrieved chunks must carry the payload's real ``chunk_id``; the Qdrant
+    point UUID is only a fallback for legacy points without the field."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    mock_async_qdrant.collection_exists = AsyncMock(return_value=False)
+
+    mock_hit = MagicMock()
+    mock_hit.id = "550e8400-e29b-41d4-a716-446655440000"
+    mock_hit.score = 0.8
+    mock_hit.payload = {"source_name": "test_source", "title": "T", "url": "http://example.com", "text": "c"}
+    mock_response = MagicMock()
+    mock_response.points = [mock_hit]
+    mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
+
+    store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    results = await store.query([0.1] * 768, top_k=1)
+
+    assert len(results) == 1
+    assert results[0].chunk.chunk_id == "550e8400-e29b-41d4-a716-446655440000"
 
 
 async def test_query_deserializes_deployment_mode(mock_async_qdrant):

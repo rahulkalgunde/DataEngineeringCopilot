@@ -292,8 +292,39 @@ def _split_keep_delimiter(text: str, pattern: re.Pattern[str]) -> list[str]:
 
 
 def _split_by_chars(text: str, max_chars: int, max_tokens: int, encoder: TokenEncoder = _ENCODER) -> list[str]:
-    """Last-resort split at whitespace boundaries preserving all characters."""
-    parts = re.split(r"(\s+)", text)
+    """Last-resort split preserving all characters.
+
+    Prefers line boundaries so list items and code lines stay intact (a cut
+    between lines is a far better retrieval boundary than a cut mid-line).
+    A single over-long line is split by whitespace; only an individual token
+    longer than the budget is fatal.
+    """
+    segments: list[str] = []
+    current = ""
+    for line in re.split(r"(\n)", text):
+        if not line:
+            continue
+        if _fits(current + line, max_tokens, max_chars, encoder):
+            current = current + line
+            continue
+        if current:
+            segments.append(current)
+            current = ""
+        if _fits(line, max_tokens, max_chars, encoder):
+            current = line
+        else:
+            for piece in _split_line_by_whitespace(line, max_chars, max_tokens, encoder):
+                segments.append(piece)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _split_line_by_whitespace(
+    line: str, max_chars: int, max_tokens: int, encoder: TokenEncoder = _ENCODER
+) -> list[str]:
+    """Split a single over-long line at whitespace boundaries (lossless)."""
+    parts = re.split(r"(\s+)", line)
     segments: list[str] = []
     current = ""
     for part in parts:
@@ -301,14 +332,11 @@ def _split_by_chars(text: str, max_chars: int, max_tokens: int, encoder: TokenEn
             continue
         if len(part) > max_chars:
             raise ValueError(f"Single token exceeds budget ({len(part)} > {max_chars} chars)")
-        candidate = current + part
-        if _fits(candidate, max_tokens, max_chars, encoder):
-            current = candidate
-            continue
-        if current:
-            segments.append(current)
-            current = part
+        if _fits(current + part, max_tokens, max_chars, encoder):
+            current = current + part
         else:
+            if current:
+                segments.append(current)
             current = part
     if current:
         segments.append(current)

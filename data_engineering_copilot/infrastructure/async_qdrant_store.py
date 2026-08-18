@@ -489,7 +489,7 @@ class AsyncQdrantVectorStore:
             for hit in points_list:
                 payload = hit.payload or {}
                 chunk = DocumentChunk(
-                    chunk_id=str(hit.id),
+                    chunk_id=payload.get("chunk_id", str(hit.id)),
                     source_name=payload.get("source_name", ""),
                     title=payload.get("title", ""),
                     url=payload.get("url", ""),

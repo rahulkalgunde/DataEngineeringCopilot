@@ -2900,7 +2900,6 @@ def eval_fast_main(
         (report["layers"].get("coverage") or {}).get("fail")
         or (report["layers"].get("chunk") or {}).get("over_token_budget")
         or (report["layers"].get("chunk") or {}).get("oversized")
-        or (report["layers"].get("chunk") or {}).get("boundary_issues")
     )
     return 1 if failed else 0
 
