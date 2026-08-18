@@ -991,6 +991,112 @@ class TestAsyncRagService:
         mock_qr.hyde.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_hyde_policy_suppressed_query_not_embedded_and_reason_recorded(self, mock_embedder, mock_llm, config):
+        """When the HyDE policy suppresses a query, only original-query retrieval
+        runs (HyDE text is never embedded) and the rewrite provenance records the
+        disabled reason."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query=query,
+                    intent="api_lookup",
+                    decomposed_steps=(),
+                    hyde_query="",
+                    hyde_reason="intent:api_lookup",
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return []
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        details: dict[str, list[dict]] = {}
+
+        def on_step_detail(kind: str, payload: dict) -> None:
+            details.setdefault(kind, []).append(payload)
+
+        await service.answer("what does DataFrame.filter do?", on_step_detail=on_step_detail)
+
+        # Original query is embedded; the suppressed HyDE text is never embedded.
+        mock_embedder.embed_query.assert_any_call("what does DataFrame.filter do?")
+        embedded = [call.args[0] for call in mock_embedder.embed_query.await_args_list]
+        assert all("hypothetical" not in text and "perfectly answer" not in text for text in embedded)
+        assert len(embedded) == 1  # only the original query
+
+        # Provenance records the disabled reason.
+        assert details["rewrite"][0]["hyde_query"] == ""
+        assert details["rewrite"][0]["hyde_reason"] == "intent:api_lookup"
+
+        # No HyDE variant participates in the fused pool.
+        assert details["embed"][0]["variants"] == 1
+
+    @pytest.mark.asyncio
+    async def test_hyde_policy_allowed_query_embedded_as_extra_variant(self, mock_embedder, mock_llm, config):
+        """When the HyDE policy allows a query, the original query is embedded AND
+        the HyDE text is embedded as an additional query variant with an empty
+        suppression reason."""
+        from data_engineering_copilot.services.async_rag import AsyncRagService
+        from data_engineering_copilot.services.query_rewriting import RewrittenQuery
+
+        mock_vs = MagicMock()
+        mock_vs.query = AsyncMock(return_value=[self._make_chunk()])
+
+        mock_llm.generate = AsyncMock(return_value="answer")
+
+        class _Rewriter:
+            async def async_rewrite(self, query):
+                return RewrittenQuery(
+                    original_query=query,
+                    intent="factual",
+                    decomposed_steps=(),
+                    hyde_query="A hypothetical paragraph about Spark.",
+                    hyde_reason="",
+                )
+
+            async def expand_queries(self, query, max_variations):
+                return []
+
+        service = AsyncRagService(
+            config=config,
+            vector_store=mock_vs,
+            llm_client=mock_llm,
+            embedder=mock_embedder,
+            reranker=None,
+            telemetry=None,
+            cache=None,
+            query_rewriter=cast("QueryRewriter", _Rewriter()),
+        )
+
+        details: dict[str, list[dict]] = {}
+
+        def on_step_detail(kind: str, payload: dict) -> None:
+            details.setdefault(kind, []).append(payload)
+
+        await service.answer("what is spark", on_step_detail=on_step_detail)
+
+        mock_embedder.embed_query.assert_any_call("what is spark")
+        mock_embedder.embed_query.assert_any_call("A hypothetical paragraph about Spark.")
+        assert details["embed"][0]["variants"] == 2
+        assert details["rewrite"][0]["hyde_reason"] == ""
+
+    @pytest.mark.asyncio
     async def test_service_close_is_idempotent(self, config):
         """close() closes every closable component exactly once across repeated calls."""
         from typing import cast

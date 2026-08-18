@@ -150,11 +150,29 @@ register_fallback("query-hyde", _HYDE_PROMPT)
 
 
 @dataclass(frozen=True)
+class HydePolicy:
+    """Deterministic policy deciding when HyDE generation is worth its LLM call.
+
+    ``enabled_intents`` names the intents eligible for HyDE; every other intent
+    is skipped. The ``suppress_*`` flags additionally skip HyDE when the query
+    itself carries the matching signal (dotted identifiers / version-qualified
+    lookups, code fences or inline code, or stack traces / error text) even
+    when the intent is nominally eligible.
+    """
+
+    enabled_intents: frozenset[str]
+    suppress_identifier_queries: bool = True
+    suppress_code_queries: bool = True
+    suppress_debugging_queries: bool = True
+
+
+@dataclass(frozen=True)
 class RewrittenQuery:
     original_query: str
     intent: str
     decomposed_steps: tuple[str, ...]
     hyde_query: str = ""
+    hyde_reason: str = ""
     filters: RetrievalFilters = field(default_factory=lambda: RetrievalFilters())
 
 
@@ -247,6 +265,54 @@ def extract_retrieval_constraints(query: str) -> RetrievalFilters:
     )
 
 
+# --- Deterministic HyDE policy -----------------------------------------------
+# HyDE (hypothetical-document embedding) costs one extra LLM call and one extra
+# fused query. It helps broad conceptual questions but wastes calls on lookups
+# where the identifier/version already pin the exact page, and can dilute code
+# or debugging queries with prose. The policy below encodes that deterministically.
+_DOTTED_IDENTIFIER_PATTERN = re.compile(r"\b[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+\b")
+_VERSION_PATTERN = re.compile(r"\b\d+\.\d+(?:\.\d+)?\b")
+_CODE_FENCE_PATTERN = re.compile(r"`{3}[\s\S]*?`{3}|`[^`\n]+`")
+_STACK_TRACE_PATTERN = re.compile(
+    r"(?i)"
+    r"(traceback \(most recent call last\)"
+    r"|file \"[^\"]+\", line \d+"
+    r"|\bat\s+[^\n]+(?:in\s+\w+|\.\w+\(\))"
+    r"|\b(keyerror|typeerror|valueerror|attributeerror|runtimeerror|"
+    r"oserror|indexerror|zerodivisionerror|notimplementederror|exception)\b"
+    r"|raise\s+\w+error)"
+)
+
+
+def default_hyde_policy() -> HydePolicy:
+    """Default policy: HyDE only for broad factual/how_to queries."""
+    return HydePolicy(enabled_intents=frozenset({"factual", "how_to"}))
+
+
+def _hyde_suppression_reason(query: str, intent: str, policy: HydePolicy) -> str | None:
+    """Return a human-readable reason when ``policy`` suppresses HyDE, else None."""
+    if intent not in policy.enabled_intents:
+        return f"intent:{intent}"
+    if policy.suppress_identifier_queries and (
+        _DOTTED_IDENTIFIER_PATTERN.search(query) or _VERSION_PATTERN.search(query)
+    ):
+        return "identifier_query"
+    if policy.suppress_code_queries and _CODE_FENCE_PATTERN.search(query):
+        return "code_query"
+    if policy.suppress_debugging_queries and _STACK_TRACE_PATTERN.search(query):
+        return "debugging_query"
+    return None
+
+
+def should_use_hyde(query: str, intent: str, policy: HydePolicy) -> bool:
+    """Return whether HyDE should run for ``query`` under ``policy``.
+
+    Deterministic and explainable: false when the intent is not eligible or a
+    query signal (identifier/version, code fence, stack trace) suppresses it.
+    """
+    return _hyde_suppression_reason(query, intent, policy) is None
+
+
 class QueryRewriter:
     """Lightweight rule-based query rewriter with optional LLM fallback.
 
@@ -262,12 +328,20 @@ class QueryRewriter:
         hyde_enabled: bool = True,
         intent_llm_enabled: bool = False,
         intent_llm_client: LLMClientProtocol | None = None,
+        hyde_policy: HydePolicy | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._intent_llm_client = intent_llm_client or llm_client
         self._enabled = enabled
         self._hyde_enabled = hyde_enabled
         self._intent_llm_enabled = intent_llm_enabled
+        self._hyde_policy = hyde_policy
+
+    def _policy_hyde_reason(self, query: str, intent: str) -> str | None:
+        """Return the HyDE suppression reason when the policy blocks HyDE."""
+        if self._hyde_policy is None:
+            return None
+        return _hyde_suppression_reason(query, intent, self._hyde_policy)
 
     def classify_intent(self, query: str) -> str:
         """Classify query intent into factual / comparative / how_to / debugging / code_example.
@@ -362,13 +436,21 @@ class QueryRewriter:
 
         intent = self.classify_intent(query)
         steps = self.decompose(query, intent=intent)
-        hyde = self._generate_hyde(query) if self._hyde_enabled else ""
+        hyde = ""
+        hyde_reason = ""
+        if self._hyde_enabled:
+            reason = self._policy_hyde_reason(query, intent)
+            if reason is None:
+                hyde = self._generate_hyde(query)
+            else:
+                hyde_reason = reason
 
         return RewrittenQuery(
             original_query=query,
             intent=intent,
             decomposed_steps=steps,
             hyde_query=hyde,
+            hyde_reason=hyde_reason,
             filters=extract_retrieval_constraints(query),
         )
 
@@ -416,7 +498,14 @@ class QueryRewriter:
                 return self.rewrite(query)
 
             intent = await self.async_classify_intent(query)
-            hyde = await self._generate_hyde_async(query) if self._hyde_enabled else ""
+            hyde = ""
+            hyde_reason = ""
+            if self._hyde_enabled:
+                reason = self._policy_hyde_reason(query, intent)
+                if reason is None:
+                    hyde = await self._generate_hyde_async(query)
+                else:
+                    hyde_reason = reason
 
             steps: tuple[str, ...] = (rewritten,)
             if intent == "comparative":
@@ -431,6 +520,7 @@ class QueryRewriter:
                 intent=intent,
                 decomposed_steps=steps,
                 hyde_query=hyde,
+                hyde_reason=hyde_reason,
                 filters=extract_retrieval_constraints(query),
             )
         except Exception as exc:

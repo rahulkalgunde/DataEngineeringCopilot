@@ -1229,6 +1229,12 @@ class AppSettings(BaseSettings):
     index_validation_min_points: int = 1
     # Query rewriting / grounding
     query_rewrite_enabled: bool = True
+    # Deterministic HyDE policy (``default_hyde_policy``): suppress HyDE for
+    # non-factual intents and for identifier/version-qualified, code, or
+    # debugging queries. Off by default (HyDE runs as before) until the
+    # benchmark gate (API/code/debugging provider-call reduction >= 20% within
+    # fixed recall/MRR thresholds) passes.
+    hyde_policy_enabled: bool = False
     groundedness_enabled: bool = True
     # Post-answer topic-scope gate (fail-open): refuses answers when the retrieved
     # context does not cover the question's topic, converting them to
