@@ -297,6 +297,7 @@ def ingest_claude_docs(site: str = "all", max_docs: int | None = None) -> None:
         hybrid_search=settings.hybrid_search_enabled,
         hybrid_rrf_k=settings.hybrid_rrf_k,
         embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
     )
 
     # Use the same token encoder as the embedding providers for the lossless
@@ -874,6 +875,7 @@ def spark_build(generation: str | None = None) -> int:
         hybrid_search=settings.hybrid_search_enabled,
         hybrid_rrf_k=settings.hybrid_rrf_k,
         embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
     )
     resolver = SparkSourceResolver(config, settings.spark_cache_dir)
     parser = NativeDocumentParser()
@@ -946,6 +948,7 @@ def spark_validate(generation: str) -> int:
         collection_name=collection,
         hybrid_search=settings.hybrid_search_enabled,
         embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
     )
 
     async def _validate_store() -> dict[str, object]:
@@ -1372,6 +1375,7 @@ def gen_build(generation: str | None = None) -> int:
         hybrid_search=settings.hybrid_search_enabled,
         hybrid_rrf_k=settings.hybrid_rrf_k,
         embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
     )
     embedder = _build_fallback_embedder()
     header_chunker = HeaderAwareChunker(
@@ -1433,6 +1437,7 @@ def gen_validate(generation: str) -> int:
         collection_name=collection,
         hybrid_search=settings.hybrid_search_enabled,
         embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
     )
 
     async def _validate_store() -> dict[str, object]:
