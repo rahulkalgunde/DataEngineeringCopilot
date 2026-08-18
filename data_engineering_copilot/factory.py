@@ -52,6 +52,7 @@ from data_engineering_copilot.services.chunker_router import ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
+from data_engineering_copilot.services.sentence_preserving_chunker import SentencePreservingChunker
 from data_engineering_copilot.services.text_filter import ChunkFilter
 
 logger = structlog.get_logger(__name__)
@@ -1437,13 +1438,23 @@ def build_chunker(app_settings: AppSettings = settings):
             min_chunk_words=int(app_settings.chunk_size_words * 0.1),
         )
 
-    if strategy not in ["fixed_size", "sentence_preserving"]:
+    if strategy == "sentence_preserving":
+        logger.info(
+            "building_sentence_preserving_chunker",
+            strategy=strategy,
+            chunk_size=app_settings.chunk_size_words,
+            overlap=app_settings.chunk_overlap_words,
+        )
+        return SentencePreservingChunker(max_chars=app_settings.chunk_size_words * 5)
+
+    if strategy not in ["fixed_size"]:
         logger.warning(
             "unknown_chunking_strategy",
             strategy=strategy,
             fallback="sentence_preserving",
         )
         strategy = "sentence_preserving"
+        return SentencePreservingChunker(max_chars=app_settings.chunk_size_words * 5)
 
     logger.info(
         "building_document_chunker",
