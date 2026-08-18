@@ -22,6 +22,12 @@ from data_engineering_copilot.config.settings import PROJECT_ROOT, resolve_activ
 from data_engineering_copilot.domain.exceptions import VectorStoreError
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievalFilters, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+from data_engineering_copilot.services.query_signals import (
+    RRF_DENSE_WEIGHT,
+    RRF_EQUAL_PROFILE,
+    RRF_IDENTIFIER_SPARSE_PROFILE,
+    RRF_SPARSE_WEIGHT,
+)
 
 
 def chunk_to_payload(chunk: DocumentChunk) -> dict:
@@ -387,6 +393,7 @@ class AsyncQdrantVectorStore:
         chunk_type_filter: str | None = None,
         metadata_filters: RetrievalFilters | None = None,
         fused_limit: int | None = None,
+        rrf_profile: str = RRF_EQUAL_PROFILE,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -413,6 +420,12 @@ class AsyncQdrantVectorStore:
             ``max(top_k * 4, 40)``. Callers that rerank (the RAG service) pass
             ``max(retrieval_top_k * 8, reranker_top_k * 5)`` so expected
             evidence can survive at ranks below the reranker limit.
+        rrf_profile:
+            Hybrid RRF profile. ``equal_rrf`` (default) fuses dense and sparse
+            prefetches with equal weights; ``identifier_sparse_rrf`` boosts the
+            sparse side with weights (dense=1.0, sparse=1.25). Only candidate
+            limits, filters, RRF ``k``, and query vectors are otherwise
+            unchanged between profiles.
         """
         if self._client is None:
             logger.warning("Qdrant client not initialized. Returning empty results.")
@@ -498,6 +511,13 @@ class AsyncQdrantVectorStore:
                         ),
                     ]
                     query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
+                    if rrf_profile == RRF_IDENTIFIER_SPARSE_PROFILE:
+                        query_kwargs["query"] = models.RrfQuery(
+                            rrf=models.Rrf(
+                                k=self._hybrid_rrf_k,
+                                weights=[RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT],
+                            )
+                        )
                 else:
                     query_kwargs["query"] = query_embedding
                     if self._hybrid_search:

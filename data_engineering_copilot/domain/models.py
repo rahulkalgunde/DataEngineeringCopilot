@@ -245,6 +245,9 @@ class RagConfig:
     max_chunks_per_source: int = 2
     max_expansion_queries: int = 2
     cache_enabled: bool = True
+    # Identifier-aware hybrid RRF profiles (see ``services/query_signals.py``).
+    # Off (equal RRF) until the technical-query benchmark gate passes.
+    identifier_sparse_rrf_enabled: bool = False
     # Phase F: smart-cache recall tier. When enabled, follow-up chat turns try
     # to reuse similar cached (question→answer) pairs via local synthesis,
     # gated by scope verify, before falling through to the full pipeline.

@@ -22,6 +22,7 @@ from data_engineering_copilot.domain.models import (
     DocumentChunk,
     LLMUsage,
     RagConfig,
+    RetrievalFilters,
     RetrievedChunk,
 )
 from data_engineering_copilot.domain.protocols import (
@@ -46,6 +47,11 @@ from data_engineering_copilot.services.query_rewriting import (
     QueryRewriter,
     is_degenerate_query,
     render_conversation_history,
+)
+from data_engineering_copilot.services.query_signals import (
+    RRF_EQUAL_PROFILE,
+    classify_query_signals,
+    select_rrf_profile,
 )
 from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
@@ -407,6 +413,107 @@ class AsyncRagService:
         self._prompt_builder = PromptBuilder()
         self._rejoin_item_limit_chars = DEFAULT_ITEM_LIMIT_CHARS
 
+    def _rrf_profile_for(self, query: str) -> str:
+        """Select the hybrid RRF profile for a query variant.
+
+        Weighted (identifier-sparse) fusion is applied only when enabled in the
+        config; otherwise every query uses the default equal-RRF profile.
+        """
+        if self.config.identifier_sparse_rrf_enabled:
+            return select_rrf_profile(classify_query_signals(query))
+        return RRF_EQUAL_PROFILE
+
+    async def _retrieve_variant_queries(
+        self,
+        queries_to_run: list[str],
+        variant_labels: list[str],
+        *,
+        source_filter: list[str] | None,
+        chunk_type_filter: str | None,
+        metadata_filters: RetrievalFilters | None,
+    ) -> tuple[
+        list[list[RetrievedChunk]],
+        list[dict[str, object]],
+        list,
+        set[str],
+        bool,
+        Exception | None,
+        int,
+        list[float],
+    ]:
+        """Embed and retrieve every query variant.
+
+        Returns the per-variant result sets, provenance entries, deduplicated
+        retrieved chunks (and seen ids), success flag, last error, the observed
+        embedding dimension, and the last embedded query vector. The original
+        query is always embedded; HyDE variants are additional queries, never
+        replacements.
+        """
+        per_query_results: list[list[RetrievedChunk]] = []
+        prov_variants: list[dict[str, object]] = []
+        all_retrieved: list = []
+        seen_ids: set[str] = set()
+        any_success = False
+        last_error: Exception | None = None
+        query_dim = 0
+        q_emb: list[float] = []
+        for i, q in enumerate(queries_to_run):
+            try:
+                profile = self._rrf_profile_for(q)
+                q_emb = await self.embedder.embed_query(q)
+                if query_dim == 0 and q_emb:
+                    query_dim = len(q_emb)
+                results = await self.vector_store.query(
+                    q_emb,
+                    top_k=self.config.retrieval_top_k,
+                    query_text=q,
+                    source_filter=source_filter,
+                    chunk_type_filter=chunk_type_filter,
+                    metadata_filters=metadata_filters,
+                    fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                    rrf_profile=profile,
+                )
+                # Unfiltered fallback: if metadata filters removed everything,
+                # retry once without inferred filters.
+                if not results and metadata_filters is not None and not metadata_filters.is_empty:
+                    results = await self.vector_store.query(
+                        q_emb,
+                        top_k=self.config.retrieval_top_k,
+                        query_text=q,
+                        source_filter=source_filter,
+                        chunk_type_filter=chunk_type_filter,
+                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                        rrf_profile=profile,
+                    )
+                any_success = True
+                per_query_results.append(results)
+                prov_variants.append(
+                    {
+                        "variant": variant_labels[i],
+                        "query": q,
+                        "rrf_profile": profile,
+                        "retrieved": [_chunk_provenance_ref(r, rank) for rank, r in enumerate(results)],
+                    }
+                )
+                for r in results:
+                    cid = r.chunk.chunk_id
+                    if cid not in seen_ids:
+                        seen_ids.add(cid)
+                        all_retrieved.append(r)
+            except Exception as sub_exc:
+                last_error = sub_exc
+                logger.warning("Failed to retrieve for sub-query %r: %s", q[:50], sub_exc)
+        return (
+            per_query_results,
+            prov_variants,
+            all_retrieved,
+            seen_ids,
+            any_success,
+            last_error,
+            query_dim,
+            q_emb,
+        )
+
     async def _record_low_confidence_review(self, trace, question: str, answer_text: str) -> None:
         """Phase 6 (Task 6.3): queue low-confidence answers into the review dataset.
 
@@ -711,50 +818,22 @@ class AsyncRagService:
                 else:
                     variant_labels.append("expanded")
 
-            for i, q in enumerate(queries_to_run):
-                try:
-                    # Embed every query separately; HyDE is an additional query,
-                    # not a replacement for the real query embeddings.
-                    q_emb = await self.embedder.embed_query(q)
-                    if query_dim == 0 and q_emb:
-                        query_dim = len(q_emb)
-                    results = await self.vector_store.query(
-                        q_emb,
-                        top_k=self.config.retrieval_top_k,
-                        query_text=q,
-                        source_filter=source_filter,
-                        chunk_type_filter=chunk_type_filter,
-                        metadata_filters=metadata_filters,
-                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
-                    )
-                    # Unfiltered fallback: if metadata filters removed everything,
-                    # retry once without inferred filters.
-                    if not results and metadata_filters is not None and not metadata_filters.is_empty:
-                        results = await self.vector_store.query(
-                            q_emb,
-                            top_k=self.config.retrieval_top_k,
-                            query_text=q,
-                            source_filter=source_filter,
-                            chunk_type_filter=chunk_type_filter,
-                            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
-                        )
-                    any_success = True
-                    per_query_results.append(results)
-                    _prov_variants.append(
-                        {
-                            "variant": variant_labels[i],
-                            "query": q,
-                            "retrieved": [_chunk_provenance_ref(r, rank) for rank, r in enumerate(results)],
-                        }
-                    )
-                    for r in results:
-                        cid = r.chunk.chunk_id
-                        if cid not in seen_ids:
-                            seen_ids.add(cid)
-                            all_retrieved.append(r)
-                except Exception as sub_exc:
-                    last_error = sub_exc
-                    logger.warning("Failed to retrieve for sub-query %r: %s", q[:50], sub_exc)
+            (
+                per_query_results,
+                _prov_variants,
+                all_retrieved,
+                seen_ids,
+                any_success,
+                last_error,
+                query_dim,
+                q_emb,
+            ) = await self._retrieve_variant_queries(
+                queries_to_run,
+                variant_labels,
+                source_filter=source_filter,
+                chunk_type_filter=chunk_type_filter,
+                metadata_filters=metadata_filters,
+            )
 
             if not any_success and last_error is not None:
                 raise RetrievalError(f"Vector store query failed: {last_error}") from last_error
@@ -785,6 +864,7 @@ class AsyncRagService:
                 {
                     "pool_size": len(retrieved_chunks),
                     "candidates": list(_retrieval_details(retrieved_chunks)),
+                    "rrf_profiles": sorted({str(v["rrf_profile"]) for v in _prov_variants}),
                 },
             )
 
