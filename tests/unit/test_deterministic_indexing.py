@@ -1000,7 +1000,9 @@ def test_build_writes_coverage_and_build_report(tmp_path) -> None:
 # ------------------------------------------------------------------
 
 
-def _segment_chunk(text: str, chunk_id: str, parent_hash: str, index: int, total: int) -> DocumentChunk:
+def _segment_chunk(
+    text: str, chunk_id: str, parent_chunk_id: str, parent_hash: str, index: int, total: int
+) -> DocumentChunk:
     from data_engineering_copilot.infrastructure.token_budget import count_tokens
 
     return DocumentChunk(
@@ -1015,6 +1017,7 @@ def _segment_chunk(text: str, chunk_id: str, parent_hash: str, index: int, total
         index_generation="gen-1",
         source_commit="fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4",
         parent_content_hash=parent_hash,
+        parent_chunk_id=parent_chunk_id,
         segment_index=index,
         segment_total=total,
         token_count=count_tokens(text),
@@ -1138,10 +1141,11 @@ def test_segment_validation_fails_on_over_character_budget() -> None:
 def test_segment_validation_fails_on_missing_segment_index() -> None:
     from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
 
+    parent_chunk_id = "parent-123"
     parent_hash = hashlib.sha256(b"parent source text").hexdigest()
     segments = [
-        _segment_chunk("segment zero", "s0", parent_hash, 0, 2),
-        _segment_chunk("segment two", "s2", parent_hash, 2, 2),
+        _segment_chunk("segment zero", "s0", parent_chunk_id, parent_hash, 0, 2),
+        _segment_chunk("segment two", "s2", parent_chunk_id, parent_hash, 2, 2),
     ]
     failures = validate_generation_artifacts(
         generation="gen-1",
@@ -1156,10 +1160,11 @@ def test_segment_validation_fails_on_missing_segment_index() -> None:
 def test_segment_validation_fails_on_inconsistent_segment_total() -> None:
     from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
 
+    parent_chunk_id = "parent-123"
     parent_hash = hashlib.sha256(b"parent source text").hexdigest()
     segments = [
-        _segment_chunk("segment zero", "s0", parent_hash, 0, 3),
-        _segment_chunk("segment one", "s1", parent_hash, 1, 3),
+        _segment_chunk("segment zero", "s0", parent_chunk_id, parent_hash, 0, 3),
+        _segment_chunk("segment one", "s1", parent_chunk_id, parent_hash, 1, 3),
     ]
     failures = validate_generation_artifacts(
         generation="gen-1",
@@ -1179,7 +1184,7 @@ def test_segment_validation_fails_on_truncated_reconstruction() -> None:
     full_text = "the quick brown fox jumps over the lazy dog"
     parent_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
     segments = [
-        _segment_chunk("the quick brown fox", "t0", parent_hash, 0, 1),
+        _segment_chunk("the quick brown fox", "t0", "parent-1", parent_hash, 0, 1),
     ]
     failures = validate_generation_artifacts(
         generation="gen-1",
@@ -1189,3 +1194,29 @@ def test_segment_validation_fails_on_truncated_reconstruction() -> None:
         native_manifest_paths=["docs/x.md"],
     )
     assert any("truncation detected" in failure for failure in failures)
+
+
+def test_segment_validation_groups_by_parent_chunk_id_not_content_hash() -> None:
+    """Regression: two DISTINCT parents sharing IDENTICAL text (and therefore
+    the same ``parent_content_hash``) must be validated independently.
+
+    The original ``_validate_segment_budgets`` grouped segments by
+    ``parent_content_hash``, so duplicate parent text across corpora merged
+    into one pseudo-parent whose segments mixed two real parents — producing
+    spurious segment-count/reconstruction failures that aborted builds.
+    """
+    from data_engineering_copilot.services.spark_index_builder import _validate_segment_budgets
+
+    parent_text = " ".join(["the quick brown fox jumps over the lazy dog"] * 50)
+    parent_hash = hashlib.sha256(parent_text.encode("utf-8")).hexdigest()
+    segments = [
+        # parent-A: two segments of identical parent text
+        _segment_chunk(parent_text[:50], "a0", "parent-A", parent_hash, 0, 2),
+        _segment_chunk(parent_text[50:], "a1", "parent-A", parent_hash, 1, 2),
+        # parent-B: same parent text, same hash, DIFFERENT parent_chunk_id
+        _segment_chunk(parent_text[:50], "b0", "parent-B", parent_hash, 0, 2),
+        _segment_chunk(parent_text[50:], "b1", "parent-B", parent_hash, 1, 2),
+    ]
+
+    failures = _validate_segment_budgets(segments)
+    assert failures == [], f"duplicate-text parents must not collide: {failures}"

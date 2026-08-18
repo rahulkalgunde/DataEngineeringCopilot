@@ -988,16 +988,16 @@ def _validate_segment_budgets(chunks: list[DocumentChunk]) -> list[str]:
     # Per-parent completeness and lossless reconstruction.
     by_parent: dict[str, list[DocumentChunk]] = {}
     for chunk in chunks:
-        if chunk.parent_content_hash:
-            by_parent.setdefault(chunk.parent_content_hash, []).append(chunk)
+        if chunk.parent_chunk_id:
+            by_parent.setdefault(chunk.parent_chunk_id, []).append(chunk)
 
-    for parent_hash, segments in by_parent.items():
+    for parent_chunk_id, segments in by_parent.items():
         segments_by_index = {segment.segment_index: segment for segment in segments}
         expected_total = max(segments_by_index) + 1 if segments_by_index else 0
         for index in range(expected_total):
             if index not in segments_by_index:
                 failures.append(
-                    f"parent {parent_hash[:12]} is missing segment index {index} "
+                    f"parent {parent_chunk_id} is missing segment index {index} "
                     "(segment indices must be contiguous from zero)"
                 )
         for segment in segments:
@@ -1008,11 +1008,14 @@ def _validate_segment_budgets(chunks: list[DocumentChunk]) -> list[str]:
                 )
         # Lossless reconstruction: the normalized joined texts reproduce the
         # parent content hash, proving no characters were truncated.
+        # Use the first segment's parent_content_hash (the text hash) as the
+        # expected reconstruction hash.
+        parent_text_hash = segments[0].parent_content_hash
         joined = "".join(segments_by_index[index].text for index in sorted(segments_by_index))
         reconstructed_hash = hashlib.sha256(joined.strip().encode("utf-8")).hexdigest()
-        if reconstructed_hash != parent_hash:
+        if reconstructed_hash != parent_text_hash:
             failures.append(
-                f"parent {parent_hash[:12]} reconstruction hash {reconstructed_hash[:12]} "
+                f"parent {parent_chunk_id} reconstruction hash {reconstructed_hash[:12]} "
                 "does not match the recorded parent content hash (truncation detected)"
             )
 

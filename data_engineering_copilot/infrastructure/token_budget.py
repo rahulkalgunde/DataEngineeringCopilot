@@ -191,6 +191,13 @@ def _split_fence_losslessly(fence: str, max_tokens: int, max_chars: int, encoder
     ``"".join(pieces)`` reconstructs the original fence exactly. Continuation
     markers are the caller's per-segment ``segment_index``/``segment_total``
     metadata, not in-band fence text.
+
+    Every emitted piece must individually satisfy the budget. Intermediate
+    pieces carry a trailing ``"\\n"`` (so the line break between pieces
+    survives reconstruction) and the last piece carries the closer, so the
+    fit check reserves one char plus the closer length to avoid an
+    off-by-one where a piece of exactly ``max_chars`` is rejected once the
+    newline/closer is attached.
     """
     lines = fence.splitlines()
     if not lines:
@@ -202,7 +209,9 @@ def _split_fence_losslessly(fence: str, max_tokens: int, max_chars: int, encoder
     pieces: list[str] = []
     current: list[str] = [opener]
     for line in body:
-        candidate = "\n".join(current + [line])
+        # Reserve the trailing newline plus the closer so every flushed piece
+        # (with its "\n" or the final "\n{closer}") still fits the budget.
+        candidate = "\n".join(current + [line]) + "\n" + closer
         if _fits(candidate, max_tokens, max_chars, encoder):
             current.append(line)
         else:
