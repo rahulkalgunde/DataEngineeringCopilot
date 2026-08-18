@@ -9,6 +9,8 @@ Supports both LLM and Embedding providers via protocol.
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar, cast
@@ -24,6 +26,67 @@ logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")  # Request type
 R = TypeVar("R")  # Response type
+
+
+class _CallBudgetTracker:
+    """Process-wide guard against runaway external provider spend.
+
+    Counts every actual provider attempt (each fallback retry included) so a
+    retry/loop bug or an over-large corpus cannot silently burn unbounded
+    live API calls — the failure mode that wasted hours of build time.
+    """
+
+    def __init__(self, max_calls: int, max_cost_usd: float) -> None:
+        self._max_calls = max_calls
+        self._max_cost_usd = max_cost_usd
+        self._calls = 0
+        self._cost_usd = 0.0
+        self._lock = threading.Lock()
+
+    def check_and_track(self, provider: str, estimated_tokens: int) -> None:
+        with self._lock:
+            if self._calls >= self._max_calls:
+                raise RuntimeError(
+                    f"External provider call budget exceeded: {self._calls} calls (max {self._max_calls})"
+                )
+            self._calls += 1
+            # Rough cost estimate: ~$0.10 per 1M tokens.
+            self._cost_usd += max(1, estimated_tokens) / 1_000_000 * 0.1
+            if self._cost_usd >= self._max_cost_usd:
+                raise RuntimeError(
+                    f"External provider cost budget exceeded: ${self._cost_usd:.2f} (max ${self._max_cost_usd:.2f})"
+                )
+
+
+def _estimate_request_tokens(request: object) -> int:
+    """Coarse token estimate for the budget tracker from common request shapes."""
+    texts = getattr(request, "texts", None)
+    if isinstance(texts, list) and texts and all(isinstance(t, str) for t in texts):
+        return sum(max(1, len(t) // 4) for t in texts)
+    prompt = getattr(request, "prompt", None)
+    if isinstance(prompt, str):
+        return max(1, len(prompt) // 4)
+    messages = getattr(request, "messages", None)
+    if isinstance(messages, list):
+        total = 0
+        for message in messages:
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    text = getattr(part, "text", None)
+                    if isinstance(text, str):
+                        total += len(text)
+        if total:
+            return max(1, total // 4)
+    return 1
+
+
+_CALL_BUDGET = _CallBudgetTracker(
+    max_calls=int(os.environ.get("MAX_PROVIDER_CALLS", "100000")),
+    max_cost_usd=float(os.environ.get("MAX_PROVIDER_COST_USD", "50.0")),
+)
 
 
 class ProviderClient(Protocol):
@@ -329,6 +392,7 @@ class ProviderFallbackChain[T, R]:
         router: RouterLike | None = None,
     ) -> R:
         """Single-attempt call. Records health outcome and returns the result."""
+        _CALL_BUDGET.check_and_track(provider.name, _estimate_request_tokens(request))
         start = time.monotonic()
         try:
             result = await provider.client.call(request)
@@ -505,6 +569,7 @@ class ProviderFallbackChain[T, R]:
         clients that do not implement streaming. Records provider success after
         the stream completes and failure (with error categorization) on error.
         """
+        _CALL_BUDGET.check_and_track(provider.name, _estimate_request_tokens(prompt))
         start = time.monotonic()
         client = provider.client
         try:

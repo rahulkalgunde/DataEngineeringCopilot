@@ -145,7 +145,7 @@ def test_gen_manifest_writes_combined_and_per_source(monkeypatch, tmp_path) -> N
 
     result = cli.gen_manifest()
     assert result == 0
-    artifact_root = settings.pinned_corpus_dir / cli._default_generation()
+    artifact_root = settings.pinned_corpus_dir / cli.resolve_naming(cli._default_generation()).artifact_dir_name
     assert (artifact_root / "manifest-airflow.json").is_file()
     assert (artifact_root / "manifest.json").is_file()
     combined = json.loads((artifact_root / "manifest.json").read_text())
@@ -168,10 +168,109 @@ def test_gen_validate_rejects_bad_identifier(monkeypatch, tmp_path) -> None:
     assert cli.gen_validate("bad id!") == 2
 
 
+def test_gen_manifest_and_validate_roundtrip_same_artifact_dir(monkeypatch, tmp_path) -> None:
+    """Smoke: gen-manifest writes and gen-validate reads the SAME resolved dir.
+
+    This is the artifact-dir contract bug that cost ~2.5h of build time: the
+    manifest/build wrote to the short generation name while validation read
+    the prefixed collection name. Both must round-trip on
+    ``resolve_naming(gen).artifact_dir_name`` with no infra and no LLM calls.
+    """
+    from data_engineering_copilot.infrastructure import async_qdrant_store
+
+    settings = _patch_settings(monkeypatch, tmp_path)
+    _write_pinned_config(tmp_path)
+
+    canned = [
+        {
+            "slug": "airflow",
+            "type": "github",
+            "name": "Apache Airflow Documentation",
+            "commit": "3adbbe1c58e4532df1964cb7794805e763816ee8",
+            "files": [
+                {
+                    "stream": "core-docs",
+                    "relative_path": "airflow-core/docs/start.rst",
+                    "doc_type": "guide",
+                    "language": "rst",
+                    "source_url": "https://raw.githubusercontent.com/apache/airflow/main/start.rst",
+                }
+            ],
+        }
+    ]
+    monkeypatch.setattr(cli, "_resolve_pinned_sources", lambda: canned)
+
+    class _FakeStore:
+        _collection_name = cli._spark_generation_collection(_GEN)
+
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        async def initialize(self) -> None:
+            return None
+
+        async def validate_index_generation(self, expected_points: int) -> dict[str, object]:
+            return {
+                "collection": self._collection_name,
+                "point_count": expected_points,
+                "bm25_ready": True,
+                "sparse_configured": True,
+            }
+
+        async def verify_payload_texts(self, expected) -> list[str]:
+            return []
+
+    async def _metadata_complete(store) -> bool:
+        return True
+
+    monkeypatch.setattr(async_qdrant_store, "AsyncQdrantVectorStore", _FakeStore)
+    monkeypatch.setattr(cli, "_collection_has_metadata", _metadata_complete)
+
+    assert cli.gen_manifest(_GEN) == 0
+
+    artifact_root = settings.pinned_corpus_dir / cli.resolve_naming(_GEN).artifact_dir_name
+    chunk = {
+        "chunk_id": "chunk-1",
+        "source_name": "Apache Airflow Documentation",
+        "title": "Doc",
+        "url": "https://raw.githubusercontent.com/apache/airflow/main/start.rst",
+        "text": "word " * 40,
+        "doc_type": "guide",
+        "language": "rst",
+        "file_path": "airflow-core/docs/start.rst",
+        "index_generation": _GEN,
+        "source_commit": "3adbbe1c58e4532df1964cb7794805e763816ee8",
+    }
+    (artifact_root / "chunks.jsonl").write_text(json.dumps(chunk) + "\n", encoding="utf-8")
+    (artifact_root / "coverage.json").write_text(
+        json.dumps(
+            [
+                {
+                    "relative_path": "airflow-core/docs/start.rst",
+                    "representation": "native",
+                    "doc_type": "guide",
+                    "canonical_url": "https://raw.githubusercontent.com/apache/airflow/main/start.rst",
+                    "status": "indexed",
+                    "chunk_count": 1,
+                    "content_hash": "",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli.gen_validate(_GEN) == 0
+    report = json.loads(cli._validation_report_path(_GEN).read_text(encoding="utf-8"))
+    assert report["generation"] == _GEN
+    assert report["collection"] == cli._spark_generation_collection(_GEN)
+    assert report["passed"] is True
+
+
 def test_gen_validate_requires_artifacts(monkeypatch, tmp_path) -> None:
     settings = _patch_settings(monkeypatch, tmp_path)
     _write_pinned_config(tmp_path)
-    (settings.pinned_corpus_dir / _GEN).mkdir(parents=True, exist_ok=True)
+    artifact_dir = settings.pinned_corpus_dir / cli.resolve_naming(_GEN).artifact_dir_name
+    artifact_dir.mkdir(parents=True, exist_ok=True)
     assert cli.gen_validate(_GEN) == 3
 
 
