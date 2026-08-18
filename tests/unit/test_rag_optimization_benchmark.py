@@ -237,6 +237,7 @@ class TestCompareBenchmarks:
             "recall_regression_ok": True,
             "mrr_regression_ok": True,
             "identifier_improved": True,
+            "generic_recall_regression_ok": True,
             "provider_calls_reduced": True,
             "duplicate_rate_reduced": True,
         }
@@ -252,6 +253,18 @@ class TestCompareBenchmarks:
         candidate = self._report(source_recall_mean=0.78)
         cmp = compare_benchmarks(baseline, candidate)
         assert cmp["gates"]["recall_regression_ok"] is False
+
+    def test_generic_recall_regression_fails(self):
+        baseline = self._report(generic_recall=0.9)
+        candidate = self._report(generic_recall=0.88)
+        cmp = compare_benchmarks(baseline, candidate)
+        assert cmp["gates"]["generic_recall_regression_ok"] is False
+
+    def test_generic_recall_regression_within_tolerance_passes(self):
+        baseline = self._report(generic_recall=0.9)
+        candidate = self._report(generic_recall=0.89)
+        cmp = compare_benchmarks(baseline, candidate)
+        assert cmp["gates"]["generic_recall_regression_ok"] is True
 
     def test_provider_calls_not_reduced_enough(self):
         baseline = self._report(provider_calls_total=10)

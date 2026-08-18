@@ -36,6 +36,7 @@ _VALID_INTENTS = frozenset(_IDENTIFIER_INTENTS | _GENERIC_INTENTS)
 RECALL_REGRESSION_LIMIT = 0.01
 MRR_REGRESSION_LIMIT = 0.02
 IDENTIFIER_RECALL_IMPROVEMENT = 0.05
+GENERIC_RECALL_REGRESSION_LIMIT = 0.01
 PROVIDER_CALL_REDUCTION_PCT = 20.0
 DUPLICATE_RATE_REDUCTION_PCT = 10.0
 
@@ -299,6 +300,9 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
             "recall_regression_ok": source_recall_delta is not None and source_recall_delta >= -RECALL_REGRESSION_LIMIT,
             "mrr_regression_ok": mrr_delta is not None and mrr_delta >= -MRR_REGRESSION_LIMIT,
             "identifier_improved": identifier_delta is not None and identifier_delta >= IDENTIFIER_RECALL_IMPROVEMENT,
+            "generic_recall_regression_ok": (
+                generic_delta is not None and generic_delta >= -GENERIC_RECALL_REGRESSION_LIMIT
+            ),
             "provider_calls_reduced": (
                 provider_calls_delta_pct is not None and provider_calls_delta_pct <= -PROVIDER_CALL_REDUCTION_PCT
             ),
