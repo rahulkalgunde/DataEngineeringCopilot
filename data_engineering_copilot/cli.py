@@ -13,6 +13,7 @@ from typing import cast
 from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
+from data_engineering_copilot.config.naming import resolve_naming, validate_naming
 from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
@@ -643,7 +644,7 @@ def validate_spark_rendered_config() -> int:
 
 
 def _spark_generation_collection(generation: str) -> str:
-    return f"data_engineering_docs__{generation}"
+    return resolve_naming(generation).collection_name
 
 
 def _spark_commit_short(commit: str) -> str:
@@ -1326,7 +1327,9 @@ def _resolve_pinned_sources() -> list[dict[str, object]]:
 def gen_manifest(generation: str | None = None) -> int:
     """Materialize all pinned sources and write per-source + combined manifests."""
     gen = generation or _default_generation()
-    artifact_root = settings.pinned_corpus_dir / gen
+    naming = resolve_naming(gen)
+    validate_naming(naming)
+    artifact_root = settings.pinned_corpus_dir / naming.artifact_dir_name
     artifact_root.mkdir(parents=True, exist_ok=True)
     try:
         results = _resolve_pinned_sources()
@@ -1357,8 +1360,10 @@ def gen_build(generation: str | None = None) -> int:
     from data_engineering_copilot.services.url_index_preparer import UrlIndexPreparer
 
     gen = generation or _default_generation()
-    collection = _spark_generation_collection(gen)
-    artifact_root = settings.pinned_corpus_dir / gen
+    naming = resolve_naming(gen)
+    validate_naming(naming)
+    collection = naming.collection_name
+    artifact_root = settings.pinned_corpus_dir / naming.artifact_dir_name
     artifact_root.mkdir(parents=True, exist_ok=True)
 
     store = AsyncQdrantVectorStore(
@@ -1414,8 +1419,10 @@ def gen_validate(generation: str) -> int:
         print("❌ Invalid generation identifier")
         return 2
 
-    collection = _spark_generation_collection(generation)
-    artifact_root = settings.pinned_corpus_dir / generation
+    naming = resolve_naming(generation)
+    validate_naming(naming)
+    collection = naming.collection_name
+    artifact_root = settings.pinned_corpus_dir / naming.artifact_dir_name
 
     chunks, coverage, _native_paths, _rendered_paths = _load_generation_artifacts(generation, artifact_root)
     if chunks is None:

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from data_engineering_copilot.config.naming import resolve_naming, validate_naming
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import MAX_SAFE_TOKENS
@@ -64,6 +65,8 @@ class PinnedIndexBuilder:
         max_embed_chars: int = DEFAULT_MAX_CHARS,
         output_dir: Path | None = None,
     ) -> None:
+        naming = resolve_naming(generation)
+        validate_naming(naming)
         self._store = store
         self._embedder = embedder
         self._generation = generation
