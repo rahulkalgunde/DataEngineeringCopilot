@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Navigation Heavy</title>
+  <script>window.analytics = { enabled: true };</script>
+</head>
+<body>
+  <header>
+    <nav>
+      <ul>
+        <li><a href="/">Docs Home</a></li>
+        <li><a href="/getting-started">Getting Started</a></li>
+        <li><a href="/reference">Reference</a></li>
+        <li><a href="/faq">FAQ</a></li>
+      </ul>
+    </nav>
+  </header>
+  <aside>
+    <h2>Related Pages</h2>
+    <ul>
+      <li><a href="/guide-a">Guide A</a></li>
+      <li><a href="/guide-b">Guide B</a></li>
+    </ul>
+  </aside>
+  <main>
+    <h1>Navigation Heavy</h1>
+    <p>This page carries a large amount of navigation chrome around a single paragraph of real content to prove that menus, sidebars, scripts and styles are removed before the body is converted to Markdown.</p>
+    <p>Only this main section should survive the conversion, and every navigation-only construct above must be absent from the final Markdown text that is stored as the page body.</p>
+  </main>
+  <footer>
+    <p>Copyright notice that belongs in the footer and must be dropped.</p>
+  </footer>
+</body>
+</html>
