@@ -962,3 +962,236 @@ class TestReactivation:
         await service.ingest()
 
         mock_crawler.frontier.reactivate_missing.assert_not_awaited()
+
+
+class _CountingChunker:
+    """Delegating wrapper counting ``chunk()`` calls on a real strategy."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.chunk_calls = 0
+
+    async def chunk(self, document, precomputed_embeddings=None):
+        self.chunk_calls += 1
+        self.last_embeddings = precomputed_embeddings
+        return await self.inner.chunk(document, precomputed_embeddings)
+
+    def extract_sentences(self, text):
+        return self.inner.extract_sentences(text)
+
+
+class _CountingRouter:
+    """Delegating wrapper counting ``route()`` calls on a real router."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.route_calls = 0
+
+    def route(self, document):
+        self.route_calls += 1
+        return self.inner.route(document)
+
+
+class TestRouterThroughProcessRaw:
+    """Behavioral tests: real router + real chunker objects through _process_raw."""
+
+    @staticmethod
+    def _parser_for(parsed):
+        parser_mock = MagicMock()
+        parser_mock.parse = MagicMock(return_value=parsed)
+        return parser_mock
+
+    async def _process(self, service, raw):
+        loop = asyncio.get_running_loop()
+        return await service._process_raw(
+            loop,
+            raw,
+            None,
+            lambda *a, **kw: IngestionEvent(event_type="test", source_name="", message=""),
+        )
+
+    @pytest.mark.asyncio
+    async def test_json_doc_routes_to_structured_with_one_route_and_one_chunk_call(self, mock_settings, mock_crawler):
+        from data_engineering_copilot.services.chunker import DocumentChunker
+        from data_engineering_copilot.services.chunker_router import ChunkerRouter
+        from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+        from data_engineering_copilot.services.structured_data_chunker import StructuredDataChunker
+
+        parsed = ParsedDocument(
+            source_name="test",
+            title="Config",
+            url="https://example.com/config.json",
+            text='{"name": "Spark", "version": "4.0"}',
+            doc_type="json",
+        )
+        structured = _CountingChunker(StructuredDataChunker())
+        router = ChunkerRouter(
+            generic_strategy=DocumentChunker(),
+            structured_strategy=structured,
+            code_strategy=DocumentChunker(),
+            guide_strategy=HeaderAwareChunker(),
+        )
+        counting_router = _CountingRouter(router)
+
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._parser_for(parsed),
+            chunker=DocumentChunker(),
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+            chunker_router=counting_router,
+        )
+        raw = RawDocument(source_name="test", url="https://example.com/config.json", html="")
+        result = await self._process(service, raw)
+
+        assert counting_router.route_calls == 1
+        assert structured.chunk_calls == 1
+        assert structured.last_embeddings is None, "structured strategy must not trigger embedding"
+        embeddings_mock.embed_texts.assert_not_awaited()
+        assert result.disposition == "indexed"
+        assert result.chunks
+        assert all(c.chunk_type == "structured" for c in result.chunks)
+        assert all(c.section_header == "$" for c in result.chunks)
+
+    @pytest.mark.asyncio
+    async def test_routed_chunks_preserve_document_metadata(self, mock_settings, mock_crawler):
+        from data_engineering_copilot.services.chunker import DocumentChunker
+        from data_engineering_copilot.services.chunker_router import ChunkerRouter
+        from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+        from data_engineering_copilot.services.structured_data_chunker import StructuredDataChunker
+
+        parsed = ParsedDocument(
+            source_name="test",
+            title="Config",
+            url="https://example.com/config.json",
+            text='{"name": "Spark"}',
+            doc_type="json",
+        )
+        router = ChunkerRouter(
+            generic_strategy=DocumentChunker(),
+            structured_strategy=StructuredDataChunker(),
+            code_strategy=DocumentChunker(),
+            guide_strategy=HeaderAwareChunker(),
+        )
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._parser_for(parsed),
+            chunker=DocumentChunker(),
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+            chunker_router=router,
+        )
+        raw = RawDocument(source_name="test", url="https://example.com/config.json", html="")
+        result = await self._process(service, raw)
+
+        assert result.disposition == "indexed"
+        for chunk in result.chunks:
+            assert chunk.source_name == "test"
+            assert chunk.title == "Config"
+            assert chunk.url == "https://example.com/config.json"
+            assert chunk.doc_type == "json"
+
+    @pytest.mark.asyncio
+    async def test_generic_route_embeds_sentences_once(self, mock_settings, mock_crawler):
+        """A sentence-supporting strategy routed through the router embeds exactly once."""
+        from data_engineering_copilot.services.chunker import DocumentChunker
+        from data_engineering_copilot.services.chunker_router import ChunkerRouter
+
+        class _SentenceChunker:
+            def __init__(self, inner):
+                self.inner = inner
+                self.chunk_calls = 0
+
+            async def chunk(self, document, precomputed_embeddings=None):
+                self.chunk_calls += 1
+                return await self.inner.chunk(document, precomputed_embeddings)
+
+            def extract_sentences(self, text):
+                return ["sentence one", "sentence two"]
+
+        parsed = ParsedDocument(
+            source_name="test",
+            title="Doc",
+            url="https://example.com/plain",
+            text="sentence one. sentence two.",
+        )
+        generic = _SentenceChunker(DocumentChunker(chunk_size_chars=500))
+        router = ChunkerRouter(generic_strategy=generic)
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._parser_for(parsed),
+            chunker=generic,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+            chunker_router=router,
+        )
+        raw = RawDocument(source_name="test", url="https://example.com/plain", html="")
+        result = await self._process(service, raw)
+
+        embeddings_mock.embed_texts.assert_awaited_once()
+        embeddings_mock.embed_texts.assert_awaited_with(["sentence one", "sentence two"])
+        assert generic.chunk_calls == 1
+        assert result.disposition == "indexed"
+        assert result.chunks
+
+    @pytest.mark.asyncio
+    async def test_semantic_route_empty_sentences_skips_as_no_content(self, mock_settings, mock_crawler):
+        from data_engineering_copilot.services.chunker_router import ChunkerRouter
+
+        class _EmptySentenceChunker:
+            def __init__(self):
+                self.chunk_calls = 0
+
+            async def chunk(self, document, precomputed_embeddings=None):
+                self.chunk_calls += 1
+                return []
+
+            def extract_sentences(self, text):
+                return []
+
+        parsed = ParsedDocument(
+            source_name="test",
+            title="Doc",
+            url="https://example.com/plain",
+            text="",
+        )
+        empty = _EmptySentenceChunker()
+        router = ChunkerRouter(generic_strategy=empty)
+        embeddings_mock = MagicMock()
+        embeddings_mock.embed_texts = AsyncMock()
+        vector_store_mock = MagicMock()
+        vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
+
+        service = _make_svc(
+            mock_settings,
+            mock_crawler,
+            parser=self._parser_for(parsed),
+            chunker=empty,
+            embeddings=embeddings_mock,
+            vector_store=vector_store_mock,
+            chunker_router=router,
+        )
+        raw = RawDocument(source_name="test", url="https://example.com/plain", html="")
+        result = await self._process(service, raw)
+
+        assert result.disposition == "no_content"
+        assert empty.chunk_calls == 0
+        embeddings_mock.embed_texts.assert_not_awaited()

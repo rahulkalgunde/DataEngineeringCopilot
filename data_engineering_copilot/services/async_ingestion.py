@@ -28,6 +28,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
+from data_engineering_copilot.services.chunker_router import ChunkerRoute, ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
 from data_engineering_copilot.services.text_filter import ChunkFilter
@@ -73,6 +74,7 @@ class AsyncIngestionService:
         chunk_filter: ChunkFilter | None = None,
         telemetry: TelemetryTracerProtocol | None = None,
         spark_chunker: SparkChunker | None = None,
+        chunker_router: ChunkerRouter | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -90,6 +92,7 @@ class AsyncIngestionService:
         self._chunk_filter = chunk_filter
         self._telemetry = telemetry
         self._spark_chunker = spark_chunker
+        self._chunker_router = chunker_router
 
         # Enrichment queue for decoupling enrichment from main pipeline
         self._enrichment_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -119,6 +122,46 @@ class AsyncIngestionService:
             file_path=parsed.file_path,
             license=parsed.license,
         )
+
+    async def _chunk_with_strategy(
+        self,
+        route: ChunkerRoute,
+        parsed: ParsedDocument,
+        on_event: Callable[[IngestionEvent], None] | None,
+        make_event: Callable[..., IngestionEvent],
+    ) -> list[DocumentChunk] | None:
+        """Chunk *parsed* with the routed strategy.
+
+        Calls ``extract_sentences()`` only on the selected strategy (never on
+        the whole router). Returns ``None`` when the page has no extractable
+        sentences and should be skipped as ``no_content``.
+        """
+        strategy = route.strategy
+        extract_sentences = getattr(strategy, "extract_sentences", None)
+        if extract_sentences is None:
+            return await strategy.chunk(parsed)
+        sentences = extract_sentences(parsed.text)
+        if sentences is None:
+            return await strategy.chunk(parsed)
+        if not sentences:
+            log.info(
+                "async_ingestion.page_skipped_no_sentences",
+                source=parsed.source_name,
+                url=parsed.url,
+            )
+            self._emit(
+                on_event,
+                make_event(
+                    "page_skipped",
+                    source_name=parsed.source_name,
+                    url=parsed.url,
+                    title=parsed.title,
+                    message=f"Skipped page with no extractable sentences: {parsed.url}",
+                ),
+            )
+            return None
+        embeddings = await self.embeddings.embed_texts(sentences)
+        return await strategy.chunk(parsed, embeddings)
 
     async def _process_raw(
         self,
@@ -171,35 +214,29 @@ class AsyncIngestionService:
             log.info("async_ingestion.content_changed", url=parsed.url)
             await self._delete_chunks_for_url(parsed.url, parsed.source_name)
 
-        extract_sentences = getattr(self.chunker, "extract_sentences", None)
-        if self._spark_chunker is not None and parsed.doc_type:
-            chunks = await self._spark_chunker.chunk(parsed, self._spark_metadata(parsed))
-        elif extract_sentences is not None:
-            sentences = extract_sentences(parsed.text)
-            if sentences is None:
-                chunks = await self.chunker.chunk(parsed)
-            elif not sentences:
-                log.info(
-                    "async_ingestion.page_skipped_no_sentences",
-                    source=parsed.source_name,
-                    url=parsed.url,
-                )
-                self._emit(
-                    on_event,
-                    make_event(
-                        "page_skipped",
-                        source_name=parsed.source_name,
-                        url=parsed.url,
-                        title=parsed.title,
-                        message=f"Skipped page with no extractable sentences: {parsed.url}",
-                    ),
-                )
-                return _ProcessedResult(disposition="no_content", parsed=parsed)
+        if self._chunker_router is not None:
+            route = self._chunker_router.route(parsed)
+            if route.key == "spark":
+                # The router only emits a spark route when a SparkChunker was
+                # wired; the service executes with its own instance (the same
+                # object in factory wiring).
+                assert self._spark_chunker is not None, "spark route requires a wired SparkChunker"
+                chunks = await self._spark_chunker.chunk(parsed, self._spark_metadata(parsed))
             else:
-                embeddings = await self.embeddings.embed_texts(sentences)
-                chunks = await self.chunker.chunk(parsed, embeddings)
+                chunks = await self._chunk_with_strategy(route, parsed, on_event, make_event)
+                if chunks is None:
+                    return _ProcessedResult(disposition="no_content", parsed=parsed)
+        elif self._spark_chunker is not None and parsed.doc_type:
+            chunks = await self._spark_chunker.chunk(parsed, self._spark_metadata(parsed))
         else:
-            chunks = await self.chunker.chunk(parsed)
+            chunks = await self._chunk_with_strategy(
+                ChunkerRoute(key="generic", strategy=self.chunker, reason="single chunker wiring"),
+                parsed,
+                on_event,
+                make_event,
+            )
+            if chunks is None:
+                return _ProcessedResult(disposition="no_content", parsed=parsed)
         crawled_at = datetime.now(UTC).isoformat()
         chunks = [dataclasses.replace(chunk, content_hash=content_hash, crawled_at=crawled_at) for chunk in chunks]
 
