@@ -258,6 +258,88 @@ async def test_query_hybrid_rrf_normalizes_confidence(mock_async_qdrant):
     assert results[0].distance == pytest.approx(1.0 - expected)
 
 
+async def test_query_equal_rrf_profile_has_no_weights(mock_async_qdrant):
+    """Default profile keeps current RRF behavior: k unchanged, no weights."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    await _rrf_mock_response(mock_async_qdrant, score=0.1)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="test",
+        hybrid_search=True,
+        hybrid_rrf_k=60,
+    )
+    assert store._bm25 is not None
+    store._bm25._frozen = True
+    store._last_query_sparse = {"indices": [1], "values": [1.0]}
+
+    await store.query(
+        [0.1] * 768,
+        top_k=5,
+        query_text="apache spark",
+        source_filter=["spark"],
+        chunk_type_filter="text",
+        fused_limit=40,
+    )
+
+    call_kwargs = mock_async_qdrant.query_points.await_args.kwargs
+    query = call_kwargs["query"]
+    assert query.rrf.k == 60
+    assert query.rrf.weights is None
+    assert call_kwargs["limit"] == 40
+    assert len(call_kwargs["prefetch"]) == 2
+    # Dense and sparse prefetches keep the same filters as before.
+    assert call_kwargs["prefetch"][0].filter is not None
+    assert call_kwargs["prefetch"][1].filter is not None
+    assert call_kwargs["prefetch"][0].using == "dense"
+    assert call_kwargs["prefetch"][1].using == "sparse"
+
+
+async def test_query_identifier_sparse_rrf_changes_only_weights(mock_async_qdrant):
+    """Weighted profile: candidate limits, filters, RRF k, and query vectors
+    are unchanged; only the RRF weights differ (sparse boosted to 1.25)."""
+    from data_engineering_copilot.infrastructure.async_qdrant_store import (
+        RRF_IDENTIFIER_SPARSE_PROFILE,
+        AsyncQdrantVectorStore,
+    )
+
+    await _rrf_mock_response(mock_async_qdrant, score=0.1)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="test",
+        hybrid_search=True,
+        hybrid_rrf_k=60,
+    )
+    assert store._bm25 is not None
+    store._bm25._frozen = True
+    store._last_query_sparse = {"indices": [1], "values": [1.0]}
+
+    await store.query(
+        [0.1] * 768,
+        top_k=5,
+        query_text="apache spark",
+        source_filter=["spark"],
+        chunk_type_filter="text",
+        fused_limit=40,
+        rrf_profile=RRF_IDENTIFIER_SPARSE_PROFILE,
+    )
+
+    call_kwargs = mock_async_qdrant.query_points.await_args.kwargs
+    query = call_kwargs["query"]
+    assert query.rrf.k == 60
+    assert query.rrf.weights == [1.0, 1.25]
+    # Identical request shape to the equal profile except for weights.
+    assert call_kwargs["limit"] == 40
+    assert len(call_kwargs["prefetch"]) == 2
+    assert call_kwargs["prefetch"][0].using == "dense"
+    assert call_kwargs["prefetch"][1].using == "sparse"
+    assert call_kwargs["prefetch"][0].query == [0.1] * 768
+    assert call_kwargs["prefetch"][0].filter is not None
+    assert call_kwargs["prefetch"][1].filter is not None
+
+
 async def test_query_hybrid_dense_fallback_keeps_raw_score(mock_async_qdrant):
     """Without a sparse vector the hybrid path falls back to raw cosine score."""
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
