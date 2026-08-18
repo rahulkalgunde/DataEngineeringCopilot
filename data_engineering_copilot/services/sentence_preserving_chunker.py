@@ -29,6 +29,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     count_tokens,
     split_text_losslessly,
 )
+from data_engineering_copilot.services.code_span_masker import mask_code_spans, unmask_code_spans
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +129,16 @@ class SentencePreservingChunker:
     def _split_sentences_losslessly(self, text: str) -> list[str]:
         """Split *text* on sentence boundaries, preserving every character.
 
-        Inter-sentence whitespace is attached to the following sentence so
+        Code spans are masked before tokenization so a sentence boundary never
+        falls inside code; each sentence is unmasked afterwards. Inter-sentence
+        whitespace is attached to the following sentence so
         ``"".join(sentences) == text`` exactly. Falls back to ``[text]`` when
         sentence tokenization is unavailable so content is never dropped.
         """
+        masked = mask_code_spans(text)
         try:
             _ensure_punkt_tab()
-            spans = list(PunktSentenceTokenizer().span_tokenize(text))
+            spans = list(PunktSentenceTokenizer().span_tokenize(masked.text))
         except Exception as exc:
             logger.warning("Sentence tokenization failed: %s", exc)
             return [text]
@@ -144,7 +148,7 @@ class SentencePreservingChunker:
         sentences: list[str] = []
         for index, (_start, end) in enumerate(spans):
             seg_start = spans[index - 1][1] if index > 0 else 0
-            sentences.append(text[seg_start:end])
+            sentences.append(unmask_code_spans(masked.text[seg_start:end], masked))
         return sentences
 
     def _pack_sentences(self, sentences: list[str]) -> list[str]:

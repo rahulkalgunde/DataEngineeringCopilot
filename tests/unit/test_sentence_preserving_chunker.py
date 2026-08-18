@@ -71,6 +71,21 @@ class TestSentencePreservingChunker:
         assert "def foo():" in joined
         assert "return 1" in joined
 
+    def test_code_blocks_stay_atomic_within_one_sentence(self):
+        text = (
+            "A brief intro here. ```python\ndef compute():\n    x = 1\n    return x\n```\nThen the conclusion follows. "
+        )
+        chunker = SentencePreservingChunker(max_chars=1000)
+        chunks = _chunk(_doc(text), chunker)
+        code_chunks = [c for c in chunks if "def compute()" in c.text]
+        assert code_chunks, "code block must survive sentence chunking"
+        assert all("return x" in c.text for c in code_chunks), "code block must not be split across chunks"
+
+    def test_code_block_reconstruction_is_lossless(self):
+        text = 'Intro. ```python\nvalue = spark.sql("select 1")\nprint(value)\n```\nOutro. `inline_code()` here.'
+        chunks = _chunk(_doc(text))
+        assert "".join(c.text for c in chunks).strip() == text.strip()
+
     def test_extract_sentences_returns_none_so_no_embeddings(self):
         assert SentencePreservingChunker().extract_sentences("anything") is None
 
