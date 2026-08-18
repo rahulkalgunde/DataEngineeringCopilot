@@ -1709,6 +1709,7 @@ def build_rag_service(
         max_chunks_per_source=app_settings.max_chunks_per_source,
         max_expansion_queries=app_settings.max_expansion_queries,
         cache_enabled=app_settings.query_cache_enabled,
+        identifier_sparse_rrf_enabled=app_settings.identifier_sparse_rrf_enabled,
         chat_cache_recall_enabled=app_settings.chat_cache_recall_enabled,
         chat_cache_top_k=app_settings.chat_cache_top_k,
         chat_cache_recall_threshold=app_settings.chat_cache_recall_threshold,

@@ -1205,6 +1205,12 @@ class AppSettings(BaseSettings):
     # Hybrid search
     hybrid_search_enabled: bool = True
     hybrid_rrf_k: int = 60
+    # Identifier-aware hybrid profiles: when enabled, technical queries
+    # (dotted identifiers, paths, versions, code/SQL) fuse hybrid retrieval with
+    # weighted RRF (sparse 1.25 / dense 1.0) instead of equal weights. Off by
+    # default (``equal_rrf``) until the benchmark gate (identifier recall
+    # >= +0.05 with all global recall/MRR thresholds satisfied) passes.
+    identifier_sparse_rrf_enabled: bool = False
     # Namespace-aware BM25 tokenizer (``namespace-v1``). Off by default until
     # the technical-query benchmark gate (identifier recall >= +0.05, generic
     # recall <= -0.01, MRR <= -0.02) passes. Enabling it invalidates every
