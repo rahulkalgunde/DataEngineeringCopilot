@@ -101,6 +101,13 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         before embedding). Failing loudly beats silently losing content.
         """
         for text in texts:
+            if not text.strip():
+                raise EmbeddingError(
+                    f"Embedding input is blank (whitespace-only) for model={self.model_name} "
+                    f"provider={self.base_url}. Blank chunks are rejected by embedding "
+                    "providers (HTTP 400) and carry no retrieval value — filter them "
+                    "from the corpus before embedding."
+                )
             token_count = self._token_counter(text)
             if token_count > self._max_tokens_per_input:
                 raise EmbeddingError(
