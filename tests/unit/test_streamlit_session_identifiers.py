@@ -79,12 +79,15 @@ def test_extract_streaming_answer_ignores_incomplete_json() -> None:
 
 
 @respx.mock
-def test_chat_turn_renders_sources_and_persists_groundedness() -> None:
+def test_chat_turn_renders_sources_and_persists_groundedness(monkeypatch) -> None:
     """Sources SSE event must surface as a Sources expander + persist on the message."""
     import httpx
     from streamlit.testing.v1 import AppTest
 
     from data_engineering_copilot.ui import streamlit_app
+
+    # Hermetic: force the chat tab to render without an ambient Qdrant.
+    monkeypatch.setenv("STREAMLIT_ASSUME_QDRANT_UP", "1")
 
     respx.post(f"{streamlit_app.API_BASE_URL}/api/v1/chat").mock(
         return_value=httpx.Response(
@@ -123,12 +126,15 @@ def test_chat_turn_renders_sources_and_persists_groundedness() -> None:
 
 
 @respx.mock
-def test_suggestion_chip_click_submits_as_user_message() -> None:
+def test_suggestion_chip_click_submits_as_user_message(monkeypatch) -> None:
     """Clicking a follow-up chip must submit it as the next user turn."""
     import httpx
     from streamlit.testing.v1 import AppTest
 
     from data_engineering_copilot.ui import streamlit_app
+
+    # Hermetic: force the chat tab to render without an ambient Qdrant.
+    monkeypatch.setenv("STREAMLIT_ASSUME_QDRANT_UP", "1")
 
     respx.post(f"{streamlit_app.API_BASE_URL}/api/v1/chat").mock(
         return_value=httpx.Response(
