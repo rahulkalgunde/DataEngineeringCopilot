@@ -1,0 +1,13 @@
+<html>
+<body>
+  <main>
+    <h1>Malformed Page</h1>
+    <p>This page contains unclosed and mis-nested tags to prove the converter keeps its behavior deterministic in the face of broken markup.
+    <div><b>Unclosed bold <i>and italic</b> text</i> still renders.
+    <table><tr><td>Orphan cell without header</td><td>Second cell</td></tr></table>
+    <p>A paragraph opened but never closed plus a stray attribute value below this line.
+
+    <pre><code class="language-python">print("balanced")</code></pre>
+  </main>
+</body>
+</html>

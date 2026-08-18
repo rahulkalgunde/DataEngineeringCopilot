@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Code Example</title>
+  <style>body { font-family: monospace; }</style>
+</head>
+<body>
+  <nav>
+    <a href="/">Home</a>
+  </nav>
+  <main>
+    <h1>Code Example</h1>
+    <p>The following Python snippet applies a window function to a DataFrame and is followed by an SQL variant for comparison.</p>
+    <pre><code class="language-python">from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+w = Window.partitionBy("dept").orderBy("salary")
+df = df.withColumn("rn", row_number().over(w))</code></pre>
+    <pre><code class="language-sql">SELECT dept, salary,
+       row_number() OVER (PARTITION BY dept ORDER BY salary) AS rn
+FROM employees;</code></pre>
+    <p>Both variants produce identical row numbering over the same logical window definition, which is the expected behavior for this documentation example.</p>
+  </main>
+</body>
+</html>

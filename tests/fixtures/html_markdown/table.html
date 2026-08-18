@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Table Reference</title>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/guides">Guides</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Table Reference</h1>
+    <p>This guide describes how window function results are laid out in result tables for the documentation set.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Function</th>
+          <th>Partition</th>
+          <th>Order</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>row_number</td>
+          <td>dept</td>
+          <td>salary desc</td>
+        </tr>
+        <tr>
+          <td>rank</td>
+          <td>dept</td>
+          <td>salary asc</td>
+        </tr>
+        <tr>
+          <td>dense_rank</td>
+          <td>team</td>
+          <td>hire_date</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>Every function above assigns a stable rank to each row within its partition window and is commonly used in reporting pipelines.</p>
+  </main>
+  <footer>
+    <span>Footer links are ignored during ingestion.</span>
+  </footer>
+</body>
+</html>
