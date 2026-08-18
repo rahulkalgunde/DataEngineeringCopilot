@@ -39,6 +39,96 @@ def create_test_scores(num_scores):
     return [2.0 - (i * 0.8) for i in range(num_scores)]
 
 
+class TestMMR:
+    """Lexical MMR diversity selection (no model required)."""
+
+    def test_mmr_keeps_lexically_similar_chunks_with_distinct_facts(self):
+        from data_engineering_copilot.services.reranker import mmr_rerank
+
+        chunks = [
+            RetrievedChunk(
+                chunk=DocumentChunk(
+                    chunk_id="fact-a",
+                    source_name="spark",
+                    title="Fact A",
+                    url="http://example.com/a",
+                    text="filter a DataFrame with isNotNull to keep rows where a column has a value",
+                    content_hash="hash_a",
+                ),
+                distance=0.1,
+                confidence=0.93,
+            ),
+            RetrievedChunk(
+                chunk=DocumentChunk(
+                    chunk_id="fact-b",
+                    source_name="sql-guide",
+                    title="Fact B",
+                    url="http://example.com/b",
+                    text="filter a DataFrame with isNotNull to drop null rows in the column",
+                    content_hash="hash_b",
+                ),
+                distance=0.12,
+                confidence=0.91,
+            ),
+            RetrievedChunk(
+                chunk=DocumentChunk(
+                    chunk_id="off-topic",
+                    source_name="other",
+                    title="Off topic",
+                    url="http://example.com/o",
+                    text="completely unrelated content about kubernetes schedulers",
+                    content_hash="hash_o",
+                ),
+                distance=0.8,
+                confidence=0.2,
+            ),
+        ]
+
+        selected = mmr_rerank(chunks, top_k=2, lambda_param=0.5)
+
+        assert len(selected) == 2
+        assert {c.chunk.chunk_id for c in selected} == {"fact-a", "fact-b"}
+        assert selected[0].chunk.chunk_id == "fact-a"
+
+    def test_mmr_removes_redundant_duplicate(self):
+        from data_engineering_copilot.services.reranker import mmr_rerank
+
+        text = "spark.sql.shuffle.partitions controls the number of partitions"
+        chunks = [
+            RetrievedChunk(
+                chunk=DocumentChunk(
+                    chunk_id=f"dup-{i}",
+                    source_name=f"source-{i}",
+                    title=f"Dup {i}",
+                    url=f"http://example.com/dup{i}",
+                    text=text,
+                    content_hash=f"hash_dup{i}",
+                ),
+                distance=1.0 - (0.9 - i * 0.02),
+                confidence=0.9 - i * 0.02,
+            )
+            for i in range(3)
+        ] + [
+            RetrievedChunk(
+                chunk=DocumentChunk(
+                    chunk_id="unique",
+                    source_name="spark",
+                    title="Unique",
+                    url="http://example.com/u",
+                    text="adaptive query execution rewrites the physical plan at runtime",
+                    content_hash="hash_u",
+                ),
+                distance=0.2,
+                confidence=0.8,
+            )
+        ]
+
+        selected = mmr_rerank(chunks, top_k=2, lambda_param=0.5)
+
+        assert len(selected) == 2
+        assert selected[-1].chunk.chunk_id == "unique"
+
+
 class TestCrossEncoderReranker:
     """Test CrossEncoderReranker initialization and behavior."""
 

@@ -202,6 +202,63 @@ class TestContextAssembler:
 
         assert len(deduped) == 3
 
+    def test_deduplicate_same_parent_siblings_collapse(self):
+        """Multiple children of the same parent (identical substituted text)
+        must collapse to the single highest-confidence child."""
+        assembler = ContextAssembler(max_context_chars=1000)
+        parent_text = "parent context about window functions shared by every sibling"
+        siblings = [
+            DocumentChunk(
+                chunk_id=f"child-{i}",
+                source_name="spark",
+                title=f"Child {i}",
+                url=f"http://example.com/child-{i}",
+                text=parent_text,
+                content_hash=f"hash_child-{i}",
+                parent_chunk_id="parent-window",
+            )
+            for i in range(4)
+        ]
+        chunks = [
+            RetrievedChunk(chunk=s, distance=1.0 - (0.9 - i * 0.01), confidence=0.9 - i * 0.01)
+            for i, s in enumerate(siblings)
+        ]
+
+        deduped = assembler._deduplicate_chunks(chunks)
+
+        assert len(deduped) == 1
+        assert deduped[0].chunk.chunk_id == "child-0"
+
+    def test_deduplicate_lexically_similar_chunks_with_distinct_facts_both_survive(self):
+        """Two chunks that share most tokens but carry different required facts
+        must both survive deduplication (overlap alone must not drop facts)."""
+        assembler = ContextAssembler(max_context_chars=1000)
+        chunk1 = DocumentChunk(
+            chunk_id="fact-a",
+            source_name="spark",
+            title="Fact A",
+            url="http://example.com/a",
+            text="filter a DataFrame with isNotNull to keep rows where a column has a value",
+            content_hash="hash_a",
+        )
+        chunk2 = DocumentChunk(
+            chunk_id="fact-b",
+            source_name="sql-guide",
+            title="Fact B",
+            url="http://example.com/b",
+            text="filter a DataFrame with isNotNull to drop null rows in the column",
+            content_hash="hash_b",
+        )
+        chunks = [
+            RetrievedChunk(chunk=chunk1, distance=0.1, confidence=0.93),
+            RetrievedChunk(chunk=chunk2, distance=0.12, confidence=0.91),
+        ]
+
+        deduped = assembler._deduplicate_chunks(chunks)
+
+        assert len(deduped) == 2
+        assert {c.chunk.chunk_id for c in deduped} == {"fact-a", "fact-b"}
+
     def test_deduplicate_single_chunk(self):
         assembler = ContextAssembler(max_context_chars=1000)
         chunk1 = create_test_chunk("chunk1", "Single chunk.")
