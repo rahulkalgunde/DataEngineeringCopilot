@@ -21,6 +21,12 @@ from qdrant_client.http.models import SparseVector
 _stemmer = PorterStemmer()
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9_\-]{2,}")
+# Technical tokens: dotted/path/colon-separated identifiers (>=2 segments),
+# e.g. ``spark.sql.functions``, ``data/engineering``, ``v3.4.1``.
+_TECH_TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+(?:[./:][a-zA-Z0-9_]+)+")
+# URL schemes are stripped so ``https://spark.apache.org/docs`` is scanned as
+# ``spark.apache.org/docs`` instead of merging the scheme into the host token.
+_URL_SCHEME_RE = re.compile(r"(?:https?|ftp)://", re.IGNORECASE)
 _STOPWORDS = frozenset(
     {
         "the",
@@ -82,11 +88,25 @@ class BM25Tokenizer:
     After ``fit()`` the tokenizer is *frozen*: new words in queries that
     were not in the training corpus are silently dropped.  Before ``fit()``
     it can still ``tokenize()`` but uses a uniform weight of 1.0.
+
+    Namespace mode (``namespace=True``) additionally preserves full dotted /
+    path identifiers (``spark.sql.functions``, ``data/engineering``) alongside
+    their stemmed components, so queries matching an exact technical name hit
+    the identifier token instead of relying on bag-of-words overlap.
     """
 
-    def __init__(self, k1: float = 1.2, b: float = 0.75):
+    # Tokenizer identity persisted with the BM25 cache. ``legacy`` is the
+    # pre-namespace word-only tokenizer; ``namespace-v1`` adds identifier
+    # preservation. ``load()`` rejects any other stored version.
+    LEGACY_TOKENIZER_VERSION = "legacy"
+    TOKENIZER_VERSION = "namespace-v1"
+    SUPPORTED_VERSIONS = frozenset({LEGACY_TOKENIZER_VERSION, TOKENIZER_VERSION})
+
+    def __init__(self, k1: float = 1.2, b: float = 0.75, namespace: bool = False):
         self._k1 = k1
         self._b = b
+        self._namespace = namespace
+        self._version = self.TOKENIZER_VERSION if namespace else self.LEGACY_TOKENIZER_VERSION
         self._vocab: dict[str, int] = {}
         self._doc_freq: Counter[str] = Counter()
         self._corpus_size: int = 0
@@ -202,12 +222,23 @@ class BM25Tokenizer:
     def is_frozen(self) -> bool:
         return self._frozen
 
+    @property
+    def version(self) -> str:
+        """Persisted tokenizer version (``legacy`` or ``namespace-v1``)."""
+        return self._version
+
+    @property
+    def namespace_enabled(self) -> bool:
+        return self._namespace
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
     def save(self, path: Path) -> None:
         data = {
+            "tokenizer_version": self._version,
+            "namespace": self._namespace,
             "vocab": self._vocab,
             "doc_freq": dict(self._doc_freq),
             "corpus_size": self._corpus_size,
@@ -222,7 +253,13 @@ class BM25Tokenizer:
     @classmethod
     def load(cls, path: Path) -> BM25Tokenizer:
         data = json.loads(path.read_text())
-        tok = cls(k1=data["k1"], b=data["b"])
+        version = str(data.get("tokenizer_version", cls.LEGACY_TOKENIZER_VERSION))
+        if version not in cls.SUPPORTED_VERSIONS:
+            raise ValueError(
+                f"Unsupported BM25 tokenizer version {version!r} (supported: {sorted(cls.SUPPORTED_VERSIONS)})"
+            )
+        namespace = bool(data.get("namespace", version == cls.TOKENIZER_VERSION))
+        tok = cls(k1=data["k1"], b=data["b"], namespace=namespace)
         tok._vocab = data["vocab"]
         tok._doc_freq = Counter(data["doc_freq"])
         tok._corpus_size = data["corpus_size"]
@@ -235,6 +272,47 @@ class BM25Tokenizer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_tokens(text: str) -> list[str]:
-        """Lowercase regex extraction + stopword removal + stemming."""
+    def _extract_word_tokens(text: str) -> list[str]:
+        """Legacy word-only extraction: lowercase regex + stopwords + stem."""
         return [_stemmer.stem(t.lower()) for t in _WORD_RE.findall(text) if t.lower() not in _STOPWORDS]
+
+    @staticmethod
+    def _component_tokens(identifier: str) -> list[str]:
+        """Stemmed, stopword-filtered segments of a technical identifier."""
+        out: list[str] = []
+        for segment in re.split(r"[./:]+", identifier):
+            lowered = segment.lower()
+            if len(segment) >= 2 and lowered not in _STOPWORDS:
+                stemmed = _stemmer.stem(lowered)
+                if stemmed not in out:
+                    out.append(stemmed)
+        return out
+
+    def _extract_namespace_tokens(self, text: str) -> list[str]:
+        """Dual extraction: full identifiers + stemmed components + prose.
+
+        Full dotted/path identifiers are emitted lowercased and unstemmed (so
+        ``spark.sql.functions`` stays whole); every segment is also emitted
+        through the legacy word pipeline so prose queries ("spark sql
+        functions") still match.  URL schemes are stripped first.
+        """
+        masked = _URL_SCHEME_RE.sub(" ", text)
+        tech_matches = list(_TECH_TOKEN_RE.finditer(masked))
+        if not tech_matches:
+            return self._extract_word_tokens(text)
+
+        tokens: list[str] = []
+        for match in tech_matches:
+            tokens.append(match.group(0).lower())
+        cursor = 0
+        for match in tech_matches:
+            tokens.extend(self._component_tokens(match.group(0)))
+            tokens.extend(self._extract_word_tokens(masked[cursor : match.start()]))
+            cursor = match.end()
+        tokens.extend(self._extract_word_tokens(masked[cursor:]))
+        return tokens
+
+    def _extract_tokens(self, text: str) -> list[str]:
+        if self._namespace:
+            return self._extract_namespace_tokens(text)
+        return self._extract_word_tokens(text)

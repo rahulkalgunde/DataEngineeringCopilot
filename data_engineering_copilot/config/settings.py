@@ -864,8 +864,6 @@ class AppSettings(BaseSettings):
             "nvidia",
             "gemini",
             "cerebras",
-            "opencodezen",
-            "opencodego",
             "sambanova",
             "mistral",
             "zai",
@@ -1207,6 +1205,11 @@ class AppSettings(BaseSettings):
     # Hybrid search
     hybrid_search_enabled: bool = True
     hybrid_rrf_k: int = 60
+    # Namespace-aware BM25 tokenizer (``namespace-v1``). Off by default until
+    # the technical-query benchmark gate (identifier recall >= +0.05, generic
+    # recall <= -0.01, MRR <= -0.02) passes. Enabling it invalidates every
+    # legacy BM25 cache: a new generation must be built and activated.
+    namespace_bm25_enabled: bool = False
     # Semantic cache
     semantic_cache_threshold: float = 0.95
     semantic_cache_ttl: int = 3600

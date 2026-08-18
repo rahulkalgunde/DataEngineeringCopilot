@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from data_engineering_copilot.infrastructure.bm25_tokenizer import (
     BM25Tokenizer,
+    _stemmer,
 )
 
 
@@ -156,3 +161,131 @@ class TestBM25TokenizerEdgeCases:
         assert tok._corpus_size == 1000
         sv = tok.tokenize_query("Document 42 topic 42")
         assert len(sv.indices) >= 2
+
+
+class TestBM25TokenizerNamespace:
+    """namespace-v1 mode: full identifiers + stemmed components."""
+
+    def _tokens(self, text: str) -> list[str]:
+        return BM25Tokenizer(namespace=True)._extract_tokens(text)
+
+    def test_dotted_identifier_full_and_components(self):
+        tokens = self._tokens("use spark.sql.functions.row_number")
+        assert "spark.sql.functions.row_number" in tokens
+        for component in ("spark", "sql", _stemmer.stem("functions"), _stemmer.stem("row_number")):
+            assert component in tokens
+
+    def test_path_identifier_full_and_components(self):
+        tokens = self._tokens("see data/engineering/copilot guide")
+        assert "data/engineering/copilot" in tokens
+        for component in ("data", _stemmer.stem("engineering"), _stemmer.stem("copilot")):
+            assert component in tokens
+
+    def test_version_identifier(self):
+        tokens = self._tokens("upgrade to v3.4.1")
+        assert "v3.4.1" in tokens
+        assert "v3" in tokens  # single-char segments (4, 1) are dropped
+
+    def test_case_insensitive_identifiers(self):
+        upper = self._tokens("Spark.SQL.Functions")
+        lower = self._tokens("spark.sql.functions")
+        assert upper == lower
+
+    def test_sql_names_stay_atomic(self):
+        tokens = self._tokens("ROW_NUMBER() OVER (PARTITION BY dept)")
+        assert _stemmer.stem("row_number") in tokens
+        assert "row" not in tokens and _stemmer.stem("number") not in tokens
+
+    def test_urls_preserve_host_and_path_tokens(self):
+        tokens = self._tokens("read https://spark.apache.org/docs/latest guide")
+        assert "spark.apache.org/docs/latest" in tokens
+        assert "https" not in tokens
+        for component in ("spark", "apache", "org", "docs", "latest"):
+            assert _stemmer.stem(component) in tokens
+
+    def test_prose_unaffected_by_namespace_mode(self):
+        namespace = self._tokens("The quick brown fox jumps")
+        legacy = BM25Tokenizer()._extract_tokens("The quick brown fox jumps")
+        assert namespace == legacy
+
+    def test_punctuation_only_terms_absent(self):
+        assert self._tokens("...") == []
+        assert self._tokens("::") == []
+        assert self._tokens("use ... or") == [*BM25Tokenizer()._extract_tokens("use or")]
+
+    def test_namespace_fit_and_query_match_full_identifier(self):
+        tok = BM25Tokenizer(namespace=True)
+        tok.fit(["applies spark.sql.functions.col to each row"])
+        sv = tok.tokenize_query("spark.sql.functions.col")
+        assert len(sv.indices) >= 3  # full token + spark/sql components
+        assert "spark.sql.functions.col" in tok._vocab
+
+    def test_namespace_query_component_hits_fitted_vocab(self):
+        tok = BM25Tokenizer(namespace=True)
+        tok.fit(["applies spark.sql.functions.col to each row"])
+        sv = tok.tokenize_query("spark sql functions")
+        assert len(sv.indices) >= 3
+        for idx in sv.indices:
+            assert idx in tok._vocab.values()
+
+    def test_namespace_legacy_query_overlap(self):
+        """A namespace-fitted corpus is still queriable by prose words."""
+        tok = BM25Tokenizer(namespace=True)
+        tok.fit(["the pyspark.sql module provides DataFrame"])
+        sv = tok.tokenize_query("pyspark sql dataframe")
+        assert len(sv.indices) >= 3
+
+    def test_save_load_round_trip_namespace(self, tmp_path):
+        tok = BM25Tokenizer(namespace=True)
+        tok.fit(["spark.sql.functions row_number"])
+        path = tmp_path / "bm25.json"
+        tok.save(path)
+        loaded = BM25Tokenizer.load(path)
+        assert loaded.version == BM25Tokenizer.TOKENIZER_VERSION
+        assert loaded.namespace_enabled is True
+        assert loaded._vocab == tok._vocab
+        assert loaded._frozen is True
+
+    def test_save_load_round_trip_legacy(self, tmp_path):
+        tok = BM25Tokenizer()
+        tok.fit(["apache spark"])
+        path = tmp_path / "bm25.json"
+        tok.save(path)
+        loaded = BM25Tokenizer.load(path)
+        assert loaded.version == BM25Tokenizer.LEGACY_TOKENIZER_VERSION
+        assert loaded.namespace_enabled is False
+
+    def test_load_legacy_cache_without_version_key(self, tmp_path):
+        path = tmp_path / "bm25.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "k1": 1.2,
+                    "b": 0.75,
+                    "vocab": {"spark": 0},
+                    "doc_freq": {"spark": 1},
+                    "corpus_size": 1,
+                    "avg_doc_len": 2.0,
+                    "frozen": True,
+                }
+            )
+        )
+        loaded = BM25Tokenizer.load(path)
+        assert loaded.version == BM25Tokenizer.LEGACY_TOKENIZER_VERSION
+        assert loaded.namespace_enabled is False
+
+    def test_load_unsupported_version_raises(self, tmp_path):
+        path = tmp_path / "bm25.json"
+        data = {
+            "tokenizer_version": "namespace-v2",
+            "k1": 1.2,
+            "b": 0.75,
+            "vocab": {},
+            "doc_freq": {},
+            "corpus_size": 0,
+            "avg_doc_len": 0.0,
+            "frozen": True,
+        }
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="Unsupported BM25 tokenizer version"):
+            BM25Tokenizer.load(path)

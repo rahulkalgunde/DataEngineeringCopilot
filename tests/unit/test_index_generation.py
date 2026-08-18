@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
+from data_engineering_copilot.domain.models import DocumentChunk
 from tests.conftest import make_settings
 
 # ------------------------------------------------------------------
@@ -194,3 +195,76 @@ def test_cli_bm25_status_sparse_without_cache(tmp_path, monkeypatch) -> None:
     assert status["cache_fitted"] is False
     assert status["sparse_configured"] is True
     assert status["hybrid_active"] is False
+
+
+# ------------------------------------------------------------------
+# BM25 tokenizer version in generation metadata (plan Task 7 Step 3)
+# ------------------------------------------------------------------
+
+
+def test_namespace_bm25_setting_defaults_to_off() -> None:
+    settings = make_settings()
+    assert settings.namespace_bm25_enabled is False
+
+
+def test_namespace_bm25_setting_can_be_enabled() -> None:
+    settings = make_settings(namespace_bm25_enabled=True)
+    assert settings.namespace_bm25_enabled is True
+
+
+def test_validate_generation_artifacts_rejects_unsupported_version() -> None:
+    from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
+
+    failures = validate_generation_artifacts(
+        generation="g1",
+        expected_commit="abc",
+        chunks=[_chunk("c1")],
+        coverage=[],
+        native_manifest_paths=["a.md"],
+        bm25_tokenizer_version="namespace-v2",
+    )
+    assert any("Unsupported BM25 tokenizer version" in f for f in failures)
+
+
+def test_validate_generation_artifacts_accepts_supported_versions() -> None:
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+    from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
+
+    for version in sorted(BM25Tokenizer.SUPPORTED_VERSIONS):
+        failures = validate_generation_artifacts(
+            generation="g1",
+            expected_commit="abc",
+            chunks=[_chunk("c1")],
+            coverage=[],
+            native_manifest_paths=["a.md"],
+            bm25_tokenizer_version=version,
+        )
+        assert not any("version" in f for f in failures)
+
+
+def test_validate_generation_artifacts_mismatch_between_expected_and_built() -> None:
+    from data_engineering_copilot.services.spark_index_builder import validate_generation_artifacts
+
+    failures = validate_generation_artifacts(
+        generation="g1",
+        expected_commit="abc",
+        chunks=[_chunk("c1")],
+        coverage=[],
+        native_manifest_paths=["a.md"],
+        bm25_tokenizer_version="legacy",
+        expected_bm25_tokenizer_version="namespace-v1",
+    )
+    assert any("BM25 tokenizer version mismatch" in f for f in failures)
+
+
+def _chunk(chunk_id: str) -> DocumentChunk:
+    return DocumentChunk(
+        chunk_id=chunk_id,
+        source_name="s",
+        title="t",
+        url="http://example.com/1",
+        text="body",
+        index_generation="g1",
+        source_commit="abc",
+        doc_type="guide",
+    )
