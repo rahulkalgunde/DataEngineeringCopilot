@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
+from data_engineering_copilot.services.async_rag import _rerank_pool_size
 from data_engineering_copilot.services.reranker import CrossEncoderReranker, _truncate_doc_for_rerank
 
 
@@ -359,3 +360,17 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+class TestRerankPoolSize:
+    def test_default_formula(self):
+        assert _rerank_pool_size(50, 30) == 240
+
+    def test_configured_overrides(self):
+        assert _rerank_pool_size(50, 30, configured_pool=100) == 100
+
+    def test_zero_uses_formula(self):
+        assert _rerank_pool_size(50, 30, configured_pool=0) == 240
+
+    def test_small_top_k(self):
+        assert _rerank_pool_size(10, 5) == 40
