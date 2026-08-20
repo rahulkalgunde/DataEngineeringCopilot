@@ -510,8 +510,8 @@ def test_prompt_augmentation_config_wiring() -> None:
     assert rag_service.config.prompt_citation_enforcement == "off"
 
     # Test that PromptBuilder and ContextAssembler receive the config
-    from data_engineering_copilot.services.prompt_builder import PromptBuilder
     from data_engineering_copilot.services.context_assembler import ContextAssembler
+    from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
     prompt_builder = PromptBuilder(
         prompt_salted_xml_tags=rag_service.config.prompt_salted_xml_tags,

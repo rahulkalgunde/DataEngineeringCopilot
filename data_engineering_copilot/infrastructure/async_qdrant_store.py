@@ -27,6 +27,7 @@ from data_engineering_copilot.services.query_signals import (
     RRF_EQUAL_PROFILE,
     RRF_IDENTIFIER_SPARSE_PROFILE,
     RRF_SPARSE_WEIGHT,
+    SearchMode,
 )
 
 
@@ -394,6 +395,7 @@ class AsyncQdrantVectorStore:
         metadata_filters: RetrievalFilters | None = None,
         fused_limit: int | None = None,
         rrf_profile: str = RRF_EQUAL_PROFILE,
+        search_mode: SearchMode | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -433,6 +435,13 @@ class AsyncQdrantVectorStore:
         self._require_no_bm25_version_mismatch()
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
+
+        # Apply search_mode routing (only when explicitly set)
+        if search_mode is not None:
+            if search_mode == SearchMode.DENSE_ONLY or search_mode == SearchMode.BM25_ONLY:
+                use_hybrid = False
+            elif search_mode in (SearchMode.HYBRID_EQUAL, SearchMode.HYBRID_SPARSE_BIAS, SearchMode.HYBRID_DENSE_BIAS):
+                use_hybrid = True
 
         # Build Qdrant filter for source names, chunk type, and metadata filters
         query_filter = None
@@ -510,20 +519,40 @@ class AsyncQdrantVectorStore:
                             filter=query_filter,
                         ),
                     ]
-                    query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
-                    if rrf_profile == RRF_IDENTIFIER_SPARSE_PROFILE:
-                        query_kwargs["query"] = models.RrfQuery(
-                            rrf=models.Rrf(
-                                k=self._hybrid_rrf_k,
-                                weights=[RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT],
-                            )
-                        )
+                    # Determine RRF weights based on search_mode
+                    if search_mode == SearchMode.HYBRID_SPARSE_BIAS:
+                        weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
+                    elif search_mode == SearchMode.HYBRID_DENSE_BIAS:
+                        weights = [RRF_SPARSE_WEIGHT, RRF_DENSE_WEIGHT]  # dense gets boost
+                    elif rrf_profile == RRF_IDENTIFIER_SPARSE_PROFILE:
+                        weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
+                    else:
+                        weights = None  # Equal profile: no explicit weights
+                    if weights is not None:
+                        query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k, weights=weights))
+                    else:
+                        query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
                 else:
                     query_kwargs["query"] = query_embedding
                     if self._hybrid_search:
                         query_kwargs["using"] = "dense"
                     if query_filter is not None:
                         query_kwargs["query_filter"] = query_filter
+            elif search_mode == SearchMode.BM25_ONLY:
+                # BM25-only: use sparse vector if available, otherwise dense
+                self._require_frozen_bm25()
+                assert self._bm25 is not None
+                sparse = self._last_query_sparse
+                if sparse is None and query_text is not None:
+                    sparse = self._bm25.tokenize_query(query_text)
+                if sparse is not None:
+                    query_kwargs["query"] = sparse
+                    query_kwargs["using"] = "sparse"
+                else:
+                    query_kwargs["query"] = query_embedding
+                    query_kwargs["using"] = "dense"
+                if query_filter is not None:
+                    query_kwargs["query_filter"] = query_filter
             else:
                 query_kwargs["query"] = query_embedding
                 if self._hybrid_search:

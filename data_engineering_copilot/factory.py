@@ -1601,11 +1601,13 @@ def _build_content_aware_parser() -> MarkdownParser:
 
 
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
+    from data_engineering_copilot.infrastructure.graph_store import GraphStore
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.contextual_chunk_enricher import (
         ContextualChunkEnricher,
         LLMContextSummarizer,
     )
+    from data_engineering_copilot.services.graph_extractor import GraphExtractor
 
     logger.info(
         "building_async_ingestion_service",
@@ -1628,6 +1630,11 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         purpose_provider=app_settings.enrichment_llm_provider or "ollama",
         purpose_model=app_settings.enrichment_llm_model,
     )
+
+    # Knowledge-graph extraction: populate the shared GraphStore during ingestion
+    # so the RAG service can later traverse it for topological context.
+    graph_store = GraphStore()
+    graph_extractor = GraphExtractor(llm_client=enrichment_client, graph_store=graph_store)
 
     async def _record_enrichment_failure(document) -> None:
         key = f"ingest:enrichment_failed:{document.source_name}"
@@ -1674,6 +1681,7 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         chunk_filter=ChunkFilter(enabled=getattr(app_settings, "chunk_filtering_enabled", True)),
         telemetry=build_telemetry_tracer(),
         chunker_router=build_chunker_router(app_settings),
+        graph_extractor=graph_extractor,
     )
 
 
@@ -1682,11 +1690,16 @@ def build_rag_service(
     token_tracker: TokenTracker | None = None,
     retrieval_tracker: RetrievalTracker | None = None,
 ) -> AsyncRagService:
+    from data_engineering_copilot.infrastructure.graph_store import GraphStore
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.context_compression import ContextCompressor
+    from data_engineering_copilot.services.feedback_telemetry import FeedbackTelemetryService
+    from data_engineering_copilot.services.graph_traversal import GraphTraversalService
     from data_engineering_copilot.services.groundedness import GroundednessVerifier
+    from data_engineering_copilot.services.multi_hop_decomposer import MultiHopDecomposer
     from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
     from data_engineering_copilot.services.query_rewriting import QueryRewriter, default_hyde_policy
+    from data_engineering_copilot.services.relevance_grader import RelevanceGrader
     from data_engineering_copilot.services.reranker import CrossEncoderReranker
     from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 
@@ -1901,6 +1914,15 @@ def build_rag_service(
 
     input_guardrails = InputGuardrails(enabled=app_settings.input_guardrails_enabled)
 
+    # GraphRAG / Multi-hop / CRAG / Feedback modules (Plan 1). A single shared
+    # GraphStore is used so graph context at query time reflects the entities
+    # extracted during ingestion (both processes default to data/graph_store.db).
+    graph_store = GraphStore()
+    graph_traversal_service = GraphTraversalService(llm_client=answer_client or llm_client, graph_store=graph_store)
+    multi_hop_decomposer = MultiHopDecomposer(llm_client=answer_client or llm_client)
+    relevance_grader = RelevanceGrader(llm_client=answer_client or llm_client)
+    feedback_telemetry = FeedbackTelemetryService()
+
     # Phase 6 (Task 6.3): low-confidence answers → review dataset (fail-open).
     from data_engineering_copilot.evaluation.langfuse_datasets import create_review_item
 
@@ -1929,6 +1951,10 @@ def build_rag_service(
         retrieval_tracker=retrieval_tracker,
         pii_redactor=pii_redactor,
         input_guardrails=input_guardrails,
+        multi_hop_decomposer=multi_hop_decomposer,
+        graph_traversal_service=graph_traversal_service,
+        relevance_grader=relevance_grader,
+        feedback_telemetry_service=feedback_telemetry,
         review_dataset_hook=create_review_item,
     )
 

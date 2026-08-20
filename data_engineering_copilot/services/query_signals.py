@@ -1,25 +1,35 @@
-"""Deterministic query-signal classification and RRF profile selection.
+"""Deterministic query-signal classification and search mode selection.
 
 Technical queries (dotted identifiers, filesystem paths, version-qualified
 lookups, SQL/code syntax) rely more on exact token matches than broad prose
-queries, so they benefit from boosting the sparse (BM25) side of the hybrid
-fusion. This module classifies a query into deterministic boolean signals and
-picks one of two RRF profiles:
+queries, so they benefit from different search mechanisms:
 
-- ``equal_rrf``: the current behavior — dense and sparse prefetches are fused
-  with equal weights.
-- ``identifier_sparse_rrf``: Qdrant weighted RRF with sparse weight ``1.25``
-  and dense weight ``1.0``. No raw-score alpha mixing is used.
+Search Modes:
+- ``bm25_only``: Pure BM25 sparse vector search (exact token matching)
+- ``dense_only``: Pure dense vector search (semantic similarity)
+- ``hybrid_equal``: Dense + sparse with equal RRF weights (1.0, 1.0)
+- ``hybrid_sparse_bias``: Dense + sparse with sparse bias (1.0, 1.25)
+- ``hybrid_dense_bias``: Dense + sparse with dense bias (1.25, 1.0)
 
-The weighted profile is only applied when the benchmark gate passes
-(identifier recall +>=0.05 with global recall/MRR thresholds satisfied);
-until then ``equal_rrf`` remains the effective profile.
+The mode is selected deterministically based on query intent and signals.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import Enum
+
+
+class SearchMode(Enum):
+    """Search mechanism to use for retrieval."""
+
+    BM25_ONLY = "bm25_only"
+    DENSE_ONLY = "dense_only"
+    HYBRID_EQUAL = "hybrid_equal"
+    HYBRID_SPARSE_BIAS = "hybrid_sparse_bias"
+    HYBRID_DENSE_BIAS = "hybrid_dense_bias"
+
 
 # RRF profile names (matched by ``AsyncQdrantVectorStore.query(rrf_profile=...)``).
 RRF_EQUAL_PROFILE = "equal_rrf"
@@ -94,3 +104,33 @@ def select_rrf_profile(signals: QuerySignals) -> str:
     if signals.identifier_heavy or signals.path_heavy or signals.version_qualified or signals.code_like:
         return RRF_IDENTIFIER_SPARSE_PROFILE
     return RRF_EQUAL_PROFILE
+
+
+def select_search_mode(intent: str, signals: QuerySignals) -> SearchMode:
+    """Select the search mechanism based on intent and query signals.
+
+    Routing logic:
+    - api_lookup, code_example -> BM25_ONLY (exact token matching for API/code)
+    - debugging -> HYBRID_SPARSE_BIAS (error terms + semantic)
+    - factual, how_to, synthesis -> DENSE_ONLY (semantic similarity)
+    - comparative -> HYBRID_EQUAL (both modes matter)
+    - configuration -> HYBRID_DENSE_BIAS (conceptual + exact terms)
+    """
+    # Intent-based primary routing
+    if intent in ("api_lookup", "code_example"):
+        return SearchMode.BM25_ONLY
+    if intent == "debugging":
+        return SearchMode.HYBRID_SPARSE_BIAS
+    if intent in ("factual", "how_to", "synthesis"):
+        return SearchMode.DENSE_ONLY
+    if intent == "comparative":
+        return SearchMode.HYBRID_EQUAL
+    if intent == "configuration":
+        return SearchMode.HYBRID_DENSE_BIAS
+
+    # Fallback: signal-based routing
+    if signals.identifier_heavy or signals.code_like:
+        return SearchMode.HYBRID_SPARSE_BIAS
+    if signals.path_heavy or signals.version_qualified:
+        return SearchMode.HYBRID_DENSE_BIAS
+    return SearchMode.HYBRID_EQUAL

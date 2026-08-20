@@ -214,6 +214,7 @@ class TestCompareBenchmarks:
             "generic_recall": 0.9,
             "provider_calls_total": 10,
             "duplicate_rate_mean": 0.2,
+            "context_precision_mean": 0.75,
         }
         report.update(overrides)
         return report
@@ -240,6 +241,7 @@ class TestCompareBenchmarks:
             "generic_recall_regression_ok": True,
             "provider_calls_reduced": True,
             "duplicate_rate_reduced": True,
+            "context_precision_regression_ok": True,
         }
 
     def test_identifier_not_improved(self):

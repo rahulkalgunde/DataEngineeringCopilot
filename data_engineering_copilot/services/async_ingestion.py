@@ -31,6 +31,7 @@ from data_engineering_copilot.services.api_extractor import ApiDocExtractor
 from data_engineering_copilot.services.chunker_router import ChunkerRoute, ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
+from data_engineering_copilot.services.graph_extractor import GraphExtractor
 from data_engineering_copilot.services.text_filter import ChunkFilter
 
 if TYPE_CHECKING:
@@ -75,6 +76,7 @@ class AsyncIngestionService:
         telemetry: TelemetryTracerProtocol | None = None,
         spark_chunker: SparkChunker | None = None,
         chunker_router: ChunkerRouter | None = None,
+        graph_extractor: GraphExtractor | None = None,
     ) -> None:
         self.settings = settings
         self.crawler = crawler
@@ -93,6 +95,7 @@ class AsyncIngestionService:
         self._telemetry = telemetry
         self._spark_chunker = spark_chunker
         self._chunker_router = chunker_router
+        self._graph_extractor = graph_extractor
 
         # Enrichment queue for decoupling enrichment from main pipeline
         self._enrichment_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -259,6 +262,10 @@ class AsyncIngestionService:
                 chunks = await self._contextual_enricher.enrich(parsed, chunks)
         elif self._contextual_enricher is not None:
             chunks = await self._contextual_enricher.enrich(parsed, chunks)
+
+        if self._graph_extractor is not None and chunks:
+            for chunk in chunks:
+                await self._graph_extractor.extract_and_store(chunk.text)
 
         return _ProcessedResult(disposition="indexed", chunks=chunks, content_hash=content_hash, parsed=parsed)
 

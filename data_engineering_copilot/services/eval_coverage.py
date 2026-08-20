@@ -95,10 +95,39 @@ class CoverageValidator:
     def _norm(url: str) -> str:
         return url.strip().rstrip("/")
 
+    def _url_path_match(self, url: str) -> bool:
+        """Flexible URL matching by path components.
+
+        Matches if the last 2-3 path components of the URL exist in the corpus.
+        Handles differences like raw.githubusercontent.com vs spark.apache.org.
+        """
+        self._load()
+        norm_url = self._norm(url)
+        if norm_url in self._urls:
+            return True
+
+        # Extract path components after domain
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(norm_url)
+            path = parsed.path.strip("/")
+            parts = path.split("/")
+
+            # Try matching last 3, then last 2 path components
+            for n in [3, 2]:
+                if len(parts) >= n:
+                    suffix = "/".join(parts[-n:])
+                    for corpus_url in self._urls:
+                        if suffix in corpus_url:
+                            return True
+        except Exception:
+            pass
+        return False
+
     def url_covered(self, url: str) -> bool:
         """Whether ``url`` corresponds to an indexed chunk."""
-        self._load()
-        return self._norm(url) in self._urls
+        return self._url_path_match(url)
 
     def term_present(self, term: str, *, source: str | None = None) -> bool:
         """Whether ``term`` occurs anywhere in the corpus (optionally a source)."""

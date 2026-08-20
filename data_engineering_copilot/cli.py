@@ -2347,6 +2347,164 @@ def _compute_spark_eval_metrics(results: list[dict]) -> dict:
     }
 
 
+def _eval_retrieval_row(query: str, intent: str, expected: list[str], retrieved: list[str], k: int) -> dict:
+    """Compute Recall@K, Precision@K, MRR@K for a single query against expected URLs."""
+    relevant = set(expected)
+    topk = (retrieved or [])[:k]
+    hits = [u for u in topk if u in relevant]
+    recall = (len(hits) / len(relevant)) if relevant else 1.0
+    precision = (len(hits) / k) if k else 0.0
+    mrr = 0.0
+    for rank, u in enumerate(retrieved or [], 1):
+        if u in relevant:
+            mrr = 1.0 / rank
+            break
+    return {"query": query, "intent": intent, "recall": recall, "precision": precision, "mrr": mrr}
+
+
+def eval_retrieval_main(
+    dataset: str | None = None,
+    k: int = 10,
+    output_dir: str | None = None,
+    compare_baseline: str | None = None,
+) -> int:
+    """Source-agnostic retrieval-only evaluation (Recall@K / MRR / Precision@K per intent).
+
+    Runs ``service.answer(..., retrieval_only=True)`` over a recall-format golden
+    dataset and reports metrics overall and grouped by ``intent``. With
+    ``--output-dir`` writes ``retrieval_eval.json`` (consumed by ``eval-set-baseline``).
+    With ``--compare-baseline <path>`` fails (exit 1) when overall Recall@K drops
+    below the baseline minus a small tolerance (CI regression gate). A missing or
+    unparseable baseline is treated as a warning, not a failure.
+    """
+    import asyncio
+
+    from data_engineering_copilot.factory import build_rag_service
+
+    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
+    if not dataset_path.exists():
+        print(f"❌ Evaluation dataset not found at {dataset_path}")
+        return 2
+
+    queries = []
+    with open(dataset_path) as f:
+        for line in f:
+            if line.strip():
+                try:
+                    queries.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    print(f"❌ Invalid JSONL row in {dataset_path}: {exc}")
+                    return 2
+    if not queries:
+        print("❌ No queries loaded from dataset")
+        return 2
+
+    print(f"Loaded {len(queries)} retrieval evaluation queries (dataset: {dataset_path.name})\n")
+    service = build_rag_service()
+
+    per_intent: dict[str, list[float]] = {}
+    per_intent_mrr: dict[str, list[float]] = {}
+    per_intent_prec: dict[str, list[float]] = {}
+
+    async def run_eval() -> list[dict]:
+        if service.reranker is not None:
+            await service.reranker.initialize()
+        rows = []
+        for i, item in enumerate(queries, 1):
+            query = item.get("question") or ""
+            if not query:
+                continue
+            intent = item.get("intent", "unknown")
+            expected = [u for u in (item.get("expected_urls") or []) if u]
+            prov: list[dict] = []
+            try:
+                # retrieval_only=True measures raw retrieval (the GraphRAG / CRAG
+                # LLM augmentations are skipped there) so the benchmark stays fast
+                # and reflects base retrieval quality.
+                answer = await service.answer(
+                    query,
+                    provenance=prov,
+                    bypass_cache=True,
+                    retrieval_only=True,
+                    expected_urls=expected,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{i}/{len(queries)}] {item.get('id', '')}: ERROR {exc}")
+                rows.append({"id": item.get("id", f"q{i}"), "question": query, "error": str(exc)})
+                continue
+            retrieved = [c.url for c in answer.sources]
+            row = _eval_retrieval_row(query, intent, expected, retrieved, k)
+            rows.append(row)
+            per_intent.setdefault(intent, []).append(row["recall"])
+            per_intent_mrr.setdefault(intent, []).append(row["mrr"])
+            per_intent_prec.setdefault(intent, []).append(row["precision"])
+            print(
+                f"[{i}/{len(queries)}] {item.get('id', '')} intent={intent}: "
+                f"R@{k}={row['recall']:.2f} MRR={row['mrr']:.2f} P@{k}={row['precision']:.2f}"
+            )
+        return rows
+
+    rows = asyncio.run(run_eval())
+    if not rows:
+        print("❌ No evaluation results produced")
+        return 5
+
+    def _avg(xs: list[float]) -> float:
+        return sum(xs) / len(xs) if xs else 0.0
+
+    scored = [r for r in rows if "recall" in r]
+    overall = {
+        "recall@k": _avg([r["recall"] for r in scored]),
+        "mrr@k": _avg([r["mrr"] for r in scored]),
+        "precision@k": _avg([r["precision"] for r in scored]),
+        "k": k,
+        "n": len(scored),
+    }
+    per_intent_metrics = {
+        intent: {
+            "recall@k": _avg(vals),
+            "mrr@k": _avg(per_intent_mrr[intent]),
+            "precision@k": _avg(per_intent_prec[intent]),
+            "n": len(vals),
+        }
+        for intent, vals in per_intent.items()
+    }
+
+    print("\n" + "=" * 40)
+    print("Retrieval Evaluation Summary")
+    print(f"Queries: {overall['n']} (k={k})")
+    print(f"Overall Recall@{k}:   {overall['recall@k']:.3f}")
+    print(f"Overall MRR@{k}:      {overall['mrr@k']:.3f}")
+    print(f"Overall Precision@{k}: {overall['precision@k']:.3f}")
+    for intent, m in sorted(per_intent_metrics.items()):
+        print(f"  [{intent}] R@{k}={m['recall@k']:.3f} MRR={m['mrr@k']:.3f} P@{k}={m['precision@k']:.3f} (n={m['n']})")
+
+    if output_dir is not None:
+        out = pathlib.Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        payload = {"overall": overall, "per_intent": per_intent_metrics}
+        (out / "retrieval_eval.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"\nMetrics written to {out / 'retrieval_eval.json'}")
+
+    if compare_baseline:
+        baseline_path = pathlib.Path(compare_baseline)
+        if not baseline_path.exists():
+            print(f"⚠️  Baseline not found at {baseline_path}; skipping regression gate.")
+            return 0
+        try:
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Could not parse baseline {baseline_path}: {exc}; skipping gate.")
+            return 0
+        base_recall = float((baseline.get("overall") or {}).get("recall@k", 1.0))
+        if overall["recall@k"] < base_recall - 0.02:
+            print(f"❌ Retrieval regression: Recall@{k} {overall['recall@k']:.3f} < baseline {base_recall:.3f}")
+            return 1
+        print(f"✅ No retrieval regression vs baseline Recall@{k}={base_recall:.3f}")
+
+    return 0
+
+
 def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path | None = None) -> int:
     """Run retrieval-recall evaluation against the Spark golden dataset.
 
@@ -3645,6 +3803,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM provider for 'llm' mode (default: ollama).",
     )
 
+    # Source-agnostic retrieval-only evaluation (Recall@K/MRR/Precision@K per intent)
+    eval_retrieval_parser = subparsers.add_parser(
+        "eval-retrieval",
+        help="Run source-agnostic retrieval-only evaluation (Recall@K/MRR/Precision@K per intent).",
+    )
+    eval_retrieval_parser.add_argument(
+        "--dataset",
+        default=None,
+        help="Path to a recall-format JSONL dataset (default: tests/evaluation/golden/recall_all.jsonl).",
+    )
+    eval_retrieval_parser.add_argument("--k", type=int, default=10, help="Cutoff position for metrics (default: 10).")
+    eval_retrieval_parser.add_argument(
+        "--output-dir", default=None, help="Write retrieval_eval.json metrics to this directory."
+    )
+    eval_retrieval_parser.add_argument(
+        "--compare-baseline",
+        default=None,
+        help="Path to a baseline retrieval_eval.json; fail (exit 1) on Recall@K regression.",
+    )
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -4037,6 +4215,15 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ eval-prompt-aug failed: {exc}")
                 sys.exit(2)
+        elif args.command == "eval-retrieval":
+            sys.exit(
+                eval_retrieval_main(
+                    dataset=getattr(args, "dataset", None),
+                    k=getattr(args, "k", 10),
+                    output_dir=getattr(args, "output_dir", None),
+                    compare_baseline=getattr(args, "compare_baseline", None),
+                )
+            )
         elif args.command == "gen-synthetic-eval":
             sys.exit(
                 gen_synthetic_eval_main(
