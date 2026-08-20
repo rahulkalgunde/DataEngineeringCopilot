@@ -1,0 +1,3 @@
+{"query": "How do I optimize Spark SQL joins?", "source_urls": ["https://docs.example.com/spark-sql-1", "https://docs.example.com/spark-sql-2", "https://docs.example.com/spark-sql-3"], "relevance_labels": [1, 0, 0]}
+{"query": "What are Delta Lake ACID guarantees?", "source_urls": ["https://docs.example.com/delta-lake-1", "https://docs.example.com/delta-lake-2", "https://docs.example.com/delta-lake-3"], "relevance_labels": [1, 1, 0]}
+{"query": "How to configure Airflow retries?", "source_urls": ["https://docs.example.com/airflow-1", "https://docs.example.com/airflow-2", "https://docs.example.com/airflow-3"], "relevance_labels": [0, 1, 0]}

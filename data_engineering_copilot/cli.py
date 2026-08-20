@@ -3608,6 +3608,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the machine-readable fast_eval.json report to this directory.",
     )
 
+    # Reranker evaluation (nDCG@K, MRR, Precision@K gains)
+    eval_rerank_parser = subparsers.add_parser(
+        "eval-rerank",
+        help="Run isolated reranker evaluation on a golden dataset.",
+    )
+    eval_rerank_parser.add_argument(
+        "--dataset",
+        default=None,
+        help="Path to a JSONL rerank evaluation dataset (default: tests/evaluation/golden/rerank_eval_sample.jsonl).",
+    )
+    eval_rerank_parser.add_argument("--k", type=int, default=10, help="Cutoff position for metrics (default: 10).")
+    eval_rerank_parser.add_argument("--pool-file", default=None, help="Path to save/load frozen candidate pool.")
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -3932,6 +3945,31 @@ def main() -> None:
                     output_dir=getattr(args, "output_dir", None),
                 )
             )
+        elif args.command == "eval-rerank":
+            import asyncio
+
+            from data_engineering_copilot.evaluation.rerank_eval import (
+                RerankEvalServiceAdapter,
+                load_rerank_eval_dataset,
+                run_rerank_eval,
+            )
+            from data_engineering_copilot.factory import build_rag_service
+
+            try:
+                dataset_path = (
+                    pathlib.Path(args.dataset)
+                    if args.dataset
+                    else pathlib.Path("tests/evaluation/golden/rerank_eval_sample.jsonl")
+                )
+                dataset = load_rerank_eval_dataset(dataset_path)
+                rag_svc = build_rag_service()
+                adapter = RerankEvalServiceAdapter(rag_svc)
+                pool_path = pathlib.Path(args.pool_file) if args.pool_file else None
+                report = asyncio.run(run_rerank_eval(dataset, adapter, k=args.k, candidate_pool_path=pool_path))
+                print(report.summary())
+            except Exception as exc:  # noqa: BLE001
+                print(f"❌ eval-rerank failed: {exc}")
+                sys.exit(2)
         elif args.command == "gen-synthetic-eval":
             sys.exit(
                 gen_synthetic_eval_main(
