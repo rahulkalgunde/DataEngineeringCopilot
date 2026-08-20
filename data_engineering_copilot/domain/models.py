@@ -261,6 +261,11 @@ class RagConfig:
     assembly_enable_sibling_merge: bool = True
     assembly_breadcrumb_format: str = "hierarchical"
     assembly_content_hash_dedup: bool = True
+    # Prompt augmentation
+    prompt_salted_xml_tags: bool = True
+    prompt_xml_content_escape: bool = True
+    prompt_trailing_instructions: bool = True
+    prompt_citation_enforcement: str = "strict"  # "strict" | "soft" | "off"
     max_expansion_queries: int = 2
     cache_enabled: bool = True
     # Identifier-aware hybrid RRF profiles (see ``services/query_signals.py``).
