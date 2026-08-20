@@ -28,7 +28,11 @@ _CODE_INSTRUCTIONS = (
     "3. Match the language requested by the user (Scala, Python, SQL, etc.).\n"
     "4. Include concise inline comments for non-obvious logic.\n"
     "5. Cite the source documentation for API signatures used.\n"
-    "6. If context lacks sufficient API details, state the limitation explicitly."
+    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
+    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
+    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
+    "7. If no document contains the answer, say so explicitly — do not fabricate.\n"
+    "8. Never fabricate citations. Cite only from the provided [Doc-N] tags."
 )
 
 _DOCUMENTATION_INSTRUCTIONS = (
@@ -37,8 +41,12 @@ _DOCUMENTATION_INSTRUCTIONS = (
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
-    "7. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover."
+    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
+    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
+    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
+    "7. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
+    "8. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
+    "9. Never fabricate citations. Cite only from the provided [Doc-N] tags. If no document supports your answer, say so explicitly."
 )
 
 # Safety net: allow code blocks in documentation answers when query contains code keywords
@@ -48,9 +56,13 @@ _DOCUMENTATION_INSTRUCTIONS_WITH_CODE = (
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
-    "7. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
-    "8. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block."
+    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
+    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
+    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
+    "7. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
+    "8. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
+    "9. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block.\n"
+    "10. Never fabricate citations. Cite only from the provided [Doc-N] tags. If no document supports your answer, say so explicitly."
 )
 
 # Code-intent output format — allows fenced code blocks in the answer
@@ -75,6 +87,13 @@ _DOC_OUTPUT_FORMAT = (
     '  "answer": "Your detailed answer here, 2-4 sentences, or null if context is insufficient.",\n'
     '  "missing_info": "Description of missing details if context is low-density and status is INSUFFICIENT_CONTEXT, otherwise null."\n'
     "}"
+)
+
+TRAILING_INSTRUCTIONS = (
+    "## CRITICAL REMINDERS\n"
+    "- Every factual claim MUST cite a source: [Doc-1], [Doc-2], etc.\n"
+    "- If no context supports your answer, set status to INSUFFICIENT_CONTEXT.\n"
+    "- Never fabricate citations or invent information not in the context."
 )
 
 # Offline fallback for the Langfuse-managed ``rag-answer`` prompt. Must stay
@@ -105,7 +124,7 @@ _RAG_PROMPT_TEMPLATE = "\n".join(
         SYSTEM_BLOCK_SEPARATOR,
         "## USER QUESTION AND CONTEXT",
         "Context:\n{tagged_context}\n\nQuestion: {question}",
-        "",
+        "{trailing}",
         "## YOUR ANSWER",
     ]
 )
@@ -132,8 +151,9 @@ CHAT_SYSTEM_ROLE = (
 class PromptBuilder:
     """Builds structured prompts for RAG context synthesis."""
 
-    def __init__(self, system_role: str | None = None) -> None:
+    def __init__(self, system_role: str | None = None, prompt_trailing_instructions: bool = True) -> None:
         self.system_role = system_role or "You are DataEngineeringCopilot, an expert data engineering assistant."
+        self._prompt_trailing_instructions = prompt_trailing_instructions
 
     @staticmethod
     def sanitize_query(question: str) -> str:
@@ -207,12 +227,15 @@ class PromptBuilder:
         if guardrail:
             system_role = f"{system_role or self.system_role}\n\n{guardrail}"
 
+        trailing = f"\n\n{TRAILING_INSTRUCTIONS}" if self._prompt_trailing_instructions else ""
+
         return get_langfuse_prompt("rag-answer").compile(
             system_role=system_role or self.system_role,
             output_format=output_format,
             instructions=instructions,
             tagged_context=tagged_context,
             question=question,
+            trailing=trailing,
         )
 
     @staticmethod

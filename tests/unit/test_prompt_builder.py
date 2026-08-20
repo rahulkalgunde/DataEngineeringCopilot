@@ -6,7 +6,11 @@ import re
 
 import pytest
 
-from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
+from data_engineering_copilot.services.prompt_builder import (
+    CODE_INTENTS,
+    TRAILING_INSTRUCTIONS,
+    PromptBuilder,
+)
 
 
 def test_prompt_builder_constructs_system_and_context():
@@ -268,3 +272,78 @@ class TestSaltedXmlTags:
         )
         assert "<chunk>" not in prompt
         assert re.search(r"<context_data_\w+>", prompt) is not None
+
+
+class TestTrailingInstructions:
+    """Instruction sandwiching: trailing reminders exploit recency bias."""
+
+    def test_trailing_instructions_present_by_default(self, monkeypatch):
+        from data_engineering_copilot.observability.langfuse_prompts import _FallbackPrompt
+        from data_engineering_copilot.services import prompt_builder as pb_module
+
+        monkeypatch.setattr(
+            pb_module,
+            "get_langfuse_prompt",
+            lambda *a, **k: _FallbackPrompt(pb_module._RAG_PROMPT_TEMPLATE),
+        )
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(context="ctx", question="q")
+        assert "CRITICAL REMINDERS" in prompt
+        assert "Every factual claim MUST cite" in prompt
+
+    def test_trailing_instructions_absent_when_disabled(self):
+        builder = PromptBuilder(prompt_trailing_instructions=False)
+        prompt = builder.build_rag_prompt(context="ctx", question="q")
+        assert "CRITICAL REMINDERS" not in prompt
+
+    def test_trailing_instructions_before_answer_section(self, monkeypatch):
+        """Trailing block must appear between context and YOUR ANSWER (recency bias)."""
+        from data_engineering_copilot.observability.langfuse_prompts import _FallbackPrompt
+        from data_engineering_copilot.services import prompt_builder as pb_module
+
+        monkeypatch.setattr(
+            pb_module,
+            "get_langfuse_prompt",
+            lambda *a, **k: _FallbackPrompt(pb_module._RAG_PROMPT_TEMPLATE),
+        )
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(context="ctx", question="q")
+        idx_reminders = prompt.index("CRITICAL REMINDERS")
+        idx_answer = prompt.index("## YOUR ANSWER")
+        assert idx_reminders < idx_answer
+
+    def test_trailing_instructions_constant_content(self):
+        assert "Never fabricate citations" in TRAILING_INSTRUCTIONS
+        assert "INSUFFICIENT_CONTEXT" in TRAILING_INSTRUCTIONS
+
+
+class TestCitationEnforcement:
+    """Citation examples baked into code and documentation instructions."""
+
+    def test_citation_examples_in_code_instructions(self):
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="Show me code for Spark joins",
+            intent="code_example",
+        )
+        assert "Doc-1" in prompt
+        assert "cite the source" in prompt.lower() or "cite" in prompt.lower()
+
+    def test_citation_examples_in_documentation_instructions(self):
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="What is Spark?",
+            intent="factual",
+        )
+        assert "Doc-" in prompt
+
+    def test_no_fabrication_rule_in_code_instructions(self):
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="Show me code",
+            intent="code_example",
+        )
+        assert "do not fabricate" in prompt.lower() or "never fabricate" in prompt.lower()
