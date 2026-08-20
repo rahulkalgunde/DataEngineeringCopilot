@@ -71,6 +71,7 @@ _COMPILE_CASES = {
         "instructions": _DOCUMENTATION_INSTRUCTIONS,
         "tagged_context": "<chunk>\n[DENSITY: LOW]\nSome docs.\n</chunk>",
         "question": "What is X?",
+        "trailing": "",
     },
     "query-intent-classify": {"query": "show me code to read a parquet file"},
     "query-rewrite": {"question": "what is a spark dataframe"},
