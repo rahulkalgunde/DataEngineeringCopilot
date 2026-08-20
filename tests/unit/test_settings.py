@@ -114,6 +114,23 @@ def test_app_settings_hybrid_search_overridable() -> None:
     assert settings.max_context_tokens == 8192
 
 
+def test_prompt_citation_enforcement_rejects_invalid() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="prompt_citation_enforcement"):
+        make_settings(prompt_citation_enforcement="invalid")
+
+
+def test_prompt_citation_enforcement_accepts_valid_values() -> None:
+    for value in ("strict", "soft", "off"):
+        settings = make_settings(prompt_citation_enforcement=value)
+        assert settings.prompt_citation_enforcement == value
+
+
+def test_prompt_citation_enforcement_default_is_strict() -> None:
+    assert make_settings().prompt_citation_enforcement == "strict"
+
+
 def test_code_llm_defaults_empty() -> None:
     settings = make_settings()
     assert settings.code_llm_provider == ""
