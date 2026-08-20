@@ -601,7 +601,7 @@ class TestXmlEscaping:
         assembler = ContextAssembler(max_context_chars=1000)
         chunk = create_retrieved_chunk(create_test_chunk("c1", "Use <script>alert('xss')</script>"))
         result = assembler._format_chunk(chunk, 1)
-        # < is escaped to < — but > is NOT escaped per spec (only & and <)
+        # < is escaped to &lt; — but > is NOT escaped per spec (only & and <)
         assert "&lt;script" in result
         assert "<script" not in result
 
@@ -609,17 +609,22 @@ class TestXmlEscaping:
         assembler = ContextAssembler(max_context_chars=1000)
         chunk = create_retrieved_chunk(create_test_chunk("c2", "Tom & Jerry love M&M's"))
         result = assembler._format_chunk(chunk, 1)
-        assert "&" in result
+        assert "&amp;" in result
         assert "Tom & Jerry" not in result
 
     def test_format_chunk_ampersand_before_angle_bracket(self):
-        """Order matters: & must be escaped before < so < doesn't become <."""
+        """Order matters: & must be escaped before < to prevent double-escaping."""
         assembler = ContextAssembler(max_context_chars=1000)
-        chunk = create_retrieved_chunk(create_test_chunk("c3", "Use < to escape <"))
+        # We use a string where < and & are separated to avoid accidental substring matches
+        # Correct: & -> &amp;, < -> &lt;
+        # Incorrect (wrong order): < -> &lt;, & in &lt; -> &amp;lt;
+        chunk = create_retrieved_chunk(create_test_chunk("c3", "A < B & C"))
         result = assembler._format_chunk(chunk, 1)
-        # The literal "<" in source → "<" (amp escaped first)
-        # The literal "<" → "<" (angle bracket escaped)
-        assert "<" in result
+        
+        assert "&amp;" in result
+        assert "&lt;" in result
+        assert "&amp;lt;" not in result  # This is the double-escaping we must avoid
+        
         # The raw < should be escaped; only wrapper tags retain <
         inner = result.split("\n", 1)[1].rsplit("\n</context_doc>", 1)[0]
         assert "<" not in inner
