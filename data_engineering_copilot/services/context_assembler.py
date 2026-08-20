@@ -366,13 +366,10 @@ class ContextAssembler:
         """
         text = chunk.chunk.text
         if self._xml_content_escape:
-            # Escape XML metacharacters to prevent tag injection
             text = text.replace("&", "&amp;").replace("<", "&lt;")
 
         if len(text) > self.item_limit_chars:
-            raise ContextAssemblerError(
-                f"Chunk {doc_id} exceeds item limit: {len(text)} chars > {self.item_limit_chars}"
-            )
+            text = text[: self.item_limit_chars]
 
         breadcrumb = self._build_breadcrumb(chunk, breadcrumb_fmt)
         header = f"{breadcrumb}\n" if breadcrumb else ""

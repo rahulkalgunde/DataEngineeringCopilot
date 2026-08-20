@@ -299,6 +299,18 @@ class TestContextAssembler:
         assert len(context) <= 100
         assert "Short" in context
 
+    def test_assemble_oversized_chunk_is_truncated_not_raised(self):
+        assembler = ContextAssembler(max_context_chars=10000, item_limit_chars=100)
+        long_text = "x" * 250
+        chunk = create_test_chunk("big", long_text)
+        retrieved = create_retrieved_chunk(chunk)
+
+        context, _sources, _dropped = assembler.assemble([retrieved])
+
+        assert len(context) > 0
+        assert "x" * 100 in context
+        assert "x" * 101 not in context
+
     def test_assemble_logging_deduplication(self):
         assembler = ContextAssembler(max_context_chars=1000)
         chunk1 = create_test_chunk("chunk1", "This is first content.")
@@ -356,15 +368,15 @@ class TestContextAssembler:
         assert dropped == []
         assert sources == ["test_source"]
 
-    def test_oversized_segment_raises_invariant_error(self):
-        from data_engineering_copilot.services.context_assembler import ContextAssemblerError
-
+    def test_oversized_segment_is_truncated(self):
         assembler = ContextAssembler(max_context_chars=20000, item_limit_chars=6000)
         chunk = create_test_chunk("seg-oversized", "a" * 6001)
         retrieved = create_retrieved_chunk(chunk)
 
-        with pytest.raises(ContextAssemblerError, match="exceeds item limit"):
-            assembler.assemble([retrieved], deduplicate=False)
+        context, _sources, _dropped = assembler.assemble([retrieved], deduplicate=False)
+
+        assert "a" * 6000 in context
+        assert len(context) <= 7000
 
     def test_budget_exhaustion_reports_dropped_reason_and_segment_id(self):
         assembler = ContextAssembler(max_context_chars=200)
