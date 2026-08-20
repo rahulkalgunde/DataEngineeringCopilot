@@ -1101,6 +1101,11 @@ class AppSettings(BaseSettings):
     assembly_enable_sibling_merge: bool = True
     assembly_breadcrumb_format: str = "hierarchical"
     assembly_content_hash_dedup: bool = True
+    # Prompt augmentation optimization
+    prompt_salted_xml_tags: bool = True  # Per-request salted <context_data_XXX> tags
+    prompt_xml_content_escape: bool = True  # Escape < in chunk text
+    prompt_trailing_instructions: bool = True  # Instruction sandwiching
+    prompt_citation_enforcement: str = "strict"  # "strict" | "soft" | "off"
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
