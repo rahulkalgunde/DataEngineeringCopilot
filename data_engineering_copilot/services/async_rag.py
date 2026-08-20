@@ -415,7 +415,11 @@ class AsyncRagService:
         self._pii_redactor = pii_redactor
         self.input_guardrails = input_guardrails
         self.review_dataset_hook = review_dataset_hook
-        self._prompt_builder = PromptBuilder()
+        self._prompt_builder = PromptBuilder(
+            prompt_trailing_instructions=self.config.prompt_trailing_instructions,
+            prompt_salted_xml_tags=self.config.prompt_salted_xml_tags,
+            prompt_citation_enforcement=self.config.prompt_citation_enforcement,
+        )
         self._rejoin_item_limit_chars = DEFAULT_ITEM_LIMIT_CHARS
 
     def _rrf_profile_for(self, query: str) -> str:

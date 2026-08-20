@@ -347,3 +347,66 @@ class TestCitationEnforcement:
             intent="code_example",
         )
         assert "do not fabricate" in prompt.lower() or "never fabricate" in prompt.lower()
+
+
+class TestConfigWiring:
+    """PromptBuilder must honor the RagConfig-backed augmentation flags.
+
+    Hermetic: force the offline fallback template so the tests do not depend on
+    a live Langfuse server prompt (which may lag the seeded template).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_fallback_template(self, monkeypatch):
+        from data_engineering_copilot.observability.langfuse_prompts import _FallbackPrompt
+        from data_engineering_copilot.services import prompt_builder as pb_module
+
+        monkeypatch.setattr(
+            pb_module,
+            "get_langfuse_prompt",
+            lambda *a, **k: _FallbackPrompt(pb_module._RAG_PROMPT_TEMPLATE),
+        )
+
+    def test_salted_tags_disabled_uses_static_chunk_tags(self):
+        builder = PromptBuilder(prompt_salted_xml_tags=False)
+        prompt = builder.build_rag_prompt(context="ctx", question="q")
+        assert "<chunk>" in prompt
+        assert "</chunk>" in prompt
+        assert "<context_data_" not in prompt
+
+    def test_salted_tags_enabled_uses_salted_tags(self):
+        builder = PromptBuilder(prompt_salted_xml_tags=True)
+        prompt = builder.build_rag_prompt(context="ctx", question="q")
+        assert "<context_data_" in prompt
+        assert "<chunk>" not in prompt
+
+    def test_citation_enforcement_off_omits_citation_rules(self):
+        builder = PromptBuilder(prompt_citation_enforcement="off")
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="What is Spark?",
+            intent="factual",
+        )
+        assert "CITATION RULES" not in prompt
+        assert "factual questions: State facts" in prompt
+
+    @pytest.mark.parametrize("enforcement", ["strict", "soft"])
+    def test_citation_enforcement_includes_citation_rules(self, enforcement: str):
+        builder = PromptBuilder(prompt_citation_enforcement=enforcement)
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="What is Spark?",
+            intent="factual",
+        )
+        assert "CITATION RULES" in prompt
+
+    def test_trailing_instructions_independent_of_citation_enforcement(self):
+        with_trailing = PromptBuilder(prompt_citation_enforcement="off", prompt_trailing_instructions=True)
+        prompt = with_trailing.build_rag_prompt(context="ctx", question="q")
+        assert "CRITICAL REMINDERS" in prompt
+        assert "CITATION RULES" not in prompt
+
+        without_trailing = PromptBuilder(prompt_citation_enforcement="off", prompt_trailing_instructions=False)
+        prompt = without_trailing.build_rag_prompt(context="ctx", question="q")
+        assert "CRITICAL REMINDERS" not in prompt
+        assert "CITATION RULES" not in prompt

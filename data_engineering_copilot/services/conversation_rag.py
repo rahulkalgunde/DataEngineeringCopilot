@@ -72,7 +72,15 @@ class ConversationService:
         self._rag_service = rag_service
         self._store = store
         self._title_max_chars = title_max_chars
-        self._prompt_builder = PromptBuilder()
+        rag_config = getattr(rag_service, "config", None)
+        if rag_config is not None:
+            self._prompt_builder = PromptBuilder(
+                prompt_trailing_instructions=rag_config.prompt_trailing_instructions,
+                prompt_salted_xml_tags=rag_config.prompt_salted_xml_tags,
+                prompt_citation_enforcement=rag_config.prompt_citation_enforcement,
+            )
+        else:
+            self._prompt_builder = PromptBuilder()
         self._local_query_rewriter = local_query_rewriter
         self._local_scope_verifier = local_scope_verifier
         self._local_llm_client = local_llm_client
