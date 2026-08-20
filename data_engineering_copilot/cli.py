@@ -3628,6 +3628,12 @@ def build_parser() -> argparse.ArgumentParser:
     eval_assembly_parser.add_argument("--dataset", default=None, help="Path to JSONL dataset.")
     eval_assembly_parser.add_argument("--k", type=int, default=20, help="Candidate pool size.")
 
+    eval_prompt_aug_parser = subparsers.add_parser(
+        "eval-prompt-aug",
+        help="Run isolated prompt augmentation evaluation on a frozen dataset.",
+    )
+    eval_prompt_aug_parser.add_argument("--dataset", required=True, help="Path to JSONL dataset.")
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -3994,6 +4000,16 @@ def main() -> None:
                     print(f"Query {i + 1}: {r.summary()}")
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ eval-assembly failed: {exc}")
+                sys.exit(2)
+        elif args.command == "eval-prompt-aug":
+            from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
+
+            try:
+                dataset_path = pathlib.Path(args.dataset)
+                report = run_prompt_aug_eval(dataset_path)
+                print(report.summary())
+            except Exception as exc:  # noqa: BLE001
+                print(f"❌ eval-prompt-aug failed: {exc}")
                 sys.exit(2)
         elif args.command == "gen-synthetic-eval":
             sys.exit(
