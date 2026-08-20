@@ -176,17 +176,29 @@ def test_seed_template_renders_byte_identical_to_fallback(name):
 
 
 def test_build_rag_prompt_matches_legacy_template(monkeypatch):
+    """Verify structure of the offline-fallback rag-answer prompt.
+
+    Salted context tags break byte-identity, so we check structural
+    properties instead of exact string equality.
+    """
+    import re
+
     monkeypatch.setattr(lp_module, "get_langfuse_instance", lambda: None)
     builder = PromptBuilder()
     prompt = builder.build_rag_prompt(context="Some docs.", question="What is X?", intent="factual")
-    expected = _RAG_PROMPT_TEMPLATE.format(
-        system_role=DEFAULT_SYSTEM_ROLE,
-        output_format=_DOC_OUTPUT_FORMAT,
-        instructions=_DOCUMENTATION_INSTRUCTIONS,
-        tagged_context="<chunk>\n[DENSITY: LOW]\nSome docs.\n</chunk>",
-        question="What is X?",
-    )
-    assert prompt == expected
+    assert "## SYSTEM" in prompt
+    assert DEFAULT_SYSTEM_ROLE in prompt
+    assert "## CONSTRAINTS" in prompt
+    assert "## OUTPUT FORMAT" in prompt
+    assert "## INSTRUCTIONS" in prompt
+    assert SYSTEM_BLOCK_SEPARATOR in prompt
+    assert "## USER QUESTION AND CONTEXT" in prompt
+    assert "## YOUR ANSWER" in prompt
+    assert "Some docs." in prompt
+    assert "What is X?" in prompt
+    # Salted tags present, old static tags gone.
+    assert re.search(r"<context_data_[0-9a-f]{8}>", prompt) is not None
+    assert "<chunk>" not in prompt
 
 
 def test_compiled_rag_prompt_splits_into_system_and_user(monkeypatch):

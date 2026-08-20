@@ -8,6 +8,7 @@ HTTP client infrastructure.  The RAG answer prompt is managed in Langfuse
 from __future__ import annotations
 
 import re
+import secrets
 
 from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
@@ -193,7 +194,10 @@ class PromptBuilder:
             output_format = _DOC_OUTPUT_FORMAT
 
         density_tag = self._compute_density_tag(context)
-        tagged_context = f"<chunk>\n[DENSITY: {density_tag}]\n{context}\n</chunk>"
+        salt = secrets.token_hex(4)
+        open_tag = f"<context_data_{salt}>"
+        close_tag = f"</context_data_{salt}>"
+        tagged_context = f"{open_tag}\n[DENSITY: {density_tag}]\n{context}\n{close_tag}"
 
         if history:
             history = self._budget_history(history, max_history_tokens)
