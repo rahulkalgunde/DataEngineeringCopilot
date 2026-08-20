@@ -3621,6 +3621,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_rerank_parser.add_argument("--k", type=int, default=10, help="Cutoff position for metrics (default: 10).")
     eval_rerank_parser.add_argument("--pool-file", default=None, help="Path to save/load frozen candidate pool.")
 
+    eval_assembly_parser = subparsers.add_parser(
+        "eval-assembly",
+        help="Run isolated context assembly evaluation on a golden dataset.",
+    )
+    eval_assembly_parser.add_argument("--dataset", default=None, help="Path to JSONL dataset.")
+    eval_assembly_parser.add_argument("--k", type=int, default=20, help="Candidate pool size.")
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -3969,6 +3976,24 @@ def main() -> None:
                 print(report.summary())
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ eval-rerank failed: {exc}")
+                sys.exit(2)
+        elif args.command == "eval-assembly":
+            from data_engineering_copilot.evaluation.assembly_eval import load_assembly_eval_dataset, run_assembly_eval
+            from data_engineering_copilot.factory import build_rag_service
+
+            try:
+                dataset_path = (
+                    pathlib.Path(args.dataset)
+                    if args.dataset
+                    else pathlib.Path("tests/evaluation/golden/assembly_eval_sample.jsonl")
+                )
+                dataset = load_assembly_eval_dataset(dataset_path)
+                rag_svc = build_rag_service()
+                reports = run_assembly_eval(dataset, rag_svc, k=args.k)
+                for i, r in enumerate(reports):
+                    print(f"Query {i + 1}: {r.summary()}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"❌ eval-assembly failed: {exc}")
                 sys.exit(2)
         elif args.command == "gen-synthetic-eval":
             sys.exit(
