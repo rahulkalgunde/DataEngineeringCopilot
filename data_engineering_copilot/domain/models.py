@@ -256,6 +256,11 @@ class RagConfig:
     colbert_max_doc_tokens: int = 256
     max_context_chars: int = 8000
     max_chunks_per_source: int = 2
+    assembly_mmr_enabled: bool = False
+    assembly_mmr_lambda: float = 0.5
+    assembly_enable_sibling_merge: bool = True
+    assembly_breadcrumb_format: str = "hierarchical"
+    assembly_content_hash_dedup: bool = True
     max_expansion_queries: int = 2
     cache_enabled: bool = True
     # Identifier-aware hybrid RRF profiles (see ``services/query_signals.py``).
