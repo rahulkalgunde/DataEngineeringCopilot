@@ -22,47 +22,44 @@ _CODE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Citation rules shared verbatim by every instruction variant
+_SHARED_CITATION_RULES = (
+    "CITATION RULES:\n"
+    "- After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
+    "  Example: 'Spark supports broadcast joins [Doc-1].'\n"
+    "  Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
+    "- If no document contains the answer, say so explicitly — do not fabricate.\n"
+    "- Never fabricate citations. Cite only from the provided [Doc-N] tags."
+)
+
 _CODE_INSTRUCTIONS = (
     "1. Provide a brief explanation (1-3 sentences) followed by a complete, runnable code example.\n"
     "2. Use fenced code blocks with the appropriate language tag (e.g. ```scala, ```python).\n"
     "3. Match the language requested by the user (Scala, Python, SQL, etc.).\n"
     "4. Include concise inline comments for non-obvious logic.\n"
     "5. Cite the source documentation for API signatures used.\n"
-    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
-    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
-    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
-    "7. If no document contains the answer, say so explicitly — do not fabricate.\n"
-    "8. Never fabricate citations. Cite only from the provided [Doc-N] tags."
+    f"{_SHARED_CITATION_RULES}\n"
+    "6. If context lacks sufficient API details, state the limitation explicitly."
 )
 
-_DOCUMENTATION_INSTRUCTIONS = (
+# Rules shared by the documentation instruction variants
+_DOCUMENTATION_BASE_RULES = (
     "1. For factual questions: State facts from the docs clearly.\n"
     "2. For comparative questions: Show differences between the documented options.\n"
     "3. For procedural questions: Outline steps from the documentation.\n"
     "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
     "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
-    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
-    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
-    "7. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
-    "8. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
-    "9. Never fabricate citations. Cite only from the provided [Doc-N] tags. If no document supports your answer, say so explicitly."
+    "6. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
+    "7. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover."
 )
+
+_DOCUMENTATION_INSTRUCTIONS = f"{_DOCUMENTATION_BASE_RULES}\n{_SHARED_CITATION_RULES}"
 
 # Safety net: allow code blocks in documentation answers when query contains code keywords
 _DOCUMENTATION_INSTRUCTIONS_WITH_CODE = (
-    "1. For factual questions: State facts from the docs clearly.\n"
-    "2. For comparative questions: Show differences between the documented options.\n"
-    "3. For procedural questions: Outline steps from the documentation.\n"
-    "4. For open-ended questions: Provide a thoughtful synthesis of available info.\n"
-    "5. When uncertain: Explicitly say 'The documentation does not clearly address this'.\n"
-    "6. After each factual claim, cite the source: [Doc-N] where N matches the context_doc id.\n"
-    "   Example: 'Spark supports broadcast joins [Doc-1].'\n"
-    "   Multiple sources: 'Broadcast joins optimize small tables [Doc-1], while sort-merge handles large datasets [Doc-3].'\n"
-    "7. Sparse/Low-Signal Context Handling: If the context contains only raw code snippets, log lines, or insufficient material to answer the query, DO NOT fabricate or infer unstated behavior. Set status to INSUFFICIENT_CONTEXT and describe what information is missing.\n"
-    "8. Out-of-Scope Topic Handling: If the context does not cover the question's topic at all — even if it contains substantial material on other topics — do NOT answer from general knowledge. Set status to INSUFFICIENT_CONTEXT and state which topic the documentation does not cover.\n"
-    "9. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block.\n"
-    "10. Never fabricate citations. Cite only from the provided [Doc-N] tags. If no document supports your answer, say so explicitly."
+    f"{_DOCUMENTATION_BASE_RULES}\n"
+    "8. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block.\n"
+    f"{_SHARED_CITATION_RULES}"
 )
 
 # Code-intent output format — allows fenced code blocks in the answer
