@@ -3633,6 +3633,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run isolated prompt augmentation evaluation on a frozen dataset.",
     )
     eval_prompt_aug_parser.add_argument("--dataset", required=True, help="Path to JSONL dataset.")
+    eval_prompt_aug_parser.add_argument(
+        "--mode",
+        choices=["template", "llm"],
+        default="template",
+        help="Evaluation mode: 'template' (hermetic, no LLM) or 'llm' (calls LLM for actual output quality).",
+    )
+    eval_prompt_aug_parser.add_argument(
+        "--provider",
+        default="ollama",
+        help="LLM provider for 'llm' mode (default: ollama).",
+    )
 
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
@@ -4002,11 +4013,18 @@ def main() -> None:
                 print(f"❌ eval-assembly failed: {exc}")
                 sys.exit(2)
         elif args.command == "eval-prompt-aug":
+            import asyncio
+
             from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
 
             try:
                 dataset_path = pathlib.Path(args.dataset)
-                report = run_prompt_aug_eval(dataset_path)
+                if args.mode == "llm":
+                    from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval_llm
+
+                    report = asyncio.run(run_prompt_aug_eval_llm(dataset_path, provider=args.provider))
+                else:
+                    report = run_prompt_aug_eval(dataset_path)
                 print(report.summary())
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ eval-prompt-aug failed: {exc}")
