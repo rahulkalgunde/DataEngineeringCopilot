@@ -338,7 +338,7 @@ def _domain_mismatch(chunks) -> bool:
     return foreign_score > 0 and foreign_score >= de_score
 
 
-def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
+def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int, configured_pool: int = 0) -> int:
     """Candidate pool handed to the cross-encoder reranker.
 
     The pool is intentionally wider than ``retrieval_top_k`` so that URLs that
@@ -349,7 +349,12 @@ def _rerank_pool_size(retrieval_top_k: int, reranker_top_k: int) -> int:
     multiplier of ``* 8`` guarantees a relevant-but-poorly-scored document
     (fused at rank ~175) stays inside the pool without running the cross-encoder
     over the whole corpus.
+
+    When ``configured_pool`` is positive it overrides the formula, giving the
+    operator direct control over cross-encoder inference cost.
     """
+    if configured_pool > 0:
+        return configured_pool
     return max(retrieval_top_k * 4, reranker_top_k * 8)
 
 
@@ -470,7 +475,9 @@ class AsyncRagService:
                     source_filter=source_filter,
                     chunk_type_filter=chunk_type_filter,
                     metadata_filters=metadata_filters,
-                    fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                    fused_limit=_rerank_pool_size(
+                        self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                    ),
                     rrf_profile=profile,
                 )
                 # Unfiltered fallback: if metadata filters removed everything,
@@ -482,7 +489,9 @@ class AsyncRagService:
                         query_text=q,
                         source_filter=source_filter,
                         chunk_type_filter=chunk_type_filter,
-                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                        fused_limit=_rerank_pool_size(
+                            self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                        ),
                         rrf_profile=profile,
                     )
                 any_success = True
@@ -938,7 +947,12 @@ class AsyncRagService:
             pre_rerank_count = len(retrieved_chunks)
             reranker = self.reranker
             rerank_used = False
-            if self.config.reranker_enabled and reranker is not None and pre_rerank_count > 1:
+            selective_skip = (
+                self.config.reranker_selective_threshold < 1.0
+                and retrieved_chunks
+                and retrieved_chunks[0].confidence >= self.config.reranker_selective_threshold
+            )
+            if not selective_skip and self.config.reranker_enabled and reranker is not None and pre_rerank_count > 1:
                 # The reranker model is loaded lazily (off the event loop) so a
                 # cold model cache degrades to "no reranking" instead of either
                 # failing the answer or silently skipping reranking forever.
@@ -949,7 +963,10 @@ class AsyncRagService:
                     # Multi-query retrieval and dense+sparse fusion generate recall;
                     # the cross-encoder is the single generic relevance decision.
                     rerank_pool = min(
-                        pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                        pre_rerank_count,
+                        _rerank_pool_size(
+                            self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                        ),
                     )
                     # Combined-corpus safeguard: multi-query fusion can union many
                     # hundreds of chunks across sources (query variants each return
@@ -977,7 +994,12 @@ class AsyncRagService:
                 "query": question,
                 "pool_size": pre_rerank_count,
                 "top_k": (
-                    min(pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k))
+                    min(
+                        pre_rerank_count,
+                        _rerank_pool_size(
+                            self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                        ),
+                    )
                     if rerank_used
                     else None
                 ),
@@ -1030,7 +1052,10 @@ class AsyncRagService:
                     "pool_size": pre_rerank_count,
                     "top_k": (
                         min(
-                            pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                            pre_rerank_count,
+                            _rerank_pool_size(
+                                self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                            ),
                         )
                         if rerank_used
                         else None
@@ -1562,7 +1587,9 @@ class AsyncRagService:
             top_k=top_k,
             query_text=effective_query,
             source_filter=source_filter,
-            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+            fused_limit=_rerank_pool_size(
+                self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+            ),
         )
         # Parent-doc re-assembly: restore sibling segments so cross-mode
         # questions see both the YARN and Kubernetes paragraphs.
@@ -1941,7 +1968,9 @@ class AsyncRagService:
                         source_filter=source_filter,
                         chunk_type_filter=chunk_type_filter,
                         metadata_filters=metadata_filters,
-                        fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                        fused_limit=_rerank_pool_size(
+                            self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                        ),
                     )
                     if not results and metadata_filters is not None and not metadata_filters.is_empty:
                         results = await self.vector_store.query(
@@ -1950,7 +1979,10 @@ class AsyncRagService:
                             query_text=q,
                             source_filter=source_filter,
                             chunk_type_filter=chunk_type_filter,
-                            fused_limit=_rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k),
+                            metadata_filters=metadata_filters,
+                            fused_limit=_rerank_pool_size(
+                                self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                            ),
                         )
                     any_success = True
                     per_query_results.append(results)
@@ -2065,7 +2097,10 @@ class AsyncRagService:
             await self._ensure_reranker_ready()
             if reranker.is_available():
                 rerank_pool = min(
-                    pre_rerank_count, _rerank_pool_size(self.config.retrieval_top_k, self.config.reranker_top_k)
+                    pre_rerank_count,
+                    _rerank_pool_size(
+                        self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                    ),
                 )
                 if pre_rerank_count > rerank_pool:
                     retrieved_chunks = retrieved_chunks[:rerank_pool]
