@@ -1043,6 +1043,7 @@ class AsyncRagService:
             assembler = ContextAssembler(
                 max_context_chars=self.config.max_context_chars,
                 max_chunks_per_source=self.config.max_chunks_per_source,
+                xml_content_escape=self.config.prompt_xml_content_escape,
             )
             context_str, source_names, dropped_records = assembler.assemble(
                 retrieved_chunks,
@@ -1641,6 +1642,7 @@ class AsyncRagService:
         assembler = ContextAssembler(
             max_context_chars=self.config.max_context_chars,
             max_chunks_per_source=self.config.max_chunks_per_source,
+            xml_content_escape=self.config.prompt_xml_content_escape,
         )
         context_str, _source_names, _dropped_records = assembler.assemble(
             sorted_chunks,
@@ -2147,6 +2149,7 @@ class AsyncRagService:
         assembler = ContextAssembler(
             max_context_chars=self.config.max_context_chars,
             max_chunks_per_source=self.config.max_chunks_per_source,
+            xml_content_escape=self.config.prompt_xml_content_escape,
         )
         context_str, _source_names, _dropped = assembler.assemble(
             sorted_chunks,

@@ -48,6 +48,7 @@ class ContextAssembler:
         max_context_chars: int,
         item_limit_chars: int = DEFAULT_ITEM_LIMIT_CHARS,
         max_chunks_per_source: int = 2,
+        xml_content_escape: bool = True,
     ):
         """Initialize context assembler.
 
@@ -58,10 +59,13 @@ class ContextAssembler:
             max_chunks_per_source: Maximum number of chunks kept per distinct
                 source URL after the coverage guarantee. Reference architecture
                 recommends "at most N chunks per document" as a diversity cap.
+            xml_content_escape: Whether to escape XML metacharacters (& and <)
+                in chunk text. Defaults to True for safety.
         """
         self.max_context_chars = max_context_chars
         self.item_limit_chars = item_limit_chars
         self.max_chunks_per_source = max_chunks_per_source
+        self._xml_content_escape = xml_content_escape
 
     def _content_hash_dedup(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Fast exact-match dedup using SHA-256 content hashes.
@@ -361,8 +365,9 @@ class ContextAssembler:
         "none" omits the header entirely.
         """
         text = chunk.chunk.text
-        # Escape XML metacharacters to prevent tag injection
-        text = text.replace("&", "&amp;").replace("<", "&lt;")
+        if self._xml_content_escape:
+            # Escape XML metacharacters to prevent tag injection
+            text = text.replace("&", "&amp;").replace("<", "&lt;")
 
         if len(text) > self.item_limit_chars:
             raise ContextAssemblerError(
