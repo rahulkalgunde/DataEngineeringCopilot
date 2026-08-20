@@ -361,6 +361,8 @@ class ContextAssembler:
         "none" omits the header entirely.
         """
         text = chunk.chunk.text
+        # Escape XML metacharacters to prevent tag injection
+        text = text.replace("&", "&amp;").replace("<", "&lt;")
 
         if len(text) > self.item_limit_chars:
             raise ContextAssemblerError(
