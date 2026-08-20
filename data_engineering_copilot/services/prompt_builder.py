@@ -32,17 +32,25 @@ _SHARED_CITATION_RULES = (
     "- Never fabricate citations. Cite only from the provided [Doc-N] tags."
 )
 
+# Code-specific citation rule (only when citation enforcement is enabled)
+_CODE_CITATION_RULE = "5. Cite the source documentation for API signatures used.\n"
+
 _CODE_BASE_RULES = (
     "1. Provide a brief explanation (1-3 sentences) followed by a complete, runnable code example.\n"
     "2. Use fenced code blocks with the appropriate language tag (e.g. ```scala, ```python).\n"
     "3. Match the language requested by the user (Scala, Python, SQL, etc.).\n"
     "4. Include concise inline comments for non-obvious logic.\n"
-    "5. Cite the source documentation for API signatures used.\n"
 )
 
-_CODE_INSTRUCTIONS = f"{_CODE_BASE_RULES}{_SHARED_CITATION_RULES}\n6. If context lacks sufficient API details, state the limitation explicitly."
+_CODE_INSTRUCTIONS = (
+    f"{_CODE_BASE_RULES}"
+    f"{_CODE_CITATION_RULE}"
+    f"{_SHARED_CITATION_RULES}\n"
+    "6. If context lacks sufficient API details, state the limitation explicitly."
+)
+
 _CODE_INSTRUCTIONS_NO_CITATIONS = (
-    f"{_CODE_BASE_RULES}6. If context lacks sufficient API details, state the limitation explicitly."
+    f"{_CODE_BASE_RULES}5. If context lacks sufficient API details, state the limitation explicitly."
 )
 
 # Rules shared by the documentation instruction variants
