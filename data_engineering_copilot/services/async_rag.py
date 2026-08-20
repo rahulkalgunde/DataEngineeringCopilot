@@ -1979,7 +1979,6 @@ class AsyncRagService:
                             query_text=q,
                             source_filter=source_filter,
                             chunk_type_filter=chunk_type_filter,
-                            metadata_filters=metadata_filters,
                             fused_limit=_rerank_pool_size(
                                 self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
                             ),

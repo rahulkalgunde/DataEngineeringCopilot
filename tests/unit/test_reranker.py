@@ -346,10 +346,19 @@ class TestDocumentTruncation:
         assert len(_truncate_doc_for_rerank("A" * 3000, 2000)) <= 2000
 
     def test_code_fence_integrity(self):
-        code = "```python\nprint('hello')\n```\n"
-        text = code + "D" * 3000
-        result = _truncate_doc_for_rerank(text, 100)
-        assert result.count("```") % 2 == 0
+        # Construct text where a code fence straddles the truncation boundary,
+        # so truncation actually exercises the code path (not a no-op).
+        prefix = "Some text.\n\n"
+        opening = "```python\n"
+        body = "print('hello')\n"
+        closing = "```\n"
+        suffix = "D" * 3000
+        text = prefix + opening + body + closing + suffix
+        limit = len(prefix) + len(opening) + 5  # cuts inside the code block
+        result = _truncate_doc_for_rerank(text, limit)
+        # Truncation must have actually occurred (the old test was a tautology).
+        assert len(result) <= limit
+        assert result != text
 
     def test_exact_limit(self):
         text = "X" * 2000
