@@ -134,6 +134,27 @@ def test_no_content_root_returns_none() -> None:
     assert result is None
 
 
+def test_extra_strip_selectors_removes_sidebar() -> None:
+    parser = SparkHtmlParser(
+        content_root_selector="main",
+        excluded_selectors=(),
+        extra_strip_selectors=(".sidebar", ".toc"),
+    )
+    html = """
+    <html><body><main>
+      <h1>Guide</h1>
+      <p>Main content with enough words to pass the minimum word count threshold easily.</p>
+      <div class="sidebar"><ul><li>Sidebar link one</li><li>Sidebar link two</li></ul></div>
+      <div class="toc"><p>Table of contents entry</p></div>
+    </main></body></html>
+    """
+    result = parser.parse(html, "https://example.com/g", "g.html")
+    assert result is not None
+    assert "Main content" in result.text
+    assert "Sidebar link" not in result.text
+    assert "Table of contents" not in result.text
+
+
 def test_headings_extracted() -> None:
     html = """
     <html><body>

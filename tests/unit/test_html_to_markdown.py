@@ -29,7 +29,7 @@ def test_golden_table_fixture():
     assert result.startswith("# Table Reference")
     assert "| Function | Partition | Order |" in result
     assert "| --- | --- | --- |" in result
-    assert "| row\\_number | dept | salary desc |" in result
+    assert "| row_number | dept | salary desc |" in result
 
 
 def test_golden_code_fixture():
@@ -105,6 +105,26 @@ def test_min_words_filter():
     html = "<html><body><p>Too short.</p></body></html>"
     result = html_to_markdown(html, min_words=50)
     assert result is None
+
+
+def test_preserves_table_as_pipe_table():
+    html = """<html><body><main>
+    <h1>Reference</h1>
+    <p>Enough words here to pass the minimum word count filter for testing purposes only.</p>
+    <table>
+      <thead><tr><th>Function</th><th>Partition</th></tr></thead>
+      <tbody>
+        <tr><td>row_number</td><td>dept</td></tr>
+        <tr><td>rank</td><td>team</td></tr>
+      </tbody>
+    </table>
+    </main></body></html>"""
+    result = html_to_markdown(html, min_words=5)
+    assert result is not None
+    assert "| Function | Partition |" in result
+    assert "| --- | --- |" in result
+    assert "| row_number | dept |" in result
+    assert "| rank | team |" in result
 
 
 def test_code_language_detection():

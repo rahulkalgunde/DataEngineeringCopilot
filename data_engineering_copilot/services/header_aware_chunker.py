@@ -36,6 +36,11 @@ _NAV_STUB_MARKERS = (
 )
 
 
+def _inside_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
+    """Return True when *pos* falls within any ``(start, end)`` span."""
+    return any(start <= pos < end for start, end in spans)
+
+
 @dataclass
 class _RawSection:
     """Intermediate representation before merging."""
@@ -160,9 +165,14 @@ class HeaderAwareChunker:
         return sections
 
     def _split_into_sections(self, text: str) -> list[_RawSection]:
-        """Split markdown *text* into sections at header boundaries."""
+        """Split markdown *text* into sections at header boundaries.
+
+        Headings that appear *inside* a fenced code block are ignored so that
+        a ``# comment`` line in code never starts a spurious section.
+        """
         text = _FRONTMATTER_RE.sub("", text, count=1)
-        matches = list(_HEADER_RE.finditer(text))
+        fence_spans = [(m.start(), m.end()) for m in _FENCE_RE.finditer(text)]
+        matches = [m for m in _HEADER_RE.finditer(text) if not _inside_spans(m.start(), fence_spans)]
         if not matches:
             # No markdown headings (table-heavy reference pages, TOC lists,
             # prose-only docs). Split on blank-line paragraphs so

@@ -33,6 +33,27 @@ class TestHeaderAwareChunker:
         # so they may merge into fewer chunks. Check heading_path is populated.
         assert all(c.heading_path for c in chunks)
 
+    def test_heading_inside_fence_is_not_a_section(self):
+        md = (
+            "## Real Section\n"
+            "Intro text.\n\n"
+            "```python\n"
+            "# this hash comment must NOT start a section\n"
+            "def foo():\n"
+            "    pass  # nor this\n"
+            "```\n\n"
+            "## Another Section\n"
+            "More content.\n"
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=200, overlap_words=10, min_chunk_words=3)
+        sections = chunker._split_into_sections(md)
+        headers = [s.header for s in sections]
+        # The in-fence '#' comment must not become a section header.
+        assert headers == ["Real Section", "Another Section"]
+        # The fenced code stays intact inside its section.
+        assert "def foo" in sections[0].text
+        assert "# this hash comment must NOT start a section" in sections[0].text
+
     def test_code_blocks_preserved(self):
         md = "## Example\nText before code.\n\n```python\ndef foo():\n    pass\n```\n\nText after code.\n"
         chunker = HeaderAwareChunker(chunk_size_words=200, overlap_words=10, min_chunk_words=3)
