@@ -108,7 +108,7 @@ SEED_PROMPTS: dict[str, str] = {
             SYSTEM_BLOCK_SEPARATOR,
             "## USER QUESTION AND CONTEXT",
             "Context:\n{{tagged_context}}\n\nQuestion: {{question}}",
-            "",
+            "{{trailing}}",
             "## YOUR ANSWER",
         ]
     ),
