@@ -1116,6 +1116,13 @@ class AppSettings(BaseSettings):
     nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_cloud_timeout_seconds: int = 30
+    reranker_type: str = "cross_encoder"
+    reranker_pool_size: int = 0
+    reranker_doc_truncation_chars: int = 2000
+    reranker_selective_threshold: float = 1.0
+    colbert_rerank_model: str = "colbert-ir/colbertv2.0"
+    colbert_max_query_tokens: int = 32
+    colbert_max_doc_tokens: int = 256
     request_timeout_seconds: int = 15
     ollama_timeout_seconds: int = 180
     ollama_connect_timeout_seconds: int = 5

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -229,6 +230,11 @@ class RerankResult:
     rankings: tuple[tuple[int, float], ...] = ()
 
 
+class RerankerType(StrEnum):
+    CROSS_ENCODER = "cross_encoder"
+    COLBERT = "colbert"
+
+
 @dataclass(frozen=True)
 class RagConfig:
     retrieval_top_k: int = 5
@@ -241,6 +247,13 @@ class RagConfig:
     # when a reranker ran for the query; otherwise fall back to
     # ``confidence_threshold`` (the embedding scale).
     reranker_confidence_threshold: float = 0.10
+    reranker_type: str = "cross_encoder"
+    reranker_pool_size: int = 0
+    reranker_doc_truncation_chars: int = 2000
+    reranker_selective_threshold: float = 1.0
+    colbert_rerank_model: str = "colbert-ir/colbertv2.0"
+    colbert_max_query_tokens: int = 32
+    colbert_max_doc_tokens: int = 256
     max_context_chars: int = 8000
     max_chunks_per_source: int = 2
     max_expansion_queries: int = 2
