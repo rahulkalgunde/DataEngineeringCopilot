@@ -21,8 +21,9 @@ are recorded with reason ``dropped_due_per_source_cap``.
 """
 
 import logging
+import re
 
-from data_engineering_copilot.domain.models import RetrievedChunk
+from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -62,63 +63,217 @@ class ContextAssembler:
         self.item_limit_chars = item_limit_chars
         self.max_chunks_per_source = max_chunks_per_source
 
+    def _content_hash_dedup(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Fast exact-match dedup using SHA-256 content hashes.
+
+        Runs before Jaccard overlap to instantly strip identical text blocks.
+        """
+        seen_hashes: set[str] = set()
+        result: list[RetrievedChunk] = []
+        for chunk in chunks:
+            h = chunk.chunk.content_hash
+            if h and h in seen_hashes:
+                logger.debug("Content-hash dedup: dropped %s (hash=%s)", chunk.chunk.chunk_id, h)
+                continue
+            if h:
+                seen_hashes.add(h)
+            result.append(chunk)
+        return result
+
+    def _merge_adjacent_siblings(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Merge adjacent chunks from the same parent into a single contiguous block.
+
+        Groups chunks by parent_chunk_id, sorts by segment_index within each group,
+        and returns one merged chunk per group plus all orphan chunks.
+        """
+        if not chunks:
+            return []
+
+        groups: dict[str, list[RetrievedChunk]] = {}
+        orphans: list[RetrievedChunk] = []
+
+        for chunk in chunks:
+            pid = chunk.chunk.parent_chunk_id
+            if pid:
+                groups.setdefault(pid, []).append(chunk)
+            else:
+                orphans.append(chunk)
+
+        merged: list[RetrievedChunk] = []
+        for _pid, siblings in groups.items():
+            siblings.sort(key=lambda c: c.chunk.segment_index)
+            best = max(siblings, key=lambda c: c.confidence)
+            merged_text = "\n\n".join(s.chunk.text for s in siblings)
+            merged_chunk = DocumentChunk(
+                chunk_id=best.chunk.chunk_id,
+                source_name=best.chunk.source_name,
+                title=best.chunk.title,
+                url=best.chunk.url,
+                text=merged_text,
+                content_hash=best.chunk.content_hash,
+                section_header=best.chunk.section_header,
+                chunk_type=best.chunk.chunk_type,
+                word_count=best.chunk.word_count,
+                heading_path=best.chunk.heading_path,
+                chunk_index=best.chunk.chunk_index,
+                total_chunks=best.chunk.total_chunks,
+                crawled_at=best.chunk.crawled_at,
+                doc_type=best.chunk.doc_type,
+                language=best.chunk.language,
+                spark_version=best.chunk.spark_version,
+                module=best.chunk.module,
+                source_commit=best.chunk.source_commit,
+                file_path=best.chunk.file_path,
+                license=best.chunk.license,
+                parser_version=best.chunk.parser_version,
+                chunker_version=best.chunk.chunker_version,
+                index_generation=best.chunk.index_generation,
+                deployment_mode=best.chunk.deployment_mode,
+                parent_content_hash=best.chunk.parent_content_hash,
+                segment_index=best.chunk.segment_index,
+                segment_total=best.chunk.segment_total,
+                token_count=best.chunk.token_count,
+                character_count=len(merged_text),
+                representation=best.chunk.representation,
+                parent_chunk_id=best.chunk.parent_chunk_id,
+            )
+            merged.append(
+                RetrievedChunk(
+                    chunk=merged_chunk,
+                    distance=best.distance,
+                    confidence=best.confidence,
+                )
+            )
+
+        return merged + orphans
+
+    def _mmr_diversify(
+        self,
+        chunks: list[RetrievedChunk],
+        lambda_param: float = 0.5,
+    ) -> list[RetrievedChunk]:
+        """Apply MMR diversity: balance relevance vs diversity via greedy selection.
+
+        At each step, pick the chunk maximizing:
+            MMR = λ * relevance - (1-λ) * max_similarity_to_selected
+        """
+        if len(chunks) <= 1:
+            return chunks
+
+        def _tokenize(text: str) -> set[str]:
+            return set(re.findall(r"[a-z0-9_]+", text.lower()))
+
+        def _cosine(a: set[str], b: set[str]) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / (len(a) * len(b)) ** 0.5
+
+        selected: list[RetrievedChunk] = []
+        remaining = list(chunks)
+        selected_tokens: list[set[str]] = []
+
+        while remaining:
+            best_score = -float("inf")
+            best_idx = 0
+            for i, chunk in enumerate(remaining):
+                chunk_tokens = _tokenize(chunk.chunk.text)
+                relevance = chunk.confidence
+                max_sim = max((_cosine(chunk_tokens, st) for st in selected_tokens), default=0.0) if selected_tokens else 0.0
+                mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = i
+            chosen = remaining.pop(best_idx)
+            selected.append(chosen)
+            selected_tokens.append(_tokenize(chosen.chunk.text))
+
+        return selected
+
+    @staticmethod
+    def _build_breadcrumb(chunk: RetrievedChunk, fmt: str = "hierarchical") -> str:
+        """Build a metadata breadcrumb header for a chunk.
+
+        Formats:
+            "hierarchical": [Source: Spark > SQL > Joins]
+            "flat": [Source: Spark]
+            "none": ""
+        """
+        source = chunk.chunk.source_name
+        if fmt == "none":
+            return ""
+        if fmt == "flat" or not chunk.chunk.heading_path:
+            return f"[Source: {source}]"
+        path = " > ".join(chunk.chunk.heading_path)
+        return f"[Source: {source} > {path}]"
+
     def assemble(
         self,
         chunks: list[RetrievedChunk],
         mitigate_lost_in_middle: bool = True,
         deduplicate: bool = True,
+        content_hash_dedup: bool = True,
+        enable_sibling_merge: bool = True,
+        mmr_enabled: bool = False,
+        mmr_lambda: float = 0.5,
+        breadcrumb_format: str = "hierarchical",
     ) -> tuple[str, list[str], list[dict[str, object]]]:
-        """Assemble context with source-coverage packing and budget-aware drop.
+        """Assemble context from retrieved chunks for the RAG answer prompt.
 
-        Selection runs in rank order (chunks are assumed sorted by confidence):
-
-        1. Coverage pass — the first (highest-ranked) chunk of every distinct
-           source URL is guaranteed a slot, as long as the budget allows.
-        2. Depth pass — remaining chunks are added by rank, capped at
-           ``max_chunks_per_source`` chunks per URL, until the total budget is
-           exhausted.
-
-        The lost-in-the-middle mitigation is applied only to the *selected*
-        set, so budget drops always remove the lowest-ranked segments.
+        Pipeline:
+            1. Content-hash dedup (exact SHA-256 match)
+            2. Adjacent sibling merge (same parent → one block)
+            3. Either MMR diversity OR Jaccard lexical dedup
+            4. Source-coverage budget selection
+            5. Lost-in-the-middle reorder
+            6. Format as XML with optional hierarchical breadcrumbs
 
         Args:
-            chunks: List of retrieved chunks, already sorted by confidence
-            mitigate_lost_in_middle: When True, reorders the selected chunks so
-                the most relevant ones appear at the beginning AND end of the
-                context, reducing the "lost in the middle" effect.
-            deduplicate: When True, deduplicate chunks before assembly.
-                Set to False if upstream (ContextCompressor) already deduplicated.
+            chunks: Retrieved chunks already sorted by confidence.
+            mitigate_lost_in_middle: Reorder so top scores appear at start AND end.
+            deduplicate: Lexical dedup via Jaccard overlap (skipped when mmr_enabled).
+            content_hash_dedup: Exact-match dedup via SHA-256 content_hash.
+            enable_sibling_merge: Merge adjacent children of same parent.
+            mmr_enabled: Use MMR diversity instead of Jaccard dedup.
+            mmr_lambda: MMR balance: 1.0=pure relevance, 0.0=pure diversity.
+            breadcrumb_format: "hierarchical"|"flat"|"none" for metadata headers.
 
         Returns:
-            Tuple of ``(context_string, list_of_source_names, dropped_records)``
-            where ``dropped_records`` lists every segment excluded from the
-            final context, each with reason ``dropped_due_total_context_budget``
-            (budget exhausted) or ``dropped_due_per_source_cap`` (source URL
-            already at ``max_chunks_per_source``) and segment provenance (rank,
-            chunk_id, url, segment_index, parent_content_hash).
+            Tuple of ``(context_string, list_of_source_names, dropped_records)``.
 
         Raises:
-            ContextAssemblerError: when an indexed segment exceeds
-                ``item_limit_chars`` (invariant violation).
+            ContextAssemblerError: when an indexed segment exceeds item_limit_chars.
         """
         if not chunks:
             return "", [], []
 
-        deduped = self._deduplicate_chunks(chunks) if deduplicate else chunks
-        logger.info("Deduplication: %d chunks → %d chunks", len(chunks), len(deduped))
+        # Phase 1: Fast exact-match dedup (content hash)
+        working = self._content_hash_dedup(chunks) if content_hash_dedup else chunks
 
-        # Step 1: Source-coverage budget selection in rank order.
+        # Phase 2: Merge adjacent siblings from same parent
+        if enable_sibling_merge:
+            working = self._merge_adjacent_siblings(working)
+
+        # Phase 3: Diversity — MMR or Jaccard dedup
+        if mmr_enabled:
+            working = self._mmr_diversify(working, lambda_param=mmr_lambda)
+            deduped = working
+        else:
+            deduped = self._deduplicate_chunks(working) if deduplicate else working
+
+        logger.info("Assembly dedup: %d → %d chunks", len(chunks), len(deduped))
+
+        # Step 1: Source-coverage budget selection
         selected, dropped_records = self._select_with_source_coverage(deduped)
 
-        # Step 2: Lost-in-the-middle mitigation on the selected set only.
+        # Step 2: Lost-in-the-middle mitigation
         if mitigate_lost_in_middle and len(selected) > 3:
             selected = self._reorder_lost_in_middle(selected)
 
-        # Step 3: Build the final context strings with sequential ids.
+        # Step 3: Format
         context_lines = []
         source_names = []
         for i, chunk in enumerate(selected, start=1):
-            formatted = self._format_chunk(chunk, i)
+            formatted = self._format_chunk(chunk, i, breadcrumb_fmt=breadcrumb_format)
             context_lines.append(formatted)
             source_names.append(chunk.chunk.source_name)
 
@@ -131,7 +286,6 @@ class ContextAssembler:
             list(set(source_names)),
             len(dropped_records),
         )
-
         return context, source_names, dropped_records
 
     def _select_with_source_coverage(
@@ -197,20 +351,23 @@ class ContextAssembler:
 
         return selected, dropped_records
 
-    def _format_chunk(self, chunk: RetrievedChunk, doc_id: int) -> str:
-        """Format a chunk as a context_doc block, enforcing the item limit."""
+    def _format_chunk(self, chunk: RetrievedChunk, doc_id: int, breadcrumb_fmt: str = "hierarchical") -> str:
+        """Format a chunk as a context document with optional metadata breadcrumb.
+
+        The ``breadcrumb_fmt`` parameter controls the metadata header style:
+        "hierarchical" shows full heading path, "flat" shows source only,
+        "none" omits the header entirely.
+        """
         text = chunk.chunk.text
+
         if len(text) > self.item_limit_chars:
             raise ContextAssemblerError(
-                f"Indexed segment {chunk.chunk.chunk_id!r} is {len(text)} chars, "
-                f"exceeding the item limit of {self.item_limit_chars}; "
-                "a valid generation must never produce over-limit segments"
+                f"Chunk {doc_id} exceeds item limit: {len(text)} chars > {self.item_limit_chars}"
             )
 
-        source = chunk.chunk.source_name
-        section_header = chunk.chunk.section_header
-        section_suffix = f" [{section_header}]" if section_header else ""
-        return f'<context_doc id="{doc_id}" url="{chunk.chunk.url}">[{source}{section_suffix}]\n{text}\n</context_doc>'
+        breadcrumb = self._build_breadcrumb(chunk, breadcrumb_fmt)
+        header = f"{breadcrumb}\n" if breadcrumb else ""
+        return f'<context_doc id="{doc_id}" url="{chunk.chunk.url}">{header}{text}\n</context_doc>'
 
     @staticmethod
     def _drop_record(chunk: RetrievedChunk, rank: int, reason: str) -> dict[str, object]:
