@@ -49,7 +49,7 @@ class TestContextAssembler:
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
-            "[test_source]\nThis is a single test chunk.\n</context_doc>"
+            "[Source: test_source]\nThis is a single test chunk.\n</context_doc>"
         )
         assert context == expected_context
         assert sources == ["test_source"]
@@ -68,11 +68,11 @@ class TestContextAssembler:
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
-            "[test_source]\nFirst chunk of text.\n</context_doc>\n"
+            "[Source: test_source]\nFirst chunk of text.\n</context_doc>\n"
             '<context_doc id="2" url="http://example.com/chunkchunk2">'
-            "[test_source]\nSecond chunk of text.\n</context_doc>\n"
+            "[Source: test_source]\nSecond chunk of text.\n</context_doc>\n"
             '<context_doc id="3" url="http://example.com/chunkchunk3">'
-            "[test_source]\nThird chunk of text.\n</context_doc>"
+            "[Source: test_source]\nThird chunk of text.\n</context_doc>"
         )
         assert context == expected_context
         assert sources == ["test_source", "test_source", "test_source"]
@@ -89,9 +89,9 @@ class TestContextAssembler:
 
         expected_context = (
             '<context_doc id="1" url="http://example.com/chunkchunk1">'
-            "[source_a]\nFirst test chunk.\n</context_doc>\n"
+            "[Source: source_a]\nFirst test chunk.\n</context_doc>\n"
             '<context_doc id="2" url="http://example.com/chunkchunk2">'
-            "[source_b]\nSecond test chunk.\n</context_doc>"
+            "[Source: source_b]\nSecond test chunk.\n</context_doc>"
         )
         assert context == expected_context
         assert sources == ["source_a", "source_b"]
@@ -363,7 +363,7 @@ class TestContextAssembler:
         chunk = create_test_chunk("seg-oversized", "a" * 6001)
         retrieved = create_retrieved_chunk(chunk)
 
-        with pytest.raises(ContextAssemblerError, match="exceeding the item limit"):
+        with pytest.raises(ContextAssemblerError, match="exceeds item limit"):
             assembler.assemble([retrieved], deduplicate=False)
 
     def test_budget_exhaustion_reports_dropped_reason_and_segment_id(self):
@@ -475,6 +475,177 @@ class TestContextAssembler:
     def test_max_chunks_per_source_constructor(self):
         assembler = ContextAssembler(max_context_chars=1000, max_chunks_per_source=3)
         assert assembler.max_chunks_per_source == 3
+
+
+class TestContentHashDedup:
+    def test_exact_hash_dedup(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(
+            chunk_id="a", source_name="s", title="A", url="http://a", text="Hello world", content_hash="abc123"
+        )
+        c2 = DocumentChunk(
+            chunk_id="b", source_name="s", title="B", url="http://b", text="Hello world", content_hash="abc123"
+        )
+        c3 = DocumentChunk(
+            chunk_id="c", source_name="s", title="C", url="http://c", text="Different text", content_hash="def456"
+        )
+        chunks = [
+            RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9),
+            RetrievedChunk(chunk=c2, distance=0.1, confidence=0.8),
+            RetrievedChunk(chunk=c3, distance=0.2, confidence=0.7),
+        ]
+        result = assembler._content_hash_dedup(chunks)
+        assert len(result) == 2
+
+    def test_empty_hash_not_deduped(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(chunk_id="a", source_name="s", title="A", url="http://a", text="Hello", content_hash="")
+        c2 = DocumentChunk(chunk_id="b", source_name="s", title="B", url="http://b", text="Hello", content_hash="")
+        chunks = [
+            RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9),
+            RetrievedChunk(chunk=c2, distance=0.1, confidence=0.8),
+        ]
+        result = assembler._content_hash_dedup(chunks)
+        assert len(result) == 2
+
+
+class TestSiblingMerge:
+    def test_adjacent_siblings_merge(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(
+            chunk_id="c1",
+            source_name="s",
+            title="C1",
+            url="http://a",
+            text="Part 1",
+            content_hash="h1",
+            parent_chunk_id="p1",
+            segment_index=0,
+        )
+        c2 = DocumentChunk(
+            chunk_id="c2",
+            source_name="s",
+            title="C2",
+            url="http://a",
+            text="Part 2",
+            content_hash="h2",
+            parent_chunk_id="p1",
+            segment_index=1,
+        )
+        chunks = [
+            RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9),
+            RetrievedChunk(chunk=c2, distance=0.1, confidence=0.8),
+        ]
+        result = assembler._merge_adjacent_siblings(chunks)
+        assert len(result) == 1
+        assert "Part 1\n\nPart 2" in result[0].chunk.text
+
+    def test_orphan_chunks_preserved(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(chunk_id="o1", source_name="s", title="O1", url="http://a", text="Orphan", content_hash="h1")
+        chunks = [RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9)]
+        result = assembler._merge_adjacent_siblings(chunks)
+        assert len(result) == 1
+
+
+class TestMMRDiversity:
+    def test_mmr_increases_diversity(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(
+            chunk_id="a",
+            source_name="s",
+            title="A",
+            url="http://a",
+            text="Spark SQL optimization techniques for joins",
+            content_hash="h1",
+        )
+        c2 = DocumentChunk(
+            chunk_id="b",
+            source_name="s",
+            title="B",
+            url="http://b",
+            text="Spark SQL optimization methods for join operations",
+            content_hash="h2",
+        )
+        c3 = DocumentChunk(
+            chunk_id="c",
+            source_name="s",
+            title="C",
+            url="http://c",
+            text="Airflow DAG scheduling configuration",
+            content_hash="h3",
+        )
+        chunks = [
+            RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9),
+            RetrievedChunk(chunk=c2, distance=0.1, confidence=0.85),
+            RetrievedChunk(chunk=c3, distance=0.3, confidence=0.6),
+        ]
+        result = assembler._mmr_diversify(chunks, lambda_param=0.5)
+        assert len(result) == 3
+        assert result[0].chunk.chunk_id == "a"
+        ids = [r.chunk.chunk_id for r in result]
+        assert ids.index("c") < ids.index("b")
+
+    def test_mmr_single_chunk(self):
+        assembler = ContextAssembler(max_context_chars=1000)
+        c1 = DocumentChunk(
+            chunk_id="a", source_name="s", title="A", url="http://a", text="Only chunk", content_hash="h1"
+        )
+        chunks = [RetrievedChunk(chunk=c1, distance=0.1, confidence=0.9)]
+        result = assembler._mmr_diversify(chunks)
+        assert len(result) == 1
+
+
+class TestBreadcrumbs:
+    def test_hierarchical_breadcrumb(self):
+        c = DocumentChunk(
+            chunk_id="c1",
+            source_name="Spark",
+            title="C1",
+            url="http://a",
+            text="text",
+            content_hash="h1",
+            heading_path=("SQL", "Joins"),
+        )
+        r = RetrievedChunk(chunk=c, distance=0.1, confidence=0.9)
+        bc = ContextAssembler._build_breadcrumb(r, "hierarchical")
+        assert bc == "[Source: Spark > SQL > Joins]"
+
+    def test_flat_breadcrumb(self):
+        c = DocumentChunk(
+            chunk_id="c1",
+            source_name="Spark",
+            title="C1",
+            url="http://a",
+            text="text",
+            content_hash="h1",
+            heading_path=("SQL",),
+        )
+        r = RetrievedChunk(chunk=c, distance=0.1, confidence=0.9)
+        bc = ContextAssembler._build_breadcrumb(r, "flat")
+        assert bc == "[Source: Spark]"
+
+    def test_no_breadcrumb(self):
+        c = DocumentChunk(
+            chunk_id="c1", source_name="Spark", title="C1", url="http://a", text="text", content_hash="h1"
+        )
+        r = RetrievedChunk(chunk=c, distance=0.1, confidence=0.9)
+        bc = ContextAssembler._build_breadcrumb(r, "none")
+        assert bc == ""
+
+    def test_empty_heading_path(self):
+        c = DocumentChunk(
+            chunk_id="c1",
+            source_name="Spark",
+            title="C1",
+            url="http://a",
+            text="text",
+            content_hash="h1",
+            heading_path=(),
+        )
+        r = RetrievedChunk(chunk=c, distance=0.1, confidence=0.9)
+        bc = ContextAssembler._build_breadcrumb(r, "hierarchical")
+        assert bc == "[Source: Spark]"
 
 
 if __name__ == "__main__":
