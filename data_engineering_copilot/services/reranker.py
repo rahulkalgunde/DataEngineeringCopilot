@@ -27,13 +27,20 @@ _reranker_cache: dict[str, CrossEncoderReranker] = {}
 _cache_lock = threading.Lock()
 
 
-def get_reranker(model_name: str = "BAAI/bge-reranker-v2-m3") -> CrossEncoderReranker:
+def get_reranker(
+    model_name: str = "BAAI/bge-reranker-v2-m3",
+    doc_truncation_chars: int = 2000,
+) -> CrossEncoderReranker:
     """Get or create a singleton CrossEncoderReranker for the given model."""
-    if model_name not in _reranker_cache:
+    cache_key = f"{model_name}:{doc_truncation_chars}"
+    if cache_key not in _reranker_cache:
         with _cache_lock:
-            if model_name not in _reranker_cache:
-                _reranker_cache[model_name] = CrossEncoderReranker(model_name=model_name)
-    return _reranker_cache[model_name]
+            if cache_key not in _reranker_cache:
+                _reranker_cache[cache_key] = CrossEncoderReranker(
+                    model_name=model_name,
+                    doc_truncation_chars=doc_truncation_chars,
+                )
+    return _reranker_cache[cache_key]
 
 
 def clear_reranker_cache() -> None:
@@ -58,6 +65,19 @@ def _min_max_normalize(scores: list[float]) -> list[float]:
     return [(s - lo) / span for s in scores]
 
 
+def _truncate_doc_for_rerank(text: str, limit_chars: int) -> str:
+    if len(text) <= limit_chars:
+        return text
+    truncated = text[:limit_chars]
+    last_para = truncated.rfind("\n\n")
+    if last_para > limit_chars * 0.6:
+        return truncated[:last_para].rstrip()
+    last_nl = truncated.rfind("\n")
+    if last_nl > limit_chars * 0.5:
+        return truncated[:last_nl].rstrip()
+    return truncated.rstrip()
+
+
 class CrossEncoderReranker:
     """Reranks retrieved chunks using a cross-encoder model.
 
@@ -68,13 +88,14 @@ class CrossEncoderReranker:
     via sentence-transformers for local inference.
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", doc_truncation_chars: int = 2000):
         """Initialize the cross-encoder reranker.
 
         Model loading is deferred — call ``await initialize()`` before first use
         to avoid blocking the event loop during the ~450MB download.
         """
         self.model_name = model_name
+        self._doc_truncation_chars = doc_truncation_chars
         self.model: CrossEncoder | None = None
         self._executor: ThreadPoolExecutor | None = None
         # Guards lazy loading so concurrent initialize() calls load once.
@@ -138,7 +159,7 @@ class CrossEncoderReranker:
 
         try:
             # Prepare texts for cross-encoder: (query, chunk_text) pairs
-            chunk_texts = [chunk.chunk.text for chunk in chunks]
+            chunk_texts = [_truncate_doc_for_rerank(chunk.chunk.text, self._doc_truncation_chars) for chunk in chunks]
             pairs = [[query, text] for text in chunk_texts]
 
             # Score in batches to avoid memory spikes on large candidate sets.
@@ -225,7 +246,7 @@ class CrossEncoderReranker:
         if not self.model:
             logger.warning("Reranker model not available; returning zero scores")
             return [0.0] * len(documents)
-        pairs = [[query, text] for text in documents]
+        pairs = [[query, _truncate_doc_for_rerank(text, self._doc_truncation_chars)] for text in documents]
         return await self._predict_scores(pairs)
 
     def _init_sync(self) -> None:

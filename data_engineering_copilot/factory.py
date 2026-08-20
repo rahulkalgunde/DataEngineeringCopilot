@@ -1824,7 +1824,10 @@ def build_rag_service(
     if app_settings.reranker_enabled:
         from data_engineering_copilot.services.llm_reranker import LLMReranker
 
-        local_reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+        local_reranker = CrossEncoderReranker(
+            model_name=app_settings.reranker_model,
+            doc_truncation_chars=app_settings.reranker_doc_truncation_chars,
+        )
         if app_settings.llm_rerank_enabled:
             rerank_chain = build_rerank_fallback_chain(
                 app_settings=app_settings,
@@ -2051,7 +2054,10 @@ def build_conversation_service(app_settings: AppSettings = settings) -> Conversa
     if app_settings.chat_rerank_local and app_settings.reranker_enabled:
         from data_engineering_copilot.services.reranker import CrossEncoderReranker
 
-        local_reranker = CrossEncoderReranker(model_name=app_settings.reranker_model)
+        local_reranker = CrossEncoderReranker(
+            model_name=app_settings.reranker_model,
+            doc_truncation_chars=app_settings.reranker_doc_truncation_chars,
+        )
 
     return ConversationService(
         rag_service=rag_service,

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
-from data_engineering_copilot.services.reranker import CrossEncoderReranker
+from data_engineering_copilot.services.reranker import CrossEncoderReranker, _truncate_doc_for_rerank
 
 
 def create_test_chunks(num_chunks=5):
@@ -325,6 +325,34 @@ def test_min_max_normalize():
     assert _min_max_normalize([0.5, 0.5]) == [0.5, 0.5]
     assert _min_max_normalize([0.0]) == [0.0]
     assert _min_max_normalize([]) == []
+
+
+class TestDocumentTruncation:
+    def test_short_doc_unchanged(self):
+        assert _truncate_doc_for_rerank("Short text", 2000) == "Short text"
+
+    def test_truncate_at_paragraph(self):
+        para1 = "A" * 1200
+        text = para1 + "\n\n" + "B" * 800
+        assert _truncate_doc_for_rerank(text, 1500) == para1
+
+    def test_truncate_at_newline(self):
+        line1 = "X" * 800
+        text = line1 + "\n" + "Y" * 800
+        assert _truncate_doc_for_rerank(text, 1200) == line1
+
+    def test_hard_truncation(self):
+        assert len(_truncate_doc_for_rerank("A" * 3000, 2000)) <= 2000
+
+    def test_code_fence_integrity(self):
+        code = "```python\nprint('hello')\n```\n"
+        text = code + "D" * 3000
+        result = _truncate_doc_for_rerank(text, 100)
+        assert result.count("```") % 2 == 0
+
+    def test_exact_limit(self):
+        text = "X" * 2000
+        assert _truncate_doc_for_rerank(text, 2000) == text
 
 
 if __name__ == "__main__":
