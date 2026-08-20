@@ -32,14 +32,17 @@ _SHARED_CITATION_RULES = (
     "- Never fabricate citations. Cite only from the provided [Doc-N] tags."
 )
 
-_CODE_INSTRUCTIONS = (
+_CODE_BASE_RULES = (
     "1. Provide a brief explanation (1-3 sentences) followed by a complete, runnable code example.\n"
     "2. Use fenced code blocks with the appropriate language tag (e.g. ```scala, ```python).\n"
     "3. Match the language requested by the user (Scala, Python, SQL, etc.).\n"
     "4. Include concise inline comments for non-obvious logic.\n"
     "5. Cite the source documentation for API signatures used.\n"
-    f"{_SHARED_CITATION_RULES}\n"
-    "6. If context lacks sufficient API details, state the limitation explicitly."
+)
+
+_CODE_INSTRUCTIONS = f"{_CODE_BASE_RULES}{_SHARED_CITATION_RULES}\n6. If context lacks sufficient API details, state the limitation explicitly."
+_CODE_INSTRUCTIONS_NO_CITATIONS = (
+    f"{_CODE_BASE_RULES}6. If context lacks sufficient API details, state the limitation explicitly."
 )
 
 # Rules shared by the documentation instruction variants
@@ -54,12 +57,17 @@ _DOCUMENTATION_BASE_RULES = (
 )
 
 _DOCUMENTATION_INSTRUCTIONS = f"{_DOCUMENTATION_BASE_RULES}\n{_SHARED_CITATION_RULES}"
+_DOCUMENTATION_INSTRUCTIONS_NO_CITATIONS = _DOCUMENTATION_BASE_RULES
 
 # Safety net: allow code blocks in documentation answers when query contains code keywords
 _DOCUMENTATION_INSTRUCTIONS_WITH_CODE = (
     f"{_DOCUMENTATION_BASE_RULES}\n"
     "8. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block.\n"
     f"{_SHARED_CITATION_RULES}"
+)
+_DOCUMENTATION_INSTRUCTIONS_WITH_CODE_NO_CITATIONS = (
+    f"{_DOCUMENTATION_BASE_RULES}\n"
+    "8. If the user asks for code or the query contains code-related keywords, include a complete, runnable code example in a fenced code block.\n"
 )
 
 # Code-intent output format — allows fenced code blocks in the answer
@@ -148,9 +156,17 @@ CHAT_SYSTEM_ROLE = (
 class PromptBuilder:
     """Builds structured prompts for RAG context synthesis."""
 
-    def __init__(self, system_role: str | None = None, prompt_trailing_instructions: bool = True) -> None:
+    def __init__(
+        self,
+        system_role: str | None = None,
+        prompt_trailing_instructions: bool = True,
+        prompt_salted_xml_tags: bool = True,
+        prompt_citation_enforcement: str = "strict",
+    ) -> None:
         self.system_role = system_role or "You are DataEngineeringCopilot, an expert data engineering assistant."
         self._prompt_trailing_instructions = prompt_trailing_instructions
+        self._prompt_salted_xml_tags = prompt_salted_xml_tags
+        self._prompt_citation_enforcement = prompt_citation_enforcement
 
     @staticmethod
     def sanitize_query(question: str) -> str:
@@ -198,22 +214,31 @@ class PromptBuilder:
         """
         is_code = intent in CODE_INTENTS
         has_code_keywords = bool(_CODE_KEYWORDS.search(question))
+        citation_off = self._prompt_citation_enforcement == "off"
 
         # Safety net: allow code blocks even for non-code intents if query contains code keywords
         if is_code:
-            instructions = _CODE_INSTRUCTIONS
+            instructions = _CODE_INSTRUCTIONS_NO_CITATIONS if citation_off else _CODE_INSTRUCTIONS
             output_format = _CODE_OUTPUT_FORMAT
         elif has_code_keywords:
-            instructions = _DOCUMENTATION_INSTRUCTIONS_WITH_CODE
+            instructions = (
+                _DOCUMENTATION_INSTRUCTIONS_WITH_CODE_NO_CITATIONS
+                if citation_off
+                else _DOCUMENTATION_INSTRUCTIONS_WITH_CODE
+            )
             output_format = _CODE_OUTPUT_FORMAT  # Allow code blocks in output
         else:
-            instructions = _DOCUMENTATION_INSTRUCTIONS
+            instructions = _DOCUMENTATION_INSTRUCTIONS_NO_CITATIONS if citation_off else _DOCUMENTATION_INSTRUCTIONS
             output_format = _DOC_OUTPUT_FORMAT
 
         density_tag = self._compute_density_tag(context)
-        salt = secrets.token_hex(4)
-        open_tag = f"<context_data_{salt}>"
-        close_tag = f"</context_data_{salt}>"
+        if self._prompt_salted_xml_tags:
+            salt = secrets.token_hex(4)
+            open_tag = f"<context_data_{salt}>"
+            close_tag = f"</context_data_{salt}>"
+        else:
+            open_tag = "<chunk>"
+            close_tag = "</chunk>"
         tagged_context = f"{open_tag}\n[DENSITY: {density_tag}]\n{context}\n{close_tag}"
 
         if history:
