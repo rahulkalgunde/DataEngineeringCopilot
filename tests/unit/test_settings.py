@@ -468,3 +468,62 @@ def test_chat_speed_settings_validate_all() -> None:
     bad_mode = _make_bad(chat_suggestions_mode="bogus")
     with pytest.raises(ValidationError, match="chat_suggestions_mode"):
         bad_mode.validate_all()
+
+
+def test_prompt_augmentation_config_wiring() -> None:
+    """Verify that prompt augmentation config flows: AppSettings -> RagConfig -> factory -> PromptBuilder."""
+    from data_engineering_copilot.config.settings import AppSettings
+    from data_engineering_copilot.domain.models import RagConfig
+    from data_engineering_copilot.factory import build_rag_service
+    from tests.conftest import make_settings
+
+    # Test AppSettings has the fields
+    settings = AppSettings(
+        prompt_salted_xml_tags=False,
+        prompt_xml_content_escape=False,
+        prompt_trailing_instructions=False,
+        prompt_citation_enforcement="off",
+    )
+    assert settings.prompt_salted_xml_tags is False
+    assert settings.prompt_xml_content_escape is False
+    assert settings.prompt_trailing_instructions is False
+    assert settings.prompt_citation_enforcement == "off"
+
+    # Test RagConfig has the fields with same defaults
+    rag_config = RagConfig()
+    assert rag_config.prompt_salted_xml_tags is True
+    assert rag_config.prompt_xml_content_escape is True
+    assert rag_config.prompt_trailing_instructions is True
+    assert rag_config.prompt_citation_enforcement == "strict"
+
+    # Test factory wiring: build_rag_service propagates settings to RagConfig
+    test_settings = make_settings(
+        prompt_salted_xml_tags=False,
+        prompt_xml_content_escape=False,
+        prompt_trailing_instructions=False,
+        prompt_citation_enforcement="off",
+    )
+    rag_service = build_rag_service(test_settings)
+    assert rag_service.config.prompt_salted_xml_tags is False
+    assert rag_service.config.prompt_xml_content_escape is False
+    assert rag_service.config.prompt_trailing_instructions is False
+    assert rag_service.config.prompt_citation_enforcement == "off"
+
+    # Test that PromptBuilder and ContextAssembler receive the config
+    from data_engineering_copilot.services.prompt_builder import PromptBuilder
+    from data_engineering_copilot.services.context_assembler import ContextAssembler
+
+    prompt_builder = PromptBuilder(
+        prompt_salted_xml_tags=rag_service.config.prompt_salted_xml_tags,
+        prompt_citation_enforcement=rag_service.config.prompt_citation_enforcement,
+        prompt_trailing_instructions=rag_service.config.prompt_trailing_instructions,
+    )
+    assert prompt_builder._prompt_salted_xml_tags is False
+    assert prompt_builder._prompt_citation_enforcement == "off"
+    assert prompt_builder._prompt_trailing_instructions is False
+
+    context_assembler = ContextAssembler(
+        max_context_chars=1000,
+        xml_content_escape=rag_service.config.prompt_xml_content_escape,
+    )
+    assert context_assembler._xml_content_escape is False

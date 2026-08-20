@@ -265,7 +265,7 @@ class RagConfig:
     prompt_salted_xml_tags: bool = True
     prompt_xml_content_escape: bool = True
     prompt_trailing_instructions: bool = True
-    prompt_citation_enforcement: str = "strict"  # "strict" | "soft" | "off"
+    prompt_citation_enforcement: Literal["strict", "soft", "off"] = "strict"
     max_expansion_queries: int = 2
     cache_enabled: bool = True
     # Identifier-aware hybrid RRF profiles (see ``services/query_signals.py``).

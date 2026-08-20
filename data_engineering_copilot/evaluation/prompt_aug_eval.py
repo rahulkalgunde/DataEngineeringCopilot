@@ -131,9 +131,8 @@ async def run_prompt_aug_eval_llm(
     from data_engineering_copilot.factory import build_llm_fallback_chain
     from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
-    # Use global settings; provider argument can override fallback order
-    settings.llm_fallback_order = [provider]
-    llm_client = build_llm_fallback_chain("answer", settings)
+    # Use purpose_provider to pin the provider instead of mutating global settings
+    llm_client = build_llm_fallback_chain("answer", settings, purpose_provider=provider)
 
     dataset = load_dataset(dataset_path)
     builder = PromptBuilder()

@@ -80,6 +80,14 @@ class ConversationService:
                 prompt_citation_enforcement=rag_config.prompt_citation_enforcement,
             )
         else:
+            import warnings
+
+            warnings.warn(
+                "ConversationService created without rag_service.config; "
+                "PromptBuilder will use default settings. "
+                "This should only happen in tests.",
+                stacklevel=2,
+            )
             self._prompt_builder = PromptBuilder()
         self._local_query_rewriter = local_query_rewriter
         self._local_scope_verifier = local_scope_verifier
