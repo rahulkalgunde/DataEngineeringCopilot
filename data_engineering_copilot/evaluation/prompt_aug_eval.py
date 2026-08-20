@@ -121,6 +121,10 @@ def run_prompt_aug_eval(dataset_path: pathlib.Path) -> PromptAugEvalReport:
 async def run_prompt_aug_eval_llm(
     dataset_path: pathlib.Path,
     provider: str = "ollama",
+    prompt_salted_xml_tags: bool = True,
+    prompt_xml_content_escape: bool = True,
+    prompt_trailing_instructions: bool = True,
+    prompt_citation_enforcement: str = "strict",
 ) -> PromptAugEvalReport:
     """Run eval with LLM generation: build prompts, call LLM, compute metrics on actual outputs.
 
@@ -135,7 +139,11 @@ async def run_prompt_aug_eval_llm(
     llm_client = build_llm_fallback_chain("answer", settings, purpose_provider=provider)
 
     dataset = load_dataset(dataset_path)
-    builder = PromptBuilder()
+    builder = PromptBuilder(
+        prompt_salted_xml_tags=prompt_salted_xml_tags,
+        prompt_trailing_instructions=prompt_trailing_instructions,
+        prompt_citation_enforcement=prompt_citation_enforcement,
+    )
 
     outputs: list[str] = []
     details: list[dict] = []

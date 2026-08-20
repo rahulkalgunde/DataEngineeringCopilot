@@ -109,6 +109,12 @@ TRAILING_INSTRUCTIONS = (
     "- Never fabricate citations or invent information not in the context."
 )
 
+TRAILING_INSTRUCTIONS_NO_CITATIONS = (
+    "## CRITICAL REMINDERS\n"
+    "- If no context supports your answer, set status to INSUFFICIENT_CONTEXT.\n"
+    "- Never invent information not in the context."
+)
+
 # Offline fallback for the Langfuse-managed ``rag-answer`` prompt. Must stay
 # byte-identical to the seeded Langfuse template when rendered.
 _RAG_PROMPT_TEMPLATE = "\n".join(
@@ -257,7 +263,11 @@ class PromptBuilder:
         if guardrail:
             system_role = f"{system_role or self.system_role}\n\n{guardrail}"
 
-        trailing = f"\n\n{TRAILING_INSTRUCTIONS}" if self._prompt_trailing_instructions else ""
+        trailing = (
+            f"\n\n{TRAILING_INSTRUCTIONS_NO_CITATIONS if citation_off else TRAILING_INSTRUCTIONS}"
+            if self._prompt_trailing_instructions
+            else ""
+        )
 
         return get_langfuse_prompt("rag-answer").compile(
             system_role=system_role or self.system_role,
