@@ -19,7 +19,7 @@ class TestLoadDataset:
         data = tmp_path / "test.jsonl"
         row = {
             "query": "What is Spark?",
-            "context": "<context_doc id=\"1\">Docs</context_doc>",
+            "context": '<context_doc id="1">Docs</context_doc>',
             "intent": "factual",
             "expected_citations": ["1"],
             "expected_format": "json",

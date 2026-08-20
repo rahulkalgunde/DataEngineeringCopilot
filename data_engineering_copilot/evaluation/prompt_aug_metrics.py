@@ -56,7 +56,11 @@ def compute_format_compliance(outputs: list[str], expected_formats: list[str]) -
         return 0.0
     correct = 0
     for output, fmt in zip(outputs, expected_formats, strict=True):
-        if (fmt == "json" and _is_json_like(output)) or (fmt == "code" and _is_code_like(output)) or fmt not in ("json", "code"):
+        if (
+            (fmt == "json" and _is_json_like(output))
+            or (fmt == "code" and _is_code_like(output))
+            or fmt not in ("json", "code")
+        ):
             correct += 1
     return correct / len(outputs)
 
