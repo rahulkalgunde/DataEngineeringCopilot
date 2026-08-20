@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.context_compression import ContextCompressor
 
@@ -84,3 +86,46 @@ class TestContextCompressor:
         ]
         result = cc.compress(chunks, "query")
         assert len(result) == 2
+
+
+class _FakeEmbedder:
+    """Deterministic sync embedder for tests (stable per-process hashing)."""
+
+    def __init__(self, dim: int = 8) -> None:
+        self._dim = dim
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for text in texts:
+            vec = [0.0] * self._dim
+            for tok in re.findall(r"[a-z0-9_]+", text.lower()):
+                idx = int.from_bytes(tok.encode("utf-8"), "little", signed=False) % self._dim
+                vec[idx] += 1.0
+            out.append(vec)
+        return out
+
+
+class TestEmbeddingDedup:
+    def test_embedding_model_deduplicates_near_duplicates(self):
+        cc = ContextCompressor(
+            enabled=True,
+            similarity_threshold=0.7,
+            embedding_model=_FakeEmbedder(),
+        )
+        chunks = [
+            _chunk("a", "spark sql window function example"),
+            _chunk("b", "spark sql window function example with identical words"),
+            _chunk("c", "kafka streaming totally different topic"),
+        ]
+        result = cc.compress(chunks, "query")
+        # The two near-identical Spark chunks collapse to one; Kafka kept.
+        assert len(result) == 2
+        assert {c.chunk.chunk_id for c in result} == {"a", "c"}
+
+    def test_missing_embedding_model_uses_token_jaccard(self):
+        cc = ContextCompressor(enabled=True, similarity_threshold=0.9)
+        chunks = [
+            _chunk("a", "alpha beta gamma delta"),
+            _chunk("b", "alpha beta gamma delta"),
+        ]
+        assert len(cc.compress(chunks, "query")) == 1

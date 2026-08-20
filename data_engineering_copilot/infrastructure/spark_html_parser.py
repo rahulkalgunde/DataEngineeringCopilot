@@ -59,10 +59,12 @@ class SparkHtmlParser:
         self,
         content_root_selector: str = "",
         excluded_selectors: tuple[str, ...] = (),
+        extra_strip_selectors: tuple[str, ...] = (),
         min_words: int = _MIN_CONTENT_WORDS,
     ) -> None:
         self._content_root_selector = content_root_selector
         self._excluded_selectors = excluded_selectors
+        self._extra_strip_selectors = extra_strip_selectors
         self._min_words = min_words
 
     def parse(
@@ -86,6 +88,10 @@ class SparkHtmlParser:
             return None
 
         for selector in self._excluded_selectors:
+            for tag in content.select(selector):
+                tag.decompose()
+
+        for selector in self._extra_strip_selectors:
             for tag in content.select(selector):
                 tag.decompose()
 

@@ -454,6 +454,7 @@ class SparkIndexBuilder:
         parser = SparkHtmlParser(
             content_root_selector=build.content_root_selector,
             excluded_selectors=build.excluded_selectors,
+            extra_strip_selectors=(".sidebar", ".toc", ".toc-wrapper"),
         )
         html = rendered.absolute_path.read_text(encoding="utf-8", errors="replace")
         return parser.parse(html, rendered.canonical_url, rendered.relative_path)
