@@ -1822,22 +1822,31 @@ def build_rag_service(
         )
     reranker = None
     if app_settings.reranker_enabled:
-        from data_engineering_copilot.services.llm_reranker import LLMReranker
+        if app_settings.reranker_type == "colbert":
+            from data_engineering_copilot.services.colbert_reranker import ColBERTReranker
 
-        local_reranker = CrossEncoderReranker(
-            model_name=app_settings.reranker_model,
-            doc_truncation_chars=app_settings.reranker_doc_truncation_chars,
-        )
-        if app_settings.llm_rerank_enabled:
-            rerank_chain = build_rerank_fallback_chain(
-                app_settings=app_settings,
-                provider_rate_limiters=provider_rate_limiters,
-                health_registry=health_registry,
-                local_reranker=local_reranker,
+            reranker = ColBERTReranker(
+                model_name=app_settings.colbert_rerank_model,
+                max_query_tokens=app_settings.colbert_max_query_tokens,
+                max_doc_tokens=app_settings.colbert_max_doc_tokens,
             )
-            reranker = LLMReranker(chain=rerank_chain, local=local_reranker)
         else:
-            reranker = local_reranker
+            from data_engineering_copilot.services.llm_reranker import LLMReranker
+
+            local_reranker = CrossEncoderReranker(
+                model_name=app_settings.reranker_model,
+                doc_truncation_chars=app_settings.reranker_doc_truncation_chars,
+            )
+            if app_settings.llm_rerank_enabled:
+                rerank_chain = build_rerank_fallback_chain(
+                    app_settings=app_settings,
+                    provider_rate_limiters=provider_rate_limiters,
+                    health_registry=health_registry,
+                    local_reranker=local_reranker,
+                )
+                reranker = LLMReranker(chain=rerank_chain, local=local_reranker)
+            else:
+                reranker = local_reranker
 
     telemetry = build_telemetry_tracer()
     if token_tracker is None:
