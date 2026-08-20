@@ -42,10 +42,7 @@ class PromptAugEvalReport:
     details: list[dict] = field(default_factory=list)
 
     def summary(self) -> str:
-        return (
-            f"Prompt Aug Eval — {self.total_samples} samples\n"
-            f"{self.metrics.summary()}"
-        )
+        return f"Prompt Aug Eval — {self.total_samples} samples\n{self.metrics.summary()}"
 
 
 def load_dataset(path: pathlib.Path) -> list[PromptAugEvalRow]:
@@ -104,18 +101,10 @@ def run_prompt_aug_eval(dataset_path: pathlib.Path) -> PromptAugEvalReport:
         )
 
     metrics = PromptAugMetrics(
-        format_compliance_rate=compute_format_compliance(
-            outputs, [r.expected_format for r in dataset]
-        ),
-        citation_precision=compute_citation_precision(
-            outputs, [r.expected_citations for r in dataset]
-        ),
-        citation_recall=compute_citation_recall(
-            outputs, [r.expected_citations for r in dataset]
-        ),
-        injection_defense_rate=compute_injection_defense_rate(
-            outputs, [r.injection_payload for r in dataset]
-        ),
+        format_compliance_rate=compute_format_compliance(outputs, [r.expected_format for r in dataset]),
+        citation_precision=compute_citation_precision(outputs, [r.expected_citations for r in dataset]),
+        citation_recall=compute_citation_recall(outputs, [r.expected_citations for r in dataset]),
+        injection_defense_rate=compute_injection_defense_rate(outputs, [r.injection_payload for r in dataset]),
         zero_context_fallback_accuracy=compute_zero_context_fallback_accuracy(
             outputs, [r.has_sufficient_context for r in dataset]
         ),
