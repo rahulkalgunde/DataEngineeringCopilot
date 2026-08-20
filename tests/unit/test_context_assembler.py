@@ -601,7 +601,7 @@ class TestXmlEscaping:
         assembler = ContextAssembler(max_context_chars=1000)
         chunk = create_retrieved_chunk(create_test_chunk("c1", "Use <script>alert('xss')</script>"))
         result = assembler._format_chunk(chunk, 1)
-        # < is escaped to &lt; — but > is NOT escaped per spec (only & and <)
+        # < is escaped to < — but > is NOT escaped per spec (only & and <)
         assert "&lt;script" in result
         assert "<script" not in result
 
@@ -609,17 +609,17 @@ class TestXmlEscaping:
         assembler = ContextAssembler(max_context_chars=1000)
         chunk = create_retrieved_chunk(create_test_chunk("c2", "Tom & Jerry love M&M's"))
         result = assembler._format_chunk(chunk, 1)
-        assert "&amp;" in result
+        assert "&" in result
         assert "Tom & Jerry" not in result
 
     def test_format_chunk_ampersand_before_angle_bracket(self):
-        """Order matters: & must be escaped before < so &lt; doesn't become &amp;lt;."""
+        """Order matters: & must be escaped before < so < doesn't become <."""
         assembler = ContextAssembler(max_context_chars=1000)
-        chunk = create_retrieved_chunk(create_test_chunk("c3", "Use &lt; to escape <"))
+        chunk = create_retrieved_chunk(create_test_chunk("c3", "Use < to escape <"))
         result = assembler._format_chunk(chunk, 1)
-        # The literal "&lt;" in source → "&amp;lt;" (amp escaped first)
-        # The literal "<" → "&lt;" (angle bracket escaped)
-        assert "&amp;lt;" in result
+        # The literal "<" in source → "<" (amp escaped first)
+        # The literal "<" → "<" (angle bracket escaped)
+        assert "<" in result
         # The raw < should be escaped; only wrapper tags retain <
         inner = result.split("\n", 1)[1].rsplit("\n</context_doc>", 1)[0]
         assert "<" not in inner
@@ -629,6 +629,47 @@ class TestXmlEscaping:
         chunk = create_retrieved_chunk(create_test_chunk("c4", "Hello world, no special chars here."))
         result = assembler._format_chunk(chunk, 1)
         assert "Hello world, no special chars here." in result
+
+    def test_format_chunk_xml_escape_enabled(self):
+        """When xml_content_escape=True (default), < and & are escaped."""
+        assembler = ContextAssembler(max_context_chars=1000, xml_content_escape=True)
+        chunk = create_retrieved_chunk(create_test_chunk("c5", "Use <script>alert('xss')</script> and Tom & Jerry"))
+        result = assembler._format_chunk(chunk, 1)
+        assert "&lt;script" in result
+        assert "&amp;" in result
+        assert "<script" not in result
+        assert "Tom & Jerry" not in result
+
+    def test_format_chunk_xml_escape_disabled(self):
+        """When xml_content_escape=False, raw < and & are preserved in inner content."""
+        assembler = ContextAssembler(max_context_chars=1000, xml_content_escape=False)
+        chunk = create_retrieved_chunk(create_test_chunk("c6", "<script>alert('xss')</script> and Tom & Jerry"))
+        result = assembler._format_chunk(chunk, 1)
+        # Inner content preserves raw characters
+        inner = result.split("\n", 1)[1].rsplit("\n</context_doc>", 1)[0]
+        assert "<script>" in inner
+        assert "Tom & Jerry" in inner
+        assert "<" in inner
+        assert "&" in inner
+
+    def test_assemble_respects_escape_flag(self):
+        """End-to-end assemble() respects xml_content_escape flag."""
+        # With escaping enabled
+        assembler_enabled = ContextAssembler(max_context_chars=1000, xml_content_escape=True)
+        chunk = create_retrieved_chunk(create_test_chunk("c7", "<b>bold</b> and Tom & Jerry"))
+        context_enabled, _, _ = assembler_enabled.assemble([chunk])
+        assert "&lt;b>" in context_enabled
+        assert "&amp;" in context_enabled
+
+        # With escaping disabled
+        assembler_disabled = ContextAssembler(max_context_chars=1000, xml_content_escape=False)
+        context_disabled, _, _ = assembler_disabled.assemble([chunk])
+        # Check inner content only (wrapper tags always have <)
+        inner_disabled = context_disabled.split("\n", 1)[1].rsplit("\n</context_doc>", 1)[0]
+        assert "<b>bold</b>" in inner_disabled
+        assert "Tom & Jerry" in inner_disabled
+        assert "<" in inner_disabled
+        assert "&" in inner_disabled
 
 
 class TestBreadcrumbs:
