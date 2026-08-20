@@ -178,7 +178,9 @@ class ContextAssembler:
             for i, chunk in enumerate(remaining):
                 chunk_tokens = _tokenize(chunk.chunk.text)
                 relevance = chunk.confidence
-                max_sim = max((_cosine(chunk_tokens, st) for st in selected_tokens), default=0.0) if selected_tokens else 0.0
+                max_sim = (
+                    max((_cosine(chunk_tokens, st) for st in selected_tokens), default=0.0) if selected_tokens else 0.0
+                )
                 mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
                 if mmr_score > best_score:
                     best_score = mmr_score
