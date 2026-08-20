@@ -126,38 +126,10 @@
       "dd *": "deny"
     }
   },
-  "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
-  "provider": {
-    "sambanova": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "sambanova",
-      "options": {
-        "baseURL": "https://api.sambanova.ai/v1",
-        "apiKey": "{env:SAMBANOVA_API_KEY}"
-      },
-      "models": {
-        "gpt-oss-120b": { "name": "gpt-oss 120B" },
-        "minimax-m2.7": { "name": "MiniMax M2.7" },
-        "deepseek-v3.1": { "name": "DeepSeek V3.1" },
-        "meta-llama-3.3-70b-instruct": { "name": "Meta Llama 3.3 70B Instruct" }
-      }
-    },
-    "mistral": {
-      "npm": "@ai-sdk/mistral",
-      "name": "mistral",
-      "options": {
-        "baseURL": "https://api.mistral.ai/v1",
-        "apiKey": "{env:MISTRAL_API_KEY}"
-      },
-      "models": {
-        "mistral-large-latest": { "name": "Mistral Large (latest)" },
-        "mistral-medium-3.5": { "name": "Mistral Medium 3.5" },
-        "mistral-small-4": { "name": "Mistral Small 4" },
-        "mistral-small-latest": { "name": "Mistral Small (latest)" }
-      }
-    }
-  },
-  "agent": {
-    "plan": { "model": "sambanova/gpt-oss-120b" }
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ],
+  "indexing": {
+    "enabled": true
   }
 }

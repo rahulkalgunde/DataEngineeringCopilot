@@ -21,6 +21,7 @@ from data_engineering_copilot.domain.models import (
     RetrievalFilters,
     RetrievedChunk,
 )
+from data_engineering_copilot.services.query_signals import SearchMode
 
 
 class SparkSourceResolverProtocol(Protocol):
@@ -115,6 +116,7 @@ class VectorStoreProtocol(Protocol):
         metadata_filters: RetrievalFilters | None = ...,
         fused_limit: int | None = ...,
         rrf_profile: str = ...,
+        search_mode: SearchMode | None = ...,
     ) -> list[RetrievedChunk]: ...
     async def count(self) -> int: ...
     async def count_urls(self, source_name: str) -> int: ...

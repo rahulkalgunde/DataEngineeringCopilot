@@ -47,6 +47,7 @@ RUN playwright install chromium
 # dependency changes (pyproject.toml) rebuild in seconds instead of re-downloading.
 USER root
 COPY pyproject.toml uv.lock ./
+COPY data_engineering_copilot ./data_engineering_copilot
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system . watchfiles
 
 # Dependency fingerprint: compared at runtime against the live uv.lock/pyproject.toml

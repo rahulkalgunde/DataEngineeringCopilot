@@ -12,6 +12,7 @@ from collections.abc import Iterable
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.domain.protocols import VectorStoreProtocol
+from data_engineering_copilot.services.query_signals import SearchMode
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -70,6 +71,7 @@ class InMemoryVectorStore(VectorStoreProtocol):
         metadata_filters: object | None = None,
         fused_limit: int | None = None,
         rrf_profile: str = "equal_rrf",
+        search_mode: SearchMode | None = None,
     ) -> list[RetrievedChunk]:
         scored: list[tuple[float, DocumentChunk]] = []
         for chunk_id, vector in self._vectors.items():

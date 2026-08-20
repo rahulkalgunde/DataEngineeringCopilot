@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import Any, cast
@@ -33,13 +34,17 @@ from data_engineering_copilot.domain.protocols import (
     TelemetryTracerProtocol,
     VectorStoreProtocol,
 )
+from data_engineering_copilot.infrastructure.graph_store import GraphStore
 from data_engineering_copilot.infrastructure.llm_client import SYSTEM_BLOCK_SEPARATOR
 from data_engineering_copilot.observability.langfuse_prompts import get_langfuse_prompt, register_fallback
 from data_engineering_copilot.observability.token_tracker import RetrievalTracker, TokenTracker
 from data_engineering_copilot.services.context_assembler import DEFAULT_ITEM_LIMIT_CHARS, ContextAssembler
 from data_engineering_copilot.services.context_compression import ContextCompressor
+from data_engineering_copilot.services.feedback_telemetry import FeedbackTelemetryService
+from data_engineering_copilot.services.graph_traversal import GraphTraversalService
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.input_guardrails import InputGuardrails
+from data_engineering_copilot.services.multi_hop_decomposer import MultiHopDecomposer
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
 from data_engineering_copilot.services.query_cache import _NON_ANSWER_MARKERS
 from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
@@ -50,9 +55,12 @@ from data_engineering_copilot.services.query_rewriting import (
 )
 from data_engineering_copilot.services.query_signals import (
     RRF_EQUAL_PROFILE,
+    SearchMode,
     classify_query_signals,
     select_rrf_profile,
+    select_search_mode,
 )
+from data_engineering_copilot.services.relevance_grader import RelevanceGrader
 from data_engineering_copilot.services.scope_verifier import ScopeVerifier
 from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
 
@@ -396,6 +404,11 @@ class AsyncRagService:
         pii_redactor: PiiRedactorProtocol | None = None,
         input_guardrails: InputGuardrails | None = None,
         review_dataset_hook: Callable[[str, str, str], object] | None = None,
+        multi_hop_decomposer: MultiHopDecomposer | None = None,
+        graph_traversal_service: GraphTraversalService | None = None,
+        relevance_grader: RelevanceGrader | None = None,
+        feedback_telemetry_service: FeedbackTelemetryService | None = None,
+        graph_store: GraphStore | None = None,
     ) -> None:
         self.config = config
         self.vector_store = vector_store
@@ -415,6 +428,11 @@ class AsyncRagService:
         self._pii_redactor = pii_redactor
         self.input_guardrails = input_guardrails
         self.review_dataset_hook = review_dataset_hook
+        self.multi_hop_decomposer = multi_hop_decomposer
+        self.graph_traversal_service = graph_traversal_service
+        self.relevance_grader = relevance_grader
+        self.feedback_telemetry_service = feedback_telemetry_service
+        self.graph_store = graph_store
         self._prompt_builder = PromptBuilder(
             prompt_trailing_instructions=self.config.prompt_trailing_instructions,
             prompt_salted_xml_tags=self.config.prompt_salted_xml_tags,
@@ -432,6 +450,110 @@ class AsyncRagService:
             return select_rrf_profile(classify_query_signals(query))
         return RRF_EQUAL_PROFILE
 
+    # --- GraphRAG / Multi-hop / CRAG / Feedback wiring (Plan 1) ---
+    # Each helper degrades gracefully: if its component was not provided (e.g.
+    # in tests that build ``AsyncRagService`` directly) or raises, it returns
+    # the unchanged input so the rest of the pipeline is unaffected.
+
+    async def _run_multi_hop(self, query: str, history: str = "") -> str | None:
+        """Plan + execute multi-hop decomposition; return combined context or ``None``."""
+        if self.multi_hop_decomposer is None:
+            return None
+        try:
+            plan = await self.multi_hop_decomposer.plan_query(query, history)
+            if not plan.is_multi_hop or not plan.steps:
+                return None
+            previous_results: dict[int, str] = {}
+            summaries: list[str] = []
+            for step in plan.steps:
+                summary = await self.multi_hop_decomposer.execute_step(step, previous_results, self)
+                previous_results[step.step_id] = summary
+                summaries.append(f"Step {step.step_id}: {summary}")
+            if not summaries:
+                return None
+            return "Multi-hop reasoning context:\n" + "\n".join(summaries)
+        except Exception as exc:
+            logger.warning("multi_hop_failed", exc)
+            return None
+
+    async def _graph_context(self, query: str) -> str:
+        """Topological context from the knowledge graph, or empty string."""
+        if self.graph_traversal_service is None:
+            return ""
+        try:
+            return await self.graph_traversal_service.get_topological_context(query)
+        except Exception as exc:
+            logger.warning("graph_context_failed", exc)
+            return ""
+
+    async def _relevance_guarded_chunks(self, query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Corrective-RAG gate: grade relevance; on low score, expand retrieval once."""
+        if self.relevance_grader is None or not chunks:
+            return chunks
+        try:
+            score = await self.relevance_grader.grade_chunks(query, chunks)
+        except Exception as exc:
+            logger.warning("relevance_grade_failed", exc)
+            return chunks
+        if score >= 0.5:
+            return chunks
+        try:
+            q_emb = await self.embedder.embed_query(query)
+            expanded = await self.vector_store.query(
+                q_emb,
+                top_k=self.config.retrieval_top_k * 2,
+                query_text=query,
+                fused_limit=_rerank_pool_size(
+                    self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                ),
+                rrf_profile=self._rrf_profile_for(query),
+            )
+            if expanded:
+                return merge_retrieval_results([chunks, expanded], query)
+        except Exception as exc:
+            logger.warning("relevance_expand_failed", exc)
+        return chunks
+
+    async def _log_feedback(self, query: str, answer_text: str, chunks: list[RetrievedChunk]) -> None:
+        """Persist an interaction to the feedback telemetry log (Plan 1 §4)."""
+        if self.feedback_telemetry_service is None:
+            return
+        try:
+            provenance = [
+                {"chunk_id": c.chunk.chunk_id, "url": c.chunk.url, "source_name": c.chunk.source_name}
+                for c in chunks[:5]
+            ]
+            await self.feedback_telemetry_service.log_interaction(
+                query_id=str(uuid.uuid4()),
+                query=query,
+                answer=answer_text,
+                provenance=provenance,
+                feedback=None,
+            )
+        except Exception as exc:
+            logger.warning("feedback_log_failed", exc)
+
+    def _compute_search_mode(self, rewritten, question: str) -> SearchMode | None:
+        """Select the intent-aware search mode for the retrieval variants."""
+        if rewritten is None:
+            return None
+        return select_search_mode(rewritten.intent, classify_query_signals(question))
+
+    async def _augment_context(self, effective_query: str, question: str, retrieval_only: bool) -> str:
+        """Build graph + multi-hop context prefix, or empty string."""
+        if retrieval_only:
+            return ""
+        extra_ctx: list[str] = []
+        graph_ctx = await self._graph_context(effective_query)
+        if graph_ctx:
+            extra_ctx.append(graph_ctx)
+        mh_ctx = await self._run_multi_hop(question)
+        if mh_ctx:
+            extra_ctx.append(mh_ctx)
+        if not extra_ctx:
+            return ""
+        return "\n\n".join(extra_ctx) + "\n\n"
+
     async def _retrieve_variant_queries(
         self,
         queries_to_run: list[str],
@@ -440,6 +562,7 @@ class AsyncRagService:
         source_filter: list[str] | None,
         chunk_type_filter: str | None,
         metadata_filters: RetrievalFilters | None,
+        search_mode: SearchMode | None = None,
     ) -> tuple[
         list[list[RetrievedChunk]],
         list[dict[str, object]],
@@ -483,6 +606,7 @@ class AsyncRagService:
                         self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
                     ),
                     rrf_profile=profile,
+                    search_mode=search_mode,
                 )
                 # Unfiltered fallback: if metadata filters removed everything,
                 # retry once without inferred filters.
@@ -831,6 +955,7 @@ class AsyncRagService:
                 else:
                     variant_labels.append("expanded")
 
+            search_mode = self._compute_search_mode(rewritten, question)
             (
                 per_query_results,
                 _prov_variants,
@@ -846,6 +971,7 @@ class AsyncRagService:
                 source_filter=source_filter,
                 chunk_type_filter=chunk_type_filter,
                 metadata_filters=metadata_filters,
+                search_mode=search_mode,
             )
 
             if not any_success and last_error is not None:
@@ -1021,6 +1147,8 @@ class AsyncRagService:
             if self.context_compressor is not None:
                 retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
                 logger.info("context_compressed chunks=%d", len(retrieved_chunks))
+            if not retrieval_only:
+                retrieved_chunks = await self._relevance_guarded_chunks(effective_query, retrieved_chunks)
             _record_stage("rerank")
 
             if rerank_span:
@@ -1054,6 +1182,9 @@ class AsyncRagService:
                 mmr_lambda=self.config.assembly_mmr_lambda,
                 breadcrumb_format=self.config.assembly_breadcrumb_format,
             )
+            prepend = await self._augment_context(effective_query, question, retrieval_only)
+            if prepend:
+                context_str = prepend + context_str
             _prov_dropped = dropped_records
             _emit_detail(
                 "rerank",
@@ -1301,6 +1432,8 @@ class AsyncRagService:
 
             _record_stage("total")
             _emit_provenance()
+            if not retrieval_only:
+                await self._log_feedback(question, answer_text, retrieved_chunks)
             trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None) if trace else None
             result = Answer(
                 text=answer_text,
@@ -1596,6 +1729,7 @@ class AsyncRagService:
             query_embedding=query_emb,
             top_k=top_k,
             query_text=effective_query,
+            search_mode=select_search_mode(intent, classify_query_signals(effective_query)),
             source_filter=source_filter,
             fused_limit=_rerank_pool_size(
                 self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
@@ -1637,6 +1771,8 @@ class AsyncRagService:
             )
             rerank_span.end()
 
+        retrieved_chunks = await self._relevance_guarded_chunks(effective_query, retrieved_chunks)
+
         # Context assembly
         sorted_chunks = sorted(retrieved_chunks, key=lambda c: c.confidence, reverse=True)
         assembler = ContextAssembler(
@@ -1652,6 +1788,15 @@ class AsyncRagService:
             mmr_lambda=self.config.assembly_mmr_lambda,
             breadcrumb_format=self.config.assembly_breadcrumb_format,
         )
+        extra_ctx: list[str] = []
+        graph_ctx = await self._graph_context(effective_query)
+        if graph_ctx:
+            extra_ctx.append(graph_ctx)
+        mh_ctx = await self._run_multi_hop(safe_question)
+        if mh_ctx:
+            extra_ctx.append(mh_ctx)
+        if extra_ctx:
+            context_str = "\n\n".join(extra_ctx) + "\n\n" + context_str
 
         # Build prompt
         prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
@@ -1743,6 +1888,7 @@ class AsyncRagService:
         groundedness_score, unsupported_claims = await self._verify_stream_groundedness(
             full_text, retrieved_chunks, trace
         )
+        await self._log_feedback(safe_question, full_text, retrieved_chunks)
         yield _sse(
             {
                 "type": "done",

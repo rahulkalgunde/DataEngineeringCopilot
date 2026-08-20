@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import pathlib
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from data_engineering_copilot.evaluation.prompt_aug_eval import (
-    PromptAugEvalRow,
     load_dataset,
     run_prompt_aug_eval,
 )
@@ -131,7 +130,6 @@ class TestGoldenDataset:
 class TestRunPromptAugEval:
     def test_run_template_mode_basic(self, tmp_path: pathlib.Path):
         """Test run_prompt_aug_eval in template mode with mocked PromptBuilder."""
-        from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
         from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
         data = tmp_path / "test.jsonl"
@@ -158,7 +156,6 @@ class TestRunPromptAugEval:
 
     def test_run_template_mode_zero_context(self, tmp_path: pathlib.Path):
         """Test template mode correctly handles zero-context rows."""
-        from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
         from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
         data = tmp_path / "test.jsonl"
@@ -205,9 +202,7 @@ class TestRunPromptAugEvalLLM:
         mock_llm = AsyncMock()
         mock_llm.generate.return_value = '{"status": "SUCCESS", "answer": "Spark is an engine", "missing_info": null}'
 
-        with patch(
-            "data_engineering_copilot.factory.build_llm_fallback_chain"
-        ) as mock_build_chain:
+        with patch("data_engineering_copilot.factory.build_llm_fallback_chain") as mock_build_chain:
             mock_build_chain.return_value = mock_llm
 
             with patch.object(PromptBuilder, "build_rag_prompt", return_value="Test prompt"):

@@ -376,7 +376,7 @@ async def _semantic_sanity_async(embed, pairs: list[dict]) -> dict:
 async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
     """URL recall + MRR over recall rows using raw embed + vector search."""
     if not recall_rows:
-        return {"rows": 0, "source_recall": None, "mrr": None, "results": []}
+        return {"rows": 0, "source_recall": None, "mrr": None, "context_precision": None, "results": []}
     results = []
     for row in recall_rows:
         if row.get("out_of_scope"):
@@ -388,6 +388,7 @@ async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
         urls = [r.chunk.url.rstrip("/") for r in retrieved]
         hit = sum(1 for u in expected_urls if u in urls)
         recall = hit / len(expected_urls) if expected_urls else 1.0
+        context_precision = hit / len(urls) if urls else 0.0
         mrr = 0.0
         for rank, u in enumerate(urls, 1):
             if u in expected_urls:
@@ -397,6 +398,7 @@ async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
             {
                 "id": row.get("id", ""),
                 "source_recall": round(recall, 4),
+                "context_precision": round(context_precision, 4),
                 "mrr": round(mrr, 4),
                 "expected_urls": len(expected_urls),
                 "hit_urls": hit,
@@ -404,10 +406,12 @@ async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
         )
     n = len(results)
     source_recall = sum(r["source_recall"] for r in results) / n if n else None
+    context_precision_avg = sum(r["context_precision"] for r in results) / n if n else None
     mrr = sum(r["mrr"] for r in results) / n if n else None
     return {
         "rows": n,
         "source_recall": round(source_recall, 4) if source_recall is not None else None,
+        "context_precision": round(context_precision_avg, 4) if context_precision_avg is not None else None,
         "mrr": round(mrr, 4) if mrr is not None else None,
         "results": results,
     }

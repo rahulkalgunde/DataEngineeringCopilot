@@ -620,11 +620,11 @@ class TestXmlEscaping:
         # Incorrect (wrong order): < -> &lt;, & in &lt; -> &amp;lt;
         chunk = create_retrieved_chunk(create_test_chunk("c3", "A < B & C"))
         result = assembler._format_chunk(chunk, 1)
-        
+
         assert "&amp;" in result
         assert "&lt;" in result
         assert "&amp;lt;" not in result  # This is the double-escaping we must avoid
-        
+
         # The raw < should be escaped; only wrapper tags retain <
         inner = result.split("\n", 1)[1].rsplit("\n</context_doc>", 1)[0]
         assert "<" not in inner

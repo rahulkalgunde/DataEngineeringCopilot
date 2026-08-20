@@ -149,6 +149,7 @@ def _row_metrics(
 
     hit = sum(1 for u in expected if u in urls)
     source_recall = hit / len(expected) if expected else 1.0
+    context_precision = hit / len(urls) if urls else 0.0
     mrr = 0.0
     for rank, u in enumerate(urls, 1):
         if u in expected:
@@ -165,6 +166,7 @@ def _row_metrics(
 
     return {
         "source_recall": round(source_recall, 4),
+        "context_precision": round(context_precision, 4),
         "mrr": round(mrr, 4),
         "latency_ms": round(elapsed_ms, 1),
         "provider_calls": calls,
@@ -248,6 +250,7 @@ async def run_retrieval_benchmark(service: Any, rows: list[dict[str, object]]) -
         "total_ms": round(total_ms, 1),
         "provider_calls_total": provider_calls_total,
         "source_recall_mean": _mean(ok_results, "source_recall"),
+        "context_precision_mean": _mean(ok_results, "context_precision"),
         "mrr_mean": _mean(ok_results, "mrr"),
         "latency_ms_mean": _mean(ok_results, "latency_ms"),
         "duplicate_rate_mean": _mean(ok_results, "duplicate_rate"),
@@ -275,6 +278,7 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
         return round(float(c) - float(b), 4)
 
     source_recall_delta = _delta("source_recall_mean")
+    context_precision_delta = _delta("context_precision_mean")
     mrr_delta = _delta("mrr_mean")
     identifier_delta = _delta("identifier_recall")
     generic_delta = _delta("generic_recall")
@@ -291,6 +295,7 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
 
     return {
         "source_recall_delta": source_recall_delta,
+        "context_precision_delta": context_precision_delta,
         "mrr_delta": mrr_delta,
         "identifier_recall_delta": identifier_delta,
         "generic_recall_delta": generic_delta,
@@ -298,6 +303,8 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
         "duplicate_rate_delta_pct": duplicate_rate_delta_pct,
         "gates": {
             "recall_regression_ok": source_recall_delta is not None and source_recall_delta >= -RECALL_REGRESSION_LIMIT,
+            "context_precision_regression_ok": context_precision_delta is not None
+            and context_precision_delta >= -RECALL_REGRESSION_LIMIT,
             "mrr_regression_ok": mrr_delta is not None and mrr_delta >= -MRR_REGRESSION_LIMIT,
             "identifier_improved": identifier_delta is not None and identifier_delta >= IDENTIFIER_RECALL_IMPROVEMENT,
             "generic_recall_regression_ok": (

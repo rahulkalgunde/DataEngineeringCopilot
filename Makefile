@@ -241,7 +241,54 @@ eval-coverage:
 eval-fast:
 	dec_venv/bin/dec eval-fast
 
-streamlit:
+# Retrieval-only benchmark (Recall@K, MRR, Precision@K per intent).
+eval-retrieval:
+	dec_venv/bin/dec eval-retrieval --k 10
+
+# Retrieval regression gate: run benchmark and compare against baseline JSON.
+# Exits non-zero if any gate fails. Use in CI as a required status check.
+eval-retrieval-gate:
+	dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
+
+# Generate synthetic recall eval set for one source (deterministic + coverage-gated).
+eval-gen-source:
+	dec_venv/bin/dec gen-synthetic-eval --source "$(SOURCE)" $(if $(GENERATION),--generation $(GENERATION)) --limit $(or $(LIMIT),50) --out tests/evaluation/golden/recall_synthetic_$(shell echo $(SOURCE) | tr ' ' _ | tr '[:upper:]' '[:lower:]').jsonl
+
+# Regenerate qa_*.jsonl datasets from recall_*.jsonl (offline template-based).
+eval-dataset-regenerate:
+	@echo "=== Regenerating qa datasets ==="
+	@python scripts/generate_qa_datasets.py
+	@echo "=== Done ==="
+
+# Consolidate & validate the golden dataset.
+eval-golden-consolidate:
+	@echo "=== Consolidating golden dataset ==="
+	@python scripts/consolidate_golden_dataset.py
+	@python scripts/trim_and_create_oos_v2.py
+	@python scripts/add_missing_queries.py
+	@python scripts/fix_golden_urls.py
+	@echo "=== Validating against corpus ==="
+	@dec_venv/bin/dec eval-coverage --dataset tests/evaluation/golden/recall_all.jsonl --generation $(or $(GENERATION),)
+	@echo "=== Done ==="
+
+# Run the RAG optimization benchmark (full pipeline) and write report.
+eval-rag-benchmark:
+	@mkdir -p tests/evaluation/benchmarks
+	@python -m data_engineering_copilot.evaluation.rag_optimization_benchmark --output $(OUTPUT) --generation $(or $(GENERATION),)
+
+# Set a new baseline for retrieval regression gates.
+eval-set-baseline:
+	@mkdir -p tests/evaluation/benchmarks
+	@dec_venv/bin/dec eval-retrieval --output-dir tests/evaluation/benchmarks --k 10
+	@mv tests/evaluation/benchmarks/retrieval_eval.json $(OUTPUT)
+	@echo "✅ Baseline written to $(OUTPUT)"
+
+# Dataset-quality gates (hermetic — no corpus/infra required). Runs in CI
+# (test-eval job) so schema/slug/evidence violations fail every commit.
+test-eval-data:
+	$(PYTEST) tests/unit/test_eval_datasets_schema.py tests/unit/test_eval_schema.py \
+		tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py \
+		tests/unit/test_synthetic_generator.py -v
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
 # Refresh the local Claude docs git mirror (network required). After running,
