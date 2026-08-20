@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from data_engineering_copilot.services.prompt_builder import CODE_INTENTS, PromptBuilder
@@ -138,7 +140,7 @@ def test_mode_confusion_constraint_present(monkeypatch):
 
 class TestHistoryInjection:
     def test_no_history_matches_legacy_prompt(self):
-        """Without history, the prompt is byte-identical to pre-chat behavior."""
+        """Without history, no history section appears (salted tags break byte-identity)."""
         builder = PromptBuilder()
         plain = builder.build_rag_prompt(
             context="Some context.",
@@ -151,8 +153,11 @@ class TestHistoryInjection:
             intent="factual",
             history=None,
         )
-        assert plain == no_history
         assert "## CONVERSATION HISTORY" not in plain
+        assert "## CONVERSATION HISTORY" not in no_history
+        # Both contain the context and question regardless of salt.
+        assert "Some context." in plain
+        assert "Some context." in no_history
 
     def test_history_injected_before_context(self):
         builder = PromptBuilder()
@@ -216,3 +221,50 @@ class TestHistoryInjection:
         # History block landed in the user message, before the context.
         assert "## CONVERSATION HISTORY" in messages[1]["content"]
         assert "Some context." in messages[1]["content"]
+
+
+class TestSaltedXmlTags:
+    """Per-request salted context tags for prompt-injection hardening."""
+
+    def test_salted_xml_tags_are_unique_per_request(self):
+        """Each call to build_rag_prompt must produce a different salt."""
+        builder = PromptBuilder()
+        p1 = builder.build_rag_prompt(context="ctx", question="q1")
+        p2 = builder.build_rag_prompt(context="ctx", question="q2")
+        tag1 = re.search(r"<context_data_(\w+)>", p1)
+        tag2 = re.search(r"<context_data_(\w+)>", p2)
+        assert tag1 is not None, "Expected <context_data_...> open tag"
+        assert tag2 is not None, "Expected <context_data_...> open tag"
+        assert tag1.group(1) != tag2.group(1)
+
+    def test_salted_tags_contain_context(self):
+        """Context text must appear between the salted open and close tags."""
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(context="Hello world", question="q")
+        match = re.search(r"<context_data_\w+>.*Hello world.*</context_data_\w+>", prompt, re.DOTALL)
+        assert match is not None, "Context not found inside salted tags"
+
+    def test_salted_tag_format_is_8char_hex(self):
+        """The salt portion must be exactly 8 hex characters."""
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(context="x", question="q")
+        salt = re.search(r"<context_data_([0-9a-f]{8})>", prompt)
+        assert salt is not None, "Salt did not match 8-char hex pattern"
+
+    def test_old_chunk_tags_are_gone(self):
+        """Static <chunk> tags must no longer appear in the prompt."""
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(context="x", question="q")
+        assert "<chunk>" not in prompt
+        assert "</chunk>" not in prompt
+
+    def test_old_chunk_tags_gone_with_history(self):
+        """Salted tags must be used even when history is injected."""
+        builder = PromptBuilder()
+        prompt = builder.build_rag_prompt(
+            context="Some context.",
+            question="q",
+            history="User: hi\nAssistant: hello",
+        )
+        assert "<chunk>" not in prompt
+        assert re.search(r"<context_data_\w+>", prompt) is not None
