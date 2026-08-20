@@ -4022,7 +4022,15 @@ def main() -> None:
                 if args.mode == "llm":
                     from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval_llm
 
-                    report = asyncio.run(run_prompt_aug_eval_llm(dataset_path, provider=args.provider))
+                    report = asyncio.run(
+                        run_prompt_aug_eval_llm(
+                            dataset_path,
+                            provider=args.provider,
+                            prompt_salted_xml_tags=settings.prompt_salted_xml_tags,
+                            prompt_trailing_instructions=settings.prompt_trailing_instructions,
+                            prompt_citation_enforcement=settings.prompt_citation_enforcement,
+                        )
+                    )
                 else:
                     report = run_prompt_aug_eval(dataset_path)
                 print(report.summary())

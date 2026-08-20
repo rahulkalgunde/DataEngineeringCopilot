@@ -29,7 +29,7 @@ class PromptAugMetrics:
         )
 
 
-_CITATION_PATTERN = re.compile(r"\[Doc-(\w+)\]")
+_CITATION_PATTERN = re.compile(r"\[Doc-([^\]]+)\]")
 
 
 def _is_json_like(text: str) -> bool:
