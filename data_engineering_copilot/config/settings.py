@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -1105,7 +1106,7 @@ class AppSettings(BaseSettings):
     prompt_salted_xml_tags: bool = True  # Per-request salted <context_data_XXX> tags
     prompt_xml_content_escape: bool = True  # Escape < in chunk text
     prompt_trailing_instructions: bool = True  # Instruction sandwiching
-    prompt_citation_enforcement: str = "strict"  # "strict" | "soft" | "off"
+    prompt_citation_enforcement: Literal["strict", "soft", "off"] = "strict"
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
