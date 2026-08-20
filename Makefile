@@ -283,12 +283,8 @@ eval-set-baseline:
 	@mv tests/evaluation/benchmarks/retrieval_eval.json $(OUTPUT)
 	@echo "✅ Baseline written to $(OUTPUT)"
 
-# Dataset-quality gates (hermetic — no corpus/infra required). Runs in CI
-# (test-eval job) so schema/slug/evidence violations fail every commit.
-test-eval-data:
-	$(PYTEST) tests/unit/test_eval_datasets_schema.py tests/unit/test_eval_schema.py \
-		tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py \
-		tests/unit/test_synthetic_generator.py -v
+# Launch the Streamlit UI (requires a running stack: `make dev`).
+streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
 # Refresh the local Claude docs git mirror (network required). After running,
