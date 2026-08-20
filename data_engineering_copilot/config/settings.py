@@ -1095,6 +1095,12 @@ class AppSettings(BaseSettings):
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.
     max_chunks_per_source: int = 2
+    # Context assembly optimization
+    assembly_mmr_enabled: bool = False
+    assembly_mmr_lambda: float = 0.5
+    assembly_enable_sibling_merge: bool = True
+    assembly_breadcrumb_format: str = "hierarchical"
+    assembly_content_hash_dedup: bool = True
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
