@@ -1043,6 +1043,11 @@ class AsyncRagService:
             context_str, source_names, dropped_records = assembler.assemble(
                 retrieved_chunks,
                 deduplicate=self.context_compressor is None,
+                content_hash_dedup=self.config.assembly_content_hash_dedup,
+                enable_sibling_merge=self.config.assembly_enable_sibling_merge,
+                mmr_enabled=self.config.assembly_mmr_enabled,
+                mmr_lambda=self.config.assembly_mmr_lambda,
+                breadcrumb_format=self.config.assembly_breadcrumb_format,
             )
             _prov_dropped = dropped_records
             _emit_detail(
@@ -1633,7 +1638,14 @@ class AsyncRagService:
             max_context_chars=self.config.max_context_chars,
             max_chunks_per_source=self.config.max_chunks_per_source,
         )
-        context_str, _source_names, _dropped_records = assembler.assemble(sorted_chunks)
+        context_str, _source_names, _dropped_records = assembler.assemble(
+            sorted_chunks,
+            content_hash_dedup=self.config.assembly_content_hash_dedup,
+            enable_sibling_merge=self.config.assembly_enable_sibling_merge,
+            mmr_enabled=self.config.assembly_mmr_enabled,
+            mmr_lambda=self.config.assembly_mmr_lambda,
+            breadcrumb_format=self.config.assembly_breadcrumb_format,
+        )
 
         # Build prompt
         prompt = self._prompt_builder.build_rag_prompt(context=context_str, question=safe_question, intent=intent)
@@ -2132,7 +2144,14 @@ class AsyncRagService:
             max_context_chars=self.config.max_context_chars,
             max_chunks_per_source=self.config.max_chunks_per_source,
         )
-        context_str, _source_names, _dropped = assembler.assemble(sorted_chunks)
+        context_str, _source_names, _dropped = assembler.assemble(
+            sorted_chunks,
+            content_hash_dedup=self.config.assembly_content_hash_dedup,
+            enable_sibling_merge=self.config.assembly_enable_sibling_merge,
+            mmr_enabled=self.config.assembly_mmr_enabled,
+            mmr_lambda=self.config.assembly_mmr_lambda,
+            breadcrumb_format=self.config.assembly_breadcrumb_format,
+        )
 
         source_refs = [
             {
