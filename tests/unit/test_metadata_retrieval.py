@@ -88,7 +88,7 @@ def test_merge_ranks_original_query_first() -> None:
     c2 = _chunk("c2", "spark sql")
     original = [_retrieved(c1, 0.4)]
     expansion = [_retrieved(c2, 0.9)]
-    merged = merge_retrieval_results([original, expansion], "window dense_rank")
+    merged = merge_retrieval_results([original, expansion])
     # c1 is in the original query set so gets the bonus and ranks first.
     assert merged[0].chunk.chunk_id == "c1"
 
@@ -97,7 +97,7 @@ def test_merge_deduplicates_across_queries() -> None:
     c1 = _chunk("c1", "window functions")
     original = [_retrieved(c1, 0.5)]
     expansion = [_retrieved(c1, 0.7)]
-    merged = merge_retrieval_results([original, expansion], "window")
+    merged = merge_retrieval_results([original, expansion])
     assert len(merged) == 1
     assert merged[0].chunk.chunk_id == "c1"
 
@@ -120,17 +120,17 @@ def test_merge_boosts_original_query_results() -> None:
     )
     # The original query is the first result list, so its chunk wins the tie.
     original = [_retrieved(filter_chunk, 0.5), _retrieved(inline_chunk, 0.9)]
-    merged = merge_retrieval_results([original], "filter array of structs where discount > 0.20")
+    merged = merge_retrieval_results([original])
     assert merged[0].chunk.chunk_id == "filter"
 
 
 def test_merge_empty_results() -> None:
-    assert merge_retrieval_results([], "q") == []
+    assert merge_retrieval_results([]) == []
 
 
 def test_merge_single_result() -> None:
     c1 = _chunk("c1", "hello world")
-    merged = merge_retrieval_results([[_retrieved(c1)]], "hello")
+    merged = merge_retrieval_results([[_retrieved(c1)]])
     assert len(merged) == 1
 
 
@@ -224,3 +224,13 @@ def test_spark_retrieval_variants_array() -> None:
     assert any("filter" in v and "transform" in v for v in variants)
     assert any("without explode" in v for v in variants)
     assert any("net_total" in v for v in variants)
+
+
+def test_merge_signature_matches_implementation() -> None:
+    """Task 5: no phantom original_query param; docstring matches behavior."""
+    import inspect
+
+    params = inspect.signature(merge_retrieval_results).parameters
+    assert "original_query" not in params
+    doc = merge_retrieval_results.__doc__ or ""
+    assert "lexical bonus" not in doc

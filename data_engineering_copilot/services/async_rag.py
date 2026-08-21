@@ -95,18 +95,14 @@ _RERANKER_INIT_TIMEOUT_SECONDS = 120.0
 
 def merge_retrieval_results(
     results: list[list[RetrievedChunk]],
-    original_query: str,
 ) -> list[RetrievedChunk]:
-    """Merge per-query retrieval results using rank fusion plus an original-query bonus.
+    """Merge per-query retrieval results using rank fusion.
 
     Each result list is ranked in retrieval order. Chunks are scored by the sum
-    of ``1 / (rank + 3)`` across all queries that retrieved them. Chunks that
-    match the original query (retrieved by the original query variant) receive
-    an extra bonus. Chunks whose text defines a Spark function named in the
-    query (e.g. ``def filter(``) receive an additional lexical bonus so the
-    real docstring implementation surfaces above unrelated function-family
-    chunks (e.g. ``inline``, ``array_*``). Returns chunks sorted by fused score
-    descending.
+    of ``1 / (rank + 3)`` across all queries that retrieved them; the first
+    result set (the verbatim-question variant) receives a ``+0.5`` bonus so
+    original-query hits outrank paraphrase-only hits at equal fused rank.
+    Returns chunks sorted by fused score descending.
     """
     scores: dict[str, float] = {}
     chunk_by_id: dict[str, RetrievedChunk] = {}
@@ -512,7 +508,7 @@ class AsyncRagService:
                 rrf_profile=self._rrf_profile_for(query),
             )
             if expanded:
-                return merge_retrieval_results([chunks, expanded], query)
+                return merge_retrieval_results([chunks, expanded])
         except Exception as exc:
             logger.warning("relevance_expand_failed", exc)
         return chunks
@@ -982,7 +978,7 @@ class AsyncRagService:
 
             # Rank-fusion merge with original-query bonus.
             if per_query_results:
-                retrieved_chunks = merge_retrieval_results(per_query_results, question)
+                retrieved_chunks = merge_retrieval_results(per_query_results)
             else:
                 retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
             _prov_pool = len(retrieved_chunks)
@@ -2201,7 +2197,7 @@ class AsyncRagService:
                 raise RetrievalError(f"Vector store query failed: {last_error}") from last_error
 
             if per_query_results:
-                retrieved_chunks = merge_retrieval_results(per_query_results, safe_question)
+                retrieved_chunks = merge_retrieval_results(per_query_results)
             else:
                 retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
 
