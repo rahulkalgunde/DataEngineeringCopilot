@@ -2663,6 +2663,39 @@ def _answer_correctness(answer: str, ground_truth: str) -> float:
     return round(answer_token_f1(ground_truth, answer), 3)
 
 
+def eval_generation_main(
+    dataset: str | None = None,
+    n_trials: int = 3,
+    output: str | None = None,
+) -> int:
+    """Evaluate the generation layer alone on a frozen gold-context dataset.
+
+    Supplies ``(question, gold_context)`` directly to the answer LLM and scores
+    faithfulness, answer relevance, and a 1-5 correctness rubric. Exits non-zero
+    if any gate fails (CI gate). Latency is deliberately not measured.
+    """
+    import asyncio
+
+    from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+    default_dataset = pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset.jsonl"
+    eval_path = pathlib.Path(dataset) if dataset else default_dataset
+    if not eval_path.exists():
+        print(f"❌ Evaluation dataset not found at {eval_path}")
+        return 1
+
+    async def _run():
+        return await evaluate_generation(str(eval_path), settings, n_trials=n_trials)
+
+    report = asyncio.run(_run())
+    print(report.to_markdown())
+    if output:
+        with open(output, "w", encoding="utf-8") as fh:
+            json.dump(report.to_dict(), fh, indent=2)
+        print(f"\nWrote report to {output}")
+    return 0 if report.passed else 2
+
+
 def evaluate(
     verbose: bool = False,
     dataset: str | None = None,
@@ -3721,6 +3754,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write machine-readable retrieval diagnostics (provenance + metrics JSON) to this directory.",
     )
 
+    # Generation-layer evaluation (retrieval frozen)
+    eval_gen_parser = subparsers.add_parser(
+        "eval-generation",
+        help="Evaluate the generation layer alone on a frozen gold-context dataset (faithfulness, relevance, rubric).",
+    )
+    eval_gen_parser.add_argument(
+        "--dataset",
+        help="Path to a JSONL dataset with question/contexts/ground_truth (default: tests/evaluation/eval_dataset.jsonl).",
+    )
+    eval_gen_parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=3,
+        help="Number of judge trials averaged for the rubric score (default: 3).",
+    )
+    eval_gen_parser.add_argument(
+        "--output",
+        help="Optional path to write the JSON report.",
+    )
+
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
 
@@ -4131,6 +4184,14 @@ def main() -> None:
                     dataset_name=getattr(args, "dataset_name", None),
                     output_dir=getattr(args, "output_dir", None),
                 )
+        elif args.command == "eval-generation":
+            sys.exit(
+                eval_generation_main(
+                    dataset=getattr(args, "dataset", None),
+                    n_trials=getattr(args, "n_trials", 3),
+                    output=getattr(args, "output", None),
+                )
+            )
         elif args.command == "eval-coverage":
             sys.exit(
                 eval_coverage_main(
