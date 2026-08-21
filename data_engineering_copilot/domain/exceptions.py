@@ -32,6 +32,10 @@ class IngestionError(CoreDomainException):
     """Raised when the ingestion pipeline fails."""
 
 
+class ChunkingError(CoreDomainException):
+    """Raised when a chunker cannot produce chunks for a document."""
+
+
 class CrawlError(CoreDomainException):
     """Raised when a single page crawl fails (non-fatal, page is skipped)."""
 

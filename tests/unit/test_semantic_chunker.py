@@ -490,8 +490,11 @@ class TestEdgeCases:
             word_count = len(chunk.text.split())
             assert word_count <= 110
 
-    async def test_embedding_model_failure_returns_empty(self):
-        """Test that embedding failures return empty chunk list."""
+    async def test_embedding_model_failure_raises_chunking_error(self):
+        """Embedding failures raise ChunkingError so the URL is marked FAILED
+        (retryable) instead of silently vanishing from the index (plan task 4b)."""
+        from data_engineering_copilot.domain.exceptions import ChunkingError
+
         model = MagicMock()
         model.embed_texts.side_effect = Exception("Embedding failed")
 
@@ -509,8 +512,8 @@ class TestEdgeCases:
             text="This is a test document.",
         )
 
-        chunks = await chunker.chunk(document)
-        assert chunks == []
+        with pytest.raises(ChunkingError, match="embedding failed"):
+            await chunker.chunk(document)
 
     async def test_tokenizer_failure_raises_not_silent_empty(self, monkeypatch):
         """Sentence-tokenizer failure must raise, not silently return [].
@@ -740,3 +743,66 @@ class TestCodeMaskingInSemanticChunker:
         assert "def foo():" in joined
         assert "return 42" in joined
         assert "spark.sql" in joined
+
+
+class _OrthogonalEmbedder:
+    """Unit vector per sentence index -> every sentence lands in its own cluster."""
+
+    def __init__(self, fail: bool = False, drop: int = 0) -> None:
+        self.fail = fail
+        self.drop = drop
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if self.fail:
+            raise RuntimeError("provider down")
+        keep = len(texts) - self.drop
+        return [[1.0 if i == j else 0.0 for j in range(len(texts))] for i in range(keep)]
+
+
+class TestSemanticChunkerOverlapBoundary:
+    """Task 4a: overlap must carry the END of the previous chunk."""
+
+    @pytest.mark.asyncio
+    async def test_overlap_comes_from_end_of_previous_chunk(self):
+        s1 = "Spark caches datasets in memory for reuse across iterative queries."
+        s2 = "Airflow schedules workflows using directed acyclic graphs called dags."
+        s3 = "Delta Lake brings acid transactions to data lakes at scale."
+        document = ParsedDocument(source_name="s", title="t", url="u", text=f"{s1} {s2} {s3}")
+        chunker = SemanticChunker(
+            chunk_size_words=10,
+            overlap_words=5,
+            embedding_model=_OrthogonalEmbedder(),
+            min_semantic_similarity=0.9,
+            min_chunk_words=1,
+        )
+        chunks = await chunker.chunk(document)
+        assert len(chunks) >= 2, f"expected multiple chunks, got {len(chunks)}"
+        prev_tail = chunks[0].text.split()[-5:]
+        next_head = chunks[1].text.split()[:5]
+        assert next_head == prev_tail, f"overlap must repeat previous chunk tail {prev_tail}, got {next_head}"
+
+
+class TestSemanticChunkerFailureContract:
+    """Task 4b: embedding failures must raise, never silently drop the page."""
+
+    @pytest.fixture
+    def document(self):
+        return ParsedDocument(
+            source_name="s", title="t", url="u", text="One sentence here. Another sentence there. A third one."
+        )
+
+    @pytest.mark.asyncio
+    async def test_embed_failure_raises_chunking_error(self, document):
+        from data_engineering_copilot.domain.exceptions import ChunkingError
+
+        chunker = SemanticChunker(chunk_size_words=50, overlap_words=5, embedding_model=_OrthogonalEmbedder(fail=True))
+        with pytest.raises(ChunkingError, match="embedding failed"):
+            await chunker.chunk(document)
+
+    @pytest.mark.asyncio
+    async def test_embedding_count_mismatch_raises_chunking_error(self, document):
+        from data_engineering_copilot.domain.exceptions import ChunkingError
+
+        chunker = SemanticChunker(chunk_size_words=50, overlap_words=5, embedding_model=_OrthogonalEmbedder(drop=1))
+        with pytest.raises(ChunkingError, match="count mismatch"):
+            await chunker.chunk(document)
