@@ -19,6 +19,7 @@ import nltk
 import numpy as np
 from nltk.tokenize import sent_tokenize
 
+from data_engineering_copilot.domain.exceptions import ChunkingError
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.services.code_span_masker import mask_code_spans, unmask_code_spans
 
@@ -170,12 +171,12 @@ class SemanticChunker:
                     document.url,
                     str(e),
                 )
-                return []
+                raise ChunkingError(f"Semantic embedding failed for url={document.url}: {e}") from e
         else:
             logger.error(
                 "Semantic chunking requires either precomputed_embeddings or an embedding_model",
             )
-            return []
+            raise ChunkingError("Semantic chunking requires precomputed_embeddings or an embedding_model")
 
         if len(embeddings) != len(sentences):
             logger.error(
@@ -183,7 +184,9 @@ class SemanticChunker:
                 len(embeddings),
                 len(sentences),
             )
-            return []
+            raise ChunkingError(
+                f"Embedding count mismatch: got {len(embeddings)} embeddings for {len(sentences)} sentences"
+            )
 
         # Cluster sentences by semantic similarity
         sentence_groups = self._cluster_sentences(sentences, embeddings)
@@ -333,21 +336,22 @@ class SemanticChunker:
 
             # If adding this cluster exceeds target size and we have content, finalize chunk
             if current_chunk_words + cluster_words > self.chunk_size_words and current_chunk_clusters:
+                prev_last_idx = current_chunk_idxs[-1][-1]
                 _finalize()
 
-                # Start new chunk with overlap
+                # Start new chunk with overlap carried from the END of the
+                # previous chunk (its final sentence), never from the incoming
+                # cluster's own opening.
                 current_chunk_clusters = []
                 current_chunk_idxs = []
                 current_chunk_words = 0
 
-                # Semantic overlap: keep sentences from end of previous chunk if available
                 if chunks and self.overlap_words > 0:
-                    last_idx = current_chunk_idxs[-1][-1] if current_chunk_idxs else cluster_idxs[0]
-                    overlap_words = sentences[last_idx].split()[-self.overlap_words :]
+                    overlap_words = sentences[prev_last_idx].split()[-self.overlap_words :]
                     if overlap_words:
                         overlap_text = " ".join(overlap_words)
                         current_chunk_clusters.append([overlap_text])
-                        current_chunk_idxs.append([last_idx])
+                        current_chunk_idxs.append([prev_last_idx])
                         current_chunk_words = len(overlap_words)
 
             # Add cluster to current chunk
