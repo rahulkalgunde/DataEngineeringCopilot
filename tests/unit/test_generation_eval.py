@@ -132,3 +132,86 @@ def test_report_markdown_includes_gates():
     assert "0.900" in md
     assert "Passed gates" in md
     assert "True" in md
+
+
+class _StubJudge:
+    """Judge double returning a fixed rubric score."""
+
+    def __init__(self, score: float) -> None:
+        self.score = score
+
+    async def generate(self, prompt: str, **kwargs: object) -> str:
+        import json as _json
+
+        return _json.dumps({"score": self.score, "reason": "stub"})
+
+
+class _StubGenerator:
+    async def generate(self, prompt: str, **kwargs: object) -> str:
+        return "Grounded answer restating the context."
+
+
+def _write_dataset(tmp_path, rows=3):
+    import json as _json
+
+    path = tmp_path / "gen_eval.jsonl"
+    with open(path, "w", encoding="utf-8") as fh:
+        for i in range(rows):
+            fh.write(
+                _json.dumps(
+                    {
+                        "id": f"row-{i}",
+                        "question": f"What is topic {i}?",
+                        "contexts": ["Context sentence for the topic."],
+                        "ground_truth": "Gold answer.",
+                    }
+                )
+                + "\n"
+            )
+    return str(path)
+
+
+@pytest.mark.asyncio
+async def test_dual_judge_agreement_reported(tmp_path):
+    """Task 7: judge_b within ±1 of judge_a on every row -> agreement 1.0."""
+    from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+    dataset = _write_dataset(tmp_path)
+    report = await evaluate_generation(
+        dataset,
+        generator=_StubGenerator(),
+        judge=_StubJudge(4.0),
+        judge_b=_StubJudge(5.0),
+        n_trials=1,
+    )
+    assert report.judge_agreement == 1.0
+    assert "judge_agreement" in report.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_dual_judge_disagreement_detected(tmp_path):
+    from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+    dataset = _write_dataset(tmp_path)
+    report = await evaluate_generation(
+        dataset,
+        generator=_StubGenerator(),
+        judge=_StubJudge(1.0),
+        judge_b=_StubJudge(5.0),
+        n_trials=1,
+    )
+    assert report.judge_agreement == 0.0
+
+
+@pytest.mark.asyncio
+async def test_no_second_judge_leaves_agreement_none(tmp_path):
+    from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+    dataset = _write_dataset(tmp_path)
+    report = await evaluate_generation(
+        dataset,
+        generator=_StubGenerator(),
+        judge=_StubJudge(4.0),
+        n_trials=1,
+    )
+    assert report.judge_agreement is None
