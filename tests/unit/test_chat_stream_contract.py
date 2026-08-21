@@ -964,3 +964,47 @@ async def test_chat_stream_emits_suggestions_event():
     suggestions = events[-1]["suggestions"]
     assert isinstance(suggestions, list) and suggestions
     await service.close()
+
+
+class _RecordingStore:
+    """Wraps the in-memory store, capturing every query() kwarg set."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.captured: list[dict] = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def query(self, *args, **kwargs):
+        self.captured.append(kwargs)
+        return await self._inner.query(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_queries_carry_rrf_profile_and_search_mode():
+    """Task 3: chat retrieval must honor search-mode routing like answer()."""
+    store = InMemoryVectorStore()
+    await store.initialize()
+    embedder = StubEmbedder(dimension=768)
+    chunks = _build_chunks()
+    vectors = await embedder.embed_texts([c.text for c in chunks])
+    await store.upsert_chunks(chunks, vectors)
+    recording = _RecordingStore(store)
+
+    from data_engineering_copilot.services.query_rewriting import QueryRewriter
+
+    service = AsyncRagService(
+        config=RagConfig(retrieval_top_k=5, confidence_threshold=0.05, max_context_chars=2000),
+        vector_store=recording,  # type: ignore[arg-type]
+        llm_client=StubLLM(),
+        embedder=embedder,
+        query_rewriter=QueryRewriter(llm_client=StubLLM(), enabled=True, hyde_enabled=False),
+    )
+    events = _collect_events([e async for e in service.chat_stream("What is Apache Spark?")])
+    assert any(e["type"] == "done" for e in events)
+    assert recording.captured, "vector store was not queried"
+    for kwargs in recording.captured:
+        assert "rrf_profile" in kwargs, f"missing rrf_profile: {kwargs.keys()}"
+        assert "search_mode" in kwargs, f"missing search_mode: {kwargs.keys()}"
+    await service.close()
