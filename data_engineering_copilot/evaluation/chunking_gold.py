@@ -37,11 +37,9 @@ def validate_gold_doc(doc: ChunkingGoldDoc) -> None:
     """
     for span in doc.gold_spans:
         if not (0 <= span.start <= span.end <= len(doc.text)):
-            raise ValueError(
-                f"Span {span.start}:{span.end} out of bounds for doc {doc.doc_id!r} (len={len(doc.text)})"
-            )
+            raise ValueError(f"Span {span.start}:{span.end} out of bounds for doc {doc.doc_id!r} (len={len(doc.text)})")
         if doc.text[span.start : span.end] != span.content:
             raise ValueError(
                 f"Span content mismatch in {doc.doc_id!r} at {span.start}:{span.end}: "
-                f"expected {span.content!r}, got {doc.text[span.start:span.end]!r}"
+                f"expected {span.content!r}, got {doc.text[span.start : span.end]!r}"
             )

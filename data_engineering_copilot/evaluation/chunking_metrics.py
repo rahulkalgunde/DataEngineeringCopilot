@@ -42,9 +42,7 @@ def tokenize_whole_doc(doc: str) -> tuple[list[int], list[int]]:
     return token_ids, byte_offsets
 
 
-def char_span_to_token_interval(
-    start: int, end: int, byte_offsets: list[int]
-) -> tuple[int, int]:
+def char_span_to_token_interval(start: int, end: int, byte_offsets: list[int]) -> tuple[int, int]:
     """Map a character ``[start, end)`` span to a token index interval.
 
     Uses ``bisect_left`` on the cumulative byte table so the mapping is stable
@@ -69,9 +67,7 @@ def _span_end(span) -> int:
     return span.end if hasattr(span, "end") else span["end"]
 
 
-def token_iou(
-    doc_text: str, gold_spans: list[dict], pred_chunks: list[DocumentChunk]
-) -> float:
+def token_iou(doc_text: str, gold_spans: list[dict], pred_chunks: list[DocumentChunk]) -> float:
     """Mean token-level Intersection-over-Union against gold spans."""
     if not pred_chunks or not gold_spans:
         return 0.0
@@ -81,9 +77,7 @@ def token_iou(
         g_start, g_end = char_span_to_token_interval(_span_start(span), _span_end(span), byte_offsets)
         best_iou = 0.0
         for chunk in pred_chunks:
-            c_start, c_end = char_span_to_token_interval(
-                chunk.start_offset, chunk.end_offset, byte_offsets
-            )
+            c_start, c_end = char_span_to_token_interval(chunk.start_offset, chunk.end_offset, byte_offsets)
             inter = max(0, min(g_end, c_end) - max(g_start, c_start))
             union = max(g_end, c_end) - min(g_start, c_start)
             if union > 0:
@@ -92,9 +86,7 @@ def token_iou(
     return sum(ious) / len(ious) if ious else 0.0
 
 
-def excerpt_precision(
-    doc_text: str, gold_spans: list[dict], pred_chunks: list[DocumentChunk]
-) -> float:
+def excerpt_precision(doc_text: str, gold_spans: list[dict], pred_chunks: list[DocumentChunk]) -> float:
     """Mean excerpt precision: ``|gold ∩ best_pred| / |best_pred|``."""
     if not pred_chunks or not gold_spans:
         return 0.0
@@ -105,9 +97,7 @@ def excerpt_precision(
         best_overlap = 0
         best_pred_size = 1
         for chunk in pred_chunks:
-            c_start, c_end = char_span_to_token_interval(
-                chunk.start_offset, chunk.end_offset, byte_offsets
-            )
+            c_start, c_end = char_span_to_token_interval(chunk.start_offset, chunk.end_offset, byte_offsets)
             inter = max(0, min(g_end, c_end) - max(g_start, c_start))
             pred_size = max(1, c_end - c_start)
             if inter > best_overlap:
@@ -175,9 +165,7 @@ def _boundaries_to_masses(boundaries: list[int], doc_length: int) -> tuple[int, 
     return tuple(sorted_b[i + 1] - sorted_b[i] for i in range(len(sorted_b) - 1))
 
 
-def boundary_similarity(
-    gold_spans: list[dict], pred_chunks: list[DocumentChunk], doc_length: int
-) -> float:
+def boundary_similarity(gold_spans: list[dict], pred_chunks: list[DocumentChunk], doc_length: int) -> float:
     """Wrap ``segeval.boundary_similarity`` for chunk boundaries."""
     if not _SEGEVAL_AVAILABLE:
         raise ImportError("segeval is required for boundary_similarity")
@@ -199,9 +187,7 @@ def pk(gold_spans: list[dict], pred_chunks: list[DocumentChunk], doc_length: int
     return float(segeval.pk(gold_masses, pred_masses))  # type: ignore[possibly-undefined]
 
 
-def windowdiff(
-    gold_spans: list[dict], pred_chunks: list[DocumentChunk], doc_length: int
-) -> float:
+def windowdiff(gold_spans: list[dict], pred_chunks: list[DocumentChunk], doc_length: int) -> float:
     """Wrap ``segeval.windowdiff`` for chunk boundaries."""
     if not _SEGEVAL_AVAILABLE:
         raise ImportError("segeval is required for windowdiff")
@@ -296,9 +282,7 @@ def extract_code_structure(doc: str, language: str) -> list[StructuralNode]:
     return nodes
 
 
-def structural_fracture_rate(
-    pred_chunks: list[DocumentChunk], structural_nodes: list[StructuralNode]
-) -> float:
+def structural_fracture_rate(pred_chunks: list[DocumentChunk], structural_nodes: list[StructuralNode]) -> float:
     """Fraction of structural nodes split by at least one chunk boundary."""
     if not structural_nodes:
         return 0.0
