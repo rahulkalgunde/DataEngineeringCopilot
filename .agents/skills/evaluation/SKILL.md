@@ -1,6 +1,6 @@
 ---
 name: evaluation
-description: Use for ANY task involving DataEngineeringCopilot evaluation — dec evaluate (golden dataset, --spark retrieval recall), ragas, LLM-as-a-judge, langfuse datasets/experiments/metrics/review queue, faithfulness/relevance scoring, or drift detection. Triggers: evaluate, eval, golden dataset, eval_dataset.jsonl, ragas, retrieval recall, faithfulness, relevance, langfuse-evaluate, langfuse-metrics, drift, experiment, LLM-as-judge.
+description: Use for ANY task involving DataEngineeringCopilot evaluation — dec evaluate (golden dataset, --spark retrieval recall), the isolated harnesses (eval-generation/eval-rerank/eval-assembly/eval-prompt-aug/eval-chunking), ragas, LLM-as-a-judge, langfuse datasets/experiments/metrics/review queue, faithfulness/relevance scoring, or drift detection. Triggers: evaluate, eval, golden dataset, eval_dataset.jsonl, ragas, retrieval recall, faithfulness, relevance, langfuse-evaluate, langfuse-metrics, drift, experiment, LLM-as-judge.
 ---
 
 # DataEngineeringCopilot Evaluation
@@ -36,6 +36,30 @@ Datasets in `tests/evaluation/`:
 
 `eval_dataset_databricks.jsonl` was **removed** (Databricks is not in the
 active pinned generation). QA rows carry `id` so drift/bisection is per-question.
+
+`tests/evaluation/golden/` is the dataset home for the isolated harnesses
+(below); `golden/README.md` documents the 520-query corpus-aligned set
+(500 in-scope + 20 OOS across all 5 sources).
+
+## Isolated harnesses (in-process, frozen inputs)
+
+Each harness freezes every stage except the one under test, so a metric delta
+attributes to that stage alone:
+
+| Command | Frozen | Metrics / gates |
+|---|---|---|
+| `dec eval-generation` | retrieval (frozen contexts); judge = `evaluation`-purpose chain at near-zero temperature | faithfulness ≥ 0.85, answer relevance ≥ 0.80, 1-5 rubric ≥ 4.0 |
+| `dec eval-rerank` | candidate pools (`golden/rerank_eval_sample.jsonl`, optional `--pool-file`) | nDCG@K / MRR@K / P@K / Recall@K gains vs un-reranked baseline |
+| `dec eval-assembly` | frozen candidate pools (`--k`, default 20) | duplicate_candidate_rate, source_coverage_rate, compression_ratio, needle_loss_rate |
+| `dec eval-prompt-aug` | retrieval + assembly | template mode (hermetic, default) or `--mode llm --provider <p>`; format compliance, citation precision/recall, injection defense, zero-context fallback accuracy |
+| `dec eval-chunking` | gold spans (`golden/chunking/*.jsonl`) | gold-span token IoU, boundary similarity, structural fracture rate |
+
+Exit codes are not fully uniform across harnesses: `0` = pass; `2` = config
+error (missing/unparseable dataset) — and also gate failure for
+`dec eval-generation`; `1` = gate failure for `dec eval-retrieval`
+(`--compare-baseline`) but missing dataset for `dec eval-generation`;
+`5` = operational failure (e.g. `dec eval-retrieval` producing no results).
+Check the specific command before scripting against it.
 
 ## Corpus-coverage gate
 

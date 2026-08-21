@@ -46,7 +46,7 @@ is defined in `docker-compose.yml`, auto-merged with `docker-compose.override.ym
 
 | Target | What it does |
 |--------|--------------|
-| `make dev` | **First-time setup**: build image with `GIT_SHA` arg, write `.docker-tag`, `up -d --wait`, pull Ollama models `nomic-embed-text`, `llama3.2:3b`, `qwen2.5-coder:7b` |
+| `make dev` | **First-time setup**: build image with `GIT_SHA` arg, write `.docker-tag`, `up -d --wait`, pull Ollama models `nomic-embed-text`, `phi4-mini:3.8b`, `qwen2.5-coder:7b` |
 | `make up` | Start stack with last built image (no rebuild) |
 | `make down` | Stop + remove containers (interactive confirm; `FORCE=1` to bypass) |
 | `make rebuild` | **Rebuild image + restart backend-api & celery_worker** — required after `pyproject.toml`/`uv.lock` changes |
@@ -57,6 +57,7 @@ is defined in `docker-compose.yml`, auto-merged with `docker-compose.override.ym
 | `make shell svc=<name>` | Exec into a service (default `backend-api`) |
 | `make config` | Validate compose config (dev + CI) |
 | `make prune` | Destructive: down + remove all images + build cache (volumes kept) |
+| `make streamlit` | Launch the Streamlit UI (`dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py`) — requires a running stack |
 | `make prune-stale` | Remove unused `de_copilot_base_image:*` images |
 | `make ci-up` / `make ci-down` | CI stack using `-f docker-compose.yml -f docker-compose.ci.yml` (`ci-down -v` deletes volumes!) |
 
