@@ -93,6 +93,27 @@ _SCOPE_REFUSAL_TEXT = (
 _RERANKER_INIT_TIMEOUT_SECONDS = 120.0
 
 
+def select_most_consistent(candidates: list[str]) -> str:
+    """Return the medoid candidate by pairwise Jaccard token similarity.
+
+    Used by self-consistency sampling: among N generated candidates, prefer
+    the one most similar to all others (majority shape wins).
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+    toks = [set(c.split()) for c in candidates]
+
+    def _jac(a: set[str], b: set[str]) -> float:
+        return len(a & b) / max(1, len(a | b))
+
+    best_i, best_score = 0, -1.0
+    for i, t in enumerate(toks):
+        score = sum(_jac(t, o) for j, o in enumerate(toks) if j != i)
+        if score > best_score:
+            best_i, best_score = i, score
+    return candidates[best_i]
+
+
 def merge_retrieval_results(
     results: list[list[RetrievedChunk]],
 ) -> list[RetrievedChunk]:
@@ -1261,6 +1282,19 @@ class AsyncRagService:
                 )
                 generation_span.update(input=prompt)
             answer_text = await llm_client.generate(prompt)
+
+            # Self-consistency sampling (dark flag): for code intents, draw
+            # N candidates and keep the medoid by token similarity.
+            if (
+                self.config.self_consistency_enabled
+                and intent in CODE_INTENTS
+                and self.config.self_consistency_samples > 1
+            ):
+                extra_candidates: list[str] = []
+                for _ in range(self.config.self_consistency_samples - 1):
+                    extra_candidates.append(await llm_client.generate(prompt))
+                answer_text = select_most_consistent([answer_text, *extra_candidates])
+                logger.info("self_consistency_applied intent=%s samples=%d", intent, len(extra_candidates) + 1)
 
             # JSON retry: if the intent expects JSON output but parsing fails,
             # retry once with a stricter instruction.

@@ -1751,6 +1751,8 @@ def build_rag_service(
         colbert_max_doc_tokens=app_settings.colbert_max_doc_tokens,
         max_context_chars=app_settings.max_context_chars,
         max_chunks_per_source=app_settings.max_chunks_per_source,
+        self_consistency_enabled=app_settings.self_consistency_enabled,
+        self_consistency_samples=app_settings.self_consistency_samples,
         assembly_mmr_enabled=app_settings.assembly_mmr_enabled,
         assembly_mmr_lambda=app_settings.assembly_mmr_lambda,
         assembly_enable_sibling_merge=app_settings.assembly_enable_sibling_merge,
