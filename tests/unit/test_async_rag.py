@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1961,3 +1962,111 @@ class TestScopeGate:
         result = await service.answer("what is spark sql")
         assert "Spark SQL is a module." in result.text
         assert "INSUFFICIENT_CONTEXT" not in result.text
+
+
+class TestStreamParity:
+    """Streaming-path parity tests (plan tasks 1-3)."""
+
+    @pytest.fixture
+    def config(self):
+        return RagConfig(
+            retrieval_top_k=5,
+            confidence_threshold=0.3,
+            reranker_enabled=False,
+            max_context_chars=4000,
+        )
+
+    @pytest.fixture
+    def mock_embedder(self):
+        m = MagicMock()
+        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        return m
+
+    @pytest.fixture
+    def mock_vector_store(self):
+        m = MagicMock()
+        m.query = AsyncMock()
+        return m
+
+    @pytest.fixture
+    def mock_llm(self):
+        async def _tokens():
+            yield "Spark SQL is a module for structured data processing."
+
+        m = MagicMock()
+        m.generate_stream = MagicMock(return_value=_tokens())
+        return m
+
+    def _make_chunk(self, text="Spark SQL is a module.", confidence=0.9):
+        chunk = MagicMock()
+        chunk.chunk.source_name = "test"
+        chunk.chunk.title = "Test"
+        chunk.chunk.url = "http://test.com/doc"
+        chunk.chunk.text = text
+        chunk.confidence = confidence
+        chunk.distance = 1.0 - confidence
+        return chunk
+
+    def _make_service(self, config, vector_store, llm, embedder, **overrides):
+        return AsyncRagService(
+            config=config,
+            vector_store=vector_store,
+            llm_client=llm,
+            embedder=embedder,
+            **overrides,
+        )
+
+    async def _collect_done(self, service, question="what is spark sql"):
+        events = [e async for e in service.answer_stream(question)]
+        payloads = [
+            json.loads(e[len("data: ") :].strip()) for e in events if isinstance(e, str) and e.startswith("data: ")
+        ]
+        return [p for p in payloads if p.get("type") == "done"]
+
+    @pytest.mark.asyncio
+    async def test_scope_refusal_is_not_cached(self, config, mock_embedder, mock_vector_store, mock_llm):
+        scope = MagicMock()
+        scope.verify = AsyncMock(return_value=False)
+        cache = MagicMock()
+        cache.is_cacheable = MagicMock(return_value=True)
+        cache.aset_exact = AsyncMock()
+        cache.aset_semantic = AsyncMock()
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        service = self._make_service(
+            config,
+            mock_vector_store,
+            mock_llm,
+            mock_embedder,
+            cache=cache,
+            scope_verifier=scope,
+        )
+
+        done = await self._collect_done(service)
+
+        assert done, "expected a done event"
+        assert "INSUFFICIENT_CONTEXT" in done[-1]["text"]
+        cache.aset_exact.assert_not_called()
+        cache.aset_semantic.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scope_covered_answer_is_cached(self, config, mock_embedder, mock_vector_store, mock_llm):
+        scope = MagicMock()
+        scope.verify = AsyncMock(return_value=True)
+        cache = MagicMock()
+        cache.is_cacheable = MagicMock(return_value=True)
+        cache.aset_exact = AsyncMock()
+        cache.aset_semantic = AsyncMock()
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        service = self._make_service(
+            config,
+            mock_vector_store,
+            mock_llm,
+            mock_embedder,
+            cache=cache,
+            scope_verifier=scope,
+        )
+
+        done = await self._collect_done(service)
+
+        assert done and "Spark SQL" in done[-1]["text"]
+        cache.aset_exact.assert_awaited_once()
