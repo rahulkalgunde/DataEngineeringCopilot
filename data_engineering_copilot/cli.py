@@ -2505,6 +2505,30 @@ def eval_retrieval_main(
     return 0
 
 
+def eval_chunking_main(
+    strategy: str = "all",
+    gold: str = "all",
+    output: str = "/tmp/chunking_eval.json",
+) -> int:
+    """Run isolated chunking quality evaluation (offline) on a gold dataset."""
+    from data_engineering_copilot.evaluation.chunking_eval import run_chunking_eval
+
+    try:
+        report = run_chunking_eval(strategy, gold, output)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Chunking evaluation failed: {exc}")
+        return 2
+
+    print(f"{'Strategy':<15} {'IoU':>6} {'Prec':>6} {'B-Sim':>6} {'Fract':>6}")
+    for strat, m in report.items():
+        print(
+            f"{strat:<15} {m['iou']:>6.3f} {m['precision']:>6.3f} "
+            f"{m['boundary_similarity']:>6.3f} {m['fracture_rate']:>6.3f}"
+        )
+    print(f"\nReport written to {output}")
+    return 0
+
+
 def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path | None = None) -> int:
     """Run retrieval-recall evaluation against the Spark golden dataset.
 
@@ -3876,6 +3900,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a baseline retrieval_eval.json; fail (exit 1) on Recall@K regression.",
     )
 
+    eval_chunking_parser = subparsers.add_parser(
+        "eval-chunking",
+        help="Run isolated chunking quality evaluation (offline) on a gold dataset.",
+    )
+    eval_chunking_parser.add_argument(
+        "--strategy",
+        choices=["all", "recursive", "sentence", "semantic", "header", "spark", "spark_rendered", "structured", "hierarchical"],
+        default="all",
+        help="Chunking strategy to evaluate.",
+    )
+    eval_chunking_parser.add_argument(
+        "--gold",
+        choices=["synthetic", "human", "all"],
+        default="all",
+        help="Gold dataset source.",
+    )
+    eval_chunking_parser.add_argument("--output", default="/tmp/chunking_eval.json", help="Output JSON path.")
+    eval_chunking_parser.set_defaults(func=eval_chunking_main)
+
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
         "gen-synthetic-eval",
@@ -4283,6 +4326,14 @@ def main() -> None:
                     k=getattr(args, "k", 10),
                     output_dir=getattr(args, "output_dir", None),
                     compare_baseline=getattr(args, "compare_baseline", None),
+                )
+            )
+        elif args.command == "eval-chunking":
+            sys.exit(
+                eval_chunking_main(
+                    strategy=getattr(args, "strategy", "all"),
+                    gold=getattr(args, "gold", "all"),
+                    output=getattr(args, "output", "/tmp/chunking_eval.json"),
                 )
             )
         elif args.command == "gen-synthetic-eval":

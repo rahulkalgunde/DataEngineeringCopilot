@@ -1,0 +1,3 @@
+{"doc_id": "hum-001", "text": "# Guide\n\nThis is a guide paragraph.\n\n## Setup\n\nSetup instructions here.\n", "gold_spans": [{"content": "This is a guide paragraph.", "start": 9, "end": 35, "structural_type": "paragraph"}, {"content": "Setup instructions here.", "start": 47, "end": 71, "structural_type": "paragraph"}]}
+{"doc_id": "hum-002", "text": "Para one.\n\nPara two with more words.\n", "gold_spans": [{"content": "Para one.", "start": 0, "end": 9, "structural_type": "paragraph"}, {"content": "Para two with more words.", "start": 11, "end": 36, "structural_type": "paragraph"}]}
+{"doc_id": "hum-003", "text": "class Foo:\n    pass\n", "gold_spans": [{"content": "pass", "start": 15, "end": 19, "structural_type": "statement"}]}

@@ -88,13 +88,25 @@ class DocumentChunker:
 
         chunks: list[DocumentChunk] = []
         total_chunks = len(texts)
+        cursor = 0
         for i, text in enumerate(texts):
+            # The splitter may drop separator characters, so pieces are not
+            # guaranteed to tile the source contiguously. Locate each piece by
+            # searching from the running cursor; fall back to best-effort when
+            # the exact text is not found.
+            start_offset = document.text.find(text, cursor)
+            if start_offset == -1:
+                start_offset = cursor
+            end_offset = start_offset + len(text)
+            cursor = end_offset
             chunk = DocumentChunk(
                 chunk_id=self._chunk_id(document, i),
                 source_name=document.source_name,
                 title=document.title,
                 url=document.url,
                 text=text,
+                start_offset=start_offset,
+                end_offset=end_offset,
                 chunk_index=i,
                 total_chunks=total_chunks,
             )

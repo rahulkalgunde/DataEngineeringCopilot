@@ -78,6 +78,8 @@ def hierarchical_chunk(
     chunk: DocumentChunk,
     parent_max_tokens: int = 1024,
     child_max_tokens: int = 256,
+    parent_offset_start: int = 0,
+    parent_offset_end: int = 0,
 ) -> list[DocumentChunk]:
     """Split *chunk* into a parent chunk plus child sub-splits.
 
@@ -86,7 +88,7 @@ def hierarchical_chunk(
     ``chunk_id``; the parent carries ``parent_chunk_id=""``. Chunks already
     within the child budget are returned unchanged (they are their own parent).
 
-    Children are produced with ``split_text_losslessly``, so
+    Children are produced with ``split_text_with_offsets``, so
     ``"".join(child_texts)`` reconstructs the parent text exactly and every
     child satisfies the child token budget. For segment-budget validation
     compatibility the parent is a complete unit (empty ``parent_content_hash``,
@@ -100,6 +102,8 @@ def hierarchical_chunk(
         return [
             replace(
                 chunk,
+                start_offset=parent_offset_start,
+                end_offset=parent_offset_end,
                 parent_content_hash="",
                 segment_index=0,
                 segment_total=1,
@@ -116,7 +120,15 @@ def hierarchical_chunk(
     )
 
     result: list[DocumentChunk] = []
+    cursor = 0
     for p_idx, parent_text in enumerate(parent_texts):
+        start = chunk.text.find(parent_text, cursor)
+        if start == -1:
+            start = cursor
+        end = start + len(parent_text)
+        cursor = end
+        abs_parent_start = parent_offset_start + start
+        abs_parent_end = parent_offset_start + end
         parent_id = f"{chunk.chunk_id}:p{p_idx}"
         # Hash the stripped text so children's shared parent_content_hash matches
         # _validate_segment_budgets' lossless-reconstruction check (which strips).
@@ -126,6 +138,8 @@ def hierarchical_chunk(
                 chunk,
                 chunk_id=parent_id,
                 text=parent_text,
+                start_offset=abs_parent_start,
+                end_offset=abs_parent_end,
                 content_hash=parent_hash,
                 word_count=len(parent_text.split()),
                 parent_content_hash="",
@@ -137,18 +151,42 @@ def hierarchical_chunk(
             )
         )
 
-        child_texts = _split_children(parent_text, child_max_tokens, parent_max_tokens)
-        for c_idx, child_text in enumerate(child_texts):
+        # Mirror _split_children: try the child budget, fall back to larger
+        # budgets so rare atomic pieces (a single long line) don't break
+        # splitting. Returns lossless, blank-merged child pieces.
+        child_pieces: list[str] = []
+        for budget in (child_max_tokens, parent_max_tokens, DEFAULT_MAX_TOKENS):
+            try:
+                child_pieces = _merge_blank_pieces(
+                    split_text_losslessly(parent_text, max_tokens=budget, max_chars=budget * 4)
+                )
+                break
+            except ValueError:
+                continue
+
+        child_segments: list[tuple[str, int, int]] = []
+        cursor = 0
+        for piece in child_pieces:
+            start = parent_text.find(piece, cursor)
+            if start == -1:
+                start = cursor
+            end = start + len(piece)
+            cursor = end
+            child_segments.append((piece, start, end))
+
+        for c_idx, (child_text, rel_start, rel_end) in enumerate(child_segments):
             result.append(
                 replace(
                     chunk,
                     chunk_id=f"{parent_id}:c{c_idx}",
                     text=child_text,
+                    start_offset=abs_parent_start + rel_start,
+                    end_offset=abs_parent_start + rel_end,
                     content_hash=hashlib.sha256(child_text.encode("utf-8")).hexdigest(),
                     word_count=len(child_text.split()),
                     parent_content_hash=parent_hash,
                     segment_index=c_idx,
-                    segment_total=len(child_texts),
+                    segment_total=len(child_segments),
                     token_count=count_tokens(child_text),
                     character_count=len(child_text),
                     parent_chunk_id=parent_id,

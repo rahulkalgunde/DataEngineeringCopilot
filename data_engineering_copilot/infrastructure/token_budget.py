@@ -106,6 +106,52 @@ def split_text_losslessly(
     return segments
 
 
+def split_text_with_offsets(
+    text: str,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    separators: tuple[str, ...] = (),
+    encoder: TokenEncoder = _ENCODER,
+) -> list[tuple[str, int, int]]:
+    """Split *text* into (segment, start, end) tuples that fit the budgets.
+
+    Identical to :func:`split_text_losslessly` but each emitted segment is
+    paired with its ``(start, end)`` character offsets relative to the
+    normalized source, so callers can recover exact positions.
+    """
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    normalized = text.strip()
+    if not normalized:
+        return []
+    if _fits(normalized, max_tokens, max_chars, encoder):
+        return [(normalized, 0, len(normalized))]
+
+    raw_segments = _pack_atoms(normalized, max_tokens, max_chars, separators, encoder)
+    validate_segments(normalized, raw_segments)
+    segments_with_offsets: list[tuple[str, int, int]] = []
+    cursor = 0
+    for segment in raw_segments:
+        start = cursor
+        end = cursor + len(segment)
+        segments_with_offsets.append((segment, start, end))
+        cursor = end
+    return segments_with_offsets
+
+
+def validate_segments_with_offsets(original: str, segments_with_offsets: list[tuple[str, int, int]]) -> None:
+    """Raise ``ValueError`` when *segments_with_offsets* do not reconstruct *original*."""
+    reconstructed = "".join(segment for segment, _, _ in segments_with_offsets)
+    if reconstructed.strip() != original.strip():
+        raise ValueError("Segment reconstruction does not match the normalized source")
+    for segment, start, end in segments_with_offsets:
+        if segment != original[start:end]:
+            raise ValueError(f"Segment offset mismatch at {start}:{end}")
+
+
 def validate_segments(original: str, segments: list[str]) -> None:
     """Raise ``ValueError`` when *segments* do not reconstruct *original*."""
     reconstructed = "".join(segments)

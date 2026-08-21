@@ -116,6 +116,20 @@ class SemanticChunker:
             logger.warning("Sentence tokenization failed: %s", str(e))
             return None
 
+    def _sentence_offsets(self, document: ParsedDocument) -> list[tuple[str, int, int]]:
+        sentences = self.extract_sentences(document.text)
+        if sentences is None:
+            raise RuntimeError(f"Sentence tokenization failed for url={document.url}; cannot perform semantic chunking")
+        cursor = 0
+        offsets: list[tuple[str, int, int]] = []
+        for sentence in sentences:
+            idx = document.text.find(sentence, cursor)
+            if idx == -1:
+                raise ValueError(f"sentence not found in document: {sentence!r}")
+            offsets.append((sentence, idx, idx + len(sentence)))
+            cursor = idx + len(sentence)
+        return offsets
+
     async def chunk(
         self,
         document: ParsedDocument,
@@ -124,6 +138,7 @@ class SemanticChunker:
         sentences = self.extract_sentences(document.text)
         if sentences is None:
             raise RuntimeError(f"Sentence tokenization failed for url={document.url}; cannot perform semantic chunking")
+        sentence_offsets = self._sentence_offsets(document)
         if not sentences:
             logger.warning("No sentences found in document url=%s", document.url)
             return []
@@ -174,7 +189,7 @@ class SemanticChunker:
         sentence_groups = self._cluster_sentences(sentences, embeddings)
 
         # Merge clusters into chunks respecting size constraints
-        chunks = self._merge_clusters_into_chunks(document, sentence_groups, sentences)
+        chunks = self._merge_clusters_into_chunks(document, sentence_groups, sentences, sentence_offsets)
 
         logger.info(
             "Chunked document (semantic) source=%s url=%s title=%r sentences=%s clusters=%s chunks=%s",
@@ -251,6 +266,7 @@ class SemanticChunker:
         document: ParsedDocument,
         sentence_groups: list[list[int]],
         sentences: list[str],
+        sentence_offsets: list[tuple[str, int, int]],
     ) -> list[DocumentChunk]:
         """
         Merge semantic clusters into chunks respecting size constraints.
@@ -264,10 +280,17 @@ class SemanticChunker:
         (``extract_sentences`` output) so cluster indices stay consistent; the
         source is never re-tokenized here, which keeps code spans intact.
 
+        ``sentence_offsets`` maps each sentence to ``(text, start, end)`` in the
+        document. Because chunks join sentences with single spaces (and may carry
+        overlap words), ``chunk.text`` is not always a contiguous substring of the
+        document, so offsets are set to span the first→last sentence rather than
+        asserting exact slice equality.
+
         Args:
             document: Source document
             sentence_groups: List of sentence index clusters
             sentences: The sentence list used for clustering and embeddings
+            sentence_offsets: Per-sentence ``(text, start, end)`` offsets
 
         Returns:
             List of DocumentChunk objects
@@ -275,69 +298,22 @@ class SemanticChunker:
         if not sentence_groups:
             return []
 
-        # Group sentences by their cluster
-        sentences_by_cluster = [[sentences[i] for i in cluster] for cluster in sentence_groups]
+        idxs_by_cluster = [list(cluster) for cluster in sentence_groups]
+        sentences_by_cluster = [[sentences[i] for i in cluster] for cluster in idxs_by_cluster]
 
         chunks: list[DocumentChunk] = []
         current_chunk_clusters: list[list[str]] = []
+        current_chunk_idxs: list[list[int]] = []
         current_chunk_words = 0
 
-        for cluster_sentences in sentences_by_cluster:
-            cluster_text = " ".join(cluster_sentences)
-            cluster_words = len(cluster_text.split())
-
-            # If adding this cluster exceeds target size and we have content, finalize chunk
-            if current_chunk_words + cluster_words > self.chunk_size_words and current_chunk_clusters:
-                chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
-                if self._is_valid_chunk(chunk_text):
-                    chunk_id = self._chunk_id(document, len(chunks))
-                    chunks.append(
-                        DocumentChunk(
-                            chunk_id=chunk_id,
-                            source_name=document.source_name,
-                            title=document.title,
-                            url=document.url,
-                            text=chunk_text,
-                        )
-                    )
-
-                # Start new chunk with overlap
-                current_chunk_clusters = []
-                current_chunk_words = 0
-
-                # Semantic overlap: keep sentences from end of previous chunk if available
-                if chunks and self.overlap_words > 0:
-                    overlap_words = chunk_text.split()[-self.overlap_words :]
-                    if overlap_words:
-                        overlap_text = " ".join(overlap_words)
-                        current_chunk_clusters.append([overlap_text])
-                        current_chunk_words = len(overlap_words)
-
-            # Add cluster to current chunk
-            current_chunk_clusters.append(cluster_sentences)
-            current_chunk_words += cluster_words
-
-            # Hard limit: if we exceed max_chunk_words, finalize even mid-cluster
-            if current_chunk_words > self.max_chunk_words:
-                chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
-                if self._is_valid_chunk(chunk_text):
-                    chunk_id = self._chunk_id(document, len(chunks))
-                    chunks.append(
-                        DocumentChunk(
-                            chunk_id=chunk_id,
-                            source_name=document.source_name,
-                            title=document.title,
-                            url=document.url,
-                            text=chunk_text,
-                        )
-                    )
-                current_chunk_clusters = []
-                current_chunk_words = 0
-
-        # Handle final chunk
-        if current_chunk_clusters:
+        def _finalize() -> None:
+            nonlocal current_chunk_clusters, current_chunk_idxs, current_chunk_words
             chunk_text = " ".join(" ".join(cluster) for cluster in current_chunk_clusters).strip()
-            if self._is_valid_chunk(chunk_text):
+            if self._is_valid_chunk(chunk_text) and current_chunk_idxs:
+                first_idx = current_chunk_idxs[0][0]
+                last_idx = current_chunk_idxs[-1][-1]
+                start_offset = sentence_offsets[first_idx][1]
+                end_offset = sentence_offsets[last_idx][2]
                 chunk_id = self._chunk_id(document, len(chunks))
                 chunks.append(
                     DocumentChunk(
@@ -346,8 +322,48 @@ class SemanticChunker:
                         title=document.title,
                         url=document.url,
                         text=chunk_text,
+                        start_offset=start_offset,
+                        end_offset=end_offset,
                     )
                 )
+
+        for cluster_sentences, cluster_idxs in zip(sentences_by_cluster, idxs_by_cluster, strict=True):
+            cluster_text = " ".join(cluster_sentences)
+            cluster_words = len(cluster_text.split())
+
+            # If adding this cluster exceeds target size and we have content, finalize chunk
+            if current_chunk_words + cluster_words > self.chunk_size_words and current_chunk_clusters:
+                _finalize()
+
+                # Start new chunk with overlap
+                current_chunk_clusters = []
+                current_chunk_idxs = []
+                current_chunk_words = 0
+
+                # Semantic overlap: keep sentences from end of previous chunk if available
+                if chunks and self.overlap_words > 0:
+                    last_idx = current_chunk_idxs[-1][-1] if current_chunk_idxs else cluster_idxs[0]
+                    overlap_words = sentences[last_idx].split()[-self.overlap_words :]
+                    if overlap_words:
+                        overlap_text = " ".join(overlap_words)
+                        current_chunk_clusters.append([overlap_text])
+                        current_chunk_idxs.append([last_idx])
+                        current_chunk_words = len(overlap_words)
+
+            # Add cluster to current chunk
+            current_chunk_clusters.append(cluster_sentences)
+            current_chunk_idxs.append(cluster_idxs)
+            current_chunk_words += cluster_words
+
+            # Hard limit: if we exceed max_chunk_words, finalize even mid-cluster
+            if current_chunk_words > self.max_chunk_words:
+                _finalize()
+                current_chunk_clusters = []
+                current_chunk_idxs = []
+                current_chunk_words = 0
+
+        # Handle final chunk
+        _finalize()
 
         return self._number_chunks(chunks)
 
