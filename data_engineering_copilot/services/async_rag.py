@@ -1741,6 +1741,27 @@ class AsyncRagService:
         # Parent-doc re-assembly: restore sibling segments so cross-mode
         # questions see both the YARN and Kubernetes paragraphs.
         retrieved_chunks = await self._rejoin_sibling_chunks(retrieved_chunks)
+
+        # Indirect prompt injection guard (parity with answer()): drop chunks
+        # that look like embedded instructions before they reach the prompt.
+        if self.input_guardrails is not None:
+            scan_result = self.input_guardrails.scan_chunks(retrieved_chunks)
+            retrieved_chunks = scan_result.kept
+            if not retrieved_chunks:
+                logger.warning("All retrieved chunks rejected by input guardrails (stream)")
+                if trace:
+                    trace.update(output="All chunks rejected by input guardrails")
+                    trace.end()
+                yield _sse(
+                    {
+                        "type": "done",
+                        "text": "I cannot answer this question because it is outside my knowledge repository.",
+                        "confidence": 0.0,
+                        "groundedness_score": None,
+                        "groundedness_claims": [],
+                    }
+                )
+                return
         if retrieval_span:
             retrieval_span.update(
                 input=effective_query,
