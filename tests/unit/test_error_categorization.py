@@ -51,3 +51,27 @@ def test_factory_categorizers_delegate_to_shared():
     assert _categorize_embedding_error is categorize_provider_error
     assert _categorize_rerank_error is categorize_provider_error
     assert _default_categorizer is categorize_provider_error
+
+
+def test_chain_generate_signature_honest():
+    """Task 12: chain.generate() must not accept args it silently ignores."""
+    import inspect
+
+    from data_engineering_copilot.infrastructure.provider_fallback import FallbackChainConfig, ProviderFallbackChain
+
+    async def _ok(prompt):
+        return "x"
+
+    chain = ProviderFallbackChain(
+        config=FallbackChainConfig(providers=[], degraded_fallback=None),
+        clients=[],
+        call=_ok,
+    )
+    assert "temperature" not in inspect.signature(chain.generate).parameters
+    assert "max_tokens" not in inspect.signature(chain.generate).parameters
+    try:
+        chain.generate("p", temperature=0.5)  # type: ignore[call-arg]
+        raised = False
+    except TypeError:
+        raised = True
+    assert raised, "chain.generate must reject ignored kwargs"
