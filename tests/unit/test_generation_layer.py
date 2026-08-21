@@ -11,9 +11,7 @@ from tests.conftest import make_settings
 
 def _answer_client(**settings_overrides):
     s = make_settings(llm_provider="ollama", llm_model="llama3.2:3b", **settings_overrides)
-    client = _build_purpose_llm_client(
-        provider="ollama", model="llama3.2:3b", app_settings=s, purpose="answer"
-    )
+    client = _build_purpose_llm_client(provider="ollama", model="llama3.2:3b", app_settings=s, purpose="answer")
     assert client is not None
     return client
 
@@ -25,27 +23,21 @@ def test_answer_purpose_uses_generation_temperature():
 
 def test_code_purpose_uses_code_generation_temperature():
     s = make_settings(llm_provider="ollama", llm_model="llama3.2:3b", code_generation_temperature=0.21)
-    client = _build_purpose_llm_client(
-        provider="ollama", model="llama3.2:3b", app_settings=s, purpose="code"
-    )
+    client = _build_purpose_llm_client(provider="ollama", model="llama3.2:3b", app_settings=s, purpose="code")
     assert client is not None
     assert client._temperature == 0.21
 
 
 def test_non_answer_purpose_keeps_default_temperature():
     s = make_settings(llm_provider="ollama", llm_model="llama3.2:3b", generation_temperature=0.12)
-    client = _build_purpose_llm_client(
-        provider="ollama", model="llama3.2:3b", app_settings=s, purpose="rewrite"
-    )
+    client = _build_purpose_llm_client(provider="ollama", model="llama3.2:3b", app_settings=s, purpose="rewrite")
     assert client is not None
     assert client._temperature == 0.05
 
 
 def test_evaluation_purpose_uses_evaluation_temperature():
     s = make_settings(llm_provider="ollama", llm_model="llama3.2:3b", evaluation_temperature=0.0)
-    client = _build_purpose_llm_client(
-        provider="ollama", model="llama3.2:3b", app_settings=s, purpose="evaluation"
-    )
+    client = _build_purpose_llm_client(provider="ollama", model="llama3.2:3b", app_settings=s, purpose="evaluation")
     assert client is not None
     assert client._temperature == 0.0
 
