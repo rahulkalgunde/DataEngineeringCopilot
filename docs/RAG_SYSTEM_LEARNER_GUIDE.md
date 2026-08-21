@@ -11,11 +11,12 @@ A visual and technical reference tracing every data transformation from HTML pag
 3. [Query Pipeline: Question to Answer](#3-query-pipeline-question-to-answer)
 4. [Streaming Flow](#4-streaming-flow)
 5. [Configuration Reference](#5-configuration-reference)
-6. [Observability & Caching](#6-observability--caching)
-7. [Provider Fallback Chain](#7-provider-fallback-chain)
-8. [Spark Index Generations](#8-spark-index-generations)
-9. [Claude Docs Ingestion (llms.txt)](#9-claude-docs-ingestion-llmstxt)
-10. [Indirect Prompt Injection Guard](#10-indirect-prompt-injection-guard)
+6. [Evaluation System](#6-evaluation-system)
+7. [Observability & Caching](#7-observability--caching)
+8. [Provider Fallback Chain](#8-provider-fallback-chain)
+9. [Spark Index Generations](#9-spark-index-generations)
+10. [Claude Docs Ingestion (llms.txt)](#10-claude-docs-ingestion-llmstxt)
+11. [Indirect Prompt Injection Guard](#11-indirect-prompt-injection-guard)
 
 ---
 
@@ -370,7 +371,7 @@ Input:  list[str] — chunk texts (up to 256 per batch)
 Output: list[list[float]] — dense vectors (768-dim for nomic-embed-text)
 ```
 
-**Provider:** Selected via `embedding_provider` + `embedding_fallback_order`. All calls route through the `ProviderFallbackChain` (see [Section 7](#7-provider-fallback-chain)):
+**Provider:** Selected via `embedding_provider` + `embedding_fallback_order`. All calls route through the `ProviderFallbackChain` (see [Section 8](#8-provider-fallback-chain)):
 - **Ollama** via `POST /api/embed`: `{"model": "nomic-embed-text", "input": texts}`
 - **OpenRouter** via `POST /embeddings` — `nvidia/nemotron-3-embed-1b:free`
 - **NVIDIA** via `POST /embeddings` — `nvidia/nemotron-3-embed-1b`
@@ -471,10 +472,11 @@ The `BM25Tokenizer` (`infrastructure/bm25_tokenizer.py:198-220`) persists to dis
              ▼
   ┌──────────────────────────────┐
   │ 2. QUERY REWRITING           │
-  │ Intent → Sub-queries → HyDE  │
-  │ → Multi-query expansion      │
+  │ Intent → Sub-queries         │
+  │ → HyDE policy gate →         │
+  │ Multi-query expansion        │
   └──────────┬───────────────────┘
-             │ effective_query + all_queries
+             │ effective_query + all_queries + search mode
              ▼
   ┌──────────────────────────────┐
   │ 3. EMBEDDING                 │
@@ -485,61 +487,81 @@ The `BM25Tokenizer` (`infrastructure/bm25_tokenizer.py:198-220`) persists to dis
              ▼
   ┌──────────────────────────────┐
   │ 4. VECTOR SEARCH (Qdrant)    │
-  │ Dense cosine + BM25 sparse   │
-  │ → RRF fusion (k=60)          │
+  │ Search-mode routing → dense  │
+  │ cosine + BM25 sparse → RRF   │
+  │ fusion (k=60)                │
   └──────────┬───────────────────┘
-             │ list[RetrievedChunk]
+             │ fused candidates
              ▼
   ┌──────────────────────────────┐
-  │ 5. INPUT GUARDRAILS          │
+  │ 5. SIBLING REJOIN            │
+  │ Parent-doc reassembly        │
+  │ (fail-open)                  │
+  └──────────┬───────────────────┘
+             ▼
+  ┌──────────────────────────────┐
+  │ 6. INPUT GUARDRAILS          │
   │ Drop injection-laden chunks  │
   └──────────┬───────────────────┘
              ▼
   ┌──────────────────────────────┐
-  │ 6. RERANKING                 │
-  │ Cross-encoder sigmoid        │
-  │ → post-rerank confidence gate│
+  │ 7. RERANKING                 │
+  │ Cloud rerank chain → local   │
+  │ cross-encoder | ColBERT proxy│
   └──────────┬───────────────────┘
-             │ top-N chunks
              ▼
   ┌──────────────────────────────┐
-  │ 7. CONTEXT COMPRESSION       │
-  │ Jaccard dedup (0.85)         │
-  │ → Relevance re-ranking       │
+  │ 8. CONTEXT COMPRESSION       │
+  │ Jaccard dedup (opt-in) +     │
+  │ relevance re-ranking         │
   └──────────┬───────────────────┘
-             │
              ▼
   ┌──────────────────────────────┐
-  │ 8. CONTEXT ASSEMBLY          │
-  │ Lost-in-middle mitigation    │
-  │ → Chunk boundary truncation  │
+  │ 9. CRAG CORRECTIVE GATE      │
+  │ LLM grade < 0.5 → one        │
+  │ expanded retrieval, refusion │
   └──────────┬───────────────────┘
-             │ context_str (max_context_chars)
              ▼
   ┌──────────────────────────────┐
-  │ 9. PROMPT BUILDING           │
-  │ Density tag + intent-based   │
-  │ output format (Langfuse)     │
+  │10. CONFIDENCE GATE           │
+  │ Low confidence → refusal     │
   └──────────┬───────────────────┘
-             │ full prompt
              ▼
   ┌──────────────────────────────┐
-  │10. LLM GENERATION            │
-  │ System msg + fallback chain  │
-  │ Temperature 0.05             │
+  │11. CONTEXT ASSEMBLY          │
+  │ dedup → sibling merge →      │
+  │ MMR/Jaccard → coverage budget│
+  │ → lost-in-middle → XML       │
+  └──────────┬───────────────────┘
+             ▼
+  ┌──────────────────────────────┐
+  │12. GRAPH + MULTI-HOP AUG.    │
+  │ Topological triplets +       │
+  │ QueryPlan step summaries     │
+  └──────────┬───────────────────┘
+             ▼
+  ┌──────────────────────────────┐
+  │13. PROMPT BUILDING           │
+  │ Salted XML tags + density    │
+  │ tag + trailing instructions  │
+  └──────────┬───────────────────┘
+             ▼
+  ┌──────────────────────────────┐
+  │14. LLM GENERATION            │
+  │ Per-purpose chain + JSON     │
+  │ schema (answer/code purposes)│
   └──────────┬───────────────────┘
              │ answer_text (raw str)
              ▼
   ┌──────────────────────────────┐
-  │11. POST-PROCESSING           │
+  │15. POST-PROCESSING           │
   │ JSON retry → Code validation │
   │ → Guardrails → PII → Cit.    │
   │ → Groundedness → Cache store │
   └──────────┬───────────────────┘
-             │ Answer(text, sources, confidence, ...)
              ▼
   ┌──────────────────────────────┐
-  │12. RESPONSE                  │
+  │16. RESPONSE                  │
   │ AskResponse with metrics     │
   │ and stage_times              │
   └──────────────────────────────┘
@@ -567,7 +589,7 @@ Output: str | None (cached answer)
 
 On cache hit, returns immediately with `Answer(text=cached, confidence=...)` and records a lightweight `rag-query-pipeline-cache-hit` trace (`_record_cache_hit_trace`, `async_rag.py:298`) — skips the entire pipeline.
 
-### Step 2 Query Rewriting (`query_rewriting.py:203-231`, `async_rag.py:430-500`)
+### Step 2 Query Rewriting (`query_rewriting.py:316-460`, `async_rag.py:862-906`)
 
 ```
 Input:  question (str)
@@ -630,9 +652,9 @@ Each intent decomposes the query into sub-queries:
 
 `api_lookup` intents can also extract structured metadata filters (`rewritten.filters`) — e.g. a specific `modules` list pins the exact API page. When a hard `modules` filter is present, the "api" chunk-type restriction is dropped because rendered reference pages carry `chunk_type="text"` (`async_rag.py:497-508`).
 
-#### 2e HyDE Generation (`query_rewriting.py:264-348`)
+#### 2e HyDE Generation + Deterministic Policy Gate (`query_rewriting.py:140-166`, `268-313`)
 
-HyDE = Hypothetical Document Embedding. Generate a hypothetical answer, then embed THAT as an ADDITIONAL query variant (not a replacement).
+HyDE = Hypothetical Document Embedding. Generate a hypothetical answer, then embed THAT as an ADDITIONAL query variant (never a replacement for the original embedding).
 
 **Prompt:**
 ```
@@ -642,7 +664,9 @@ the following question. Do not address the user directly.
 Question: {query}
 ```
 
-The HyDE query is appended to `queries_to_run` and embedded separately (`async_rag.py:520-530`).
+**Policy gate:** HyDE costs one extra LLM call, so a deterministic, explainable policy decides when it is worth paying for. `HydePolicy` (`query_rewriting.py:153-166`) + `should_use_hyde()` (`query_rewriting.py:307-313`) run HyDE ONLY for `factual`/`how_to` intents (`default_hyde_policy`, `query_rewriting.py:287-289`) and suppress it — recording a machine-readable `hyde_reason` in provenance/telemetry — when the query itself carries a suppressing signal even if the intent is eligible: dotted identifiers or version numbers, code fences/inline code, or stack-trace/error text (patterns at `query_rewriting.py:273-284`, reasons at `292-304`). Gated by `hyde_policy_enabled=True` (`settings.py:1270`) — enabled after its benchmark gate passed: provider calls cut ≥20% (36 → 26, −27.8%) with no recall/MRR regression on `technical_queries.jsonl`.
+
+The HyDE query is appended to `queries_to_run` and embedded separately (`async_rag.py:944-945`) as one more fused variant.
 
 #### 2f Multi-Query Expansion (`query_rewriting.py:279-301`)
 
@@ -659,7 +683,7 @@ Variations:
 
 Called with `max_variations=settings.max_expansion_queries` (default 2). Results are appended to `all_queries`.
 
-**Final `all_queries` list (`async_rag.py:432`):**
+**Final `all_queries` list (`async_rag.py:858-876`):**
 ```python
 all_queries = [question]          # always includes original
 + decomposed_steps                # 1-3 sub-queries from intent
@@ -689,7 +713,7 @@ embedder = CachedEmbedder(embedder)  # LRU cache, max 1024 entries
 - **HuggingFace serverless**: native `feature-extraction` route; prefixes `query:` for queries and `passage:` for documents client-side.
 - **local-hf**: local SentenceTransformer.
 
-### Step 4 Vector Search (`infrastructure/async_qdrant_store.py:206-329`)
+### Step 4 Vector Search (`infrastructure/async_qdrant_store.py:388`, `AsyncQdrantVectorStore.query`)
 
 ```
 Input:  query_embedding (list[float])
@@ -716,7 +740,26 @@ if metadata_filters and not metadata_filters.is_empty:
 query_filter = Filter(must=filter_conditions) if filter_conditions else None
 ```
 
-#### 4b Hybrid Search Path — default
+#### 4b Search-Mode Routing (`services/query_signals.py:109-136`)
+
+Before any Qdrant call, `select_search_mode()` deterministically maps the query's intent plus regex-derived technical signals (`classify_query_signals`, `query_signals.py:76-95`: identifier-heavy, path-heavy, version-qualified, code-like) to a `SearchMode` (`query_signals.py:24-31`):
+
+| Intent | SearchMode |
+|---|---|
+| `api_lookup`, `code_example` | `bm25_only` |
+| `debugging` | `hybrid_sparse_bias` |
+| `factual`, `how_to`, `synthesis` | `dense_only` |
+| `comparative` | `hybrid_equal` |
+| `configuration` | `hybrid_dense_bias` |
+| (fallback, no intent match) | identifier/code-like → `hybrid_sparse_bias`; path/version → `hybrid_dense_bias`; else `hybrid_equal` |
+
+The mode is computed once per request (`_compute_search_mode`, `async_rag.py:539-543`) and forwarded to `AsyncQdrantVectorStore.query(search_mode=...)` (`async_qdrant_store.py:439-443`), which forces the hybrid path on/off and picks weighted RRF weights: sparse bias = `(dense=1.0, sparse=1.25)` (`RRF_DENSE_WEIGHT`/`RRF_SPARSE_WEIGHT`, `query_signals.py:41-42`; applied `async_qdrant_store.py:522-527`) — technical queries hinge on exact token matches, so the sparse leg gets the boost.
+
+**Gated-off profiles (retrieval flags ship dark until their benchmark gate passes):**
+- `identifier_sparse_rrf_enabled=False` (`settings.py:1240`) — the per-query `identifier_sparse_rrf` profile (same 1.0/1.25 weights, selected by query signals rather than intent) exists end-to-end but stays OFF until the benchmark gate in the `settings.py` comment passes (identifier recall ≥ +0.05 with all global recall/MRR thresholds satisfied). Until then every variant uses equal RRF (`_rrf_profile_for`, `async_rag.py:446-454`).
+- `namespace_bm25_enabled=False` (`settings.py:1245`) — namespace-aware BM25 tokenizer; enabling it invalidates every legacy BM25 cache (new generation required).
+
+#### 4c Hybrid Search Path — default
 
 When `hybrid_search_enabled=True` AND BM25 is fitted:
 
@@ -728,11 +771,11 @@ prefetch = [
 query = RrfQuery(rrf=Rrf(k=60))  # RRF fusion
 ```
 
-**RRF scoring:** Each result gets score = `1 / (k + rank_dense) + 1 / (k + rank_sparse)`. k=60 softens the rank contribution. Top results up to `fused_limit` returned.
+**RRF scoring:** Each result gets score = `1 / (k + rank_dense) + 1 / (k + rank_sparse)`. k=60 softens the rank contribution. When a weighted profile is active (search-mode routing above), the RRF query carries explicit per-leg weights instead of the equal default. Top results up to `fused_limit` returned.
 
 **BM25 sparse vector:** `self._bm25.tokenize_query(query_text)` — Porter-stemmed tokens from the query extracted against the fitted vocabulary. Tokens not in the vocabulary are silently dropped (see `bm25_tokenizer.py`).
 
-#### 4c Dense-Only Path — fallback
+#### 4d Dense-Only Path — fallback
 
 When BM25 is not fitted or hybrid is disabled:
 ```python
@@ -740,7 +783,7 @@ query = query_embedding
 using = "dense"
 ```
 
-#### 4d Result Construction
+#### 4e Result Construction
 
 Each Qdrant hit becomes:
 ```python
@@ -753,13 +796,22 @@ RetrievedChunk(
 
 Score is clamped to [0, 1].
 
-#### 4e Multi-Query Merge (`async_rag.py:57-90`)
+#### 4f Multi-Query Merge (`async_rag.py:57-90`)
 
-Per-query result sets are merged via `merge_retrieval_results(per_query_results, question)` — the original query's hits receive a fusion bonus. Query-level `api_lookup` (e.g. `def filter(`) gets an additional lexical bonus on the vector score.
+Per-query result sets are merged via `merge_retrieval_results(per_query_results, question)` — the original query's hits receive a fusion bonus. Query-level `api_lookup` (e.g. `def filter(`) gets an additional lexical bonus on the vector score. Variants are retrieved by `_retrieve_variant_queries` (`async_rag.py:560`), which embeds and searches each query in `all_queries`.
 
-**Unfiltered fallback:** If metadata filters removed everything, retry once without inferred filters (`async_rag.py:556-566`).
+**Unfiltered fallback:** If metadata filters removed everything, retry once without inferred filters (inside `_retrieve_variant_queries`, `async_rag.py:614`).
 
-### Step 5 Input Guardrails (`async_rag.py:680-690`, `services/input_guardrails.py:28-60`)
+### Step 5 Sibling Rejoin (`async_rag.py:2802-2888`, call site `async_rag.py:994`)
+
+Post-retrieval **parent-doc reassembly**, run immediately after the multi-query fusion merge. When a retrieved chunk is one segment of a losslessly-split parent document, its siblings share the same `parent_content_hash`; rejoining them restores the surrounding context so a cross-mode question sees BOTH matching paragraphs (e.g. the YARN paragraph and its Kubernetes sibling) instead of only the single matched segment — the root cause of mode-confusion hallucination.
+
+1. Group retrieved chunks by non-empty `parent_content_hash`.
+2. Pick up to `max_sibling_blocks=3` parent groups, highest-confidence first, to bound scroll cost.
+3. For each group: scroll every sibling segment via `vector_store.scroll_chunks_by_parent_hash`, join their texts, cap the block at 6000 chars (`_cap_rejoined_block`, `async_rag.py:372-386` — never produce an over-limit segment), and replace the member segments in place with one rejoined chunk carrying the best member's confidence.
+4. **Fail-open:** any store error or absent parent metadata leaves the retrieved set untouched.
+
+### Step 6 Input Guardrails (`async_rag.py:1056-1069`, `services/input_guardrails.py`)
 
 **Indirect prompt injection guard.** Before any chunk reaches the prompt:
 ```python
@@ -767,43 +819,35 @@ scan_result = self.input_guardrails.scan_chunks(retrieved_chunks)
 retrieved_chunks = scan_result.kept
 ```
 
-Drops retrieved chunks that look like embedded instructions (e.g. "ignore previous instructions", prompt-esque payloads). If ALL chunks are rejected, returns the out-of-repository answer. Enabled via `input_guardrails_enabled=True` (`settings.py:705`).
+Drops retrieved chunks that look like embedded instructions (e.g. "ignore previous instructions", prompt-esque payloads). If ALL chunks are rejected, returns the out-of-repository answer. Enabled via `input_guardrails_enabled=True` (`settings.py:1289`).
 
-### Step 6 Reranking (`async_rag.py:700-745`, `services/reranker.py:84-151`)
+### Step 7 Reranking (`async_rag.py:1080-1146`, `services/reranker.py`, `services/llm_reranker.py`, `services/colbert_reranker.py`)
 
 ```
-Input:  query (str), chunks (list[RetrievedChunk]), top_k
-Output: list[RetrievedChunk] — reranked by cross-encoder score
+Input:  question (str), chunks (list[RetrievedChunk]), top_k
+Output: list[RetrievedChunk] — reranked, confidence rebuilt in [0, 1]
 ```
 
-**Model:** `BAAI/bge-reranker-v2-m3` (`reranker_model`, `settings.py:622`) (~2.2GB, downloaded on first use). Loaded lazily off the event loop (`_ensure_reranker_ready`) — a cold model cache degrades to "no reranking" instead of failing the answer.
+**Reranker selection — `reranker_type` (`settings.py:1139`), wired in `factory.py:1869-1895`:**
 
-**Scoring:**
-1. Prepare `(query, chunk_text)` pairs.
-2. `self.model.predict(pairs)` — raw logits from cross-encoder.
-3. Sigmoid normalization: `score = 1.0 / (1.0 + math.exp(-logit))`.
-4. Sort descending by score.
+| `reranker_type` | Implementation | Notes |
+|---|---|---|
+| `"cross_encoder"` (default) | `LLMReranker` facade (`services/llm_reranker.py`) wrapping a cloud rerank chain, local cross-encoder last | see below |
+| `"colbert"` | `ColBERTReranker` (`services/colbert_reranker.py:61-148`) | **NOT neural late-interaction.** A char-3gram MaxSim *proxy* (`_char_ngram_overlap`, lines 24-58): per query token, max char-trigram overlap against any doc token, averaged; min-max normalized. No model load — always available |
 
-**Rerank pool:** The reranker scores a candidate pool of `min(pre_rerank_count, _rerank_pool_size(retrieval_top_k, reranker_top_k))` — a broad pool (default `retrieval_top_k * 2 = 100`) narrowed by the cross-encoder.
+**Cloud LLM rerank chain (default path):** when `llm_rerank_enabled=True` (`settings.py:1131`), reranking goes through a `ProviderFallbackChain[RerankRequest, RerankResult]` over `rerank_fallback_order = ["openrouter", "nvidia", "huggingface"]` (`settings.py:1132`; dedicated rerank endpoints/models at `settings.py:1133-1137`). The local `CrossEncoderReranker` (`BAAI/bge-reranker-v2-m3`, `reranker_model`, `settings.py:1100`) is the **degraded last resort**: it loads lazily off the event loop only when the chain fails down to it (`_ensure_reranker_ready`, `async_rag.py:2890-2910`). Provider scores are min-max normalized within the candidate pool so the downstream confidence gate keeps the same meaning across providers (`LLMReranker._apply`, `llm_reranker.py:98-131`); if every provider fails, chunks are returned unchanged trimmed to `top_k` (fail-open, `llm_reranker.py:90-94`).
 
-**Query choice:** The reranker uses the `effective_query` (first decomposed step or rewritten query), NOT the original question — the rewritten query is more search-optimized.
+**Rerank pool:** `_rerank_pool_size(retrieval_top_k, reranker_top_k)` (`async_rag.py:352-369`) returns `max(retrieval_top_k * 4, reranker_top_k * 8)` — with defaults 50/30 that is 240 candidates — so URLs just missing the fused cutoff can still be rescued. The pool is capped at the number of fused candidates and can be pinned via `reranker_pool_size` (`settings.py:1140`). Pool narrowing happens before scoring; after scoring, results are cut to `reranker_top_k` (`async_rag.py:1145-1146`).
 
-**No MMR:** The old MMR diversity step was removed. The reranker is the single relevance decision; a second diversity objective could discard complementary evidence needed for multi-part questions (`async_rag.py:725-728`).
+**Selective skip:** `reranker_selective_threshold=1.0` disables skipping (`settings.py:1142`). Set it < 1.0 to skip reranking entirely when the top fused confidence already exceeds the threshold (`async_rag.py:1083-1087`) — saves inference on easy queries.
 
-**Truncation:** `if len(retrieved_chunks) > reranker_top_k: retrieved_chunks = retrieved_chunks[:reranker_top_k]`
+**Query choice:** reranking scores against the **ORIGINAL question**, not the rewrite (`rerank_query = question`, `async_rag.py:1115-1122`): rewrites can drift user-typed API terms (`dense_rank` → "dense ranking"), and cross-encoders score code/API pairs far higher against the verbatim question. The rewrite still drives retrieval variants and the prompt.
 
-### Step 7 Post-Rerank Confidence Gate (`async_rag.py:259-295`)
+**Structural truncation:** documents are truncated for scoring by `_truncate_doc_for_rerank` (`services/reranker.py:68-78`) at `reranker_doc_truncation_chars=2000` (`settings.py:1141`) — cut at the last paragraph boundary (`\n\n`) when it falls past 60% of the limit, else the last newline past 50%, else a hard cut.
 
-```python
-gate_threshold = reranker_confidence_threshold if rerank_used else confidence_threshold
-if retrieved_chunks[0].confidence >= gate_threshold:
-    return None  # pass
-# else: out-of-repository answer + low-confidence review record
-```
+**Diversity:** MMR is no longer applied inside the rerank stage; diversity moved to the ContextAssembler as an opt-in stage (see Step 11).
 
-**Why two thresholds:** Cross-encoder sigmoid scores cluster lower than embedding/fused confidence (relevant pairs commonly land ~0.10-0.15). So when a reranker ran, the gate compares against `reranker_confidence_threshold=0.10`; without one, it uses `confidence_threshold=0.18`. On rejection it returns the out-of-repository `Answer` and records a low-confidence review.
-
-### Step 8 Context Compression (`async_rag.py:739-742`, `context_compression.py:46-75`)
+### Step 8 Context Compression (`async_rag.py:1150-1152`, `services/context_compression.py:51-77`)
 
 ```
 Input:  chunks (list[RetrievedChunk]), query (str)
@@ -812,69 +856,114 @@ Output: list[RetrievedChunk] — deduplicated + relevance scored
 
 **Runs AFTER reranking** (avoids wasted work — compressed results were previously discarded by re-fetch).
 
-1. **Jaccard dedup** (line 56): If two chunks have token-set Jaccard similarity ≥ 0.85, keep only the first. Tokenization: `re.findall(r"[a-z0-9_]+", text.lower())`.
-2. **Relevance scoring** (lines 59-73):
+1. **Jaccard dedup**: If two chunks have token-set Jaccard similarity ≥ 0.85 (`similarity_threshold`, `context_compression.py:66`), keep only the first. Tokenization: `re.findall(r"[a-z0-9_]+", text.lower())`.
+2. **Relevance scoring**:
    - `cosine = |A∩B| / √(|A|·|B|)` — token-set cosine
    - `overlap = |query_tokens ∩ chunk_tokens| / |query_tokens|`
    - `score = cosine × 0.6 + overlap × 0.4`
 3. Return top `max_chunks` by score.
 
-**Note:** `context_compression_enabled` defaults to `False` (`settings.py:692`). When enabled, the `ContextAssembler`'s internal dedup is skipped to avoid double work (`async_rag.py:747`, `deduplicate=self.context_compressor is None`).
+**Note:** `context_compression_enabled` defaults to `False` (`settings.py:1278`). When enabled, the `ContextAssembler`'s internal Jaccard dedup is skipped to avoid double work (`async_rag.py:1181`, `deduplicate=self.context_compressor is None`).
 
-### Step 9 Context Assembly (`async_rag.py:745-770`, `context_assembler.py:31-111`)
+### Step 9 CRAG Corrective Gate (`services/relevance_grader.py:14-50`, `async_rag.py:492-518`, applied at `async_rag.py:1153-1154`)
+
+Corrective-RAG retrieval check between reranking/compression and generation. Skipped entirely in `retrieval_only` mode (benchmarks measure base retrieval).
+
+1. `RelevanceGrader.grade_chunks(query, chunks)` builds a prompt from the top-3 chunk excerpts (500 chars each) and asks the LLM for a single JSON score: `{"relevance_score": 0.0-1.0}`.
+2. **Score ≥ 0.5** → chunks pass through unchanged.
+3. **Score < 0.5** → ONE expanded retrieval: `vector_store.query(top_k=retrieval_top_k * 2, ...)` whose results are fused back into the working set via `merge_retrieval_results([chunks, expanded], query)`.
+4. **Fail-open twice over:** a grader error returns a perfect score of `1.0` (`relevance_grader.py:48-50`); an expansion error returns the original chunks (`async_rag.py:516-518`).
+
+### Step 10 Post-Rerank Confidence Gate (`async_rag.py:673`, applied at `async_rag.py:1164-1172`)
+
+```python
+gate_threshold = reranker_confidence_threshold if rerank_used else confidence_threshold
+if retrieved_chunks[0].confidence >= gate_threshold:
+    return None  # pass
+# else: out-of-repository answer + low-confidence review record
+```
+
+**Why two thresholds:** Cross-encoder sigmoid scores cluster lower than embedding/fused confidence (relevant pairs commonly land ~0.10-0.15). So when a reranker ran, the gate compares against `reranker_confidence_threshold=0.10` (`settings.py:1126`); without one, it uses `confidence_threshold=0.18` (`settings.py:1121`). Cloud-rerank scores are min-max normalized per pool so the same threshold applies across providers (Step 7). On rejection it returns the out-of-repository `Answer` and records a low-confidence review.
+
+### Step 11 Context Assembly (`async_rag.py:1174-1191`, `services/context_assembler.py`)
 
 ```
-Input:  chunks (list[RetrievedChunk]), max_context_chars=12000
+Input:  chunks (list[RetrievedChunk]), max_context_chars=16000
 Output: context_str (str), source_names (list[str]), dropped_records (list[dict])
 ```
 
-#### 9a Dedup (if compressor didn't run)
+`ContextAssembler.assemble()` (`context_assembler.py:215-295`) runs a six-phase pipeline, each phase toggled by config:
 
-Jaccard-like word overlap with 70% threshold. Employs a 12-word filler list to avoid false positives on common words.
+#### 11a Content-Hash Dedup (`context_assembler.py:70-85`)
 
-#### 9b Lost-in-the-Middle Mitigation
+Exact-match dedup on each chunk's SHA-256 `content_hash` (computed at ingestion). Instantly strips identical text blocks before any fuzzy work. Config: `assembly_content_hash_dedup=True` (`settings.py:1112`).
 
-Reorders chunks so the most relevant appear at BOTH ends of the context:
+#### 11b Adjacent Sibling Merge (`context_assembler.py:87-152`)
+
+Groups chunks by `parent_chunk_id`, sorts each group by `segment_index`, and merges the texts into one contiguous block (joined with `\n\n`) carrying the highest-confidence member's metadata. Orphans pass through untouched. Config: `assembly_enable_sibling_merge=True` (`settings.py:1110`).
+
+#### 11c Diversity — MMR **or** Jaccard Dedup (`context_assembler.py:154-196`, `409-453`)
+
+Mutually exclusive objectives:
+- **MMR** (`_mmr_diversify`): greedy selection maximizing `λ·relevance − (1−λ)·max_token_cosine_to_selected` (λ = `assembly_mmr_lambda=0.5`). **Default OFF** via `assembly_mmr_enabled=False` (`settings.py:1108`) — MMR was re-added to the assembler (it had been removed from the rerank stage) but stays opt-in.
+- **Jaccard dedup** (default path): word-overlap Jaccard > 0.70 drops the later chunk; a 12-word filler list (`the`, `a`, `an`, ...) is removed first to avoid false positives. Children of the same `parent_chunk_id` also collapse to the single highest-confidence child.
+
+#### 11d Two-Pass Source-Coverage Budget Selection (`context_assembler.py:297-358`)
+
+Budget-aware selection over the rank-ordered chunks:
+1. **Coverage pass** — the highest-ranked chunk of every distinct source URL is placed first, guaranteeing cross-source coverage before any source is deepened.
+2. **Depth pass** — remaining chunks fill the budget by rank, capped at `max_chunks_per_source=2` chunks per URL (`settings.py:1106`).
+
+Every dropped segment is recorded with a machine-readable reason — `dropped_due_total_context_budget` or `dropped_due_per_source_cap` — plus rank/chunk_id/url/segment metadata (`_drop_record`, lines 379-388). These records surface in the `Answer` provenance so budget-dropped segments are never claimed as retrieved (`async_rag.py:1191`, `1211-1216`). The first chunk is always placed even when it alone exceeds the budget.
+
+#### 11e Lost-in-the-Middle Reorder (`context_assembler.py:391-407`)
+
+Boustrophedon reorder so the most relevant chunks appear at BOTH ends of the context (only when > 3 chunks survived selection):
 
 ```
 Original (by confidence): [A, B, C, D, E]
 Rearranged:               [A, E, B, D, C]
 ```
 
-Algorithm: alternate picking from left (highest confidence) and right (lowest confidence). Only activates when > 3 chunks remain after dedup.
+#### 11f XML Formatting & Truncation (`context_assembler.py:198-213`, `360-376`)
 
-#### 9c Formatting & Truncation
+Each chunk becomes a `<context_doc id="N" url="...">` element with a breadcrumb header — `assembly_breadcrumb_format` picks `hierarchical` (default; `[Source: Spark > SQL > Joins]`), `flat` (`[Source: Spark]`), or `none` (`settings.py:1111`). With `prompt_xml_content_escape=True` (`settings.py:1115`), `&` and `<` in chunk text are escaped before the element is built. A final hard truncate caps any segment at `item_limit_chars=6000` (`DEFAULT_ITEM_LIMIT_CHARS`, line 31).
 
-Each chunk formatted:
-```
-[source_name > section_header] chunk text
-```
-or (no section header):
-```
-[source_name] chunk text
-```
+**Oversized-segment invariant:** ingestion's lossless splitter (`split_text_losslessly`, `infrastructure/token_budget.py:63-73`, `DEFAULT_MAX_CHARS=6000`) guarantees `"".join(segments)` reconstructs the source exactly, so no indexed segment exceeds the item limit and rejoining siblings can always rebuild the parent. `ContextAssemblerError` (`context_assembler.py:34`) documents that contract; the assembler's per-segment truncate at 11f is only a defensive backstop, never the expected path.
 
-Truncation happens at chunk boundaries — if adding the next chunk would exceed `max_context_chars`, it's dropped entirely (unless it's the first chunk). Dropped records are returned as `dropped_records` (used for provenance — budget-dropped segments must not be claimed as retrieved).
+### Step 12 GraphRAG + Multi-Hop Context Augmentation (`async_rag.py:461-490`, `545-558`; applied at `async_rag.py:1188-1190`)
 
-### Step 10 Prompt Building (`async_rag.py:784-794`, `prompt_builder.py:110-165`)
+Two optional LLM augmentations prepend extra context to the assembled context string, right before prompt building (`_augment_context`). Both **fail open / degrade to no-op**: if the component is not wired (e.g. minimal test builds) or raises, the context is returned unchanged.
+
+**GraphRAG (knowledge-graph triplets):**
+- *Ingestion side:* `GraphExtractor` (`services/graph_extractor.py:14-54`) prompts an LLM (the enrichment-purpose chain) for `{source, target, relation}` triplets from each chunk and writes them via `GraphStore.add_edge` — a small SQLite store (`infrastructure/graph_store.py:7`, default `data/graph_store.db`, `nodes`/`edges` tables). Wired into ingestion in `build_async_ingestion_service` (`factory.py:1660-1661`).
+- *Query side:* `GraphTraversalService.get_topological_context` (`services/graph_traversal.py:19-54`) extracts entities from the effective query via LLM, fetches neighbor triplets per entity, and renders a bullet list — `- (src) --[rel]--> (tgt)` — headed "Topological & Entity Relationships found in Knowledge Graph:".
+
+**Multi-hop decomposition:**
+- `MultiHopDecomposer.plan_query` (`services/multi_hop_decomposer.py:34-87`) asks the LLM planner for a `QueryPlan{steps, is_multi_hop}` where each `QueryStep{step_id, query, depends_on}` (lines 15-27) declares its dependencies. Non-multi-hop queries return an empty plan (no extra work).
+- `AsyncRagService._run_multi_hop` (`async_rag.py:461-480`) executes the plan **sequentially**: each `execute_step` (`multi_hop_decomposer.py:89-129`) refines its query with the summaries of the steps it depends on, retrieves (`retrieval_top_k`), summarizes the top-3 chunks, and records the summary for dependent steps. The outputs are joined into a "Multi-hop reasoning context:" block (`async_rag.py:477`).
+
+### Step 13 Prompt Building (`async_rag.py:1246`, `services/prompt_builder.py:170-279`)
 
 ```
 Input:  context_str (str), safe_question (str), intent (str)
 Output: full_prompt (str)
 ```
 
-#### 10a Pre-processing
+#### 13a Pre-processing
 
 ```python
 safe_question = PromptBuilder.sanitize_query(question)
 # 1. Strip triple backticks
-# 2. Convert "## " → "# " (prevent heading injection)
-# 3. Truncate to 2000 chars
+# 2. Strip leading markdown headers (^#{1,6}) so injected text cannot
+#    mimic the prompt's own section structure
+# 3. Strip control characters, collapse 3+ newlines
+# 4. Truncate to 2000 chars
 ```
 
-If PII redaction is enabled (default), the question is also PII-redacted before prompt building.
+(`prompt_builder.py:185-195`.) If PII redaction is enabled (default), the question is also PII-redacted before prompt building.
 
-#### 10b Context Density Tag
+#### 13b Context Density Tag
 
 ```python
 density_tag = "HIGH"   if word_count > 100 and alpha_ratio > 0.7
@@ -882,23 +971,35 @@ density_tag = "MEDIUM" if word_count > 30  and alpha_ratio > 0.5
 density_tag = "LOW"    otherwise
 ```
 
-Injected into context as: `<chunk>\n[DENSITY: {density_tag}]\n{context}\n</chunk>`
+Wrapped around the context together with the outer XML tag (13c).
 
-#### 10c Prompt Source: Langfuse-Managed
+#### 13c Prompt-Augmentation Hardening
 
-The RAG answer prompt is **managed in Langfuse** under `rag-answer` (`observability/langfuse_prompts.py:85`); `_RAG_PROMPT_TEMPLATE` is the offline fallback (`register_fallback`). Rendered via:
+Four independent defenses, all on by default:
+
+- **Salted XML tags** (`prompt_builder.py:249-256`): the context is wrapped in `<context_data_{salt}>…</context_data_{salt}>` where `salt = secrets.token_hex(4)` is drawn per request — a cached injection payload targeting the predictable legacy `<chunk>` tags can never match. Config: `prompt_salted_xml_tags=True` (`settings.py:1114`).
+- **Instruction sandwiching** (`prompt_builder.py:105-116`, applied at `266-270`): a `## CRITICAL REMINDERS` block ("cite every claim / INSUFFICIENT_CONTEXT when unsupported / never fabricate") is repeated AFTER the question and context via the template's `{trailing}` slot, so instructions bracket the untrusted content instead of only preceding it. Config: `prompt_trailing_instructions=True` (`settings.py:1116`).
+- **Citation enforcement tri-state** (`prompt_citation_enforcement`: `"strict"` | `"soft"` | `"off"`, `settings.py:1117`): selects citation-mandating vs citation-free instruction variants (`prompt_builder.py:231-246`). Note: `strict` and `soft` render identically today — only `"off"` changes output.
+- **Mode guardrails** (`services/mode_guardrails.py:50-67`): for questions naming an execution mode (YARN/K8s), `build_mode_guardrail_block()` injects a `## VERIFIED DOCUMENTATION FACTS` block into the system role. Every fact string is a **byte-exact substring of the pinned Spark corpus** (`docs/running-on-yarn.md` / `docs/running-on-kubernetes.md`) — enforced by unit tests so facts can never drift from the documentation (lines 22-35). Ordinary questions leave the system prompt byte-identical to baseline.
+
+#### 13d Prompt Source: Langfuse-Managed
+
+The RAG answer prompt is **managed in Langfuse** under `rag-answer`; `_RAG_PROMPT_TEMPLATE` is the byte-identical offline fallback (`prompt_builder.py:120-151`, `register_fallback`). The template's `{trailing}` slot carries the sandwiched instructions (13c). Rendered via:
 
 ```python
 get_langfuse_prompt("rag-answer").compile(
-    system_role=self.system_role,
+    system_role=system_role,       # includes mode-guardrail block when triggered
     output_format=output_format,
     instructions=instructions,
-    tagged_context=tagged_context,
+    tagged_context=tagged_context, # salted XML tag + density tag
     question=question,
+    trailing=trailing,             # "## CRITICAL REMINDERS" block
 )
 ```
 
-#### 10d Intent-Based Prompt Selection
+(`prompt_builder.py:272-279`.)
+
+#### 13e Intent-Based Prompt Selection
 
 | Intent | Instructions | Output Format |
 |---|---|---|
@@ -908,42 +1009,69 @@ get_langfuse_prompt("rag-answer").compile(
 
 The system prompt is sent as a real `role: "system"` message — `build_chat_messages(prompt)` (`llm_client.py:38-53`) splits on `SYSTEM_BLOCK_SEPARATOR` and places the system block before the user turn.
 
-### Step 11 LLM Generation (`async_rag.py:800-880`, `llm_client.py:179-260`)
+### Step 14 LLM Generation (`async_rag.py:1246-1420`, `llm_client.py:164-360`)
 
-#### 11a Client Selection
+#### 14a Client Selection — per-intent routing
 
 ```python
 def _select_llm_client(self, intent: str) -> LLMClientProtocol:
     if self.code_llm_client and intent in CODE_INTENTS:
-        return self.code_llm_client  # qwen2.5-coder:7b or configured code model
+        return self.code_llm_client  # dedicated code-purpose chain
     return self.llm_client           # per-purpose chain (answer)
 ```
 
-#### 11b API Payload
+Code intents (`code_example`, `api_lookup`) route to the dedicated **code chain** (`code_llm_provider/model`); everything else uses the answer chain. Each purpose has its own `ProviderFallbackChain` — routing is per-request, never a global override.
+
+#### 14b Generation-Layer Tuning (capability-gated)
+
+Per-purpose sampling parameters are attached at client construction (`factory.py:349-363`) and emitted into the payload only when the provider supports them — unsupported params are **silently omitted, never errored** (`LLMClient._apply_generation_params`, `llm_client.py:229-256`, gated by `infrastructure/provider_capabilities.py`):
+
+| Setting | Default | Emitted when | `settings.py` |
+|---|---|---|---|
+| `generation_temperature` | 0.15 | answer purpose | 671 |
+| `code_generation_temperature` | 0.20 | code purpose | 672 |
+| `evaluation_temperature` | 0.0 | evaluation judge chain | 677 |
+| `generation_seed` | None | provider ∈ `SUPPORTS_SEED` | 673 |
+| `generation_frequency_penalty` / `generation_presence_penalty` | 0.0 | provider ∈ `SUPPORTS_SAMPLING_PENALTIES` | 674-675 |
+| `generation_top_p` | 1.0 (emitted only ≠ 1.0) | provider ∈ `SUPPORTS_SAMPLING_PENALTIES` | 676 |
+
+#### 14c Schema-Enforced Structured Output (`services/structured_output.py`)
+
+Doc-intent answers use schema-constrained decoding. `StructuredRAGAnswer{answer, citations, missing_info}` (`structured_output.py:18-28`) is backed by a **hand-written strict JSON schema** (`STRUCTURED_RAG_ANSWER_SCHEMA`, lines 34-43: all fields required, `additionalProperties: false`). The schema is attached **only to the answer and code purpose clients** (`factory.py:364-367`). Transport differs per provider (`llm_client.py:245-256`):
+
+- **Ollama** → `payload["format"] = <schema>` (constrained decoding)
+- **OpenAI-compatible providers** → `payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "rag_answer", "strict": true, "schema": ...}}`
+
+Responses are parsed by `parse_structured_rag_response` (`structured_output.py:85-102`), which prefers schema-valid JSON and degrades to the permissive `parse_rag_response` (fenced blocks / raw text) otherwise — downstream callers stay type-stable.
+
+#### 14d API Payload
 
 ```python
 payload = {
     "model": self.model,
     "messages": build_chat_messages(prompt),    # system + user split
-    "temperature": temp,                        # Very low — nearly deterministic
-    "max_tokens": max_tokens,                   # per-purpose, from settings
-    **self._extra_body,                         # Ollama: {options: {num_ctx: 4096, num_predict: 512}}
+    "temperature": temp,                        # per-purpose (14b)
+    # max_tokens via purpose-specific cap (max_tokens / max_completion_tokens)
+    # keep_alive forwarded for Ollama
 }
+self._apply_generation_params(payload)          # seed / penalties / top_p / structured schema (14b, 14c)
 ```
 
-#### 11c HTTP Request (`_http_post`, lines 282-303)
+(`llm_client.py:278-289`.)
+
+#### 14e HTTP Request (`_http_post`, `llm_client.py:362`)
 
 - **URL:** `POST {base_url}/v1/chat/completions`
-- **Retry:** Single attempt per call — no client-side retry, no circuit breaker. On failure the adaptive router marks a category-based cooldown and fails over to the next provider in `llm_fallback_order` (ending at Ollama).
-- **Rate limiter:** Non-blocking pre-flight gate before the request — an over-limit provider (OpenRouter/NVIDIA/HF) is skipped without a paid call. `retry_after` from `429` headers is parsed.
-- **Auth:** Bearer token in `Authorization` header (empty string for Ollama).
-- **Keep-alive:** `keep_alive` (default `"10m"`) forwarded for Ollama.
+- **Retry:** Single attempt per call — no client-side retry, no circuit breaker (`llm_client.py:291-293`). On failure the adaptive router marks a category-based cooldown and fails over to the next provider in `llm_fallback_order` (ending at Ollama). `429` responses carry a parsed `retry_after` back to the rate limiter (`llm_client.py:312-327`).
+- **Rate limiter:** Non-blocking pre-flight gate before the request (`llm_client.py:362-364`) — an over-limit provider (OpenRouter/NVIDIA/HF) is skipped without a paid call.
+- **Auth:** Bearer token in `Authorization` header (empty string for Ollama) (`llm_client.py:218-224`).
+- **Keep-alive:** `keep_alive` (default `"10m"`) forwarded for Ollama (`llm_client.py:287-288`).
 
-#### 11d JSON Retry
+#### 14f JSON Retry
 
-If the intent expects JSON output but parsing fails (`intent not in CODE_INTENTS` and no `answer` extracted), the generation is **retried once** with a stricter instruction suffix (`rag-json-retry-suffix` prompt, `langfuse_prompts.py:193`).
+If the intent expects JSON output but parsing fails (`intent not in CODE_INTENTS` and no `answer` extracted), the generation is **retried once** with a stricter instruction suffix (`rag-json-retry-suffix` prompt, registered at `async_rag.py:70-76`, applied at `async_rag.py:1275`).
 
-#### 11e Response Processing
+#### 14g Response Processing
 
 ```python
 content = body["choices"][0]["message"]["content"]
@@ -951,9 +1079,11 @@ content = body["choices"][0]["message"]["content"]
 # Record token usage: LLMUsage(prompt_tokens, completion_tokens, model)
 ```
 
-### Step 12 Post-Processing (in order)
+(`llm_client.py:332-360`.)
 
-#### 12a Code Syntax Validation (`async_rag.py:1422`, code intents only)
+### Step 15 Post-Processing (in order)
+
+#### 15a Code Syntax Validation (`async_rag.py:2912`, code intents only)
 
 1. Extract Python code blocks: `re.findall(r"```python\n(.*?)```", answer_text, re.DOTALL)`
 2. Try `ast.parse()` on each block.
@@ -969,7 +1099,7 @@ content = body["choices"][0]["message"]["content"]
    ```
 4. Replace broken block with fixed version. Only validates Python (Scala/SQL unchecked).
 
-#### 12b Output Guardrails (`async_rag.py:903-910`, `output_guardrails.py:29-117`)
+#### 15b Output Guardrails (`async_rag.py:903-910`, `output_guardrails.py:29-117`)
 
 `OutputGuardrails.verify(raw_answer, source_count)`:
 
@@ -983,7 +1113,7 @@ content = body["choices"][0]["message"]["content"]
 4. **INSUFFICIENT_CONTEXT handling** (`async_rag.py:907-913`): if status is `INSUFFICIENT_CONTEXT` and `missing_info` present, appends `\n\nMissing information: {missing_info}` to the answer.
 5. **Fallback on rejection**: If guardrails reject, the raw output is used unchanged (fail-open).
 
-#### 12c PII Redaction (`async_rag.py:941-944`, `pii_redactor.py:99-130`)
+#### 15c PII Redaction (`async_rag.py:941-944`, `pii_redactor.py:99-130`)
 
 **Patterns:** email, phone (US), SSN, credit card, IP address
 
@@ -994,15 +1124,15 @@ content = body["choices"][0]["message"]["content"]
 
 **Applied both:** pre-LLM (on question) and post-LLM (on answer). Config: `pii_redaction_enabled=True`, `pii_redaction_mode="full"` (`settings.py:703-704`).
 
-#### 12d Citation Verification (`async_rag.py:946`, `structured_output.py:16-56`)
+#### 15d Citation Verification (`async_rag.py:1409`, `structured_output.py:52-111`)
 
 ```python
-parsed = parse_rag_response(answer_text)       # Extract answer + citations from JSON/text
+parsed = parse_structured_rag_response(answer_text)  # schema-preferred, permissive fallback (14c)
 source_names = [c.chunk.source_name for c in retrieved_chunks]
-verified = verify_citations(parsed.citations, source_names)  # Keep if source matches
+verified = verify_citations(parsed.citations, source_names)  # Keep if source matches (structured_output.py:105-111)
 ```
 
-#### 12e Groundedness Verification (`async_rag.py:959-985`, `groundedness.py:66-216`)
+#### 15e Groundedness Verification (`async_rag.py:959-985`, `groundedness.py:66-216`)
 
 Uses LLM-as-judge to verify each claim in the answer against the context.
 
@@ -1030,11 +1160,11 @@ JSON array:
 
 **Fail-open:** If LLM is unavailable, falls back to text-overlap heuristic (Jaccard-ish token overlap with `min_support_score=0.3`). On guardrails failure, appends warning note: `"[Note: Some claims may not be fully supported by the documentation.]"`.
 
-#### 12f Token/Cost Telemetry
+#### 15f Token/Cost Telemetry
 
 Token usage + cost are recorded to Langfuse: `generation_span.update(usage_details=..., cost_details=...)`, `trace.update(metadata={"token_usage": ..., "cost_usd": ...})`, and a `cost_usd` numeric score (`async_rag.py:846-884`). Cost estimated via `_estimate_cost(prompt_tokens, completion_tokens, model)`.
 
-### Step 13 Response Assembly
+### Step 16 Response Assembly
 
 **Service layer** (`async_rag.py:977-985`):
 ```python
@@ -1204,28 +1334,60 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 
 | Setting | Default | Range | File:Line |
 |---|---|---|---|
-| `retrieval_top_k` | 50 | 1-100 | `settings.py:620` |
-| `reranker_enabled` | True | — | `settings.py:621` |
-| `reranker_model` | `BAAI/bge-reranker-v2-m3` | — | `settings.py:622` |
-| `reranker_top_k` | 30 | 1-100 | `settings.py:623` |
-| `max_context_chars` | 12000 | 500-100000 | `settings.py:624` |
-| `max_context_tokens` | 4096 | — | `settings.py:693` |
-| `max_expansion_queries` | 2 | 0-5 | `settings.py:625` |
-| `context_compression_ratio` | 0.8 | — | `settings.py:626` |
-| `groundedness_threshold` | 0.6 | 0.0-1.0 | `settings.py:627` |
-| `confidence_threshold` | 0.18 | 0.0-1.0 | `settings.py:628` |
-| `reranker_confidence_threshold` | 0.10 | 0.0-1.0 | cross-encoder gate (`settings.py:633`) |
-| `hybrid_search_enabled` | True | — | `settings.py:677` |
-| `hybrid_rrf_k` | 60 | 10-200 | `settings.py:678` |
-| `semantic_cache_threshold` | 0.95 | 0.5-1.0 | `settings.py:680` |
-| `semantic_cache_ttl` | 3600 | seconds | `settings.py:681` |
-| `query_rewrite_enabled` | True | — | `settings.py:688` |
-| `groundedness_enabled` | True | — | `settings.py:689` |
-| `intent_classification_llm_enabled` | False | — | LLM fallback for intent (`settings.py:690`) |
-| `context_compression_enabled` | False | — | `settings.py:692` |
-| `input_guardrails_enabled` | True | — | Indirect prompt injection guard (`settings.py:705`) |
-| `rbac_enabled` | False | — | Document-level access control (`settings.py:707`) |
-| `temperature` | 0.05 | 0.0-1.0 | per-purpose, in llm_client |
+| `retrieval_top_k` | 50 | 1-100 | `settings.py:1098` |
+| `reranker_enabled` | True | — | `settings.py:1099` |
+| `reranker_model` | `BAAI/bge-reranker-v2-m3` | — | `settings.py:1100` |
+| `reranker_top_k` | 30 | 1-100 | `settings.py:1101` |
+| `reranker_type` | `cross_encoder` | `cross_encoder` \| `colbert` | local reranker selection (`settings.py:1139`) |
+| `llm_rerank_enabled` | True | — | cloud rerank chain before local model (`settings.py:1131`) |
+| `rerank_fallback_order` | `["openrouter", "nvidia", "huggingface"]` | — | cloud rerank providers (`settings.py:1132`) |
+| `reranker_selective_threshold` | 1.0 (disabled) | 0.0-1.0 | skip rerank when top fused confidence ≥ threshold (`settings.py:1142`) |
+| `reranker_doc_truncation_chars` | 2000 | — | structural truncation for rerank scoring (`settings.py:1141`) |
+| `max_context_chars` | 16000 | 500-100000 | `settings.py:1102` |
+| `max_context_tokens` | 4096 | — | `settings.py:1279` |
+| `max_expansion_queries` | 2 | 0-5 | `settings.py:1118` |
+| `context_compression_ratio` | 0.8 | — | `settings.py:1119` |
+| `groundedness_threshold` | 0.6 | 0.0-1.0 | `settings.py:1120` |
+| `confidence_threshold` | 0.18 | 0.0-1.0 | `settings.py:1121` |
+| `reranker_confidence_threshold` | 0.10 | 0.0-1.0 | cross-encoder gate (`settings.py:1126`) |
+| `hybrid_search_enabled` | True | — | `settings.py:1233` |
+| `hybrid_rrf_k` | 60 | 10-200 | `settings.py:1234` |
+| `identifier_sparse_rrf_enabled` | False | — | weighted identifier-sparse RRF — dark until benchmark gate (`settings.py:1240`) |
+| `namespace_bm25_enabled` | False | — | namespace-aware BM25 — dark until benchmark gate (`settings.py:1245`) |
+| `semantic_cache_threshold` | 0.95 | 0.5-1.0 | `settings.py:1247` |
+| `semantic_cache_ttl` | 3600 | seconds | `settings.py:1248` |
+| `query_rewrite_enabled` | True | — | `settings.py:1264` |
+| `hyde_policy_enabled` | True | — | deterministic HyDE gating (`settings.py:1270`) |
+| `groundedness_enabled` | True | — | `settings.py:1271` |
+| `intent_classification_llm_enabled` | False | — | LLM fallback for intent (`settings.py:1276`) |
+| `context_compression_enabled` | False | — | `settings.py:1278` |
+| `input_guardrails_enabled` | True | — | Indirect prompt injection guard (`settings.py:1289`) |
+| `rbac_enabled` | False | — | Document-level access control (`settings.py:1291`) |
+
+**Context assembly & prompt augmentation flags:**
+
+| Setting | Default | File:Line |
+|---|---|---|
+| `max_chunks_per_source` | 2 | per-URL depth cap after coverage pass (`settings.py:1106`) |
+| `assembly_content_hash_dedup` | True | SHA-256 exact dedup (`settings.py:1112`) |
+| `assembly_enable_sibling_merge` | True | merge adjacent children of same parent (`settings.py:1110`) |
+| `assembly_mmr_enabled` | False | MMR diversity instead of Jaccard dedup (`settings.py:1108`) |
+| `assembly_breadcrumb_format` | `hierarchical` | `hierarchical` \| `flat` \| `none` (`settings.py:1111`) |
+| `prompt_salted_xml_tags` | True | per-request salted `<context_data_XXX>` tags (`settings.py:1114`) |
+| `prompt_xml_content_escape` | True | escape `&`/`<` in chunk text (`settings.py:1115`) |
+| `prompt_trailing_instructions` | True | instruction sandwiching (`settings.py:1116`) |
+| `prompt_citation_enforcement` | `strict` | `strict` \| `soft` \| `off` (`settings.py:1117`) |
+
+**Generation-layer tuning** (per-purpose, applied in `factory.py:349-367`, emitted only when the provider supports the parameter — `infrastructure/provider_capabilities.py` silently omits unsupported params):
+
+| Setting | Default | Purpose | File:Line |
+|---|---|---|---|
+| `generation_temperature` | 0.15 | answer-purpose sampling | `settings.py:671` |
+| `code_generation_temperature` | 0.20 | code-purpose answers | `settings.py:672` |
+| `evaluation_temperature` | 0.0 | evaluation judge chain | `settings.py:677` |
+| `generation_seed` | None | best-effort determinism | `settings.py:673` |
+| `generation_frequency_penalty` / `generation_presence_penalty` | 0.0 | repetition shaping | `settings.py:674-675` |
+| `generation_top_p` | 1.0 | nucleus sampling | `settings.py:676` |
 
 ### 5.7 Chunking Settings
 
@@ -1291,9 +1453,56 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 
 ---
 
-## 6. Observability & Caching
+## 6. Evaluation System
 
-### 6.1 Telemetry Pipeline (`observability/telemetry.py:74-102`)
+Evaluation is a **cost-tiered ladder**: zero-LLM integrity layers run constantly (CI, after every pipeline change), frozen-input component harnesses isolate one stage at a time, and LLM-judged layers run at milestones. Two principles govern it:
+
+- **Numeric thresholds live next to the code that enforces them** — each harness module declares its own gates.
+- **Retrieval flags ship dark until their benchmark passes** (`identifier_sparse_rrf_enabled`, `namespace_bm25_enabled` default `False` with acceptance criteria in their `settings.py` comments). Never flip a retrieval flag on without running its eval harness against baseline.
+
+### 6.1 Layer 0 — Zero-LLM Integrity: `dec eval-fast`
+
+Free, deterministic checks against the active generation (`evaluation/fast_eval.py`, `run_fast_eval`): **corpus** (load + integrity), **chunk** (size stats, boundary issues: split code fences/tables/mid-sentence tails), **coverage** (`CoverageValidator` over recall rows), **embedding** (dimension validation, consistency, semantic sanity pairs), **vectordb** (self-retrieval of stored chunks), and **retrieval** (expected-term recall without any LLM).
+
+### 6.2 Layer 1 — Retrieval-Only
+
+- **`dec eval-retrieval`** — source-agnostic Recall@K / MRR@K / Precision@K, overall and per intent, via `service.answer(..., retrieval_only=True)` so GraphRAG/CRAG LLM augmentations are skipped and base retrieval is what's measured (`cli.py:2365-2505`). With `--compare-baseline <json>` it is a CI regression gate: exit 1 when overall Recall@K drops more than **0.02** below the baseline.
+- **`dec evaluate --spark`** — expected-term recall (against assembled context) AND expected-source recall must both average ≥ **0.90**; any forbidden-term hit in answers fails; every out-of-scope row must produce a scope refusal (`cli.py:2660-2672`). Writes provenance diagnostics with `--output-dir`.
+
+### 6.3 Layer 2 — Frozen Generation: `dec eval-generation`
+
+Retrieval frozen; only generation varies. Three gates enforced together (`evaluation/generation_eval.py:34-36`): faithfulness ≥ **0.85**, answer relevance ≥ **0.80**, LLM-as-judge rubric (1-5) ≥ **4.0**. The judge is the evaluation-purpose fallback chain running at `evaluation_temperature=0.0`; rubric scores are averaged over `n_trials` to damp variance.
+
+### 6.4 Layer 3 — Isolated Component Harnesses
+
+Each harness freezes its inputs and scores exactly one stage:
+
+| Harness | Command | Metrics |
+|---|---|---|
+| Reranking | `dec eval-rerank` | nDCG@K / MRR@K / P@K / Recall@K gains (post vs pre rerank) on frozen candidate pools (`evaluation/rerank_metrics.py`) |
+| Context assembly | `dec eval-assembly` | duplicate rate, source coverage, compression ratio, needle-loss over a `--k` candidate pool (default 20) (`evaluation/assembly_eval.py`) |
+| Prompt augmentation | `dec eval-prompt-aug` | `--mode template` (hermetic, no LLM) or `--mode llm`; format compliance, citation precision/recall, injection defense rate, zero-context fallback accuracy (`evaluation/prompt_aug_metrics.py`) |
+| Chunking quality | `dec eval-chunking` | gold-span token IoU + excerpt precision, SegEval boundary similarity (`pk`/`windowdiff`), structural fracture rate (`evaluation/chunking_metrics.py`) |
+
+### 6.5 Layer 4 — End-to-End: `dec evaluate`
+
+Full-pipeline evaluation on QA datasets: token-F1 answer correctness vs ground truth, P50/P95/P99 latency percentiles, optional RAGAS block (faithfulness / context recall+precision / answer relevancy when the `ragas` package is installed), plus Langfuse dataset upload and optional `--experiment-name` runs.
+
+### 6.6 Layer 5 — Production
+
+Batched trace evaluators judge live traffic in Langfuse (`evaluation/langfuse_evaluators.py`, evaluation-purpose chain), and drift detection compares fresh metrics against a rolling baseline snapshot history (`drift_detector.py`, Section 7.4).
+
+### 6.7 Datasets & Schemas
+
+- **`tests/evaluation/golden/`** — corpus-aligned golden set: **520 queries** (500 in-scope across Spark/Airflow/Delta Lake/Claude Platform/Claude Code + 20 out-of-scope), each row carrying verified `expected_urls`, `expected_terms`, intent, complexity (`golden/README.md`). Pinned to specific corpus generations per source.
+- **`evaluation/eval_schema.py`** — strict JSONL row validation for both record kinds (`recall` vs `qa`): required fields, slug ids, out-of-scope constraints (OOS rows carry refusal-trigger terms but no `expected_urls`).
+- **`CoverageValidator`** (`services/eval_coverage.py`) — orphan-row gate: any row whose `expected_urls` are missing from the active generation (or whose `expected_terms` never appear corpus-wide) fails coverage, forcing dataset/index re-alignment before benchmarks can be trusted.
+
+---
+
+## 7. Observability & Caching
+
+### 7.1 Telemetry Pipeline (`observability/telemetry.py:74-102`)
 
 Priority chain:
 ```
@@ -1319,7 +1528,7 @@ Cache hits trace under `rag-query-pipeline-cache-hit`; streaming under `rag-quer
 
 **Span attributes:** `app.input` (truncated 2000), `app.model`, `app.output` (truncated 5000), `app.span_type`. Trace metadata carries `git_sha`, `app_env`, token usage, and `cost_usd`. A `confidence` numeric score is recorded per trace.
 
-### 6.2 Token & Retrieval Tracking
+### 7.2 Token & Retrieval Tracking
 
 **TokenTracker** (`token_tracker.py:18-55`):
 - Thread-safe (`threading.Lock`)
@@ -1341,7 +1550,7 @@ Cache hits trace under `rag-query-pipeline-cache-hit`; streaming under `rag-quer
   rag_llm_calls_total
   ```
 
-### 6.3 Cache Architecture (`query_cache.py:36-389`)
+### 7.3 Cache Architecture (`query_cache.py:36-389`)
 
 ```
 ┌───────────────────────────────────────────────┐
@@ -1383,7 +1592,7 @@ Cache hits trace under `rag-query-pipeline-cache-hit`; streaming under `rag-quer
 
 **Alternative:** `redis_query_cache.py` provides a Redis-only `RedisQueryCache` (standalone sync/async API) used where the in-process `QueryCache` isn't wired.
 
-### 6.4 Drift Detection (`drift_detector.py:65-172`)
+### 7.4 Drift Detection (`drift_detector.py:65-172`)
 
 Stores eval snapshots in `data/eval_history.jsonl`. Each snapshot contains timestamp, metrics dict, and eval dataset hash.
 
@@ -1397,7 +1606,7 @@ Stores eval snapshots in `data/eval_history.jsonl`. Each snapshot contains times
 
 Wired into `dec evaluate` CLI command.
 
-### 6.5 Health Checks (`provider_health.py`, `health_check.py`)
+### 7.5 Health Checks (`provider_health.py`, `health_check.py`)
 
 Provider health is scored as a weighted blend of success rate, latency, and recency:
 ```
@@ -1408,7 +1617,7 @@ Used by the fallback chain to skip unhealthy providers before attempting a call 
 
 ---
 
-## 7. Provider Fallback Chain
+## 8. Provider Fallback Chain
 
 **File:** `infrastructure/provider_fallback.py` (346 lines)
 
@@ -1438,7 +1647,7 @@ All LLM and embedding calls route through `ProviderFallbackChain[T, R]` — neve
 
 **Providers in the default embedding chain:** `nvidia → openrouter → ollama`. `.env` may extend it (e.g. `["nvidia", "openrouter", "huggingface", "local-hf"]`).
 
-### 7.1 Error Categorization
+### 8.1 Error Categorization
 
 `ErrorCategorizer` (`provider_fallback.py:67-111`) maps exceptions to `ProviderErrorCategory`:
 - `RATE_LIMIT` (429, rate limit headers)
@@ -1450,13 +1659,13 @@ All LLM and embedding calls route through `ProviderFallbackChain[T, R]` — neve
 
 Category determines whether the provider gets a cooldown and whether the request is retried on the next provider.
 
-### 7.2 Provider Health & Cooldown
+### 8.2 Provider Health & Cooldown
 
 - `_provider_gate(provider)` (line 243): returns `(allowed, reason, wait_seconds)`. Skips providers in cooldown, over rate limit, or with degraded health.
 - `_call_with_health(provider, request)` (line 270): records success/failure + latency into the health tracker after each attempt.
 - `_degraded_available(provider)` (line 264): checks whether the local degraded fallback (Ollama) is reachable.
 
-### 7.3 Rate Limiter
+### 8.3 Rate Limiter
 
 `SlidingWindowRateLimiter` (`infrastructure/rate_limiter.py`) — non-blocking pre-flight gate per provider:
 ```python
@@ -1465,19 +1674,19 @@ if rate_limiter is not None and not await rate_limiter.try_acquire():
 ```
 Limits come from `{provider}_rpm_limit` / `{provider}_rpd_limit` settings. `429` `Retry-After` headers are parsed (`parse_retry_after`) and contribute to cooldown.
 
-### 7.4 Fallback Embedder
+### 8.4 Fallback Embedder
 
 `infrastructure/fallback_embedder.py` — thin `FallbackEmbedder` adapter (embeds with `inner` provider): fallback logic lives entirely in the chain; the adapter only bridges `embed_texts`/`embed_query` calls.
 
 ---
 
-## 8. Spark Index Generations
+## 9. Spark Index Generations
 
 Spark docs are built as **named, validated, atomically-switched index generations** — a reproducible-corpus approach distinct from incremental ingestion.
 
 **Files:** `services/spark_index_builder.py`, `services/spark_chunker.py`, `services/spark_metadata.py`, `services/spark_rendered_chunker.py`, `services/spark_rendered_builder.py`, `infrastructure/spark_source_resolver.py`
 
-### 8.1 Lifecycle
+### 9.1 Lifecycle
 
 ```
 dec spark-build --generation <gen>     → build full dense+BM25 generation in Qdrant
@@ -1486,7 +1695,7 @@ dec spark-activate --generation <gen>  → atomically switch alias to validated 
 dec evaluate --spark                   → spark retrieval-recall evaluation
 ```
 
-### 8.2 Build (`SparkIndexBuilder.build`)
+### 9.2 Build (`SparkIndexBuilder.build`)
 
 1. **Pin source:** Resolve the Spark version + commit via `spark_source_resolver.py` (config in `config/spark_sources.json`, `config/spark_rendered_sources.json`).
 2. **Chunk:** `spark_chunker.py` / `spark_rendered_chunker.py` produce generation-aware chunks from the rendered docs.
@@ -1495,20 +1704,20 @@ dec evaluate --spark                   → spark retrieval-recall evaluation
 5. **Validate:** `validate_index_generation(len(normalized))` (`spark_index_builder.py:241`) enforces `index_require_hybrid=True` and `index_validation_min_points`.
 6. **Report:** `IndexBuildReport(generation, chunk_count, coverage_records, validation)`.
 
-### 8.3 State Management
+### 9.3 State Management
 
 - `.index_state/active.json` — current active generation
 - `.index_state/history.jsonl` — activation history
 - `.index_state/validation-{generation}.json` — per-generation validation artifacts
 - `dec spark-activate` atomically switches the Qdrant collection alias (`data_engineering_docs`) to the validated generation collection.
 
-### 8.4 Verification
+### 9.4 Verification
 
-`dec spark-validate --generation <gen>` runs retrieval-recall checks against the built generation. `dec evaluate --spark` reports faithfulness / context recall / precision / answer relevancy with drift detection (Section 6.4).
+`dec spark-validate --generation <gen>` runs retrieval-recall checks against the built generation. `dec evaluate --spark` reports faithfulness / context recall / precision / answer relevancy with drift detection (Section 7.4).
 
 ---
 
-## 9. Claude Docs Ingestion (llms.txt)
+## 10. Claude Docs Ingestion (llms.txt)
 
 **File:** `services/claude_docs_ingestion.py`
 
@@ -1550,7 +1759,7 @@ _chunk_embed_upsert(docs, chunker, embedder, store)
 
 ---
 
-## 10. Indirect Prompt Injection Guard
+## 11. Indirect Prompt Injection Guard
 
 **File:** `services/input_guardrails.py`
 
@@ -1564,12 +1773,12 @@ retrieved_chunks = scan_result.kept
 **Behavior:**
 - **Kept:** chunks that pass the scan continue through the pipeline unchanged.
 - **Rejected:** injection-laden chunks are dropped. If ALL chunks are rejected, the pipeline returns the out-of-repository answer ("I cannot answer this question because it is outside my knowledge repository.") rather than generating from a poisoned context.
-- Enabled via `input_guardrails_enabled=True` (`settings.py:705`).
+- Enabled via `input_guardrails_enabled=True` (`settings.py:1289`).
 
-Complements `prompt_injection.py` (query-side injection detection on user input) and the prompt-builder's own heading sanitization (`##` → `#`).
+Complements `prompt_injection.py` (query-side injection detection on user input) and the prompt-builder's own heading sanitization (leading `#` headers are stripped from questions, Step 13a).
 
 ---
 
-> **Document version:** 2026-08-12  
-> **Codebase ref:** commit `ffcdfd1`  
+> **Document version:** 2026-08-21  
+> **Codebase ref:** commit `7fbd636`  
 > **Generated from:** deep architectural audit of the DataEngineeringCopilot codebase

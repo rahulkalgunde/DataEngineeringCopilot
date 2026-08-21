@@ -49,7 +49,10 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 - Redis connections: always `get_shared_redis_client()`.
 - Three-valued returns: e.g. `extract_sentences` returns `None` (unsupported) vs `[]` (empty) vs list — check `is None` explicitly.
 - Non-test code: call `settings.validate_all()` after constructing `AppSettings`.
-- Package layout and per-module tour: `README.md`.
+- **Generation layer**: per-purpose tuning via `generation_temperature` (0.15) / `code_generation_temperature` (0.20) / `generation_seed` / penalties; `provider_capabilities.py` gates which params are emitted per provider (silently omitted, never errored). Doc-intent answers use schema-enforced structured output (`services/structured_output.py`, strict JSON schema; Ollama gets `format=`, others `response_format=json_schema`).
+- **Retrieval flags ship dark until their benchmark gate passes** (`identifier_sparse_rrf_enabled`, `namespace_bm25_enabled` default False with acceptance criteria in `settings.py` comments). Never flip a retrieval flag on without running its eval harness and comparing against baseline.
+- **Fail-open vs fail-closed is contractual**: auxiliary verifiers (groundedness, scope, CRAG grader, sibling rejoin, reranker init) fail open with logged warnings; only evidence-based refusals are hard (empty retrieval, low confidence, explicit scope `does_not_cover`). State the posture in module docstrings.
+- Package layout and per-module tour: `README.md`. RAG techniques tour: `docs/RAG_SYSTEM_LEARNER_GUIDE.md`.
 
 ## Key make targets
 | Target | Description |
@@ -61,6 +64,8 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 | `make test-e2e` | E2E (serial + parallel legs) |
 | `make test-eval` / `make test-eval-data` | Eval harness (mocked embedder) / dataset schema gates (both run in CI) |
 | `make eval-fast` | Zero-LLM retrieval integrity check (Qdrant + local embedder only) — run after RAG-pipeline changes |
+| `make test-chunking` / `test-chunking-serial` | Chunking evaluator suite (gold-span metrics, invariants, snapshots) |
+| `make streamlit` | Run the Streamlit UI locally |
 | `make dev` / `make up` / `make down` | First-time setup / start / stop stack |
 | `make rebuild` | Rebuild image + restart app services (after dependency changes) |
 | `make status` / `make logs` / `make logs-worker` | Health / log tailing |
@@ -72,7 +77,8 @@ Entry: `main.py:main` → `cli.py`. Full list with per-command infra requirement
 
 - **`dec probe-llm` makes live paid API calls (one per provider) — get explicit user approval before running.**
 - In-process (no Celery): `ask`, `ingest-claude-docs`, `evaluate`, `eval-fast`, `eval-coverage`, `inspect-db`, `health`, `config`. Celery path (needs API + worker + full stack): `ingest`, `profile`.
-- Generation lifecycle (immutable index gens): `gen-manifest` → `gen-build` → `gen-validate` → `gen-activate` (atomic alias switch); plus `gen-rollback`, `gen-stale`, `gen-reset`. Spark-only mirror: `spark-build`/`spark-validate`/`spark-activate`/`spark-rollback`.
+- Isolated eval harnesses (in-process, frozen inputs): `eval-retrieval` (recall/MRR gate vs baseline), `eval-generation` (faithfulness/relevance/rubric with retrieval frozen), `eval-rerank` (nDCG@K/MRR/P@K on frozen candidate pools), `eval-assembly` (duplicate rate/coverage/compression/needle-loss), `eval-prompt-aug` (template/LLM modes), `eval-chunking` (gold-span chunker quality).
+- Generation lifecycle (immutable index gens): `gen-manifest` → `gen-build` → `gen-validate` → `gen-activate` (atomic alias switch); plus `gen-rollback`, `gen-stale`, `gen-reset`. Spark-only mirror: `spark-config-check`, `spark-manifest`, `spark-render` (Sphinx/Jekyll), `spark-build`/`spark-validate`/`spark-activate`/`spark-rollback`.
 - Reset granularity: `reset-index` (Qdrant + BM25 + Redis + PG) > `reset-qdrant` (collection + BM25) > `reset-crawler-db` (Redis/PG crawl state, keeps Qdrant); `clear-cache [--query|--embedding|--crawl|--bm25|--all]` for cache stores.
 - Recovery: `reenrich` (failed summaries), `retry-failed --category fetch` (failed pages), `unskip`.
 
