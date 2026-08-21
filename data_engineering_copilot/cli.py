@@ -3928,15 +3928,11 @@ def build_parser() -> argparse.ArgumentParser:
             "all",
             "recursive",
             "sentence",
-            "semantic",
             "header",
-            "spark",
-            "spark_rendered",
             "structured",
-            "hierarchical",
         ],
         default="all",
-        help="Chunking strategy to evaluate.",
+        help="Chunking strategy to evaluate (strategies supported by _build_chunker).",
     )
     eval_chunking_parser.add_argument(
         "--gold",
