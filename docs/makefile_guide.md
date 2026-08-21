@@ -10,6 +10,7 @@ The project `Makefile` wraps package setup, the test matrix, linting/formatting,
 - [Setup targets](#setup-targets)
 - [Test targets](#test-targets)
 - [Quality targets](#quality-targets)
+- [Eval targets](#eval-targets)
 - [Docker targets](#docker-targets)
 - [Cheat sheet](#cheat-sheet)
 - [Common workflows](#common-workflows)
@@ -28,6 +29,7 @@ Key Makefile variables:
 | `COMPOSE` | `docker compose --profile app` | The `--profile app` gates `backend-api` + `celery_worker`. |
 | `GIT_SHA` | `git rev-parse --short HEAD` | Short git SHA for image tags. |
 | `IMAGE_TAG` | `dev-$(GIT_SHA)` | e.g. `dev-1a2b3c4`. |
+| `DOCKER_TAG_FILE` | `.docker-tag` | Last-built image tag; `make up` reuses it. |
 
 Run `make <target>`; pass variables inline where a target accepts them (e.g. `make docker-shell svc=redis`).
 
@@ -56,6 +58,14 @@ make streamlit
 ```
 
 **When to use**: interactive UI development/testing. The API does not need to be running for the Streamlit app to start.
+
+### `make mirror-claude-docs`
+Refresh the local Claude docs git mirror (network required). After it runs, paste the printed commit SHAs into the `local_mirror` entries of `pinned_sources.json`.
+
+```bash
+make mirror-claude-docs
+# dec_venv/bin/python scripts/mirror_claude_docs.py
+```
 
 ---
 
@@ -179,6 +189,35 @@ make test-eval
 
 **When to use**: verify evaluation tooling without spinning up Qdrant/Ollama. (Differs from `dec evaluate`, which runs the real pipeline against the golden dataset.)
 
+### `make test-eval-data`
+Dataset-quality gates — hermetic (no corpus/infra required). Runs the eval dataset schema, slug/evidence, coverage, run-metrics, and synthetic-generator unit tests. Runs in CI (`test-eval` job), so schema violations fail every commit.
+
+```bash
+make test-eval-data
+# pytest tests/unit/test_eval_datasets_schema.py tests/unit/test_eval_schema.py
+#      tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py
+#      tests/unit/test_synthetic_generator.py -v
+```
+
+### `make test-chunking`
+Chunking evaluator suite: gold-span quality metrics, chunker invariants, and snapshots — 6-way parallel (`--dist worksteal`).
+
+```bash
+make test-chunking
+# pytest tests/unit/test_chunker_invariants.py tests/unit/test_chunking_metrics.py
+#      tests/unit/test_chunking_snapshots.py -v -n 6 --dist worksteal
+```
+
+**When to use**: after changing any chunker. Pairs with the offline CLI harness `dec eval-chunking`.
+
+### `make test-chunking-serial`
+The same chunking suite sequentially (`-n 0`) for debugging xdist-order failures.
+
+```bash
+make test-chunking-serial
+# pytest ... -v -n 0
+```
+
 ---
 
 ## Quality targets
@@ -214,6 +253,92 @@ make clean
 
 ---
 
+## Eval targets
+
+Wrappers around the isolated `dec eval-*` harnesses (see the CLI guide for flags, metrics, and exit codes).
+
+### `make eval-fast`
+Zero-LLM layered integrity check: corpus/chunk/embedding/vector-DB/retrieval layers over the active generation. Requires Qdrant + a local embedder (Ollama) — no paid calls.
+
+```bash
+make eval-fast
+# dec_venv/bin/dec eval-fast
+```
+
+**When to use**: after any RAG-pipeline change, before paying for a full evaluation.
+
+### `make eval-coverage`
+Corpus-coverage gate: validates every in-scope recall-eval row against the **active generation's** indexed corpus (`expected_url` resolves to an indexed chunk, `expected_term` occurs in it). Needs Qdrant + built corpus.
+
+```bash
+make eval-coverage
+# dec_venv/bin/dec eval-coverage
+```
+
+Dataset additions must pass this gate before merge.
+
+### `make eval-retrieval`
+Retrieval-only benchmark (`Recall@K` / MRR / Precision@K per intent) at k=10.
+
+```bash
+make eval-retrieval
+# dec_venv/bin/dec eval-retrieval --k 10
+```
+
+### `make eval-retrieval-gate`
+Retrieval regression gate: same benchmark compared against the committed baseline; exits non-zero when Recall@K regresses by more than 0.02. Suitable as a required CI status check.
+
+```bash
+make eval-retrieval-gate
+# dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
+```
+
+### `make eval-set-baseline`
+Write a fresh retrieval baseline for the regression gate. Requires the output path via the `OUTPUT` variable.
+
+```bash
+make eval-set-baseline OUTPUT=tests/evaluation/benchmarks/baseline.json
+# mkdir -p tests/evaluation/benchmarks
+# dec eval-retrieval --output-dir tests/evaluation/benchmarks --k 10
+# mv tests/evaluation/benchmarks/retrieval_eval.json $(OUTPUT)
+```
+
+### `make eval-gen-source SOURCE="..."`
+Generate a deterministic, coverage-gated synthetic recall set for one source → `tests/evaluation/golden/recall_synthetic_<source>.jsonl`. Optional variables: `GENERATION`, `LIMIT` (default 50). `SOURCE` is required.
+
+```bash
+make eval-gen-source SOURCE="Claude Platform Docs"
+```
+
+### `make eval-dataset-regenerate`
+Regenerate the `qa_*.jsonl` golden datasets from `recall_*.jsonl` (offline template-based).
+
+```bash
+make eval-dataset-regenerate
+```
+
+> ⚠️ Unlike every other target, this one shells out to bare `python` (not `$(PYTHON)`), so it uses your system interpreter.
+
+### `make eval-golden-consolidate [GENERATION=...]`
+Consolidate & validate the golden dataset: runs the consolidation scripts (consolidate, trim/OOS v2, add missing queries, fix URLs), then validates the result with `dec eval-coverage` against `recall_all.jsonl`.
+
+```bash
+make eval-golden-consolidate
+```
+
+> ⚠️ Also uses bare `python` for its scripts.
+
+### `make eval-rag-benchmark [OUTPUT=...] [GENERATION=...]`
+Run the RAG optimization benchmark (full pipeline) and write a report under `tests/evaluation/benchmarks/`.
+
+```bash
+make eval-rag-benchmark OUTPUT=.rag_eval/benchmark.json
+```
+
+> ⚠️ Also uses bare `python -m data_engineering_copilot.evaluation.rag_optimization_benchmark`. Makes real LLM calls (full pipeline).
+
+---
+
 ## Docker targets
 
 All Docker targets use `docker compose --profile app` (unless a `-f` compose file is specified explicitly). The `--profile app` gates `backend-api` + `celery_worker`.
@@ -229,7 +354,7 @@ make dev
 # echo "dev-<sha>" > .docker-tag
 # IMAGE_TAG=dev-<sha> docker compose --profile app up -d --wait
 # docker exec ollama ollama pull nomic-embed-text
-# docker exec ollama ollama pull llama3.2:3b
+# docker exec ollama ollama pull phi4-mini:3.8b
 # docker exec ollama ollama pull qwen2.5-coder:7b
 ```
 
@@ -367,6 +492,12 @@ The old `docker-*` targets still work but are aliases for the new targets:
 | `docker-prune-stale` | `prune-stale` | Same behavior |
 | `docker-ci-up` | `ci-up` | Same behavior |
 | `docker-ci-down` | `ci-down` | Same behavior |
+| `docker-stop-all` | — | Stops all services without removing containers |
+| `docker-build` | — | Builds the `backend-api` image only (does not start anything) |
+| `docker-pull` | — | Pulls compose service images (`--ignore-pull-failures`) |
+| `docker-config` | `config` | Same behavior |
+| `docker-restart` | — | Restarts all services |
+| `docker-cleanup` | `down` | Same behavior (requires confirmation) |
 
 ---
 
@@ -382,6 +513,8 @@ The old `docker-*` targets still work but are aliases for the new targets:
 | Real-infra hard gate | `make test-real` |
 | E2E tests | `make test-e2e` |
 | Eval harness (no infra) | `make test-eval` |
+| Eval dataset gates (CI) | `make test-eval-data` |
+| Chunking evaluator suite | `make test-chunking` |
 | Lint | `make lint` |
 | Format | `make format` |
 | Clean caches | `make clean` |
@@ -397,6 +530,12 @@ The old `docker-*` targets still work but are aliases for the new targets:
 | Remove containers + images | `make FORCE=1 prune` |
 | Validate compose config | `make config` |
 | CI layout up/down | `make ci-up` / `make ci-down` |
+| Zero-LLM integrity gate | `make eval-fast` |
+| Corpus coverage gate | `make eval-coverage` |
+| Retrieval benchmark (Recall@K/MRR/P@K) | `make eval-retrieval` |
+| Write retrieval baseline | `make eval-set-baseline OUTPUT=tests/evaluation/benchmarks/baseline.json` |
+| Retrieval regression gate | `make eval-retrieval-gate` |
+| Refresh Claude docs mirror | `make mirror-claude-docs` |
 | Streamlit UI | `make streamlit` |
 
 ---
@@ -429,6 +568,14 @@ make rebuild          # rebuild image so deps_fingerprint matches
 make lint
 make format
 make test-real        # REQUIRE_INFRA=1 integration + e2e — fails loudly if infra is missing
+```
+
+**Retrieval-quality loop**
+```bash
+make eval-fast                                    # free integrity check after pipeline changes
+make eval-retrieval                               # benchmark Recall@K/MRR/P@K
+make eval-set-baseline OUTPUT=tests/evaluation/benchmarks/baseline.json   # freeze a known-good baseline
+make eval-retrieval-gate                          # gate future changes against it
 ```
 
 **Clean slate for local testing**

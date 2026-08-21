@@ -1,53 +1,56 @@
 # DataEngineeringCopilot
 
-Offline question answering for data engineering documentation using Ollama, llama3.2:3b, Qdrant, and Streamlit.
+Question answering over data engineering documentation (Spark, Airflow, Databricks, Delta Lake, Claude docs). RAG pipeline built on Qdrant, Redis, Celery, and Streamlit — multi-provider LLM routing with Ollama as the always-available local fallback. No LangChain or LlamaIndex.
 
 ## Project Structure
 
 ```text
 DataEngineeringCopilot/
-  main.py
-  README.md
-  Makefile                    # Docker, test, lint commands
-  AGENTS.md                   # Agent guide & architecture
-  qdrant_db/ -> qdrant_db/
-  data/
-  logs/                       # Runtime logs
+  main.py                       # CLI entry point
+  Makefile                      # Docker, test, lint, eval targets
+  AGENTS.md                     # Agent guide & architecture
   data_engineering_copilot/
     config/
+      settings.py               # All runtime settings (providers, limits, flags)
       documentation_sources.json
-      settings.py
+      logging.py, naming.py, pinned_sources.json, spark_sources.json, ...
     domain/
-      models.py
+      models.py                 # Dataclasses shared across the app
+      exceptions.py, protocols.py
     infrastructure/
-      rate_limiter.py          # RPM/RPD coordination
-      llm_client.py                # Unified OpenAI-compatible LLM client
-      async_openrouter_embeddings.py
-      qdrant_store.py
-      redis_store.py
-      crawl_cache.py
-      html_parser.py
-      ollama_client.py
-      embeddings.py
+      llm_client.py             # Unified OpenAI-compatible LLM client
+      provider_fallback.py      # ProviderFallbackChain (all LLM/embedding calls)
+      provider_selector.py, provider_health.py, provider_capabilities.py
+      rate_limiter.py           # RPM/RPD coordination
+      async_qdrant_store.py, async_crawler.py, async_embeddings.py
+      async_rag_cache.py, embedding_cache.py, crawl_cache.py, crawl_db.py
+      rerank_clients.py, pii_redactor.py, bm25_tokenizer.py, token_budget.py
     services/
-      chunker.py
-      ingestion.py
-      rag.py
+      async_rag.py              # RAG pipeline orchestration
+      query_rewriting.py        # Intent, decomposition, expansion, gated HyDE
+      reranker.py, colbert_reranker.py, llm_reranker.py
+      context_assembler.py, context_compression.py
+      groundedness.py, scope_verifier.py, relevance_grader.py
+      input_guardrails.py, output_guardrails.py, prompt_injection.py
+      structured_output.py, prompt_builder.py
+      async_ingestion.py, claude_docs_ingestion.py
+      chunker.py, hierarchical_chunker.py, semantic_chunker.py, ...
     workers/
-      celery_app.py            # Celery config & signal handlers
-      tasks.py                 # Ingestion tasks with zombie recovery
+      celery_app.py             # Celery config & signal handlers
+      tasks.py                  # Ingestion tasks with zombie recovery
     api/
-      app.py                   # FastAPI backend
+      app.py, routes.py         # FastAPI backend
     ui/
-      streamlit_app.py
-    cli.py                     # CLI dispatcher
+      streamlit_app.py          # Chat UI
+    observability/
+      langfuse_client.py, otel_telemetry.py, structured_logging.py
+    evaluation/                 # Eval harnesses (retrieval, generation, rerank, ...)
+    profiler/
+      cli.py, report_generator.py
+    cli.py                      # CLI dispatcher
+    factory.py                  # DI: build_rag_service(), fallback chains, ...
     utils/
       text.py
-    profiler/
-      cli.py                   # Profiler CLI
-      report_generator.py      # Profiler report generation
-  scripts/
-    download_embedding_model.py
 ```
 
 ## Setup
@@ -60,23 +63,6 @@ DataEngineeringCopilot/
 - To add a single package to the environment, use: `uv pip install <package_name>`
 - Always ensure you target the correct local virtual environment binary path: `dec_venv/bin/python`
 
-On windows machine, Install and start Ollama, then run the models:
-
-```bash
-ollama serve
-ollama pull nomic-embed-text:v1.5
-ollama pull qwen3.5:9b
-```
-
-Docker
-
-1. Start Docker Desktop on windows machine
-2. Login to wsl and go to Project Directory
-3. Activate python venv `source dec_venv/bin/activate`
-3. Run: `docker compose up -d`
-
-Always Use Python virtual environment located at `dec_venv/` at the project root.
-
 Linux/macOS:
 
 ```bash
@@ -85,7 +71,13 @@ source dec_venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-No additional embedding model download is required. The system uses Ollama's `nomic-embed-text` model via HTTP API.
+Ollama models (pulled automatically by `make dev`; also via `make pull-models`):
+
+- `nomic-embed-text` — embeddings
+- `phi4-mini:3.8b` — general LLM
+- `qwen2.5-coder:7b` — code generation
+
+No additional embedding model download is required — embeddings go through the Ollama HTTP API (or the configured cloud embedding provider).
 
 ## Configuration
 
@@ -96,56 +88,91 @@ Settings load from three `.env` files in order (later files override earlier):
 3. `.env.local` — personal overrides (gitignored)
 
 ### Models
-- **LLM**: OpenRouter free tier (`openrouter/free`)
-- **Embeddings**: OpenRouter `nvidia/nemotron-3-embed-1b:free` (dimension=2048)
-- **Local Ollama**: `nomic-embed-text` + `llama3.2:3b` (alternative)
 
-## Docker Commands
+- **Class defaults**: `llm_provider=ollama`, `llm_model=llama3.2:3b`, `embedding_provider=ollama` (`data_engineering_copilot/config/settings.py`). Ollama is the last-resort degraded fallback in every chain.
+- **Answer purpose**: defaults to OpenRouter free tier (`answer_llm_provider=openrouter`, `answer_llm_model=openrouter/free`); rewrite/groundedness/intent/evaluation default to Groq.
+- **LLM fallback chain** (`llm_fallback_order`): cloudflare → groq → nvidia → gemini → cerebras → sambanova → mistral → zai → llm7 → agnes → anyapi → ollama_cloud → ollama. Providers without configured keys are skipped, so with no API keys everything routes to Ollama.
+- **Embedding fallback chain**: nvidia → openrouter → ollama.
+
+All LLM/embedding calls route through `ProviderFallbackChain` (health-scored provider selection, Redis-backed). See `docs/RAG_SYSTEM_LEARNER_GUIDE.md` for the full tour.
+
+## Docker
+
+First-time setup (builds image, starts stack, pulls Ollama models):
 
 ```bash
-make docker-up          # Start all services
-make docker-down        # Stop all services
-make docker-status      # Show containers, status, health checks
-make docker-rebuild     # Full rebuild with --no-cache
-make docker-logs        # Stream logs (tail=100)
-make docker-logs-worker # Stream worker-specific logs
-make docker-health      # Verify service connectivity (dec health)
-make docker-stop-all    # Stop all services (preserve state)
-make docker-cleanup     # Prune unused images/containers/volumes
-make docker-setup       # Start + pull Ollama models
+make dev
 ```
+
+Day-to-day:
+
+```bash
+make up              # Start all services (infra + app profile)
+make down            # Stop all services
+make status          # Containers, status, health checks
+make logs            # Stream logs
+make logs-worker     # Stream worker logs
+make rebuild         # Rebuild app services (required after pyproject.toml/uv.lock changes)
+make streamlit       # Run the Streamlit UI locally
+```
+
+Bare `docker compose up` starts **infrastructure only** — `backend-api` and `celery_worker` are gated behind the `app` profile. `make up` includes the profile.
+
+Legacy aliases (`make docker-up`, `docker-down`, `docker-status`, `docker-logs`, ...) still exist and map to the targets above — see `docs/makefile_guide.md`.
 
 ### Services
-- redis, qdrant, minio, ollama, clickhouse, langfuse
-- backend-api (FastAPI), celery_worker
-- langfuse-postgres, langfuse-worker
 
-## CLI Commands
+- Infra: redis, qdrant, minio (+ minio-init), ollama, clickhouse, postgres (crawl frontier), langfuse, langfuse-postgres, langfuse-worker
+- App profile: backend-api (FastAPI), celery_worker
+
+## CLI
+
+Run via `dec_venv/bin/dec` (or `python main.py`). Full reference with per-command infra requirements: `docs/cli_guide.md`.
 
 ```bash
-# Ingestion
-dec ingest --source "Apache Spark Documentation" --max-pages 1000
-dec ingest --source "Apache Airflow Documentation"
-
-# Query
+# Core (in-process)
 dec ask "How does Delta Lake time travel work?"
+dec health / dec config / dec inspect-db / dec status
 
-# Status
-dec status                    # Show ingestion job status
-dec status <task-id>          # Show specific task
-dec health                    # Verify all service connections
-dec config                    # Show current configuration
+# Ingestion
+dec ingest ...                # Celery path (needs API + worker + full stack)
+dec ingest-claude-docs ...    # In-process
 
-# Reset
-dec reset-index              # Clear Qdrant + Redis
+# Eval harnesses (in-process, frozen inputs)
+dec eval-fast                 # Zero-LLM retrieval integrity check
+dec eval-retrieval / eval-generation / eval-rerank / eval-assembly
+dec eval-prompt-aug / eval-chunking / evaluate / eval-coverage
 
-# Profiling
-dec profile --sources "Apache Spark" --max-pages 20 --load-sweep "100,500,1000,5000"
+# Index generation lifecycle
+dec gen-manifest → gen-build → gen-validate → gen-activate   # atomic alias switch
+dec gen-rollback / gen-stale / gen-reset
+# Spark-only mirror: spark-manifest / spark-render / spark-build / spark-activate ...
+
+# Reset granularity (coarse → fine)
+dec reset-index               # Qdrant + BM25 + Redis + PG
+dec reset-qdrant              # Collection + BM25
+dec reset-crawler-db          # Redis/PG crawl state, keeps Qdrant
+dec clear-cache [--query|--embedding|--crawl|--bm25|--all]
 ```
+
+## RAG Pipeline at a Glance
+
+Query path in `services/` (full tour: `docs/RAG_SYSTEM_LEARNER_GUIDE.md`):
+
+- Two-tier query cache (exact + semantic) checked before any retrieval
+- Query rewriting: intent classification, decomposition, expansion, gated HyDE
+- Multi-query hybrid retrieval: dense + BM25 fused via Qdrant RRF
+- Injection scan on retrieved context
+- Reranking (cross-encoder / LLM / ColBERT)
+- CRAG relevance gate on candidates
+- Context assembly: dedup, sibling merge, MMR, source coverage, lost-in-the-middle reorder
+- Schema-enforced structured generation (strict JSON for doc-intent answers)
+- Guardrails: groundedness check, scope gate, citation verification, PII redaction
+- Langfuse scoring/tracing on the way out
 
 ## Ingestion
 
-The crawler downloads documentation pages and stores chunks in Qdrant. After ingestion, question answering is fully local: Qdrant reads from disk, Ollama runs `nomic-embed-text` and `llama3.2:3b` locally.
+The crawler downloads documentation pages and stores chunks in Qdrant (Celery path via `dec ingest`, in-process via `dec ingest-claude-docs`).
 
 ### When to Reset and Re-Ingest
 
@@ -170,76 +197,53 @@ Set these in `.env`:
 
 ```bash
 # Switch from Ollama to OpenRouter
-LLM_PROVIDER=openrouter
 EMBEDDING_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_EMBEDDING_DIMENSION=2048
 ```
 
 Then reset and re-ingest:
+
 ```bash
 dec reset-index
 dec ingest --max-pages 20
 ```
 
-The configured documentation sources are:
-
-- Apache Spark Documentation
-- Apache Airflow Documentation
-- Databricks Documentation
-- Delta Lake Documentation
-
-Edit documentation source URLs in:
-
-```text
-data_engineering_copilot/config/documentation_sources.json
-```
-
-Each chunk stores:
-
-- source name
-- title
-- original URL
-- chunk id
-- chunk text
+The configured documentation sources live in `data_engineering_copilot/config/documentation_sources.json` (Apache Spark, Apache Airflow, Databricks, Delta Lake).
 
 ## Rate Limiting
 
-- **Sliding Window Rate Limiter**: Shared `SlidingWindowRateLimiter` coordinates RPM and RPD between embeddings and LLM clients. Configured per-provider (OpenRouter: 20 RPM / 1000 RPD; NVIDIA NIM: 40 RPM).
+- **Sliding Window Rate Limiter**: Shared `SlidingWindowRateLimiter` coordinates RPM and RPD between embeddings and LLM clients. Configured per-provider in `settings.py` (OpenRouter: 18 RPM / 900 RPD; NVIDIA NIM: 36 RPM; defaults for all other providers are in `settings.py`).
 - **429 Handling**: LLM calls are fail-fast and failover-first — no same-provider retries, no circuit breaker. `Retry-After` is parsed into a category-based provider cooldown and the adaptive router fails over to the next provider in `llm_fallback_order`, ending at Ollama. The rate limiter acts as a non-blocking pre-flight gate so an over-limit provider is skipped without a paid API call. Embeddings still block on the limiter and retry transient errors.
 
 ## Ingestion & Workers
 
-- **Worker Time Limits**: Soft limit=36000s (10h), Hard limit=43200s (12h)
-- **Zombie Task Recovery**: Celery `task_failure` signal handler catches hard time limit kills and marks Redis status as FAILED
+- **Worker Time Limits**: Soft limit=36000s (10h), Hard limit=43200s (12h) (`workers/celery_app.py`)
+- **Zombie Task Recovery**: Celery `task_failure`/`task_revoked` signal handlers catch hard time limit kills and mark Redis status as FAILED
 - **Qdrant Batch Splitting**: `upsert_chunks` splits into 256-chunk sub-batches to prevent 32MB payload limit errors
 - **Ingestion Lock**: Released before flush to prevent unbounded chunk accumulation
 
 ## Architecture
 
-This project intentionally does not use LangChain or LlamaIndex.
+This project intentionally does not use LangChain or LlamaIndex (except `langchain-text-splitters`).
 
-- `config`: source URLs and runtime settings
-- `domain`: simple dataclasses shared by the app
-- `infrastructure`: adapters for HTTP crawling, HTML parsing, embeddings, Qdrant, Ollama, and rate limiting
-- `services`: business workflows for ingestion and RAG answering
+- `config`: source URLs, runtime settings, logging
+- `domain`: dataclasses, exceptions, and protocols shared by the app
+- `infrastructure`: adapters for crawling, HTML parsing, embeddings, Qdrant, Redis, BM25, rerank clients, PII redaction, and provider fallback/health/rate limiting
+- `services`: the RAG pipeline (retrieval, rewriting, reranking, context assembly, guardrails, structured output) plus ingestion workflows
 - `workers`: Celery tasks with zombie recovery
-- `api`: FastAPI backend with ingestion endpoints
-- `cli`: Command-line interface dispatcher
-- `profiler`: Performance profiling and reporting
-- `ui`: Streamlit interface
+- `api`: FastAPI backend (auth, routes, middleware)
+- `observability`: Langfuse tracing/scoring, OpenTelemetry, structured logging, token tracking
+- `evaluation`: eval harnesses (retrieval, generation, rerank, assembly, chunking, prompt augmentation)
+- `profiler`: performance profiling and reporting
+- `cli`: command-line interface dispatcher
+- `ui`: Streamlit chat interface
+
+Dependency injection goes through `factory.py` (`build_rag_service()`, `build_llm_fallback_chain()`, ...) — never hand-instantiate services.
 
 Local generation can take time on CPU. The timeout and generation limits are configured in `data_engineering_copilot/config/settings.py` as `ollama_timeout_seconds`, `ollama_num_ctx`, `ollama_num_predict`, `retrieval_top_k`, and `max_context_chars`.
 
-If Ollama fails due to prompt or output length, the service automatically retries with reduced repository context and then with a larger output budget. You can tune this behavior with `ollama_retry_context_ratio`, `ollama_retry_extra_num_predict`, and `ollama_retry_max_num_predict` in the same settings file.
-
-Default retry settings in `data_engineering_copilot/config/settings.py`:
-
-```python
-ollama_retry_context_ratio = 0.5
-ollama_retry_extra_num_predict = 512
-ollama_retry_max_num_predict = 1024
-```
+If Ollama fails due to prompt or output length, the service automatically retries with reduced repository context and then with a larger output budget. Tune with `ollama_retry_context_ratio`, `ollama_retry_extra_num_predict`, and `ollama_retry_max_num_predict` in the same settings file.
 
 Runtime logs are written under `logs/` in the project workspace:
 
