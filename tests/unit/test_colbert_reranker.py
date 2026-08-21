@@ -6,7 +6,7 @@ import pytest
 
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievedChunk
 from data_engineering_copilot.services.colbert_reranker import (
-    ColBERTReranker,
+    LexicalNgramReranker,
     _char_ngram_overlap,
     _tokenize,
 )
@@ -75,7 +75,7 @@ class TestMaxSimLightweight:
         assert good > bad
 
 
-class TestColBERTReranker:
+class TestLexicalNgramReranker:
     @pytest.mark.asyncio
     async def test_rerank_basic(self):
         chunks = [
@@ -83,32 +83,41 @@ class TestColBERTReranker:
             _make_chunk("Spark SQL query optimization"),
             _make_chunk("another unrelated topic"),
         ]
-        reranker = ColBERTReranker()
+        reranker = LexicalNgramReranker()
         result = await reranker.rerank("Spark SQL", chunks, top_k=2)
         assert len(result) == 2
         assert result[0].chunk.text == "Spark SQL query optimization"
 
     @pytest.mark.asyncio
     async def test_empty(self):
-        reranker = ColBERTReranker()
+        reranker = LexicalNgramReranker()
         result = await reranker.rerank("query", [], top_k=5)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_fewer_than_top_k(self):
         chunks = [_make_chunk("hello")]
-        reranker = ColBERTReranker()
+        reranker = LexicalNgramReranker()
         result = await reranker.rerank("hello", chunks, top_k=5)
         assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_scores_normalized(self):
         chunks = [_make_chunk("a"), _make_chunk("b")]
-        reranker = ColBERTReranker()
+        reranker = LexicalNgramReranker()
         result = await reranker.rerank("a", chunks, top_k=2)
         scores = [r.confidence for r in result]
         assert all(0.0 <= s <= 1.0 for s in scores)
 
     def test_is_available(self):
-        reranker = ColBERTReranker()
+        reranker = LexicalNgramReranker()
         assert reranker.is_available()
+
+
+def test_class_documentation_states_proxy_nature():
+    """Task 6: the class must not claim to be neural late-interaction."""
+    from data_engineering_copilot.services.colbert_reranker import LexicalNgramReranker
+
+    doc = LexicalNgramReranker.__doc__ or ""
+    assert "proxy" in doc.lower()
+    assert "not neural late-interaction" in doc.lower()
