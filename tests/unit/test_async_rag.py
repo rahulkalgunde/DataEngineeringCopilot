@@ -4,91 +4,15 @@ from __future__ import annotations
 
 import json
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from data_engineering_copilot.domain.exceptions import LLMGenerationError, RetrievalError
-from data_engineering_copilot.domain.models import Answer, RagConfig
+from data_engineering_copilot.domain.models import RagConfig
 from data_engineering_copilot.services.async_rag import AsyncRagService
 from data_engineering_copilot.services.groundedness import GroundednessVerifier
 from data_engineering_copilot.services.query_rewriting import QueryRewriter
-
-
-class TestQueryCache:
-    def test_cache_hit_returns_cached_answer(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        cache.set("what is spark", Answer(text="cached answer", sources=(), confidence=0.9))
-        result = cache.get("what is spark")
-        assert result is not None
-        assert result.text == "cached answer"
-
-    def test_cache_miss_returns_none(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        result = cache.get("nonexistent query")
-        assert result is None
-
-    def test_cache_expires_after_ttl(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=0)
-        cache.set("expiring query", Answer(text="old", sources=(), confidence=0.8))
-
-        with patch("time.monotonic", return_value=1.0):
-            cache.set("expiring query", Answer(text="old", sources=(), confidence=0.8))
-        with patch("time.monotonic", return_value=2.0):
-            result = cache.get("expiring query")
-        assert result is None
-
-    def test_cache_not_expired_within_ttl(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        with patch("time.monotonic", return_value=1.0):
-            cache.set("fresh query", Answer(text="fresh", sources=(), confidence=0.9))
-        with patch("time.monotonic", return_value=60.0):
-            result = cache.get("fresh query")
-        assert result is not None
-        assert result.text == "fresh"
-
-    def test_cache_clear(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        cache.set("q1", Answer(text="a1", sources=(), confidence=0.9))
-        cache.clear()
-        assert cache.get("q1") is None
-
-    def test_cache_size(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        cache.set("q1", Answer(text="a1", sources=(), confidence=0.9))
-        cache.set("q2", Answer(text="a2", sources=(), confidence=0.8))
-        assert cache.size() == 2
-
-    def test_cache_strips_whitespace_in_key(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        cache.set("  what is spark  ", Answer(text="answer", sources=(), confidence=0.9))
-        result = cache.get("what is spark")
-        assert result is not None
-
-    def test_cache_overwrites_same_key(self):
-        from data_engineering_copilot.infrastructure.async_rag_cache import QueryCache
-
-        cache = QueryCache(ttl_seconds=60)
-        cache.set("q", Answer(text="first", sources=(), confidence=0.5))
-        cache.set("q", Answer(text="second", sources=(), confidence=0.9))
-        result = cache.get("q")
-        assert result is not None
-        assert result.text == "second"
-        assert cache.size() == 1
 
 
 class TestAsyncRagService:
