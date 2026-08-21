@@ -1,8 +1,11 @@
-"""ColBERT late-interaction reranker.
+"""Lexical char-trigram MaxSim reranker.
 
-Uses lightweight char-ngram overlap as a proxy for token embeddings to avoid
-the PyTorch/transformers dependency while preserving the MaxSim scoring
-semantics of ColBERT.
+A deterministic proxy for late-interaction scoring: per-query-token best
+char-3gram overlap against each document token, averaged and min-max
+normalized. NOT neural late-interaction — no token embeddings, no PLAID-class
+optimizations. Kept behind ``reranker_type="colbert"`` for backward
+compatibility; for true late interaction see the deferred experiment in
+docs/research/rag_best_practices_comparison_2026-08-21.md.
 """
 
 from __future__ import annotations
@@ -58,11 +61,12 @@ def _char_ngram_overlap(query_tokens: list[str], doc_tokens: list[str], n: int =
     return total / len(query_tokens)
 
 
-class ColBERTReranker:
-    """Late-interaction reranker using char-ngram MaxSim proxy.
+class LexicalNgramReranker:
+    """Char-trigram MaxSim proxy reranker.
 
-    No neural model loading — uses token-level char-ngram overlap as a
-    lightweight approximation of ColBERT's MaxSim scoring.
+    A lightweight lexical approximation of late-interaction scoring — this is
+    a proxy, not neural late-interaction: no token embeddings are produced and
+    ``model_name`` is accepted only for interface compatibility.
     """
 
     def __init__(

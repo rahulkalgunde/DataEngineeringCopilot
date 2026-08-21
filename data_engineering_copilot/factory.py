@@ -1869,9 +1869,11 @@ def build_rag_service(
     reranker = None
     if app_settings.reranker_enabled:
         if app_settings.reranker_type == "colbert":
-            from data_engineering_copilot.services.colbert_reranker import ColBERTReranker
+            # "colbert" is a lexical char-trigram MaxSim proxy (see
+            # colbert_reranker.py), not neural late-interaction.
+            from data_engineering_copilot.services.colbert_reranker import LexicalNgramReranker
 
-            reranker = ColBERTReranker(
+            reranker = LexicalNgramReranker(
                 model_name=app_settings.colbert_rerank_model,
                 max_query_tokens=app_settings.colbert_max_query_tokens,
                 max_doc_tokens=app_settings.colbert_max_doc_tokens,
