@@ -1,8 +1,16 @@
+import json
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np  # noqa: F401 — import early prevents fork-related ImportError
 import pytest
+
+from data_engineering_copilot.evaluation.chunking_gold import (
+    ChunkingGoldDoc,
+    ChunkingGoldSpan,
+    validate_gold_doc,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -56,3 +64,28 @@ def mock_embedder():
     m.embed_texts = AsyncMock()
     m.embed_query = AsyncMock()
     return m
+
+
+@pytest.fixture
+def gold_chunking_dataset():
+    """Load the committed chunking gold fixtures (synthetic + human slices)."""
+    base = Path("tests/evaluation/golden/chunking")
+    docs: list[ChunkingGoldDoc] = []
+    for name in ["synthetic_gold.jsonl", "human_slice.jsonl"]:
+        path = base / name
+        if not path.exists():
+            continue
+        with path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                doc = ChunkingGoldDoc(
+                    doc_id=data["doc_id"],
+                    text=data["text"],
+                    gold_spans=[ChunkingGoldSpan(**s) for s in data["gold_spans"]],
+                )
+                validate_gold_doc(doc)
+                docs.append(doc)
+    return docs

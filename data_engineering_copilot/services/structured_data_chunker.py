@@ -77,6 +77,16 @@ class StructuredDataChunker:
         chunks: list[DocumentChunk] = []
         total_chunks = len(units)
         for index, (path, unit_text) in enumerate(units):
+            start_offset = document.text.find(unit_text)
+            if start_offset == -1:
+                # unit_text (compact JSON) may not be a substring of the
+                # original, possibly differently-formatted document; fall back
+                # to best-effort offsets rather than dropping the unit.
+                start_offset = 0
+                end_offset = 0
+            else:
+                end_offset = start_offset + len(unit_text)
+                assert unit_text == document.text[start_offset:end_offset]
             chunks.append(
                 DocumentChunk(
                     chunk_id=self._chunk_id(document, path),
@@ -84,6 +94,8 @@ class StructuredDataChunker:
                     title=document.title,
                     url=document.url,
                     text=unit_text,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=hashlib.sha256(unit_text.encode("utf-8")).hexdigest(),
                     section_header=path,
                     chunk_type="structured",
@@ -169,7 +181,13 @@ class StructuredDataChunker:
         segments = split_text_losslessly(text, max_tokens=self.max_tokens, max_chars=self.max_chars)
         chunks: list[DocumentChunk] = []
         total_chunks = len(segments)
+        cursor = 0
         for index, segment in enumerate(segments):
+            start_offset = text.find(segment, cursor)
+            end_offset = start_offset + len(segment) if start_offset != -1 else 0
+            if start_offset != -1:
+                assert segment == text[start_offset:end_offset]
+                cursor = end_offset
             chunks.append(
                 DocumentChunk(
                     chunk_id=self._chunk_id(document, f"$[{index}]"),
@@ -177,6 +195,8 @@ class StructuredDataChunker:
                     title=document.title,
                     url=document.url,
                     text=segment,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=hashlib.sha256(segment.encode("utf-8")).hexdigest(),
                     section_header="$",
                     chunk_type="text",
