@@ -62,7 +62,10 @@ from data_engineering_copilot.services.query_signals import (
 )
 from data_engineering_copilot.services.relevance_grader import RelevanceGrader
 from data_engineering_copilot.services.scope_verifier import ScopeVerifier
-from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
+from data_engineering_copilot.services.structured_output import (
+    parse_structured_rag_response,
+    verify_citations,
+)
 
 # Offline fallback for the Langfuse-managed ``rag-json-retry-suffix`` prompt.
 _JSON_RETRY_SUFFIX = (
@@ -258,7 +261,7 @@ def _clean_chat_text(raw: str) -> str:
                         rest = stripped[i + 1 :].lstrip()
                         result = rest if rest else raw
                         break
-    parsed = parse_rag_response(result)
+    parsed = parse_structured_rag_response(result)
     if parsed.answer:
         result = parsed.answer
     return _strip_sources_line(result)
@@ -1266,7 +1269,7 @@ class AsyncRagService:
             # JSON retry: if the intent expects JSON output but parsing fails,
             # retry once with a stricter instruction.
             if intent not in CODE_INTENTS and isinstance(answer_text, str):
-                parsed_attempt = parse_rag_response(answer_text)
+                parsed_attempt = parse_structured_rag_response(answer_text)
                 if not parsed_attempt.answer and len(answer_text.strip()) > 20:
                     logger.info("json_parse_retry intent=%s response_len=%d", intent, len(answer_text))
                     retry_prompt = prompt + get_langfuse_prompt("rag-json-retry-suffix").compile()
@@ -1385,7 +1388,7 @@ class AsyncRagService:
                     # Surface the human-readable raw text if available; a raw
                     # structured-JSON blob with an empty answer still resolves
                     # to the default message rather than leaking raw JSON.
-                    answer_text = parse_rag_response(str(raw_answer_text)).answer
+                    answer_text = parse_structured_rag_response(str(raw_answer_text)).answer
                 if not answer_text or not str(answer_text).strip():
                     logger.warning("LLM returned an empty answer, substituting default message")
                     answer_text = (
@@ -1403,7 +1406,7 @@ class AsyncRagService:
             # Citation verification: keep only citations matching retrieved sources
             if not isinstance(answer_text, str):
                 answer_text = str(answer_text) if answer_text else ""
-            parsed = parse_rag_response(answer_text)
+            parsed = parse_structured_rag_response(answer_text)
             source_names = [c.chunk.source_name for c in retrieved_chunks]
             verified_citations = verify_citations(parsed.citations, source_names)
             if verified_citations:
