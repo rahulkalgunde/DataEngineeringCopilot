@@ -101,6 +101,10 @@ class GenerationEvalReport:
     faithfulness_mean: float = 0.0
     relevance_mean: float = 0.0
     rubric_mean: float = 0.0
+    # Fraction of rows where a second independent judge's rubric score is
+    # within ±1 of the primary judge (MT-Bench-style agreement check).
+    # None when no second judge was supplied.
+    judge_agreement: float | None = None
     passed: bool = False
 
     def to_dict(self) -> dict:
@@ -196,13 +200,17 @@ async def evaluate_generation(
     *,
     generator=None,
     judge=None,
+    judge_b=None,
     n_trials: int = 3,
     intent: str = "factual",
 ) -> GenerationEvalReport:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
     ``generator`` and ``judge`` are injectable for hermetic tests; when omitted
-    they are built from ``settings`` (answer and evaluation purposes).
+    they are built from ``settings`` (answer and evaluation purposes). When
+    ``judge_b`` is supplied, every row is additionally rubric-scored by it and
+    the report carries ``judge_agreement`` — the fraction of rows where the two
+    judges' scores differ by at most 1 point (LLM-judge reliability check).
     """
     rows = load_generation_dataset(dataset_path)
     if (generator is None or judge is None) and settings is None:
@@ -244,12 +252,24 @@ async def evaluate_generation(
     faith_mean = statistics.fmean([r["faithfulness"] for r in results]) if results else 0.0
     rel_mean = statistics.fmean([r["relevance"] for r in results]) if results else 0.0
     rubric_mean = statistics.fmean([r["rubric"] for r in results]) if results else 0.0
+
+    judge_agreement: float | None = None
+    if judge_b is not None and results:
+        agreements: list[float] = []
+        for row in rows:
+            answer = next(r["answer"] for r in results if r["id"] == row.id)
+            rubric_b = await score_rubric(judge_b, row.question, answer, row.ground_truth, row.contexts, n_trials=1)
+            rubric_a = next(r["rubric"] for r in results if r["id"] == row.id)
+            agreements.append(1.0 if abs(rubric_a - rubric_b) <= 1.0 else 0.0)
+        judge_agreement = statistics.fmean(agreements)
+
     passed = faith_mean >= FAITHFULNESS_GATE and rel_mean >= RELEVANCE_GATE and rubric_mean >= RUBRIC_GATE
     return GenerationEvalReport(
         rows=results,
         faithfulness_mean=faith_mean,
         relevance_mean=rel_mean,
         rubric_mean=rubric_mean,
+        judge_agreement=judge_agreement,
         passed=passed,
     )
 

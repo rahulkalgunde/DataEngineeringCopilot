@@ -2691,6 +2691,7 @@ def eval_generation_main(
     dataset: str | None = None,
     n_trials: int = 3,
     output: str | None = None,
+    judge_provider_b: str | None = None,
 ) -> int:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
@@ -2709,7 +2710,16 @@ def eval_generation_main(
         return 1
 
     async def _run():
-        return await evaluate_generation(str(eval_path), settings, n_trials=n_trials)
+        judge_b = None
+        if judge_provider_b:
+            from data_engineering_copilot.factory import build_llm_fallback_chain
+
+            judge_b = build_llm_fallback_chain(
+                purpose="evaluation",
+                app_settings=settings,
+                purpose_provider=judge_provider_b,
+            )
+        return await evaluate_generation(str(eval_path), settings, n_trials=n_trials, judge_b=judge_b)
 
     report = asyncio.run(_run())
     print(report.to_markdown())
@@ -3797,6 +3807,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         help="Optional path to write the JSON report.",
     )
+    eval_gen_parser.add_argument(
+        "--judge-provider-b",
+        help=(
+            "Optional second judge provider for an inter-judge agreement check "
+            "(report.judge_agreement = fraction of rows where the two judges' "
+            "rubric scores differ by <= 1)."
+        ),
+    )
 
     # Config
     subparsers.add_parser("config", help="Validate and display configuration.")
@@ -3906,7 +3924,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_chunking_parser.add_argument(
         "--strategy",
-        choices=["all", "recursive", "sentence", "semantic", "header", "spark", "spark_rendered", "structured", "hierarchical"],
+        choices=[
+            "all",
+            "recursive",
+            "sentence",
+            "semantic",
+            "header",
+            "spark",
+            "spark_rendered",
+            "structured",
+            "hierarchical",
+        ],
         default="all",
         help="Chunking strategy to evaluate.",
     )
@@ -4233,6 +4261,7 @@ def main() -> None:
                     dataset=getattr(args, "dataset", None),
                     n_trials=getattr(args, "n_trials", 3),
                     output=getattr(args, "output", None),
+                    judge_provider_b=getattr(args, "judge_provider_b", None),
                 )
             )
         elif args.command == "eval-coverage":
