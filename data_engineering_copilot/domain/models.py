@@ -144,6 +144,8 @@ class DocumentChunk:
     title: str
     url: str
     text: str
+    start_offset: int = 0
+    end_offset: int = 0
     content_hash: str = ""
     section_header: str = ""
     chunk_type: str = "text"  # one of: text, code, api, table

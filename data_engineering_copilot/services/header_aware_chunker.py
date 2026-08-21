@@ -50,6 +50,8 @@ class _RawSection:
     heading_path: tuple[str, ...]
     text: str
     code_blocks: tuple[str, ...]
+    start: int = 0
+    end: int = 0
 
 
 class HeaderAwareChunker:
@@ -133,12 +135,17 @@ class HeaderAwareChunker:
             return []
 
         sections: list[_RawSection] = []
+        cursor = 0
         for paragraph in re.split(r"\n\s*\n", body):
             paragraph = paragraph.strip()
             if not paragraph:
                 continue
             words = paragraph.split()
             if len(words) <= self.chunk_size_words:
+                idx = text.find(paragraph, cursor)
+                start = idx if idx != -1 else cursor
+                end = start + len(paragraph)
+                cursor = end
                 sections.append(
                     _RawSection(
                         header="",
@@ -146,6 +153,8 @@ class HeaderAwareChunker:
                         heading_path=(),
                         text=paragraph,
                         code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(paragraph)),
+                        start=start,
+                        end=end,
                     )
                 )
                 continue
@@ -153,6 +162,10 @@ class HeaderAwareChunker:
             # within the budget. Windows share no heading path.
             for start in range(0, len(words), self.chunk_size_words):
                 window = " ".join(words[start : start + self.chunk_size_words])
+                idx = text.find(window, cursor)
+                wstart = idx if idx != -1 else cursor
+                wend = wstart + len(window)
+                cursor = wend
                 sections.append(
                     _RawSection(
                         header="",
@@ -160,6 +173,8 @@ class HeaderAwareChunker:
                         heading_path=(),
                         text=window,
                         code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(window)),
+                        start=wstart,
+                        end=wend,
                     )
                 )
         return sections
@@ -193,6 +208,8 @@ class HeaderAwareChunker:
                     heading_path=(),
                     text=preamble,
                     code_blocks=(),
+                    start=0,
+                    end=len(preamble),
                 )
             )
 
@@ -224,6 +241,8 @@ class HeaderAwareChunker:
                     heading_path=path,
                     text=raw_body.strip(),
                     code_blocks=code_blocks,
+                    start=start,
+                    end=end,
                 )
             )
 
@@ -242,18 +261,20 @@ class HeaderAwareChunker:
         chunks: list[DocumentChunk] = []
         current_text_parts: list[str] = []
         current_code_parts: list[str] = []
+        current_section_offsets: list[tuple[int, int]] = []
         current_heading: str = ""
         current_path: tuple[str, ...] = ()
         current_words = 0
 
         def _flush() -> None:
-            nonlocal current_text_parts, current_code_parts, current_words
+            nonlocal current_text_parts, current_code_parts, current_words, current_section_offsets
             if not current_text_parts:
                 return
             body = "\n\n".join(current_text_parts).strip()
             if not body:
                 current_text_parts = []
                 current_code_parts = []
+                current_section_offsets = []
                 current_words = 0
                 return
 
@@ -266,6 +287,8 @@ class HeaderAwareChunker:
                     ct = "code"
                 elif current_code_parts:
                     ct = "mixed"
+                start_offset = current_section_offsets[0][0] if current_section_offsets else 0
+                end_offset = current_section_offsets[-1][1] if current_section_offsets else 0
                 chunks.append(
                     DocumentChunk(
                         chunk_id=chunk_id,
@@ -273,6 +296,8 @@ class HeaderAwareChunker:
                         title=document.title,
                         url=document.url,
                         text=body,
+                        start_offset=start_offset,
+                        end_offset=end_offset,
                         section_header=current_heading,
                         chunk_type=ct,
                         word_count=wc,
@@ -295,14 +320,17 @@ class HeaderAwareChunker:
                 # contract of ``min_chunk_words``).
                 last = chunks[-1]
                 merged_text = last.text + "\n\n" + body
+                merged_end = current_section_offsets[-1][1] if current_section_offsets else last.end_offset
                 chunks[-1] = replace(
                     last,
                     text=merged_text,
                     word_count=len(merged_text.split()),
+                    end_offset=merged_end,
                 )
 
             current_text_parts = []
             current_code_parts = []
+            current_section_offsets = []
             current_words = 0
 
         for section in sections:
@@ -341,6 +369,7 @@ class HeaderAwareChunker:
             # Accumulate
             if section.text:
                 current_text_parts.append(section.text)
+                current_section_offsets.append((section.start, section.end))
             if section.code_blocks:
                 current_code_parts.extend(section.code_blocks)
             current_words += section_wc

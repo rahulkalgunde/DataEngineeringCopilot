@@ -48,12 +48,12 @@ class SparkRenderedChunker:
         if not matches:
             return []
 
-        sections: list[tuple[tuple[str, ...], str, list[str]]] = []
+        sections: list[tuple[tuple[str, ...], str, list[str], int, int]] = []
 
         # Preamble before the first heading.
         preamble = text[: matches[0].start()].strip()
         if preamble:
-            sections.append(((), preamble, []))
+            sections.append(((), preamble, [], 0, len(preamble)))
 
         heading_stack: list[tuple[str, int]] = []
         for i, m in enumerate(matches):
@@ -67,16 +67,16 @@ class SparkRenderedChunker:
                 heading_stack.pop()
             heading_stack.append((header, level))
             path = tuple(h for h, _ in heading_stack)
-            sections.append((path, header, [raw_body]))
+            sections.append((path, header, [raw_body], start, end))
 
         chunks: list[DocumentChunk] = []
-        for path, header, body_parts in sections:
+        for path, header, body_parts, start, end in sections:
             body = "\n".join(p for p in body_parts if p.strip()).strip()
             if not body:
                 continue
             code_blocks = tuple(blk.group(0) for blk in _FENCE_RE.finditer(body))
             chunk_type = self._classify(header, body, code_blocks)
-            chunks.append(self._build_chunk(parsed, metadata, path, header, body, chunk_type))
+            chunks.append(self._build_chunk(parsed, metadata, path, header, body, chunk_type, start, end))
 
         if not chunks:
             return []
@@ -96,12 +96,16 @@ class SparkRenderedChunker:
         if not pieces:
             pieces = [text]
         chunks: list[DocumentChunk] = []
+        cursor = 0
         for piece in pieces:
             if not piece.strip():
                 continue
+            start_offset = text.find(piece, cursor)
+            end_offset = start_offset + len(piece) if start_offset != -1 else cursor + len(piece)
+            cursor = end_offset
             code_blocks = tuple(blk.group(0) for blk in _FENCE_RE.finditer(piece))
             chunk_type = self._classify("", piece, code_blocks)
-            chunks.append(self._build_chunk(parsed, metadata, (), "", piece, chunk_type))
+            chunks.append(self._build_chunk(parsed, metadata, (), "", piece, chunk_type, start_offset, end_offset))
         return chunks
 
     # ------------------------------------------------------------------
@@ -125,6 +129,8 @@ class SparkRenderedChunker:
         header: str,
         body: str,
         chunk_type: str,
+        start_offset: int = 0,
+        end_offset: int = 0,
     ) -> DocumentChunk:
         content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         index = 0
@@ -135,6 +141,8 @@ class SparkRenderedChunker:
             title=header or parsed.title,
             url=parsed.url,
             text=body,
+            start_offset=start_offset,
+            end_offset=end_offset,
             content_hash=content_hash,
             section_header=header,
             chunk_type=chunk_type,

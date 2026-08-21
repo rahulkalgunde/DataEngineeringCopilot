@@ -102,6 +102,12 @@ class SparkChunker:
         for index, piece in enumerate(pieces):
             if not piece.strip():
                 continue
+            start_offset = document.text.find(piece)
+            if start_offset == -1:
+                start_offset = 0
+                end_offset = 0
+            else:
+                end_offset = start_offset + len(piece)
             content_hash = hashlib.sha256(piece.encode("utf-8")).hexdigest()
             chunk_id = _deterministic_chunk_id(metadata, index, piece)
             chunks.append(
@@ -111,6 +117,8 @@ class SparkChunker:
                     title=document.title,
                     url=document.url,
                     text=piece,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=content_hash,
                     section_header=document.title,
                     chunk_type=chunk_type,
@@ -176,6 +184,12 @@ def chunk_spark_document(
         for index, (header, body) in enumerate(sections):
             if not body.strip():
                 continue
+            start_offset = document.text.find(body)
+            if start_offset == -1:
+                start_offset = 0
+                end_offset = 0
+            else:
+                end_offset = start_offset + len(body)
             content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
             chunk_id = _deterministic_chunk_id(metadata, index, body)
             chunks.append(
@@ -185,6 +199,8 @@ def chunk_spark_document(
                     title=header or document.title,
                     url=document.url,
                     text=body,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=content_hash,
                     section_header=header,
                     chunk_type="text",
@@ -206,6 +222,12 @@ def chunk_spark_document(
         for index, piece in enumerate(_split_python_top_level(document.text) or [document.text]):
             if not piece.strip():
                 continue
+            start_offset = document.text.find(piece)
+            if start_offset == -1:
+                start_offset = 0
+                end_offset = 0
+            else:
+                end_offset = start_offset + len(piece)
             content_hash = hashlib.sha256(piece.encode("utf-8")).hexdigest()
             chunk_id = _deterministic_chunk_id(metadata, index, piece)
             chunks.append(
@@ -215,6 +237,8 @@ def chunk_spark_document(
                     title=document.title,
                     url=document.url,
                     text=piece,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=content_hash,
                     section_header=document.title,
                     chunk_type="api",
@@ -236,6 +260,12 @@ def chunk_spark_document(
         for index, piece in enumerate(_split_python_top_level(document.text) or [document.text]):
             if not piece.strip():
                 continue
+            start_offset = document.text.find(piece)
+            if start_offset == -1:
+                start_offset = 0
+                end_offset = 0
+            else:
+                end_offset = start_offset + len(piece)
             content_hash = hashlib.sha256(piece.encode("utf-8")).hexdigest()
             chunk_id = _deterministic_chunk_id(metadata, index, piece)
             chunks.append(
@@ -245,6 +275,8 @@ def chunk_spark_document(
                     title=document.title,
                     url=document.url,
                     text=piece,
+                    start_offset=start_offset,
+                    end_offset=end_offset,
                     content_hash=content_hash,
                     section_header=document.title,
                     chunk_type="code",
@@ -482,12 +514,23 @@ def _build_chunk(
 ) -> DocumentChunk:
     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     chunk_id = _deterministic_chunk_id(metadata, index, text)
+    start_offset = document.text.find(text)
+    if start_offset == -1:
+        # Text may have been transformed (e.g. ``_FUNC_`` substitution in SQL
+        # function references) and no longer be a substring; fall back to
+        # best-effort offsets rather than dropping the chunk.
+        start_offset = 0
+        end_offset = 0
+    else:
+        end_offset = start_offset + len(text)
     return DocumentChunk(
         chunk_id=chunk_id,
         source_name=document.source_name,
         title=header,
         url=document.url,
         text=text,
+        start_offset=start_offset,
+        end_offset=end_offset,
         content_hash=content_hash,
         section_header=header,
         chunk_type=chunk_type,

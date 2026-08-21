@@ -96,26 +96,32 @@ class SentencePreservingChunker:
 
         chunks: list[DocumentChunk] = []
         total_chunks = len(pieces)
+        cursor = 0
         for index, piece in enumerate(pieces):
-            chunks.append(
-                DocumentChunk(
-                    chunk_id=self._chunk_id(document, index),
-                    source_name=document.source_name,
-                    title=document.title,
-                    url=document.url,
-                    text=piece,
-                    content_hash=hashlib.sha256(piece.encode("utf-8")).hexdigest(),
-                    chunk_type="text",
-                    word_count=len(piece.split()),
-                    chunk_index=index,
-                    total_chunks=total_chunks,
-                    doc_type=document.doc_type,
-                    language=document.language,
-                    file_path=document.file_path,
-                    token_count=count_tokens(piece),
-                    character_count=len(piece),
-                )
+            start_offset = cursor
+            end_offset = cursor + len(piece)
+            cursor = end_offset
+            chunk = DocumentChunk(
+                chunk_id=self._chunk_id(document, index),
+                source_name=document.source_name,
+                title=document.title,
+                url=document.url,
+                text=piece,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                content_hash=hashlib.sha256(piece.encode("utf-8")).hexdigest(),
+                chunk_type="text",
+                word_count=len(piece.split()),
+                chunk_index=index,
+                total_chunks=total_chunks,
+                doc_type=document.doc_type,
+                language=document.language,
+                file_path=document.file_path,
+                token_count=count_tokens(piece),
+                character_count=len(piece),
             )
+            assert chunk.text == document.text[chunk.start_offset : chunk.end_offset]
+            chunks.append(chunk)
 
         logger.info(
             "Sentence-preserving chunking: source=%s url=%s sentences=%d chunks=%d",

@@ -304,3 +304,9 @@ clean:
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+.PHONY: test-chunking test-chunking-serial
+test-chunking:
+	$(PYTEST) tests/unit/test_chunker_invariants.py tests/unit/test_chunking_metrics.py tests/unit/test_chunking_snapshots.py -v -n 6 --dist worksteal
+test-chunking-serial:
+	$(PYTEST) tests/unit/test_chunker_invariants.py tests/unit/test_chunking_metrics.py tests/unit/test_chunking_snapshots.py -v -n 0

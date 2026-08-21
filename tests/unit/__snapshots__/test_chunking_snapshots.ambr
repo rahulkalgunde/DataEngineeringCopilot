@@ -1,0 +1,66 @@
+# serializer version: 1
+# name: test_chunk_snapshots[document-<lambda>][document]
+  list([
+    tuple(
+      0,
+      75,
+      '''
+        # Title
+        
+        First paragraph here.
+        
+        ## Section
+        
+        Second
+      ''',
+    ),
+  ])
+# ---
+# name: test_chunk_snapshots[header-<lambda>][header]
+  list([
+    tuple(
+      8,
+      32,
+      'First paragraph here.',
+    ),
+    tuple(
+      43,
+      76,
+      'Second paragraph under section.',
+    ),
+  ])
+# ---
+# name: test_chunk_snapshots[sentence-<lambda>][sentence]
+  list([
+    tuple(
+      0,
+      75,
+      '''
+        # Title
+        
+        First paragraph here.
+        
+        ## Section
+        
+        Second
+      ''',
+    ),
+  ])
+# ---
+# name: test_chunk_snapshots[structured-<lambda>][structured]
+  list([
+    tuple(
+      0,
+      75,
+      '''
+        # Title
+        
+        First paragraph here.
+        
+        ## Section
+        
+        Second
+      ''',
+    ),
+  ])
+# ---

@@ -237,7 +237,13 @@ class SparkIndexBuilder:
 
         hierarchical: list[DocumentChunk] = []
         for chunk in normalized:
-            hierarchical.extend(hierarchical_chunk(chunk))
+            hierarchical.extend(
+                hierarchical_chunk(
+                    chunk,
+                    parent_offset_start=chunk.start_offset,
+                    parent_offset_end=chunk.end_offset,
+                )
+            )
         normalized = hierarchical
         self._reject_duplicate_chunk_ids(normalized)
 
