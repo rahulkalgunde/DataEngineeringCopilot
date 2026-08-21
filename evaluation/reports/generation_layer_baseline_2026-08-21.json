@@ -1,0 +1,104 @@
+{
+  "rows": [
+    {
+      "id": "qa-spark-001",
+      "question": "What is Apache Spark?",
+      "answer": "{\"answer\":\"Apache Spark is a unified analytics engine for large-scale data processing that offers high-level APIs in Scala, Java, Python, and R.\",\"citations\":[\"[Doc-c04266d5]\"],\"missing_info\":false}",
+      "faithfulness": 1.0,
+      "relevance": 0.9666666666666667,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-002",
+      "question": "What is the difference between DataFrame and Dataset in Spark?",
+      "answer": "{\"answer\":\"A DataFrame in Spark is a distributed collection of data organized into named columns, whereas a Dataset is essentially a type\u2011safe version of a DataFrame that provides compile\u2011time type checking. This means Datasets retain the columnar structure of DataFrames but add strong typing for safer operations.\",\"citations\":[\"Doc-9618d49b\"],\"missing_info\":false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-003",
+      "question": "How to read Parquet files in Spark?",
+      "answer": "{\"answer\":\"You can read Parquet files by calling spark.read.parquet('path'), which returns a DataFrame. Spark SQL natively supports this operation, so no additional configuration is required.\",\"citations\":[\"[Doc-4bd53be9]\"],\"missing_info\":false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-004",
+      "question": "What is the Catalyst optimizer in Spark?",
+      "answer": "{\"answer\":\"Catalyst is Spark's extensible query optimizer that applies rule-based and cost-based optimization.\",\"citations\":[\"[Doc-3db34068]\"],\"missing_info\":false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 4.0
+    },
+    {
+      "id": "qa-spark-005",
+      "question": "How does Spark handle partitioning?",
+      "answer": "{\"answer\":\"Spark partitions data across clusters for parallel processing, and the partitionBy() function writes data into partition directories.\",\"citations\":[\"[context_data_c652ce52]\"],\"missing_info\":false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-006",
+      "question": "What is a broadcast join in Spark?",
+      "answer": "{\n  \"status\": \"SUCCESS\",\n  \"answer\": \"A broadcast join in Spark sends the small table to all executors, avoiding shuffle for large table joins.\",\n  \"missing_info\": null\n}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-007",
+      "question": "How to configure Spark SQL shuffle partitions?",
+      "answer": "{\n  \"status\": \"SUCCESS\",\n  \"answer\": \"To configure Spark SQL shuffle partitions, set the spark.sql.shuffle.partitions property. The default value is 200.\",\n  \"missing_info\": null\n}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-008",
+      "question": "What is Structured Streaming in Spark?",
+      "answer": "{\n  \"status\": \"SUCCESS\",\n  \"answer\": \"Structured Streaming is a scalable stream processing engine built on the Spark SQL engine.\",\n  \"missing_info\": null\n}",
+      "faithfulness": 1.0,
+      "relevance": 0.5,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-009",
+      "question": "How to cache a DataFrame in Spark?",
+      "answer": "{\n  \"status\": \"SUCCESS\",\n  \"answer\": \"To cache a DataFrame in Spark, use the cache() or persist() method on the DataFrame, such as df.cache() or df.persist().\",\n  \"missing_info\": null\n}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-010",
+      "question": "What is PySpark?",
+      "answer": "{\"answer\": \"PySpark is the Python API for Apache Spark. It allows you to write Spark applications using Python.\", \"citations\": [\"Doc-1\"], \"missing_info\": false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-011",
+      "question": "How do I install PySpark?",
+      "answer": "{\"answer\": \"Install PySpark using pip install pyspark. It requires Python 3.7+.\", \"citations\": [\"context_data_738aafa1\"], \"missing_info\": false}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    },
+    {
+      "id": "qa-spark-012",
+      "question": "What is Spark SQL used for?",
+      "answer": "{\n  \"status\": \"SUCCESS\",\n  \"answer\": \"Spark SQL is used for structured data processing, providing a programming abstraction called DataFrames and SQL.\",\n  \"missing_info\": null\n}",
+      "faithfulness": 1.0,
+      "relevance": 1.0,
+      "rubric": 5.0
+    }
+  ],
+  "faithfulness_mean": 1.0,
+  "relevance_mean": 0.9555555555555556,
+  "rubric_mean": 4.916666666666667,
+  "passed": true
+}
