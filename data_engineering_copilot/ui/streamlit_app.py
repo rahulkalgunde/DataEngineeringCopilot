@@ -1945,7 +1945,7 @@ def render_metrics_tab() -> None:
     col_s1.metric("Total Queries", summary["total_queries"])
     col_s2.metric("Answered", summary["answered_queries"])
     col_s3.metric("Answer Rate", f"{summary['answer_rate']:.0%}")
-    col_s4.metric("Avg MRR", f"{summary['avg_mrr']:.3f}")
+    col_s4.metric("Avg MRR", f"{summary['avg_proxy_mrr']:.3f}")
     col_s5.metric("Avg Answer Length (words)", summary["avg_answer_length"])
 
     st.divider()
