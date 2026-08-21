@@ -460,13 +460,13 @@ class ProviderFallbackChain[T, R]:
 
         return LLMUsage()
 
-    async def generate(
-        self,
-        prompt: str,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        """Generate using the fallback chain (delegates to execute)."""
+    async def generate(self, prompt: str) -> str:
+        """Generate using the fallback chain (delegates to execute).
+
+        Deliberately takes no sampling kwargs: per-purpose temperature and
+        token limits are baked into the underlying clients at factory time
+        (see ``provider_capabilities.py``), not per-call.
+        """
         return cast(str, await self.execute(cast(T, prompt)))
 
     async def _call_with_health_stream(
