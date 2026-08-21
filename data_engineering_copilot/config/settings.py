@@ -1136,6 +1136,8 @@ class AppSettings(BaseSettings):
     nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_cloud_timeout_seconds: int = 30
+    # "colbert" = lexical char-trigram MaxSim proxy (see colbert_reranker.py),
+    # NOT neural late-interaction.
     reranker_type: str = "cross_encoder"
     reranker_pool_size: int = 0
     reranker_doc_truncation_chars: int = 2000
