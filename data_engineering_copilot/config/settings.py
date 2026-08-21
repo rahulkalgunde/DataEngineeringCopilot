@@ -668,6 +668,14 @@ class AppSettings(BaseSettings):
         "global": 2048,
     }
 
+    generation_temperature: float = 0.15
+    code_generation_temperature: float = 0.20
+    generation_seed: int | None = None
+    generation_frequency_penalty: float = 0.0
+    generation_presence_penalty: float = 0.0
+    generation_top_p: float = 1.0
+    evaluation_temperature: float = 0.0
+
     # API key for the API auth middleware (pydantic-set, env-file aware).
     api_key: SecretStr = SecretStr("")
 
