@@ -19,6 +19,11 @@ import httpx
 from data_engineering_copilot.domain.exceptions import CoreDomainException, ProviderErrorCategory
 from data_engineering_copilot.domain.models import LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
+from data_engineering_copilot.infrastructure.provider_capabilities import (
+    supports_sampling_penalties,
+    supports_seed,
+    supports_structured_output,
+)
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -163,6 +168,12 @@ class LLMClient(SafeAsyncClientMixin):
         api_key: str = "",
         timeout_seconds: int = 120,
         temperature: float = 0.05,
+        seed: int | None = None,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        top_p: float = 1.0,
+        provider: str | None = None,
+        structured_schema: dict | None = None,
         endpoint_path: str = "/chat/completions",
         max_tokens: int | None = None,
         max_tokens_field: str = "max_tokens",
@@ -178,6 +189,12 @@ class LLMClient(SafeAsyncClientMixin):
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self._temperature = temperature
+        self._seed = seed
+        self._frequency_penalty = frequency_penalty
+        self._presence_penalty = presence_penalty
+        self._top_p = top_p
+        self._provider = provider
+        self._structured_schema = structured_schema
         self._endpoint_path = endpoint_path
         self._max_tokens = max_tokens
         self._max_tokens_field = max_tokens_field
@@ -208,6 +225,35 @@ class LLMClient(SafeAsyncClientMixin):
 
     async def _get_client(self) -> httpx.AsyncClient:
         return await self._get_safe_client()
+
+    def _apply_generation_params(self, payload: dict) -> None:
+        """Attach generation-layer hyperparameters, guarded by provider capability.
+
+        Only emits ``seed``, sampling penalties, ``top_p``, and structured-output
+        schema when the provider supports them, so providers that reject these
+        parameters (e.g. Anthropic, reasoning models) get a clean request.
+        """
+        if self._seed is not None and supports_seed(self._provider):
+            payload["seed"] = self._seed
+        if supports_sampling_penalties(self._provider):
+            if self._frequency_penalty:
+                payload["frequency_penalty"] = self._frequency_penalty
+            if self._presence_penalty:
+                payload["presence_penalty"] = self._presence_penalty
+            if self._top_p != 1.0:
+                payload["top_p"] = self._top_p
+        if self._structured_schema is not None and supports_structured_output(self._provider):
+            if self._provider == "ollama":
+                payload["format"] = self._structured_schema
+            else:
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "rag_answer",
+                        "strict": True,
+                        "schema": self._structured_schema,
+                    },
+                }
 
     async def generate(
         self,
@@ -240,6 +286,7 @@ class LLMClient(SafeAsyncClientMixin):
             payload.update(self._extra_body)
         if self._keep_alive is not None:
             payload["keep_alive"] = self._keep_alive
+        self._apply_generation_params(payload)
 
         # Single attempt: no retry loop, no circuit breaker. Failures carry
         # structured status_code / retry_after so the router can fail over fast.
@@ -381,6 +428,7 @@ class LLMClient(SafeAsyncClientMixin):
             payload[self._max_tokens_field] = self._max_tokens
         if self._extra_body:
             payload.update(self._extra_body)
+        self._apply_generation_params(payload)
 
         try:
             if self._rate_limiter is not None and not await self._rate_limiter.try_acquire():
