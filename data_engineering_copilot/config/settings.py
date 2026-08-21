@@ -675,6 +675,11 @@ class AppSettings(BaseSettings):
     generation_presence_penalty: float = 0.0
     generation_top_p: float = 1.0
     evaluation_temperature: float = 0.0
+    # Self-consistency sampling for CODE_INTENTS answers: N candidates,
+    # medoid selected by token similarity. Dark until eval-generation
+    # faithfulness >= baseline AND p95 latency stays within budget.
+    self_consistency_enabled: bool = False
+    self_consistency_samples: int = 3
 
     # API key for the API auth middleware (pydantic-set, env-file aware).
     api_key: SecretStr = SecretStr("")

@@ -269,6 +269,9 @@ class RagConfig:
     prompt_trailing_instructions: bool = True
     prompt_citation_enforcement: Literal["strict", "soft", "off"] = "strict"
     max_expansion_queries: int = 2
+    # Self-consistency sampling for code intents (dark flag; see settings).
+    self_consistency_enabled: bool = False
+    self_consistency_samples: int = 3
     cache_enabled: bool = True
     # Identifier-aware hybrid RRF profiles (see ``services/query_signals.py``).
     # Off (equal RRF) until the technical-query benchmark gate passes.
