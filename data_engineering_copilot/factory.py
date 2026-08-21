@@ -19,6 +19,7 @@ from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings 
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache, NoOpCrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
+from data_engineering_copilot.infrastructure.error_categorization import categorize_provider_error
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.infrastructure.huggingface_serverless_embeddings import (
     HuggingFaceServerlessEmbeddings,
@@ -243,54 +244,7 @@ def _is_model_not_supported_text(text: str) -> bool:
     )
 
 
-def _categorize_embedding_error(exc: Exception, provider: str, model: str):
-    """Categorize embedding provider errors for the unified fallback chain."""
-    import httpx
-
-    from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
-
-    def _status_category(status: int, response_text: str = "") -> ProviderErrorCategory:
-        if _is_model_not_supported_text(response_text) and status in (401, 403):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status == 429:
-            return ProviderErrorCategory.RATE_LIMITED
-        if status in (401, 403):
-            return ProviderErrorCategory.AUTHENTICATION_ERROR
-        if status in (400, 422):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status >= 500:
-            return ProviderErrorCategory.TEMPORARY_UNAVAILABLE
-        return ProviderErrorCategory.PERMANENT_ERROR
-
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
-        return ProviderError(
-            _status_category(status, exc.response.text),
-            provider,
-            model,
-            retry_after=retry_after if status == 429 else None,
-            original=exc,
-        )
-
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    lower_msg = str(exc).lower()
-    if "rate limit" in lower_msg or "429" in lower_msg or "too many requests" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
-    if "quota" in lower_msg or "exceeded" in lower_msg:
-        return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
-    if _is_model_not_supported_text(lower_msg) and ("401" in lower_msg or "unauthorized" in lower_msg):
-        return ProviderError(ProviderErrorCategory.INVALID_REQUEST, provider, model, original=exc)
-    if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
-        return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
-    if "timed out" in lower_msg or "timeout" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-    if "could not reach" in lower_msg or "connection" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    return ProviderError(ProviderErrorCategory.PERMANENT_ERROR, provider, model, original=exc)
+_categorize_embedding_error = categorize_provider_error
 
 
 def _build_purpose_llm_client(
@@ -1114,54 +1068,7 @@ def build_embedding_fallback_chain(
     return chain
 
 
-def _categorize_rerank_error(exc: Exception, provider: str, model: str):
-    """Categorize rerank provider errors for the unified fallback chain."""
-    import httpx
-
-    from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
-
-    def _status_category(status: int, response_text: str = "") -> ProviderErrorCategory:
-        if _is_model_not_supported_text(response_text) and status in (401, 403):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status == 429:
-            return ProviderErrorCategory.RATE_LIMITED
-        if status in (401, 403):
-            return ProviderErrorCategory.AUTHENTICATION_ERROR
-        if status in (400, 422):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status >= 500:
-            return ProviderErrorCategory.TEMPORARY_UNAVAILABLE
-        return ProviderErrorCategory.PERMANENT_ERROR
-
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
-        return ProviderError(
-            _status_category(status, exc.response.text),
-            provider,
-            model,
-            retry_after=retry_after if status == 429 else None,
-            original=exc,
-        )
-
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    lower_msg = str(exc).lower()
-    if "rate limit" in lower_msg or "429" in lower_msg or "too many requests" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
-    if "quota" in lower_msg or "exceeded" in lower_msg:
-        return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
-    if _is_model_not_supported_text(lower_msg) and ("401" in lower_msg or "unauthorized" in lower_msg):
-        return ProviderError(ProviderErrorCategory.INVALID_REQUEST, provider, model, original=exc)
-    if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
-        return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
-    if "timed out" in lower_msg or "timeout" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-    if "could not reach" in lower_msg or "connection" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    return ProviderError(ProviderErrorCategory.PERMANENT_ERROR, provider, model, original=exc)
+_categorize_rerank_error = categorize_provider_error
 
 
 def _build_rerank_chain_config(

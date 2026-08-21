@@ -18,6 +18,7 @@ from typing import Any, Protocol, TypeVar, cast
 import structlog
 
 from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+from data_engineering_copilot.infrastructure.error_categorization import categorize_provider_error
 from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 from data_engineering_copilot.infrastructure.provider_health import ProviderHealthRegistry
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
@@ -155,92 +156,7 @@ class RouterLike(Protocol):
     ) -> None: ...
 
 
-def _default_categorizer(exc: Exception, provider: str, model: str) -> ProviderError:
-    """Categorise a provider failure, preferring structured error metadata.
-
-    ``LLMClientError`` carries optional ``status_code`` / ``retry_after``
-    attributes so the router does not depend on brittle message matching.
-
-    A 401 from some OpenAI-compatible gateways is a **model-not-supported**
-    error (e.g. opencodego's ``ModelError: "Model X is not supported"``), not
-    an auth failure — the server body distinguishes them. When the body
-    indicates an unsupported/unknown model the error is categorised as
-    ``INVALID_REQUEST`` so the provider is not marked down as an auth failure.
-    """
-    import httpx
-
-    from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
-
-    def _is_model_not_supported(exc: Exception) -> bool:
-        if isinstance(exc, LLMClientError) and exc.response_body:
-            lowered = exc.response_body.lower()
-            return (
-                "not supported" in lowered
-                or "modelerror" in lowered
-                or "does not exist" in lowered
-                or "unknown model" in lowered
-                or ("model" in lowered and "not found" in lowered)
-            )
-        if isinstance(exc, httpx.HTTPStatusError):
-            lowered = (exc.response.text or "").lower()
-            return (
-                "not supported" in lowered
-                or "modelerror" in lowered
-                or "does not exist" in lowered
-                or "unknown model" in lowered
-                or ("model" in lowered and "not found" in lowered)
-            )
-        return False
-
-    def _status_category(status: int) -> ProviderErrorCategory:
-        if _is_model_not_supported(exc) and status in (401, 403):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status == 429:
-            return ProviderErrorCategory.RATE_LIMITED
-        if status in (401, 403):
-            return ProviderErrorCategory.AUTHENTICATION_ERROR
-        if status in (400, 422):
-            return ProviderErrorCategory.INVALID_REQUEST
-        if status >= 500:
-            return ProviderErrorCategory.TEMPORARY_UNAVAILABLE
-        return ProviderErrorCategory.PERMANENT_ERROR
-
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        retry_after = SlidingWindowRateLimiter.parse_retry_after(dict(exc.response.headers))
-        return ProviderError(
-            _status_category(status),
-            provider,
-            model,
-            retry_after=retry_after if status == 429 else None,
-            original=exc,
-        )
-
-    if isinstance(exc, LLMClientError) and exc.status_code is not None:
-        return ProviderError(
-            _status_category(exc.status_code),
-            provider,
-            model,
-            retry_after=exc.retry_after,
-            original=exc,
-        )
-
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    lower_msg = str(exc).lower()
-    if "rate limit" in lower_msg or "429" in lower_msg or "too many requests" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RATE_LIMITED, provider, model, original=exc)
-    if "quota" in lower_msg or "exceeded" in lower_msg:
-        return ProviderError(ProviderErrorCategory.QUOTA_EXCEEDED, provider, model, original=exc)
-    if "401" in lower_msg or "unauthorized" in lower_msg or "authentication" in lower_msg:
-        return ProviderError(ProviderErrorCategory.AUTHENTICATION_ERROR, provider, model, original=exc)
-    if "timed out" in lower_msg or "timeout" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-    if "could not reach" in lower_msg or "connection" in lower_msg:
-        return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
-
-    return ProviderError(ProviderErrorCategory.PERMANENT_ERROR, provider, model, original=exc)
+_default_categorizer = categorize_provider_error
 
 
 class ProviderFallbackChain[T, R]:
@@ -350,7 +266,6 @@ class ProviderFallbackChain[T, R]:
             attempts=attempted,
             last_error=str(self._last_error) if self._last_error else "no providers configured",
         )
-        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
         raise LLMClientError(
             f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
@@ -477,7 +392,6 @@ class ProviderFallbackChain[T, R]:
             attempts=attempted,
             last_error=str(self._last_error) if self._last_error else "no providers configured",
         )
-        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
         raise LLMClientError(
             f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
@@ -674,7 +588,6 @@ class ProviderFallbackChain[T, R]:
             attempts=attempted,
             last_error=str(self._last_error) if self._last_error else "no providers configured",
         )
-        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
         raise LLMClientError(
             f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
@@ -741,7 +654,6 @@ class ProviderFallbackChain[T, R]:
             attempts=attempted,
             last_error=str(self._last_error) if self._last_error else "no providers configured",
         )
-        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
         raise LLMClientError(
             f"All providers in fallback chain failed. Attempts: {attempted}. Last error: {self._last_error}",
