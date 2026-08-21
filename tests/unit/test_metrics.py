@@ -82,17 +82,17 @@ class TestMetricsCollector:
 
     def test_retrieval_metrics_empty_chunks(self):
         collector = MetricsCollector()
-        metrics = collector.compute_retrieval_metrics("test query", [])
+        metrics = collector.compute_proxy_retrieval_metrics("test query", [])
         assert metrics.retrieved_count == 0
         assert metrics.top_confidence == 0.0
 
     def test_retrieval_metrics_with_data(self):
         collector = MetricsCollector()
         chunks = create_test_retrieved_chunks(count=5, base_confidence=0.7)
-        metrics = collector.compute_retrieval_metrics("test query", chunks)
+        metrics = collector.compute_proxy_retrieval_metrics("test query", chunks)
         assert metrics.retrieved_count == 5
         assert metrics.top_confidence == 0.7
-        assert metrics.mrr == 1.0
+        assert metrics.proxy_mrr == 1.0
 
     def test_answer_metrics_structure(self):
         collector = MetricsCollector()
@@ -161,7 +161,7 @@ class TestMetricsCollector:
         summary = collector.get_session_summary()
         assert summary["total_queries"] == 3
         assert summary["answered_queries"] == 2
-        assert "avg_mrr" in summary
+        assert "avg_proxy_mrr" in summary
 
     def test_session_summary_by_difficulty(self):
         collector = MetricsCollector()
@@ -183,14 +183,14 @@ class TestMetricsCollector:
             query="What is machine learning? This is a longer query to test truncation.",
             retrieved_count=10,
             top_confidence=0.95,
-            mrr=0.8,
-            precision_at_3=0.7,
-            precision_at_5=0.6,
+            proxy_mrr=0.8,
+            proxy_precision_at_3=0.7,
+            proxy_precision_at_5=0.6,
         )
         s = str(rm)
         assert "RetrievalMetrics" in s
         assert "retrieved=10" in s
-        assert "mrr=0.800" in s
+        assert "proxy_mrr=0.800" in s
 
     def test_str_answer_metrics(self):
         am = AnswerMetrics(
@@ -254,3 +254,16 @@ if __name__ == "__main__":
     import pytest
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_proxy_metrics_are_named_as_proxies():
+    """Task 13: confidence-proxy metrics must be named as proxies."""
+    import inspect
+
+    from data_engineering_copilot.services.metrics import MetricsCollector, RetrievalMetrics
+
+    methods = dict(inspect.getmembers(MetricsCollector, predicate=inspect.isfunction))
+    assert any("proxy" in name for name in methods)
+    fields = {f.name for f in RetrievalMetrics.__dataclass_fields__.values()}
+    assert any("proxy" in f for f in fields), f"no proxy-named fields in {fields}"
+    assert not any(f in fields for f in ("mrr", "precision_at_3", "precision_at_5"))

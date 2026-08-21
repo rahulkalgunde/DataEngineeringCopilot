@@ -18,23 +18,29 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RetrievalMetrics:
-    """Metrics for retrieval quality."""
+    """Confidence-proxy retrieval metrics.
+
+    These are NOT ground-truth accuracy: "relevant" means a chunk's fused
+    confidence exceeds a fixed 0.45 proxy threshold, not that it matches a
+    labeled qrel. For accuracy-grade metrics use the eval harnesses
+    (``dec eval-retrieval`` / ``eval-rerank``) against golden datasets.
+    """
 
     query: str
     retrieved_count: int
     top_confidence: float
-    mrr: float = 0.0  # Mean Reciprocal Rank
-    precision_at_3: float = 0.0
-    precision_at_5: float = 0.0
+    proxy_mrr: float = 0.0  # reciprocal rank of first chunk above the 0.45 confidence proxy
+    proxy_precision_at_3: float = 0.0
+    proxy_precision_at_5: float = 0.0
 
     def __str__(self) -> str:
         return (
             f"RetrievalMetrics(query={self.query[:30]}..., "
             f"retrieved={self.retrieved_count}, "
             f"top_conf={self.top_confidence:.3f}, "
-            f"mrr={self.mrr:.3f}, "
-            f"p@3={self.precision_at_3:.3f}, "
-            f"p@5={self.precision_at_5:.3f})"
+            f"proxy_mrr={self.proxy_mrr:.3f}, "
+            f"proxy_p@3={self.proxy_precision_at_3:.3f}, "
+            f"proxy_p@5={self.proxy_precision_at_5:.3f})"
         )
 
 
@@ -112,18 +118,19 @@ class MetricsCollector:
         else:
             return "medium"
 
-    def compute_retrieval_metrics(
+    def compute_proxy_retrieval_metrics(
         self, query: str, retrieved_chunks: list[RetrievedChunk], top_k: int = 5
     ) -> RetrievalMetrics:
-        """Compute retrieval quality metrics.
+        """Compute confidence-proxy retrieval metrics (NOT ground-truth IR
+        metrics; see ``RetrievalMetrics`` docstring).
 
         Args:
             query: User question
             retrieved_chunks: Retrieved and ranked chunks
-            top_k: k value for precision@k
+            top_k: k value for the p@5 proxy
 
         Returns:
-            RetrievalMetrics object with computed metrics
+            RetrievalMetrics object with computed proxies
         """
         if not retrieved_chunks:
             return RetrievalMetrics(query=query, retrieved_count=0, top_confidence=0.0)
@@ -132,10 +139,10 @@ class MetricsCollector:
         confidence_threshold = 0.45
 
         # MRR: Mean Reciprocal Rank — first chunk exceeding confidence threshold
-        mrr = 0.0
+        proxy_mrr = 0.0
         for rank, chunk in enumerate(retrieved_chunks, start=1):
             if chunk.confidence >= confidence_threshold:
-                mrr = 1.0 / rank
+                proxy_mrr = 1.0 / rank
                 break
         top_k_chunks = retrieved_chunks[:top_k]
         relevant_count = sum(1 for c in top_k_chunks if c.confidence >= confidence_threshold)
@@ -149,9 +156,9 @@ class MetricsCollector:
             query=query,
             retrieved_count=len(retrieved_chunks),
             top_confidence=retrieved_chunks[0].confidence,
-            mrr=mrr,
-            precision_at_3=precision_at_3,
-            precision_at_5=precision_at_5,
+            proxy_mrr=proxy_mrr,
+            proxy_precision_at_3=precision_at_3,
+            proxy_precision_at_5=precision_at_5,
         )
 
     def compute_answer_metrics(self, question: str, answer: Answer) -> AnswerMetrics:
@@ -223,7 +230,7 @@ class MetricsCollector:
         difficulty = self.classify_query_difficulty(query)
 
         # Retrieval metrics
-        retrieval_metrics = self.compute_retrieval_metrics(query, retrieved_chunks)
+        retrieval_metrics = self.compute_proxy_retrieval_metrics(query, retrieved_chunks)
 
         # Answer metrics (if available)
         answer_metrics = None
@@ -263,7 +270,9 @@ class MetricsCollector:
             }
 
         answered = sum(1 for q in self.queries if q.was_answered)
-        avg_mrr = sum(q.retrieval_metrics.mrr for q in self.queries if q.retrieval_metrics) / len(self.queries)
+        avg_proxy_mrr = sum(q.retrieval_metrics.proxy_mrr for q in self.queries if q.retrieval_metrics) / len(
+            self.queries
+        )
         avg_answer_len = sum(q.answer_metrics.answer_length for q in self.queries if q.answer_metrics) / max(
             1, answered
         )
@@ -272,7 +281,7 @@ class MetricsCollector:
             "total_queries": len(self.queries),
             "answered_queries": answered,
             "answer_rate": answered / len(self.queries) if self.queries else 0.0,
-            "avg_mrr": avg_mrr,
+            "avg_proxy_mrr": avg_proxy_mrr,
             "avg_answer_length": int(avg_answer_len),
             "by_difficulty": self._summary_by_difficulty(),
         }
