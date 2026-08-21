@@ -1282,19 +1282,7 @@ class AsyncRagService:
                 )
                 generation_span.update(input=prompt)
             answer_text = await llm_client.generate(prompt)
-
-            # Self-consistency sampling (dark flag): for code intents, draw
-            # N candidates and keep the medoid by token similarity.
-            if (
-                self.config.self_consistency_enabled
-                and intent in CODE_INTENTS
-                and self.config.self_consistency_samples > 1
-            ):
-                extra_candidates: list[str] = []
-                for _ in range(self.config.self_consistency_samples - 1):
-                    extra_candidates.append(await llm_client.generate(prompt))
-                answer_text = select_most_consistent([answer_text, *extra_candidates])
-                logger.info("self_consistency_applied intent=%s samples=%d", intent, len(extra_candidates) + 1)
+            answer_text = await self._apply_self_consistency(answer_text, prompt, intent, llm_client)
 
             # JSON retry: if the intent expects JSON output but parsing fails,
             # retry once with a stricter instruction.
@@ -1322,72 +1310,7 @@ class AsyncRagService:
             answer_text = await self._validate_and_fix_code_syntax(answer_text, intent, llm_client, trace)
 
             # Track token usage from LLM provider
-            if self.token_tracker is not None and hasattr(llm_client, "last_usage"):
-                usage = getattr(llm_client, "last_usage", None)
-                if usage is not None:
-                    self.token_tracker.record(
-                        prompt_tokens=usage.prompt_tokens,
-                        completion_tokens=usage.completion_tokens,
-                        model=usage.model,
-                    )
-
-                    # Also send token usage and cost to Langfuse
-                    if self.telemetry and trace:
-                        try:
-                            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
-                            if trace_id:
-                                # Calculate cost based on provider pricing
-                                cost = self._estimate_cost(
-                                    usage.prompt_tokens,
-                                    usage.completion_tokens,
-                                    usage.model,
-                                )
-
-                                # Record token usage + cost on the generation observation
-                                if generation_span:
-                                    generation_span.update(
-                                        usage_details={
-                                            "input": usage.prompt_tokens,
-                                            "output": usage.completion_tokens,
-                                            "total": usage.prompt_tokens + usage.completion_tokens,
-                                            "unit": "TOKENS",
-                                        },
-                                        cost_details={
-                                            "input": cost,
-                                            "output": cost,
-                                            "total": cost,
-                                            "currency": "USD",
-                                        },
-                                    )
-
-                                # Update trace with token usage and cost metadata
-                                trace.update(
-                                    metadata={
-                                        "token_usage": {
-                                            "prompt_tokens": usage.prompt_tokens,
-                                            "completion_tokens": usage.completion_tokens,
-                                            "total_tokens": usage.prompt_tokens + usage.completion_tokens,
-                                            "model": usage.model,
-                                        },
-                                        "cost_usd": cost,
-                                    }
-                                )
-
-                                # Score cost for monitoring
-                                self.telemetry.score(
-                                    trace_id=trace_id,
-                                    name="cost_usd",
-                                    value=cost,
-                                    data_type="NUMERIC",
-                                )
-
-                                logger.debug(
-                                    "Langfuse token usage and cost recorded: tokens=%d cost=$%.6f",
-                                    usage.prompt_tokens + usage.completion_tokens,
-                                    cost,
-                                )
-                        except Exception as exc:
-                            logger.warning("Failed to record Langfuse token usage: %s", exc)
+            self._record_token_usage_and_cost(llm_client, generation_span, trace)
 
             # Output guardrails: verify structure and quality
             from data_engineering_copilot.services.output_guardrails import OutputGuardrails
@@ -2793,6 +2716,78 @@ class AsyncRagService:
         if self.code_llm_client and intent in CODE_INTENTS:
             return self.code_llm_client
         return self.llm_client
+
+    async def _apply_self_consistency(
+        self, answer_text: str, prompt: str, intent: str, llm_client: LLMClientProtocol
+    ) -> str:
+        """Self-consistency sampling (dark flag): for code intents, draw N
+        candidates and keep the medoid by token similarity."""
+        if (
+            not self.config.self_consistency_enabled
+            or intent not in CODE_INTENTS
+            or self.config.self_consistency_samples <= 1
+        ):
+            return answer_text
+        extra_candidates: list[str] = []
+        for _ in range(self.config.self_consistency_samples - 1):
+            extra_candidates.append(await llm_client.generate(prompt))
+        logger.info("self_consistency_applied intent=%s samples=%d", intent, len(extra_candidates) + 1)
+        return select_most_consistent([answer_text, *extra_candidates])
+
+    def _record_token_usage_and_cost(self, llm_client: LLMClientProtocol, generation_span: Any, trace: Any) -> None:
+        """Record provider token usage on the token tracker and emit
+        usage/cost details to the trace and generation span (fail-open)."""
+        if self.token_tracker is None or not hasattr(llm_client, "last_usage"):
+            return
+        usage = getattr(llm_client, "last_usage", None)
+        if usage is None:
+            return
+        self.token_tracker.record(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            model=usage.model,
+        )
+        if not (self.telemetry and trace):
+            return
+        try:
+            trace_id = getattr(trace, "trace_id", None) or getattr(trace, "id", None)
+            if not trace_id:
+                return
+            cost = self._estimate_cost(usage.prompt_tokens, usage.completion_tokens, usage.model)
+            if generation_span:
+                generation_span.update(
+                    usage_details={
+                        "input": usage.prompt_tokens,
+                        "output": usage.completion_tokens,
+                        "total": usage.prompt_tokens + usage.completion_tokens,
+                        "unit": "TOKENS",
+                    },
+                    cost_details={
+                        "input": cost,
+                        "output": cost,
+                        "total": cost,
+                        "currency": "USD",
+                    },
+                )
+            trace.update(
+                metadata={
+                    "token_usage": {
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                        "total_tokens": usage.prompt_tokens + usage.completion_tokens,
+                        "model": usage.model,
+                    },
+                    "cost_usd": cost,
+                }
+            )
+            self.telemetry.score(trace_id=trace_id, name="cost_usd", value=cost, data_type="NUMERIC")
+            logger.debug(
+                "Langfuse token usage and cost recorded: tokens=%d cost=$%.6f",
+                usage.prompt_tokens + usage.completion_tokens,
+                cost,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record Langfuse token usage: %s", exc)
 
     async def _apply_scope_gate(
         self,
