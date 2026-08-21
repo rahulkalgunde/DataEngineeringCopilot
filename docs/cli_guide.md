@@ -41,6 +41,12 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec evaluate](#dec-evaluate)
   - [dec eval-coverage](#dec-eval-coverage)
   - [dec eval-fast](#dec-eval-fast)
+  - [dec eval-generation](#dec-eval-generation)
+  - [dec eval-retrieval](#dec-eval-retrieval)
+  - [dec eval-rerank](#dec-eval-rerank)
+  - [dec eval-assembly](#dec-eval-assembly)
+  - [dec eval-prompt-aug](#dec-eval-prompt-aug)
+  - [dec eval-chunking](#dec-eval-chunking)
   - [dec gen-synthetic-eval](#dec-gen-synthetic-eval)
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
@@ -76,6 +82,10 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 |---|---|---|---|---|---|
 | `ingest`, `cancel`, `ingestion-monitor`, `profile` | Yes | Yes (via worker) | Yes | Yes (crawl) | Yes |
 | `ask`, `evaluate` | No (direct RAG) | Yes | Yes | No | Yes |
+| `eval-retrieval`, `eval-rerank`, `eval-assembly` | No (direct RAG) | Yes | Yes | No | Embedder (+ reranker for `eval-rerank`; optional there) |
+| `eval-generation` | No | No | No | No | Yes — LLM only (`answer` generator + `evaluation` judge chains) |
+| `eval-prompt-aug --mode llm` | No | No | No | No | Yes — LLM only |
+| `eval-chunking`, `eval-prompt-aug --mode template` | No | No | No | No | No (fully offline) |
 | `reenrich`, `retry-failed`, `unskip` | No (in-process, direct ingestion) | Yes | Yes | Yes | Yes |
 | `reset-index` | No | Yes | Yes | If set | No |
 | `reset-qdrant` | No | Yes | No | No | No |
@@ -1090,6 +1100,224 @@ usage: dec eval-fast [--dataset DATASET] [--generation GEN] [--output-dir DIR]
 - Needs Qdrant + a generation corpus + a local embedder (Ollama) — no paid
   calls (`make eval-fast`).
 
+### `dec eval-generation`
+
+Generation-layer-only evaluation with **retrieval frozen**: each dataset row's
+gold contexts are fed directly to the answer LLM (no Qdrant/Redis involved), so
+the score isolates generation quality from retrieval/prompt-assembly quality.
+LLM-as-judge metrics with hard gates; latency is deliberately not measured.
+
+```
+usage: dec eval-generation [-h] [--dataset DATASET] [--n-trials N] [--output PATH]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/eval_dataset.jsonl` | JSONL rows with `question`, `contexts` (frozen gold context list), and `ground_truth` (or `answer`). |
+| `--n-trials` | int | `3` | Judge trials averaged per row for the rubric score (dampens judge variance). |
+| `--output` | path | None (stdout only) | Write the full JSON report to this path. |
+
+**Metrics & gates**
+
+| Metric | Gate | What it measures |
+|---|---|---|
+| Faithfulness | ≥ 0.85 | Fraction of answer claims backed by the frozen context. |
+| Answer relevance | ≥ 0.80 | How directly the answer addresses the question (topicality). |
+| Rubric correctness | ≥ 4.0 | 1–5 completeness/accuracy/tone vs the gold answer. |
+
+- The **generator** is the purpose-`answer` fallback chain; the **judge** is the
+  separate purpose-`evaluation` chain at `evaluation_temperature` = `0.0` — a
+  different model family than the generator to reduce self-judging bias.
+- Prints a Markdown report (means + gates verdict + per-row table).
+- Cost: per row ≈ 1 generation call + 3 × `--n-trials` judge calls through the
+  paid providers.
+
+**Examples**
+
+```bash
+dec eval-generation
+dec eval-generation --n-trials 5 --output .rag_eval/gen_eval.json
+dec eval-generation --dataset tests/evaluation/golden/qa_spark.jsonl
+```
+
+**Exit codes**: `0` all gates passed; `2` any gate failed; `1` dataset missing.
+
+---
+
+### `dec eval-retrieval`
+
+Source-agnostic retrieval-only benchmark: Recall@K / MRR / Precision@K overall
+and grouped by intent. Each query runs through the RAG service with
+`retrieval_only=True` (no answer generation — the GraphRAG/CRAG LLM
+augmentations are skipped), so it measures base retrieval quality quickly and
+cheaply. With `--compare-baseline` it doubles as a CI regression gate: exit 1
+when overall Recall@K drops below baseline − 0.02.
+
+```
+usage: dec eval-retrieval [-h] [--dataset DATASET] [--k K] [--output-dir DIR]
+                          [--compare-baseline BASELINE]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/golden/recall_all.jsonl` | Recall-format JSONL (`question`; optional `intent`, `expected_urls`). |
+| `--k` | int | `10` | Cutoff position for Recall/MRR/Precision. |
+| `--output-dir` | dir | None (summary only) | Write machine-readable `retrieval_eval.json` here (consumed by `make eval-set-baseline`). |
+| `--compare-baseline` | path | None | Baseline `retrieval_eval.json`; fail (exit 1) when Recall@K < baseline − 0.02. |
+
+**Behavior**
+- Retrieval always bypasses the cache (`bypass_cache=True`) so stale answers never skew a benchmark run.
+- Per-query progress line: `[i/n] <id> intent=<intent>: R@10=… MRR=… P@10=…`.
+- Summary block prints overall Recall@K / MRR@K / Precision@K plus a per-intent breakdown with counts.
+- A missing or unparseable baseline file is treated as a warning — the gate is skipped, exit stays `0`.
+
+**Baseline workflow**
+
+```bash
+make eval-set-baseline OUTPUT=tests/evaluation/benchmarks/baseline.json   # write a baseline
+make eval-retrieval-gate                                                  # compare against it (CI gate)
+# equivalent: dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
+```
+
+**Exit codes**: `0` pass (or gate skipped); `1` retrieval regression vs baseline; `2` bad input (missing dataset, invalid JSONL, no queries); `5` operational failure (no results produced).
+
+---
+
+### `dec eval-rerank`
+
+Isolated reranker A/B on frozen candidate pools — no pipeline coupling. For
+each query it retrieves top `k×4` candidates (or loads them from the frozen
+pool file), reranks down to top-k, and reports post − pre rerank **gains** at K:
+nDCG@K, MRR@K, Precision@K, Recall@K.
+
+```
+usage: dec eval-rerank [-h] [--dataset DATASET] [--k K] [--pool-file PATH]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/golden/rerank_eval_sample.jsonl` | JSONL rows: `query`, `source_urls`, `relevance_labels` (binary labels aligned with `source_urls`). |
+| `--k` | int | `10` | Cutoff position; also drives the `k×4` candidate pool size. |
+| `--pool-file` | path | None | Freeze/reuse candidate pools: newly retrieved pools are merged back into this JSON, so later runs replay identical candidates. |
+
+**Behavior**
+- Prints an aggregate summary: `Queries evaluated: N` followed by one line per metric gain (`ndcg_gain`, `mrr_gain`, `precision_gain`, `recall_gain`).
+- If no reranker is configured the rerank step is a passthrough (gains of ~0) rather than an error.
+- Needs Qdrant + embedder (+ the reranker model) — no answer LLM calls.
+
+**Example**
+
+```bash
+dec eval-rerank                                   # default sample dataset, k=10
+dec eval-rerank --pool-file .rag_eval/rerank_pool.json   # reproducible frozen-pool runs
+```
+
+**Exit codes**: `0` success; `2` failure (missing dataset, unreachable Qdrant/embedder).
+
+---
+
+### `dec eval-assembly`
+
+Isolated context-assembly evaluation: retrieves top-k candidates per query,
+runs them through the production `ContextAssembler` (16,000-char budget), and
+scores assembly quality on the frozen result set.
+
+```
+usage: dec eval-assembly [-h] [--dataset DATASET] [--k K]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/golden/assembly_eval_sample.jsonl` | JSONL rows: `query`, `source_urls`, optional `gold_facts`. |
+| `--k` | int | `20` | Candidate pool size fed to the assembler. |
+
+**Metrics** (per query)
+- `duplicate_candidate_rate` — duplicated content in the assembled context.
+- `source_coverage_rate` — share of retrieved sources surviving into the context.
+- `compression_ratio` — assembled-context chars vs raw retrieved chars.
+- `needle_loss_rate` — gold facts dropped from the assembled context.
+
+Prints one four-line metric block per query. Needs Qdrant + embedder — no LLM.
+
+**Exit codes**: `0` success; `2` failure (missing/unreadable dataset, retrieval error).
+
+---
+
+### `dec eval-prompt-aug`
+
+Prompt-augmentation evaluation on frozen inputs: swaps prompt templates over
+identical `(query, context)` pairs and scores format, citation, injection
+defense, and zero-context behavior. `--mode template` is fully hermetic (only
+`PromptBuilder` runs — zero infra, zero cost); `--mode llm` makes live LLM calls
+through the answer-purpose chain pinned to `--provider`.
+
+```
+usage: dec eval-prompt-aug [-h] --dataset PATH [--mode {template,llm}] [--provider NAME]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path (required) | — | JSONL rows: `query`, `context`, `intent`; optional `expected_citations`, `expected_format` (default `json`), `has_sufficient_context` (default true), `injection_payload`. |
+| `--mode` | choice | `template` | `template` = hermetic prompt-construction check; `llm` = generate real outputs via the LLM. |
+| `--provider` | str | `ollama` | Provider pinned for the answer chain in `llm` mode. |
+
+**Metrics**: `format_compliance_rate`, `citation_precision`, `citation_recall`,
+`injection_defense_rate`, `zero_context_fallback_accuracy`.
+
+**Behavior**
+- In `llm` mode the prompt flags come from settings (`prompt_salted_xml_tags`, `prompt_trailing_instructions`, `prompt_citation_enforcement`), so you can A/B prompt-augmentation features against the same frozen dataset.
+- No pass/fail gates — informational report (`Prompt Aug Eval — N samples` + metric lines).
+
+**Example**
+
+```bash
+dec eval-prompt-aug --dataset tests/evaluation/golden/prompt_aug_eval_sample.jsonl
+dec eval-prompt-aug --dataset tests/evaluation/golden/prompt_aug_eval_sample.jsonl --mode llm --provider groq
+```
+
+**Exit codes**: `0` success; `2` failure (missing dataset, LLM error in `llm` mode).
+
+---
+
+### `dec eval-chunking`
+
+Offline chunker-quality evaluation against committed gold spans. Loads the gold
+datasets, chunks every document with the selected strategy, and reports
+token-level overlap, excerpt precision, boundary alignment, and structural
+fracture. No retrieval, embedding, or LLM calls — safe to run anywhere.
+
+```
+usage: dec eval-chunking [-h] [--strategy {all,recursive,sentence,semantic,header,spark,spark_rendered,structured,hierarchical}]
+                         [--gold {synthetic,human,all}] [--output PATH]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--strategy` | choice | `all` | Chunking strategy to evaluate. ⚠️ See the support note below. |
+| `--gold` | choice | `all` | Gold dataset source: `synthetic` (`synthetic_gold.jsonl`), `human` (`human_slice.jsonl`), or both. |
+| `--output` | path | `/tmp/chunking_eval.json` | Output JSON report path. |
+
+**Strategy support mismatch**: argparse accepts `all, recursive, sentence,
+semantic, header, spark, spark_rendered, structured, hierarchical`, but the
+evaluator's chunker factory only supports **`recursive`, `sentence`,
+`header`, `structured`** (and `all` = those four). Any other value raises
+`Unsupported strategy for chunking eval` and exits `2`.
+
+**Metrics** (per strategy): token IoU, excerpt precision, `boundary_similarity`, `structural_fracture_rate` (+ `doc_count`). Printed as a table:
+
+```
+Strategy          IoU   Prec  B-Sim  Fract
+recursive       0.xxx  0.xxx  0.xxx  0.xxx
+...
+Report written to /tmp/chunking_eval.json
+```
+
+Gold data lives in `tests/evaluation/golden/chunking/{synthetic_gold,human_slice}.jsonl`. Pair with the unit-level suite `make test-chunking` (invariants/metrics/snapshots).
+
+**Exit codes**: `0` success; `2` evaluation failure (unsupported strategy, missing gold data).
+
+---
+
 ### `dec gen-synthetic-eval`
 
 Generates a corpus-grounded **synthetic recall set** from the active
@@ -1578,6 +1806,13 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Wipe all generation state + re-run reset | `dec gen-reset` |
 | List active/stale/orphan generations | `dec gen-stale` |
 | Spark retrieval-recall evaluation | `dec evaluate --spark` |
+| Retrieval-only benchmark (Recall@K/MRR/P@K) | `dec eval-retrieval --k 10` |
+| Retrieval regression gate vs baseline | `dec eval-retrieval --compare-baseline <retrieval_eval.json>` |
+| Generation-only eval (frozen contexts, LLM judge) | `dec eval-generation` |
+| Isolated reranker A/B (nDCG/MRR/P/R gains) | `dec eval-rerank` |
+| Context-assembly quality | `dec eval-assembly` |
+| Prompt augmentation A/B | `dec eval-prompt-aug --dataset <file>` |
+| Chunker quality vs gold spans | `dec eval-chunking` |
 | Preview plan phase commands | `dec rag-plan --dry-run` |
 | Run RAG improvement plan phase | `dec rag-plan --phase <0-7>` |
 | Profile ingestion | `dec profile --load-sweep 10,50,100` |
