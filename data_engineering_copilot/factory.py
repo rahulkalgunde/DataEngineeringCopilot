@@ -346,9 +346,33 @@ def _build_purpose_llm_client(
 
     rate_limiter = (provider_rate_limiters or {}).get(eff_provider)
 
+    _gen_kwargs: dict = {}
+    if purpose == "answer":
+        _gen_kwargs["temperature"] = app_settings.generation_temperature
+    elif purpose == "code":
+        _gen_kwargs["temperature"] = app_settings.code_generation_temperature
+    elif purpose == "evaluation":
+        _gen_kwargs["temperature"] = app_settings.evaluation_temperature
+    if app_settings.generation_seed is not None:
+        _gen_kwargs["seed"] = app_settings.generation_seed
+    if app_settings.generation_frequency_penalty:
+        _gen_kwargs["frequency_penalty"] = app_settings.generation_frequency_penalty
+    if app_settings.generation_presence_penalty:
+        _gen_kwargs["presence_penalty"] = app_settings.generation_presence_penalty
+    if app_settings.generation_top_p != 1.0:
+        _gen_kwargs["top_p"] = app_settings.generation_top_p
+    if purpose in ("answer", "code"):
+        from data_engineering_copilot.services.structured_output import STRUCTURED_RAG_ANSWER_SCHEMA
+
+        _gen_kwargs["structured_schema"] = STRUCTURED_RAG_ANSWER_SCHEMA
+
+    def _make(**base) -> LLMClient:
+        merged = {**base, "provider": eff_provider, **_gen_kwargs}
+        return LLMClient(**merged)
+
     if eff_provider == "ollama":
         llm_base = app_settings.llm_ollama_base_url or app_settings.ollama_base_url
-        return LLMClient(
+        return _make(
             base_url=f"{llm_base}/v1",
             model=eff_model,
             api_key="",
@@ -362,7 +386,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.openrouter_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required when provider='openrouter'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.openrouter_base_url,
             model=eff_model,
             api_key=api_key,
@@ -377,7 +401,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.nvidia_api_key.get_secret_value()
         if not api_key:
             raise ValueError("NVIDIA_API_KEY is required when provider='nvidia'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.nvidia_base_url,
             model=eff_model,
             api_key=api_key,
@@ -390,7 +414,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.groq_api_key.get_secret_value()
         if not api_key:
             raise ValueError("GROQ_API_KEY is required when provider='groq'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.groq_base_url,
             model=eff_model,
             api_key=api_key,
@@ -404,7 +428,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.cerebras_api_key.get_secret_value()
         if not api_key:
             raise ValueError("CEREBRAS_API_KEY is required when provider='cerebras'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.cerebras_base_url,
             model=eff_model,
             api_key=api_key,
@@ -418,7 +442,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.gemini_api_key.get_secret_value()
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required when provider='gemini'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.gemini_base_url,
             model=eff_model,
             api_key=api_key,
@@ -431,7 +455,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.cloudflare_api_key.get_secret_value()
         if not api_key:
             raise ValueError("CLOUDFLARE_API_KEY is required when provider='cloudflare'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.cloudflare_base_url,
             model=eff_model,
             api_key=api_key,
@@ -444,7 +468,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.opencodezen_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OPENCODEZEN_API_KEY is required when provider='opencodezen'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.opencodezen_base_url,
             model=eff_model,
             api_key=api_key,
@@ -458,7 +482,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.opencodego_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OPENCODEGO_API_KEY is required when provider='opencodego'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.opencodego_base_url,
             model=eff_model,
             api_key=api_key,
@@ -472,7 +496,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.sambanova_api_key.get_secret_value()
         if not api_key:
             raise ValueError("SAMBANOVA_API_KEY is required when provider='sambanova'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.sambanova_base_url,
             model=eff_model,
             api_key=api_key,
@@ -486,7 +510,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.mistral_api_key.get_secret_value()
         if not api_key:
             raise ValueError("MISTRAL_API_KEY is required when provider='mistral'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.mistral_base_url,
             model=eff_model,
             api_key=api_key,
@@ -500,7 +524,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.deepseek_api_key.get_secret_value()
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY is required when provider='deepseek'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.deepseek_base_url,
             model=eff_model,
             api_key=api_key,
@@ -514,7 +538,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.zai_api_key.get_secret_value()
         if not api_key:
             raise ValueError("ZAI_API_KEY is required when provider='zai'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.zai_base_url,
             model=eff_model,
             api_key=api_key,
@@ -528,7 +552,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.siliconflow_api_key.get_secret_value()
         if not api_key:
             raise ValueError("SILICONFLOW_API_KEY is required when provider='siliconflow'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.siliconflow_base_url,
             model=eff_model,
             api_key=api_key,
@@ -542,7 +566,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.together_api_key.get_secret_value()
         if not api_key:
             raise ValueError("TOGETHER_API_KEY is required when provider='together'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.together_base_url,
             model=eff_model,
             api_key=api_key,
@@ -556,7 +580,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.fireworks_api_key.get_secret_value()
         if not api_key:
             raise ValueError("FIREWORKS_API_KEY is required when provider='fireworks'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.fireworks_base_url,
             model=eff_model,
             api_key=api_key,
@@ -570,7 +594,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.ollama_cloud_api_key.get_secret_value()
         if not api_key:
             raise ValueError("OLLAMA_API_KEY is required when provider='ollama_cloud'")
-        return LLMClient(
+        return _make(
             base_url=f"{app_settings.ollama_cloud_base_url}/v1",
             model=eff_model,
             api_key=api_key,
@@ -585,7 +609,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.llm7_api_key.get_secret_value()
         if not api_key:
             raise ValueError("LLM7_API_KEY is required when provider='llm7'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.llm7_base_url,
             model=eff_model,
             api_key=api_key,
@@ -599,7 +623,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.agnes_api_key.get_secret_value()
         if not api_key:
             raise ValueError("AGNES_API_KEY is required when provider='agnes'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.agnes_base_url,
             model=eff_model,
             api_key=api_key,
@@ -613,7 +637,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.helyx_api_key.get_secret_value()
         if not api_key:
             raise ValueError("HELYX_API_KEY is required when provider='helyx'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.helyx_base_url,
             model=eff_model,
             api_key=api_key,
@@ -627,7 +651,7 @@ def _build_purpose_llm_client(
         api_key = app_settings.anyapi_api_key.get_secret_value()
         if not api_key:
             raise ValueError("ANYAPI_API_KEY is required when provider='anyapi'")
-        return LLMClient(
+        return _make(
             base_url=app_settings.anyapi_base_url,
             model=eff_model,
             api_key=api_key,
