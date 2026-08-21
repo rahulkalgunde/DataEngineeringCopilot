@@ -1845,6 +1845,16 @@ class AsyncRagService:
         if validated is not None:
             full_text = validated.answer
 
+        # Scope gate BEFORE trace/cache write: refusals must never be cached,
+        # and the trace must record the text actually returned.
+        scope_refused = False
+        if self.scope_verifier is not None and full_text.strip():
+            scope_covered = await self.scope_verifier.verify(safe_question, context_str)
+            if not scope_covered:
+                logger.info("scope_gate_refused_stream topic_not_covered question=%r", safe_question[:80])
+                full_text = _SCOPE_REFUSAL_TEXT
+                scope_refused = True
+
         confidence = retrieved_chunks[0].confidence if retrieved_chunks else 0.0
 
         # Score and end trace
@@ -1864,7 +1874,7 @@ class AsyncRagService:
             )
             trace.end()
 
-        if self.cache is not None:
+        if self.cache is not None and not scope_refused:
             try:
                 envelope = CachedAnswer(
                     text=full_text,
@@ -1883,11 +1893,6 @@ class AsyncRagService:
                 await self.telemetry.flush_async()
 
         # Done event with metadata
-        if self.scope_verifier is not None and full_text.strip():
-            scope_covered = await self.scope_verifier.verify(safe_question, context_str)
-            if not scope_covered:
-                logger.info("scope_gate_refused_stream topic_not_covered question=%r", safe_question[:80])
-                full_text = _SCOPE_REFUSAL_TEXT
         groundedness_score, unsupported_claims = await self._verify_stream_groundedness(
             full_text, retrieved_chunks, trace
         )
