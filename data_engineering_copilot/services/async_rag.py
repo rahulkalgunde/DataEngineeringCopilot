@@ -2145,6 +2145,13 @@ class AsyncRagService:
             if metadata_filters is None or not metadata_filters.modules:
                 chunk_type_filter = "api"
 
+        # Search-mode routing parity with answer(): intent + query signals
+        # select the dense/sparse/hybrid balance for every chat variant.
+        chat_search_mode = select_search_mode(
+            rewritten.intent if rewritten is not None else "factual",
+            classify_query_signals(safe_question),
+        )
+
         all_retrieved: list[RetrievedChunk] = []
         per_query_results: list[list[RetrievedChunk]] = []
         seen_ids: set[str] = set()
@@ -2161,6 +2168,8 @@ class AsyncRagService:
                         source_filter=source_filter,
                         chunk_type_filter=chunk_type_filter,
                         metadata_filters=metadata_filters,
+                        rrf_profile=self._rrf_profile_for(q),
+                        search_mode=chat_search_mode,
                         fused_limit=_rerank_pool_size(
                             self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
                         ),
@@ -2172,6 +2181,8 @@ class AsyncRagService:
                             query_text=q,
                             source_filter=source_filter,
                             chunk_type_filter=chunk_type_filter,
+                            rrf_profile=self._rrf_profile_for(q),
+                            search_mode=chat_search_mode,
                             fused_limit=_rerank_pool_size(
                                 self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
                             ),
