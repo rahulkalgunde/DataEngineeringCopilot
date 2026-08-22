@@ -1243,6 +1243,14 @@ class AppSettings(BaseSettings):
     frontier_max_attempts: int = 3
     logging_enabled: bool = True
     # Hybrid search
+    # Matryoshka (MRL) multistage retrieval: store a renormalized small-dim
+    # prefix as "dense_small" and prefetch with it at oversampled limits
+    # before full-dim rescoring. Dark until: eval-retrieval Recall@10 within
+    # -0.01 of baseline AND p95 retrieval latency improved >= 20%. Requires an
+    # MRL-capable dense model (nomic v1.5-class); new index generation needed.
+    mrl_multistage_enabled: bool = False
+    mrl_small_dim: int = 256
+    mrl_oversample_factor: int = 4
     hybrid_search_enabled: bool = True
     hybrid_rrf_k: int = 60
     # Identifier-aware hybrid profiles: when enabled, technical queries

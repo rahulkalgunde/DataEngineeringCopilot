@@ -8,6 +8,7 @@ Hybrid mode:    adds BM25 sparse vectors and uses Qdrant native RRF fusion
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
@@ -94,6 +95,23 @@ def _resolve_bm25_cache_path(collection_name: str) -> Path:
     return base / f"{collection_name}.json"
 
 
+def _mrl_small_vector(vector: list[float], small_dim: int) -> list[float]:
+    """Matryoshka prefix slice + L2 renormalization.
+
+    MRL-trained models concentrate semantics in the leading dimensions, so a
+    renormalized prefix acts as the small-dim first-stage vector. Raises when
+    ``small_dim`` exceeds the source dimensionality; an all-zero prefix stays
+    all-zero (no division by zero).
+    """
+    if small_dim > len(vector):
+        raise ValueError(f"mrl_small_dim {small_dim} exceeds embedding dim {len(vector)}")
+    prefix = [float(x) for x in vector[:small_dim]]
+    norm = math.sqrt(sum(x * x for x in prefix))
+    if norm == 0.0:
+        return prefix
+    return [x / norm for x in prefix]
+
+
 class AsyncQdrantVectorStore:
     """Async wrapper around Qdrant with optional BM25 hybrid search.
 
@@ -117,9 +135,15 @@ class AsyncQdrantVectorStore:
         embedding_dimension: int | None = None,
         bm25_persist_path: Path | None = None,
         bm25_namespace: bool = False,
+        mrl_multistage_enabled: bool = False,
+        mrl_small_dim: int = 256,
+        mrl_oversample_factor: int = 4,
     ) -> None:
         self._url = url
         self._collection_name = collection_name
+        self._mrl_enabled = mrl_multistage_enabled
+        self._mrl_small_dim = mrl_small_dim
+        self._mrl_oversample_factor = mrl_oversample_factor
         self._hybrid_search = hybrid_search
         self._hybrid_rrf_k = hybrid_rrf_k
         self._bm25_namespace = bm25_namespace
@@ -194,6 +218,11 @@ class AsyncQdrantVectorStore:
                         distance=models.Distance.COSINE,
                     ),
                 }
+                if self._mrl_enabled:
+                    vectors_config["dense_small"] = models.VectorParams(
+                        size=self._mrl_small_dim,
+                        distance=models.Distance.COSINE,
+                    )
                 sparse_vectors_config = {"sparse": SparseVectorParams(index=SparseIndexParams())}
             else:
                 vectors_config = models.VectorParams(
@@ -331,7 +360,9 @@ class AsyncQdrantVectorStore:
                     sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in sub_chunks]
                     vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
                 else:
-                    vectors_dict = vectors
+                    vectors_dict = {"dense": vectors}
+                if self._mrl_enabled:
+                    vectors_dict["dense_small"] = [_mrl_small_vector(v, self._mrl_small_dim) for v in vectors]
 
                 await self._client.upsert(
                     collection_name=self._collection_name,
@@ -856,6 +887,8 @@ class AsyncQdrantVectorStore:
                 "dense": [list(e) for e in sub_embeddings],
                 "sparse": [self._bm25.tokenize_query(c.text) for c in sub_chunks],
             }
+            if self._mrl_enabled:
+                vectors_dict["dense_small"] = [_mrl_small_vector(list(e), self._mrl_small_dim) for e in sub_embeddings]
             payloads = [self._chunk_to_payload(chunk) for chunk in sub_chunks]
             await self._client.upsert(
                 collection_name=self._collection_name,
