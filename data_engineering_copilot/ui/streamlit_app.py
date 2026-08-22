@@ -182,18 +182,14 @@ def _check_ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
+                # Embeddings are in-process (local-hf) — Ollama only needs LLMs.
                 models = [m.get("name", "") for m in data.get("models", [])]
-                has_embed = any(settings.embedding_model_name in m for m in models)
-                has_llm = any(settings.ollama_model in m for m in models)
-                missing = []
-                if not has_embed:
-                    missing.append(settings.embedding_model_name)
-                if not has_llm:
-                    missing.append(settings.ollama_model)
-                if missing:
+                if settings.ollama_model not in models:
                     return False, (
-                        f"Ollama is running but missing models: **{', '.join(missing)}**\n\n"
-                        "**Pull them with:**\n```\n" + "\n".join(f"ollama pull {m}" for m in missing) + "\n```"
+                        f"Ollama is running but missing model: **{settings.ollama_model}**\n\n"
+                        "**Pull it with:**\n```\n"
+                        f"ollama pull {settings.ollama_model}\n```\n\n"
+                        f"(Embeddings run in-process via local-hf: {settings.local_hf_embedding_model})"
                     )
                 return True, "Ollama is running with all required models"
             return False, f"Ollama returned HTTP {resp.status}"
@@ -201,9 +197,8 @@ def _check_ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
         return False, (
             f"Ollama is not reachable at {settings.ollama_base_url}.\n\n"
             "**Start it with:**\n```\nollama serve\n```\n\n"
-            "Then pull the required models:\n```\n"
-            f"ollama pull {settings.embedding_model_name}\n"
-            f"ollama pull {settings.ollama_model}\n```"
+            f"Then pull the required model:\n```\nollama pull {settings.ollama_model}\n```\n\n"
+            f"(Embeddings run in-process via local-hf: {settings.local_hf_embedding_model})"
         )
     except (TimeoutError, OSError) as exc:
         return False, f"Ollama connection failed: {exc}"
@@ -1845,7 +1840,7 @@ def render_health_tab() -> None:
     st.markdown("### Ollama Configuration")
     col_o1, col_o2, col_o3 = st.columns(3)
     col_o1.metric("Model", settings.ollama_model)
-    col_o2.metric("Embedding Model", settings.embedding_model_name)
+    col_o2.metric("Embedding Model", settings.active_embedding_model_name())
     col_o3.metric("Base URL", settings.ollama_base_url)
 
     col_o4, col_o5 = st.columns(2)
