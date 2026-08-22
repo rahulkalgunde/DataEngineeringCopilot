@@ -39,7 +39,7 @@ def sample_chunks():
 
 @pytest.fixture
 def sample_embeddings():
-    return [[0.1] * 768, [0.2] * 768]
+    return [[0.1] * 2048, [0.2] * 2048]
 
 
 # ------------------------------------------------------------------
@@ -163,7 +163,7 @@ async def test_hybrid_query_uses_prefetch(mock_async_qdrant):
 
     store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
 
-    results = await store.query([0.1] * 768, top_k=5)
+    results = await store.query([0.1] * 2048, top_k=5)
 
     # Verify query_points was called with prefetch
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
@@ -193,7 +193,7 @@ async def test_hybrid_query_returns_deep_fused_pool(mock_async_qdrant):
 
     store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
 
-    await store.query([0.1] * 768, top_k=5)
+    await store.query([0.1] * 2048, top_k=5)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
     assert call_kwargs["limit"] == 40
@@ -224,7 +224,7 @@ async def test_hybrid_query_honors_fused_limit(mock_async_qdrant):
     store.set_query_sparse(SparseVector(indices=[0, 1], values=[1.0, 0.5]))
 
     # retrieval_top_k=5, reranker_top_k=20 -> max(5*8, 20*5) = 100
-    await store.query([0.1] * 768, top_k=5, fused_limit=100)
+    await store.query([0.1] * 2048, top_k=5, fused_limit=100)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
     assert call_kwargs["limit"] == 100
@@ -257,7 +257,7 @@ async def test_hybrid_query_fused_limit_meets_rerank_pool(mock_async_qdrant):
     rerank_pool = max(retrieval_top_k * 8, reranker_top_k * 5)
     assert rerank_pool == 100
 
-    await store.query([0.1] * 768, top_k=retrieval_top_k, fused_limit=rerank_pool)
+    await store.query([0.1] * 2048, top_k=retrieval_top_k, fused_limit=rerank_pool)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
     assert call_kwargs["limit"] >= rerank_pool
@@ -279,7 +279,7 @@ async def test_dense_only_query_no_prefetch(mock_async_qdrant):
         collection_name="test",
         hybrid_search=False,
     )
-    await store.query([0.1] * 768, top_k=5)
+    await store.query([0.1] * 2048, top_k=5)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
     # No prefetch when hybrid is off

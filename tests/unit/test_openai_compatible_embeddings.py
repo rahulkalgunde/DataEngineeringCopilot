@@ -166,7 +166,8 @@ async def test_embed_sends_auth_header(embeddings):
 
 
 @pytest.mark.asyncio
-async def test_embed_wrong_dimension_raises(embeddings):
+async def test_embed_wrong_dimension_raises():
+    """Provider returning a different geometry than configured must raise."""
     with respx.mock:
         respx.post("https://openrouter.ai/api/v1/embeddings").mock(
             return_value=httpx.Response(
@@ -175,7 +176,16 @@ async def test_embed_wrong_dimension_raises(embeddings):
             )
         )
         from data_engineering_copilot.domain.exceptions import EmbeddingError
+        from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+            OpenAICompatibleEmbeddings,
+        )
 
+        embeddings = OpenAICompatibleEmbeddings(
+            api_key="sk-or-v1-test-key",
+            model_name="nvidia/nemotron-3-embed-1b:free",
+            base_url="https://openrouter.ai/api/v1",
+            embedding_dimension=2048,
+        )
         with pytest.raises(EmbeddingError, match="dimension 768"):
             await embeddings.embed_texts(["test"])
 
