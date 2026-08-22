@@ -73,7 +73,6 @@ uv pip install -e ".[dev]"
 
 Ollama models (pulled automatically by `make dev`; also via `make pull-models`):
 
-- `nomic-embed-text` — embeddings
 - `phi4-mini:3.8b` — general LLM
 - `qwen2.5-coder:7b` — code generation
 
