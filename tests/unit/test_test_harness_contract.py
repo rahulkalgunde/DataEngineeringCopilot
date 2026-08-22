@@ -141,12 +141,12 @@ def test_non_ollama_provider_allowed_with_opt_in():
 # ---------------------------------------------------------------------------
 
 
-def test_make_settings_defaults_to_ollama_and_empty_overrides():
+def test_make_settings_defaults_to_hermetic_providers_and_empty_overrides():
     settings = tc.make_settings()
     assert settings.llm_provider == "ollama"
-    assert settings.embedding_provider == "ollama"
+    assert settings.embedding_provider == "local-hf"
     assert settings.llm_model == "llama3.2:3b"
-    assert settings.embedding_model_name == "nomic-embed-text"
+    assert settings.local_hf_embedding_model == "nvidia/Nemotron-3-Embed-1B-BF16"
     for field in ("answer", "rewrite", "groundedness", "intent", "enrichment", "evaluation", "code"):
         assert getattr(settings, f"{field}_llm_provider") == ""
     assert settings.code_llm_model == ""

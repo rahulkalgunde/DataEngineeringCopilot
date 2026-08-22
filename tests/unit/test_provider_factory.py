@@ -549,14 +549,16 @@ class TestBuildFallbackChain:
 
 
 class TestBuildEmbedder:
-    def test_ollama_default(self):
+    def test_local_hf_default(self):
         from data_engineering_copilot.factory import build_embedder
-        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+        from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+            LocalSentenceTransformerEmbeddings,
+        )
 
-        s = _make_settings(embedding_provider="ollama")
+        s = _make_settings(embedding_provider="local-hf")
         embedder = build_embedder(s)
-        assert isinstance(embedder, AsyncOllamaEmbeddings)
-        assert embedder.model_name == "nomic-embed-text"
+        assert isinstance(embedder, LocalSentenceTransformerEmbeddings)
+        assert embedder.model_name == "nvidia/Nemotron-3-Embed-1B-BF16"
 
     def test_openrouter(self):
         from data_engineering_copilot.factory import build_embedder
