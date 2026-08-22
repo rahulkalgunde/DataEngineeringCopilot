@@ -66,7 +66,7 @@ def _make_store(**overrides):
         mrl_small_dim=4,
         **overrides,
     )
-    store._client = _CapturingClient()
+    store._client = _CapturingClient()  # type: ignore[assignment]
     return store
 
 
@@ -81,7 +81,7 @@ class TestUpsertWritesSmallVector:
     async def test_upsert_chunks_includes_dense_small(self):
         store = _make_store()
         await store.upsert_chunks([_chunk()], [[0.6, 0.8, 0.1, 0.2, 0.3, 0.4]])
-        points = store._client.upserts[-1]
+        points = store._client.upserts[-1]  # type: ignore[attr-defined]
         vectors = points.vectors
         assert "dense" in vectors
         small = vectors["dense_small"]
@@ -99,7 +99,7 @@ class TestUpsertWritesSmallVector:
             hybrid_search=True,
             embedding_dimension=768,
         )
-        store._client = _CapturingClient()
+        store._client = _CapturingClient()  # type: ignore[assignment]
         await store.upsert_chunks([_chunk()], [[0.6, 0.8, 0.1, 0.2, 0.3, 0.4]])
-        vectors = store._client.upserts[-1].vectors
+        vectors = store._client.upserts[-1].vectors  # type: ignore[attr-defined]
         assert "dense_small" not in vectors
