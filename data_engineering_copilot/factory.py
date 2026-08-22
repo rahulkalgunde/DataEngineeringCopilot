@@ -1765,6 +1765,9 @@ def build_rag_service(
         hybrid_rrf_k=app_settings.hybrid_rrf_k,
         embedding_dimension=app_settings.get_embedding_dimension(),
         bm25_namespace=app_settings.namespace_bm25_enabled,
+        mrl_multistage_enabled=app_settings.mrl_multistage_enabled,
+        mrl_small_dim=app_settings.mrl_small_dim,
+        mrl_oversample_factor=app_settings.mrl_oversample_factor,
     )
     embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
     if app_settings.embedding_cache_enabled:
