@@ -17,7 +17,7 @@ from data_engineering_copilot.domain.models import DocumentChunk
 pytestmark = [pytest.mark.integration, pytest.mark.qdrant]
 
 
-def _fake_embedding(dim: int = 768) -> list[float]:
+def _fake_embedding(dim: int = 2048) -> list[float]:
     return [random.random() for _ in range(dim)]
 
 
