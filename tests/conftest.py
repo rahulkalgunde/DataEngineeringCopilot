@@ -502,12 +502,10 @@ def integration_settings():
 
 @pytest.fixture
 def embeddings_provider(integration_settings):
-    """Real Ollama embeddings provider (async wrapper). Skips if Ollama unreachable."""
-    require_ollama()
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
-
-    return AsyncOllamaEmbeddings(
-        model_name=integration_settings.embedding_model_name,
+    """In-process local-hf embeddings provider."""
+    return LocalSentenceTransformerEmbeddings(
+        model_name=integration_settings.local_hf_embedding_model,
+        embedding_dimension=integration_settings.get_embedding_dimension(),
     )
 
 
