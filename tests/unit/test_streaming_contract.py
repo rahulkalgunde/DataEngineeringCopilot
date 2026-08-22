@@ -59,7 +59,7 @@ async def _stream_rag():
     """Hermetic RAG service with a real QueryRewriter wired in."""
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
 
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])

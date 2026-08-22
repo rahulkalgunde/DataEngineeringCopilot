@@ -66,12 +66,12 @@ class TestExactCache:
 class TestSemanticCache:
     def test_miss_when_empty(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        result = cache.get_semantic("What is Spark?", [0.1] * 768)
+        result = cache.get_semantic("What is Spark?", [0.1] * 2048)
         assert result is None
 
     def test_hit_for_identical_vector(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        vec = [0.5] * 768
+        vec = [0.5] * 2048
         cache.set_semantic("What is Spark?", vec, _answer("answer1"))
         result = cache.get_semantic("What is Spark?", vec)
         assert result is not None
@@ -80,15 +80,15 @@ class TestSemanticCache:
     def test_miss_for_orthogonal_vector(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
         vec_a = [1.0] + [0.0] * 767
-        vec_b = [0.0] * 768
+        vec_b = [0.0] * 2048
         cache.set_semantic("What is Spark?", vec_a, _answer("answer1"))
         result = cache.get_semantic("Something else", vec_b)
         assert result is None
 
     def test_semantic_disabled_returns_none(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=False, similarity_threshold=0.9)
-        cache.set_semantic("q", [1.0] * 768, _answer("a"))
-        assert cache.get_semantic("q", [1.0] * 768) is None
+        cache.set_semantic("q", [1.0] * 2048, _answer("a"))
+        assert cache.get_semantic("q", [1.0] * 2048) is None
 
 
 class TestSemanticDimensionGuard:
@@ -97,13 +97,13 @@ class TestSemanticDimensionGuard:
 
     def test_wrong_dim_entry_skipped_not_crashed(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        cache.set_semantic("stale", [0.5] * 768, _answer("stale 768"))
+        cache.set_semantic("stale", [0.5] * 1024, _answer("stale"))
         result = cache.get_semantic("What is Spark?", [0.25] * 2048)
         assert result is None
 
     def test_wrong_dim_entry_does_not_hide_same_dim_hits(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        cache.set_semantic("stale", [0.5] * 768, _answer("stale 768"))
+        cache.set_semantic("stale", [0.5] * 2048, _answer("stale"))
         vec = [0.5] + [0.0] * 2047
         cache.set_semantic("fresh", vec, _answer("fresh 2048"))
         result = cache.get_semantic("fresh", vec)
@@ -115,13 +115,13 @@ class TestCombined:
     def test_exact_hit_skips_semantic(self):
         cache = QueryCache(exact_enabled=True, semantic_enabled=True, similarity_threshold=0.9)
         cache.set_exact("What is Spark?", _answer("exact_answer"))
-        result = cache.get("What is Spark?", query_embedding=[0.1] * 768)
+        result = cache.get("What is Spark?", query_embedding=[0.1] * 2048)
         assert result is not None
         assert result.text == "exact_answer"
 
     def test_fallback_to_semantic(self):
         cache = QueryCache(exact_enabled=True, semantic_enabled=True, similarity_threshold=0.9)
-        vec = [0.5] * 768
+        vec = [0.5] * 2048
         cache.set_semantic("What is Spark?", vec, _answer("semantic_answer"))
         result = cache.get("What is Spark?", query_embedding=vec)
         assert result is not None
@@ -129,7 +129,7 @@ class TestCombined:
 
     def test_miss_returns_none(self):
         cache = QueryCache(exact_enabled=True, semantic_enabled=True, similarity_threshold=0.9)
-        assert cache.get("What is Spark?", query_embedding=[0.1] * 768) is None
+        assert cache.get("What is Spark?", query_embedding=[0.1] * 2048) is None
 
 
 class TestScopeIsolation:
@@ -185,7 +185,7 @@ class TestScopeIsolation:
 
     def test_semantic_entries_scoped_by_tenant(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        vec = [0.5] * 768
+        vec = [0.5] * 2048
         cache.set_semantic("q", vec, _answer("tenant-a semantic"), scope=_SPARK)
         assert cache.get_semantic("q", vec, scope=_SPARK) is not None
         assert cache.get_semantic("q", vec, scope=_DELTA) is None
@@ -237,7 +237,7 @@ class TestPoisoningPrevention:
 
     def test_bad_answer_never_enters_semantic_cache(self):
         cache = QueryCache(exact_enabled=False, semantic_enabled=True, similarity_threshold=0.9)
-        vec = [0.5] * 768
+        vec = [0.5] * 2048
         bad = CachedAnswer(text="I cannot answer this question.", sources=(_source(),), confidence=0.8)
         cache.set_semantic("What is Spark?", vec, bad)
         assert cache.get_semantic("What is Spark?", vec) is None
@@ -280,7 +280,7 @@ class TestTopK:
 
     def test_empty_returns_none(self):
         cache = self._cache()
-        assert cache.top_k([0.5] * 768, k=3, min_similarity=0.0) == []
+        assert cache.top_k([0.5] * 2048, k=3, min_similarity=0.0) == []
 
     def test_returns_top_k_sorted_by_score(self):
         cache = self._cache()
@@ -320,7 +320,7 @@ class TestTopK:
 
     def test_dimension_mismatch_skipped(self):
         cache = self._cache()
-        cache.set_semantic("q", [0.5] * 768, _answer("answer-diff-dim"))
+        cache.set_semantic("q", [0.5] * 2048, _answer("answer-diff-dim"))
         results = cache.top_k([0.5] * 64, k=3, min_similarity=0.0)
         assert results == []
 

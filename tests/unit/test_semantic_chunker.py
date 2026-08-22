@@ -23,7 +23,7 @@ from data_engineering_copilot.services.semantic_chunker import SemanticChunker
 class MockEmbeddingModel:
     """Mock embedding model for testing without actual Ollama."""
 
-    def __init__(self, embedding_dim: int = 768):
+    def __init__(self, embedding_dim: int = 2048):
         self.embedding_dim = embedding_dim
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:

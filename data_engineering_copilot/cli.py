@@ -653,7 +653,7 @@ def _spark_commit_short(commit: str) -> str:
 
 
 def _resolve_spark_embedding_name() -> str:
-    model = settings.embedding_model_name
+    model = settings.active_embedding_model_name()
     if settings.embedding_provider == "nvidia":
         model = settings.nvidia_embedding_model
     elif settings.embedding_provider == "openrouter":
@@ -3292,7 +3292,7 @@ def config() -> None:
     elif provider == "gemini":
         model = settings.gemini_embedding_model
     else:
-        model = settings.embedding_model_name
+        model = settings.active_embedding_model_name()
     print(f"  Provider: {provider}")
     print(f"  Model: {model}")
     print(f"  Dimension: {dim}")
@@ -3424,7 +3424,7 @@ def inspect_db() -> None:
     elif provider == "gemini":
         model = settings.gemini_embedding_model
     else:
-        model = settings.embedding_model_name
+        model = settings.active_embedding_model_name()
     expected_dim = settings.get_embedding_dimension()
     match_icon = "✅" if (isinstance(dim, int) and dim == expected_dim) or dim == "?" else "⚠️"
     print(f"  Provider:       {provider}")

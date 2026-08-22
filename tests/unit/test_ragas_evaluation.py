@@ -291,8 +291,8 @@ class TestRagasEvaluator:
             if embeddings_wrapper._chain._config.degraded_fallback:
                 providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
         else:
-            providers = ["ollama"]  # bare EmbedderProtocol
-        assert providers == ["ollama"]
+            providers = ["bare"]  # bare EmbedderProtocol
+        assert providers == ["bare"]
 
     def test_build_runtime_prefers_external_embedding_providers(self):
         from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
@@ -302,7 +302,7 @@ class TestRagasEvaluator:
         app_settings = make_settings(
             nvidia_api_key="placeholder",
             openrouter_api_key="placeholder",
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         llm_wrapper, embeddings_wrapper = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(embeddings_wrapper, AdaptiveRagasEmbeddings)
@@ -311,9 +311,9 @@ class TestRagasEvaluator:
             if embeddings_wrapper._chain._config.degraded_fallback:
                 providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
         else:
-            providers = ["ollama"]
-        # NVIDIA + OpenRouter as main chain, Ollama as degraded fallback
-        assert providers == ["nvidia", "openrouter", "ollama"]
+            providers = ["bare"]
+        # NVIDIA + OpenRouter lead; local-hf rides the ordered chain (no key needed)
+        assert providers == ["nvidia", "openrouter", "local-hf"]
         assert llm_wrapper is not None
 
     def test_build_runtime_adaptive_judge_has_no_pinned_primary(self):
@@ -633,7 +633,7 @@ class TestAdaptiveRagasEmbeddings:
         # Dimension consistency is enforced at chain-build time (factory pins
         # providers to the same model/dim). At call time the promoted provider
         # simply serves its own vectors.
-        nvidia = _StubEmbedder(dim=768, name="nvidia", tag=1.0, fail_on_call=2)
+        nvidia = _StubEmbedder(dim=2048, name="nvidia", tag=1.0, fail_on_call=2)
         openrouter = _StubEmbedder(dim=2048, name="openrouter", tag=2.0)
 
         config = FallbackChainConfig(
@@ -649,7 +649,7 @@ class TestAdaptiveRagasEmbeddings:
         embeddings = AdaptiveRagasEmbeddings(chain)
 
         query_vec = embeddings.embed_query("q")
-        assert query_vec == [1.0] * 768
+        assert query_vec == [1.0] * 2048
 
         doc_vecs = embeddings.embed_documents(["a"])
         assert doc_vecs[0] == [2.0] * 2048

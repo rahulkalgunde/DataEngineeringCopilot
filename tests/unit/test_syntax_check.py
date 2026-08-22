@@ -16,7 +16,7 @@ def service():
         config=RagConfig(),
         vector_store=MagicMock(query=AsyncMock(return_value=[])),
         llm_client=MagicMock(generate=AsyncMock(return_value="answer")),
-        embedder=MagicMock(embed_query=AsyncMock(return_value=[0.1] * 768)),
+        embedder=MagicMock(embed_query=AsyncMock(return_value=[0.1] * 2048)),
     )
 
 
