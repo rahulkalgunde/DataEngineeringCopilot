@@ -103,7 +103,7 @@ def _build_cache_scope(request, source_filter: list[str] | None) -> CacheScope:
         tenant_id=tenant_id,
         role=role,
         source_filter=tuple(source_filter or ()),
-        embedding_model=settings.embedding_model_name,
+        embedding_model=settings.active_embedding_model_name(),
         collection_name=settings.active_collection_name or settings.collection_name,
         index_generation=active_generation,
         config_fingerprint=answer_config_fingerprint(settings),

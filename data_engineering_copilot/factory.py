@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from data_engineering_copilot.services.pipeline_lab import PipelineLab
 from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClientProtocol
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
-from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache, NoOpCrawlCache
@@ -965,18 +964,6 @@ def _build_embedding_chain_config(
                     ),
                     batch_size=app_settings.embedding_batch_size,
                 )
-            elif provider_name in ("ollama", "local"):
-                embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
-                client = AsyncOllamaEmbeddings(
-                    model_name=app_settings.embedding_model_name,
-                    base_url=embed_base,
-                    batch_size=app_settings.embedding_batch_size,
-                    timeout_seconds=app_settings.ollama_timeout_seconds,
-                    max_concurrency=app_settings.embed_concurrency,
-                    keep_alive=app_settings.ollama_keep_alive,
-                    connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
-                    pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
-                )
 
             if client is not None:
                 providers_config.append(
@@ -1272,29 +1259,17 @@ def build_embedder(
             batch_size=app_settings.embedding_batch_size,
             token_counter=token_counter_for(app_settings.huggingface_embedding_model),
         )
-    elif provider in ("ollama", "local"):
-        embed_base = app_settings.embedding_ollama_base_url or app_settings.ollama_base_url
-        return AsyncOllamaEmbeddings(
-            model_name=app_settings.embedding_model_name,
-            base_url=embed_base,
-            batch_size=app_settings.embedding_batch_size,
-            timeout_seconds=app_settings.ollama_timeout_seconds,
-            max_concurrency=app_settings.embed_concurrency,
-            keep_alive=app_settings.ollama_keep_alive,
-            connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
-            pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
-        )
     elif provider == "groq":
         raise ValueError(
-            "Groq does not support embeddings. Set embedding_provider to 'ollama', 'openrouter', 'nvidia', or 'gemini'."
+            "Groq does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', or 'local-hf'."
         )
     elif provider == "cerebras":
         raise ValueError(
-            "Cerebras does not support embeddings. Set embedding_provider to 'ollama', 'openrouter', 'nvidia', or 'gemini'."
+            "Cerebras does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', or 'local-hf'."
         )
     else:
         raise ValueError(
-            f"Unsupported embedding_provider: {provider!r}. Choose 'ollama', 'openrouter', 'nvidia', 'gemini'."
+            f"Unsupported embedding_provider: {provider!r}. Choose 'nvidia', 'openrouter', 'gemini', 'huggingface', or 'local-hf'."
         )
 
 

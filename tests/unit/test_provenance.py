@@ -33,9 +33,9 @@ class TestEnvResolution:
         s = make_settings(active_index_generation="pinned-test-123")
         assert active_generation(s) == "pinned-test-123"
 
-    def test_embedding_model_ollama(self) -> None:
-        s = make_settings(embedding_provider="ollama", embedding_model_name="nomic-embed-text")
-        assert embedding_model(s) == "nomic-embed-text"
+    def test_embedding_model_local_hf(self) -> None:
+        s = make_settings(embedding_provider="local-hf")
+        assert embedding_model(s) == "nvidia/Nemotron-3-Embed-1B-BF16"
 
     def test_embedding_model_nvidia(self) -> None:
         s = make_settings(
@@ -85,8 +85,8 @@ class TestConfigFingerprint:
         assert config_fingerprint(s) == config_fingerprint(s)
 
     def test_changes_when_embedding_model_changes(self) -> None:
-        a = make_settings(embedding_provider="ollama", embedding_model_name="nomic-embed-text")
-        b = make_settings(embedding_provider="ollama", embedding_model_name="different-model")
+        a = make_settings(embedding_provider="local-hf")
+        b = make_settings(embedding_provider="local-hf", local_hf_embedding_model="other/model")
         assert config_fingerprint(a) != config_fingerprint(b)
 
     def test_excludes_git_commit(self) -> None:

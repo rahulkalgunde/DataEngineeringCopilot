@@ -582,7 +582,6 @@ class AppSettings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     # Separate Ollama instances for embedding vs LLM to prevent resource contention.
     # Default to the same value; set to different ports for dedicated instances.
-    embedding_ollama_base_url: str = ""
     llm_ollama_base_url: str = ""
 
     # Ollama Cloud (LLM only). Same Ollama protocol as local, but hosted at
@@ -632,7 +631,6 @@ class AppSettings(BaseSettings):
     # Recall@10 >= baseline - 0.01. Local sentence-transformers models only.
     late_chunking_enabled: bool = False
     late_chunking_max_tokens: int = 8192
-    embedding_model_name: str = "nomic-embed-text"
     # Local HuggingFace embedding model (provider "local-hf"): runs
     # sentence-transformers on the local CPU, mirroring the reranker. Produces
     # vectors identical to the hosted NVIDIA nemotron-3-embed-1b (verified cos
@@ -641,7 +639,6 @@ class AppSettings(BaseSettings):
     # Embedding dimension is model-dependent, not provider-dependent.
     # Map model names to their known output dimensions.
     embedding_model_dimensions: dict[str, int] = {
-        "nomic-embed-text": 768,
         "mxbai-embed-large": 1024,
         "snowflake-arctic-embed2": 1024,
         "llama3.2:3b": 3072,
@@ -650,7 +647,8 @@ class AppSettings(BaseSettings):
         "nvidia/Nemotron-3-Embed-1B-BF16": 2048,
         "text-embedding-004": 768,
     }
-    default_embedding_dimension: int = 768
+    # Unknown models fail toward production geometry (Nemotron BF16), not legacy.
+    default_embedding_dimension: int = 2048
     llm_provider: str = "ollama"
     llm_model: str = "llama3.2:3b"
     embedding_provider: str = "ollama"
@@ -1412,6 +1410,23 @@ class AppSettings(BaseSettings):
                 raise ValueError(f"{env_var} is required when EMBEDDING_PROVIDER='{provider}'")
         return self
 
+    def active_embedding_model_name(self) -> str:
+        """Model name for the ACTIVE embedding provider (single source for
+        provenance, cache scope, token encoders, UI). Mirrors the provider
+        branching of :meth:`get_embedding_dimension`."""
+        provider = self.embedding_provider.lower()
+        if provider == "openrouter":
+            return self.openrouter_embedding_model
+        if provider == "nvidia":
+            return self.nvidia_embedding_model
+        if provider == "gemini":
+            return self.gemini_embedding_model
+        if provider == "local-hf":
+            return self.local_hf_embedding_model
+        if provider == "huggingface":
+            return self.huggingface_embedding_model
+        return self.local_hf_embedding_model
+
     def get_embedding_dimension(self) -> int:
         """Return the embedding dimension for the active model.
 
@@ -1419,19 +1434,7 @@ class AppSettings(BaseSettings):
         ``embedding_model_dimensions`` and falls back to
         ``default_embedding_dimension`` if the model is unrecognised.
         """
-        provider = self.embedding_provider.lower()
-        if provider == "openrouter":
-            model_name = self.openrouter_embedding_model
-        elif provider == "nvidia":
-            model_name = self.nvidia_embedding_model
-        elif provider == "gemini":
-            model_name = self.gemini_embedding_model
-        elif provider == "local-hf":
-            model_name = self.local_hf_embedding_model
-        elif provider == "huggingface":
-            model_name = self.huggingface_embedding_model
-        else:
-            model_name = self.embedding_model_name
+        model_name = self.active_embedding_model_name()
         return self.embedding_model_dimensions.get(model_name, self.default_embedding_dimension)
 
     def validate_all(self) -> None:
@@ -1509,6 +1512,20 @@ class AppSettings(BaseSettings):
         }
         if not configured_providers:
             errors.append("At least one LLM or embedding provider must be configured")
+
+        # Mixed-dimension fallback chains corrupt the index mid-build: every
+        # leg must resolve to the SAME geometry as the active provider.
+        dims: dict[str, int] = {}
+        for prov in [*self.embedding_fallback_order, self.embedding_provider]:
+            key = str(prov).lower()
+            sub = self.model_copy(update={"embedding_provider": key})
+            dims[key] = sub.get_embedding_dimension()
+        distinct = set(dims.values())
+        if len(distinct) > 1:
+            errors.append(
+                f"EMBEDDING_FALLBACK_ORDER mixes dimensions {dims}; a mid-chain "
+                "provider switch would write/query incompatible vectors."
+            )
 
         if errors:
             from typing import cast
