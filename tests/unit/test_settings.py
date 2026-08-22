@@ -156,7 +156,7 @@ def test_code_llm_overridable() -> None:
 
 def test_embedding_model_dimensions_lookup() -> None:
     settings = make_settings()
-    assert settings.get_embedding_dimension() == 768
+    assert settings.get_embedding_dimension() == 2048
 
 
 def test_get_embedding_dimension_nvidia() -> None:

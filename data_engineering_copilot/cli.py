@@ -214,7 +214,7 @@ def _resolve_embedding_encoder(settings: AppSettings) -> TokenEncoder:
         }.get(provider)
         if model:
             return resolve_token_encoder(model)
-    return resolve_token_encoder(settings.embedding_model_name)
+    return resolve_token_encoder(settings.active_embedding_model_name())
 
 
 def ask(

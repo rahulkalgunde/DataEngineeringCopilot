@@ -22,8 +22,6 @@ _EMBEDDING_MODEL_FIELDS: dict[str, str] = {
     "gemini": "gemini_embedding_model",
     "local-hf": "local_hf_embedding_model",
     "huggingface": "huggingface_embedding_model",
-    "ollama": "embedding_model_name",
-    "local": "embedding_model_name",
 }
 
 _RERANK_MODEL_FIELDS: dict[str, str] = {
@@ -63,7 +61,7 @@ def active_generation(settings) -> str:
 def embedding_model(settings) -> str:
     """Resolve the effective embedding model for the configured provider."""
     provider = str(getattr(settings, "embedding_provider", "") or "").lower()
-    field = _EMBEDDING_MODEL_FIELDS.get(provider, "embedding_model_name")
+    field = _EMBEDDING_MODEL_FIELDS.get(provider, "local_hf_embedding_model")
     return str(getattr(settings, field, "") or "")
 
 

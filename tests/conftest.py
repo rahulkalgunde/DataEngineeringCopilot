@@ -253,7 +253,8 @@ def pytest_configure(config):
 
     _original_init = AppSettings.__init__
 
-    _ALLOWED = frozenset({"ollama", ""})
+    # local-hf is in-process (no network/key), so it is always test-safe.
+    _ALLOWED = frozenset({"ollama", "local-hf", ""})
 
     _PROVIDER_FIELDS = [
         "llm_provider",
@@ -332,7 +333,7 @@ def pytest_configure(config):
                 raise RuntimeError(
                     "Test configuration uses non-Ollama LLM provider(s) in explicit kwargs:\n  "
                     + "\n  ".join(f"{f}={kwargs.get(f)!r}" for f in bad)
-                    + "\nOnly 'ollama' is allowed in tests by default to avoid costly external API "
+                    + "\nOnly ollama/local-hf are allowed by default to avoid costly external API "
                     "calls. If you deliberately test provider routing, pass "
                     "_test_allow_non_ollama=True with placeholder API keys."
                 )
@@ -363,8 +364,8 @@ def make_settings(**overrides) -> "AppSettings":
         "_env_file": None,
         "llm_provider": "ollama",
         "llm_model": "llama3.2:3b",
-        "embedding_provider": "ollama",
-        "embedding_model_name": "nomic-embed-text",
+        "embedding_provider": "local-hf",
+        "local_hf_embedding_model": "nvidia/Nemotron-3-Embed-1B-BF16",
         "ollama_base_url": "http://localhost:11434",
         "ollama_model": "llama3.2:3b",
         "answer_llm_provider": "",
