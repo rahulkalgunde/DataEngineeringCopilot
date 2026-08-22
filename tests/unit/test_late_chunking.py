@@ -103,7 +103,7 @@ class TestContextLimit:
             def __call__(self, text, return_offsets_mapping=False):
                 result = super().__call__(text, return_offsets_mapping)
                 if return_offsets_mapping:
-                    result["offset_mapping"] = [(0, 0)] + result["offset_mapping"]
+                    result["offset_mapping"] = [[0, 0]] + result["offset_mapping"]
                 else:
                     result["input_ids"] = [[101]] + result["input_ids"]
                 return result
