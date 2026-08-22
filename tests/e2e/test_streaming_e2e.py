@@ -42,7 +42,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
-                embedding_dimension=768,
+                embedding_dimension=2048,
             )
             await store.initialize()
 
@@ -88,7 +88,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
-                embedding_dimension=768,
+                embedding_dimension=2048,
             )
             await store.initialize()
 
@@ -128,7 +128,7 @@ class TestRagStreaming:
             store = AsyncQdrantVectorStore(
                 url=e2e_settings.qdrant_url,
                 collection_name=e2e_settings.collection_name,
-                embedding_dimension=768,
+                embedding_dimension=2048,
             )
             await store.initialize()
 

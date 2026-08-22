@@ -92,7 +92,7 @@ async def vector_store(e2e_settings):
     store = AsyncQdrantVectorStore(
         url=e2e_settings.qdrant_url,
         collection_name=coll,
-        embedding_dimension=768,
+        embedding_dimension=2048,
     )
     await store.initialize()
     yield store
@@ -206,7 +206,7 @@ class TestIngestionPipelineE2E:
         verify_store = AsyncQdrantVectorStore(
             url=e2e_settings.qdrant_url,
             collection_name=vector_store._collection_name,
-            embedding_dimension=768,
+            embedding_dimension=2048,
         )
         try:
             assert await verify_store.count() > 0, "Qdrant must contain indexed chunks"
@@ -273,7 +273,7 @@ class TestIngestionPipelineE2E:
         verify_store = AsyncQdrantVectorStore(
             url=e2e_settings.qdrant_url,
             collection_name=vector_store._collection_name,
-            embedding_dimension=768,
+            embedding_dimension=2048,
         )
         try:
             assert await verify_store.count() > 0, "Qdrant must contain semantically chunked points"

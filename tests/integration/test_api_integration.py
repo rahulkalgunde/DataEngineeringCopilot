@@ -489,7 +489,7 @@ class TestSseStreaming:
 
         store = InMemoryVectorStore()
         await store.initialize()
-        embedder = StubEmbedder(dimension=768)
+        embedder = StubEmbedder(dimension=2048)
         chunk = DocumentChunk(
             chunk_id="stream:doc000:chunk00",
             source_name="RAG Test Docs",
