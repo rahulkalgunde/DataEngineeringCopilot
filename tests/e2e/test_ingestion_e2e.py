@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from data_engineering_copilot.domain.models import RawDocument
-from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import LocalSentenceTransformerEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 from data_engineering_copilot.services.chunker import DocumentChunker
@@ -78,7 +78,10 @@ df.show()</code></pre>
 @pytest.fixture
 async def embedder(e2e_settings):
     require_qdrant_and_ollama(e2e_settings.qdrant_url)
-    emb = AsyncOllamaEmbeddings(model_name=e2e_settings.embedding_model_name)
+    emb = LocalSentenceTransformerEmbeddings(
+        model_name=e2e_settings.local_hf_embedding_model,
+        embedding_dimension=e2e_settings.get_embedding_dimension(),
+    )
     yield emb
     await emb.close()
 
