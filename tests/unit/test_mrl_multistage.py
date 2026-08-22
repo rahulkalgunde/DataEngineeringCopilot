@@ -150,7 +150,7 @@ async def test_query_wraps_dense_prefetch_with_small_dim_stage():
     store = _make_query_store()
     await store.initialize()  # collection_exists False -> creates (with dense_small)
     await store.query([0.1] * 768, top_k=10, query_text="hello world")
-    kwargs = store._client.query_kwargs[-1]
+    kwargs = store._client.query_kwargs[-1]  # type: ignore[attr-defined]
     prefetches = kwargs["prefetch"]
     assert len(prefetches) == 2, "dense + sparse top-level prefetches expected"
     names = [p.using for p in prefetches]
