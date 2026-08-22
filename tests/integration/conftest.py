@@ -80,8 +80,8 @@ def fresh_qdrant_store(qdrant_url, worker_id):
     suffix = _worker_suffix(worker_id)
     collection = f"itest_{suffix}_{os.getpid()}"
 
-    # Use Ollama dimension (768) for test isolation
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=768)
+    # Production geometry (Nemotron BF16, 2048) for test isolation
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=2048)
     asyncio.run(store.initialize())
     yield store
 
@@ -362,15 +362,6 @@ def integration_settings(ollama_url):
 
 
 @pytest.fixture
-def embeddings_provider(integration_settings):
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
-
-    return AsyncOllamaEmbeddings(
-        model_name=integration_settings.embedding_model_name,
-        base_url=integration_settings.ollama_base_url,
-    )
-
-
 @pytest.fixture
 def ollama_client(integration_settings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient

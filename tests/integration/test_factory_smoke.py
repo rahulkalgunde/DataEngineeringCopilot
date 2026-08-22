@@ -16,7 +16,7 @@ async def test_build_async_ingestion_service_creates_collection(qdrant_url):
     store = AsyncQdrantVectorStore(
         url=qdrant_url,
         collection_name="test_factory_smoke",
-        embedding_dimension=768,
+        embedding_dimension=2048,
         hybrid_search=True,
     )
 

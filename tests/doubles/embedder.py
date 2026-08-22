@@ -33,7 +33,7 @@ def _text_vector(text: str, dimension: int) -> list[float]:
 class StubEmbedder(EmbedderProtocol):
     """Deterministic, offline embedder for hermetic RAG tests."""
 
-    def __init__(self, dimension: int = 768) -> None:
+    def __init__(self, dimension: int = 2048) -> None:
         self.dimension = dimension
         self.embed_texts_calls: list[list[str]] = []
 
