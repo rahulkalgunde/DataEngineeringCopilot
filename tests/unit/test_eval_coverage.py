@@ -42,6 +42,19 @@ class TestResolveGenerationRoot:
         (tmp_path / "spark_corpus" / "g1" / "chunks.jsonl").touch()
         assert resolve_generation_root("g1", tmp_path) == tmp_path / "spark_corpus" / "g1"
 
+    def test_pinned_corpus_naming_contract_layout(self, tmp_path):
+        # gen-build writes artifact dirs named after the COLLECTION
+        # (data_engineering_docs__<gen>) per config/naming.py — the resolver
+        # must find them or eval-fast/eval-coverage fail for every
+        # contract-compliant generation.
+        gen = tmp_path / "pinned_corpus" / "data_engineering_docs__ci-repro"
+        gen.mkdir(parents=True)
+        (gen / "chunks.jsonl").touch()
+        assert (
+            resolve_generation_root("ci-repro", tmp_path)
+            == tmp_path / "pinned_corpus" / "data_engineering_docs__ci-repro"
+        )
+
     def test_missing(self, tmp_path):
         assert resolve_generation_root("nope", tmp_path) is None
 
