@@ -1401,7 +1401,17 @@ def gen_build(generation: str | None = None) -> int:
         packages.append(package)
         print(f"  {config.slug}: {len(package.chunks)} chunks, {len(package.coverage)} files")
 
-    builder = PinnedIndexBuilder(store, embedder, gen, output_dir=artifact_root)
+    builder_kwargs: dict[str, object] = {"output_dir": artifact_root}
+    if getattr(settings, "late_chunking_enabled", False):
+        builder_kwargs.update(
+            {
+                "late_chunking_enabled": True,
+                "late_chunking_max_tokens": settings.late_chunking_max_tokens,
+                "late_chunking_model_name": settings.local_hf_embedding_model,
+            }
+        )
+        print("  late chunking: ENABLED (dark-flag benchmark build)")
+    builder = PinnedIndexBuilder(store, embedder, gen, **builder_kwargs)  # type: ignore[arg-type]
     try:
         report = asyncio.run(builder.build(packages))
     except Exception as exc:
