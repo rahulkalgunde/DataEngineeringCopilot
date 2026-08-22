@@ -154,7 +154,7 @@ make test-e2e
 ```
 
 ### `make test-ci`
-CI gate: unit + integration + e2e with coverage (no markers filter, sequential for the infra legs):
+Local-only gates (NOT run in CI since 2026-08-22 — CI is hermetic lint/unit/eval only):
 
 ```bash
 make test-ci
@@ -286,7 +286,7 @@ make eval-retrieval
 ```
 
 ### `make eval-retrieval-gate`
-Retrieval regression gate: same benchmark compared against the committed baseline; exits non-zero when Recall@K regresses by more than 0.02. Suitable as a required CI status check.
+Retrieval regression gate: same benchmark compared against the committed baseline; exits non-zero when Recall@K regresses by more than 0.02. Local-only by policy — anything needing Docker/Ollama stays out of GitHub CI.
 
 ```bash
 make eval-retrieval-gate

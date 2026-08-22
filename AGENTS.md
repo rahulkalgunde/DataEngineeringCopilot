@@ -12,7 +12,7 @@ Python 3.12+. RAG over data-engineering docs: Qdrant + Ollama + FastAPI + Celery
 **Tier 2 — milestone only (feature complete, before commit), run once:**
 `ruff check data_engineering_copilot/ tests/ --fix` → `ruff format …` → `pyright …` → `pytest tests/unit/ -n 6` (all via `dec_venv/bin/python -m …`).
 
-The full suite between milestones only burns time; Tier 2 exists to catch cross-module surprises (import wiring, shared fixtures). CI (`.github/workflows/test.yml`) runs lint → unit/eval → integration+e2e, but **not pyright** — local pyright is the only type gate.
+The full suite between milestones only burns time; Tier 2 exists to catch cross-module surprises (import wiring, shared fixtures). CI (`.github/workflows/test.yml`) is **hermetic only**: lint → unit → eval-data/schema gates. It does NOT run pyright (local-only gate) and does NOT run integration/e2e/smoke/retrieval-gate — anything needing Docker/Ollama/testcontainers stays local (`make test-integration`, `make test-e2e`, `make test-real`, `dec gen-*`, `eval-retrieval-gate`).
 
 ## Environment
 - Always `dec_venv/bin/python` / `dec_venv/bin/dec` — never bare `python`. Install: `uv pip install -e ".[dev]"` (`make install`).
