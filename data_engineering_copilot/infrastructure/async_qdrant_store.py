@@ -141,7 +141,9 @@ class AsyncQdrantVectorStore:
     ) -> None:
         self._url = url
         self._collection_name = collection_name
-        self._mrl_enabled = mrl_multistage_enabled
+        # MRL multistage presupposes named dense/sparse spaces; without
+        # hybrid search there is no dense_small vector space to attach.
+        self._mrl_enabled = mrl_multistage_enabled and hybrid_search
         self._mrl_small_dim = mrl_small_dim
         self._mrl_oversample_factor = mrl_oversample_factor
         self._hybrid_search = hybrid_search
@@ -360,7 +362,7 @@ class AsyncQdrantVectorStore:
                     sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in sub_chunks]
                     vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
                 else:
-                    vectors_dict = {"dense": vectors}
+                    vectors_dict = vectors
                 if self._mrl_enabled:
                     vectors_dict["dense_small"] = [_mrl_small_vector(v, self._mrl_small_dim) for v in vectors]
 
