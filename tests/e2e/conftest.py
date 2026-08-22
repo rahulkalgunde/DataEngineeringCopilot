@@ -220,10 +220,10 @@ def e2e_settings(
         crawl_db_url=e2e_pg_dsn,
         ollama_base_url=e2e_ollama_url,
         llm_provider="ollama",
-        embedding_provider="ollama",
+        embedding_provider="local-hf",
         code_llm_provider="ollama",
         code_llm_model="llama3.2:3b",
-        embedding_model_name="nomic-embed-text",
+        local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         embedding_batch_size=32,
         retrieval_top_k=5,
         max_context_chars=2000,
@@ -274,12 +274,14 @@ async def e2e_redis(e2e_redis_url: str) -> AsyncGenerator:
 
 @pytest.fixture
 async def e2e_embedder(e2e_settings: AppSettings):
-    """Real Ollama embeddings provider from testcontainer (function-scoped)."""
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+    """In-process local-hf embeddings (function-scoped)."""
+    from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+        LocalSentenceTransformerEmbeddings,
+    )
 
-    embedder = AsyncOllamaEmbeddings(
-        model_name=e2e_settings.embedding_model_name,
-        base_url=e2e_settings.ollama_base_url,
+    embedder = LocalSentenceTransformerEmbeddings(
+        model_name=e2e_settings.local_hf_embedding_model,
+        embedding_dimension=e2e_settings.get_embedding_dimension(),
     )
     yield embedder
     await embedder.close()

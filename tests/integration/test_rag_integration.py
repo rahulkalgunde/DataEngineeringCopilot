@@ -88,11 +88,13 @@ def _populated(_store, _settings):
 
     import asyncio
 
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+    from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+        LocalSentenceTransformerEmbeddings,
+    )
 
-    embedder = AsyncOllamaEmbeddings(
-        model_name=_settings.embedding_model_name,
-        base_url=_settings.ollama_base_url,
+    embedder = LocalSentenceTransformerEmbeddings(
+        model_name=_settings.local_hf_embedding_model,
+        embedding_dimension=_settings.get_embedding_dimension(),
     )
 
     topics = [
@@ -167,7 +169,9 @@ async def _rag_real(_store, _settings, _ollama):
     """Function-scoped RAG service with the real Ollama LLM (quality smoke test)."""
 
     from data_engineering_copilot.domain.models import RagConfig
-    from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+    from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+        LocalSentenceTransformerEmbeddings,
+    )
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
@@ -177,9 +181,9 @@ async def _rag_real(_store, _settings, _ollama):
         embedding_dimension=2048,
     )
     await store.initialize()
-    embedder = AsyncOllamaEmbeddings(
-        model_name=_settings.embedding_model_name,
-        base_url=_settings.ollama_base_url,
+    embedder = LocalSentenceTransformerEmbeddings(
+        model_name=_settings.local_hf_embedding_model,
+        embedding_dimension=_settings.get_embedding_dimension(),
     )
     service = AsyncRagService(
         config=RagConfig(),
@@ -226,20 +230,19 @@ class TestRAGWireMocked:
         """Real Qdrant, mock LLM client — verify cache hit skips LLM."""
 
         from data_engineering_copilot.domain.models import DocumentChunk, RagConfig
-        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+        from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+            LocalSentenceTransformerEmbeddings,
+        )
         from data_engineering_copilot.services.async_rag import AsyncRagService
         from data_engineering_copilot.services.query_cache import QueryCache as TwoTierCache
         from tests.conftest import make_settings
         from tests.doubles.llm import StaticLLM
 
-        settings = make_settings(
-            ollama_base_url=ollama_url,
-            embedding_model_name="nomic-embed-text",
-        )
+        settings = make_settings(ollama_base_url=ollama_url)
 
-        embedder = AsyncOllamaEmbeddings(
-            model_name=settings.embedding_model_name,
-            base_url=settings.ollama_base_url,
+        embedder = LocalSentenceTransformerEmbeddings(
+            model_name=settings.local_hf_embedding_model,
+            embedding_dimension=settings.get_embedding_dimension(),
         )
 
         chunk = DocumentChunk(
@@ -317,34 +320,44 @@ class TestRAGWireMocked:
             await client.close()
 
     @pytest.mark.asyncio
-    async def test_rag_embedding_with_wire_mocked(self):
-        """Wire-mock Ollama embed, verify vector returned."""
-        import respx
-        from httpx import Response
-
-        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+    async def test_local_hf_embedder_returns_production_geometry(self):
+        """In-process local-hf embedder returns production-geometry vectors."""
         from tests.conftest import make_settings
 
-        settings = make_settings(
-            embedding_model_name="nomic-embed-text",
-        )
+        settings = make_settings(embedding_provider="local-hf")
         dim = settings.get_embedding_dimension()
-        fake_embedding = [0.01] * dim
 
-        with respx.mock(assert_all_mocked=False) as respx_mock:
-            respx_mock.post(f"{settings.ollama_base_url}/api/embed").mock(
-                return_value=Response(
-                    200,
-                    json={"embeddings": [fake_embedding]},
-                )
-            )
+        embedder = LocalSentenceTransformerEmbeddings(
+            model_name=settings.local_hf_embedding_model,
+            embedding_dimension=dim,
+        )
+        result = await embedder.embed_query("test query")
+        assert len(result) == dim
 
-            embedder = AsyncOllamaEmbeddings(model_name=settings.embedding_model_name)
-            result = await embedder.embed_query("test query")
-            assert len(result) == dim
-            assert abs(result[0] - 0.01) < 0.001
 
-            await embedder.close()
+class TestHybridSearch:
+    """Integration tests for hybrid (dense + sparse BM25) search."""
+
+    async def test_hybrid_query_returns_results(self, _store, _populated):
+        """Hybrid query with both dense and sparse vectors returns results."""
+        store = _store
+        assert store._bm25 is not None
+
+        # BM25 should be fitted
+        assert store._bm25.is_frozen
+
+        # Query should use hybrid search (dense + sparse)
+        fake_emb = [0.01] * 2048
+
+        results = await store.query(
+            query_embedding=fake_emb,
+            top_k=5,
+            query_text="Apache Spark",
+        )
+
+        assert len(results) > 0
+        assert all(hasattr(r, "chunk") for r in results)
+
 
 
 class TestHybridSearch:
