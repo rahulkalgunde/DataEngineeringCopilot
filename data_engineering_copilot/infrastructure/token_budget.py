@@ -387,3 +387,26 @@ def _split_line_by_whitespace(
     if current:
         segments.append(current)
     return segments
+
+
+def coalesce_blank_segments(segments: list[str]) -> list[str]:
+    """Fold whitespace-only segments into their neighbours.
+
+    Lossless splitting must preserve content, so blank runs (e.g. ``"\\n\\n"``
+    between paragraphs) are valid splitter output — but blank-only segments
+    carry no retrieval value and embedding providers reject them (HTTP 400).
+    This folds every blank run into the next real segment (trailing runs into
+    the previous one), so ``"".join(result) == "".join(segments)`` stays true
+    while no emitted segment is whitespace-only. All-blank input returns [].
+    """
+    kept: list[str] = []
+    pending = ""
+    for seg in segments:
+        if seg.strip():
+            kept.append(pending + seg)
+            pending = ""
+        else:
+            pending += seg
+    if pending and kept:
+        kept[-1] += pending
+    return kept

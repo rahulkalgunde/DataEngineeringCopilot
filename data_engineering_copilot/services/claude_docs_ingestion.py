@@ -32,6 +32,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     _ENCODER,
     DEFAULT_MAX_TOKENS,
     TokenEncoder,
+    coalesce_blank_segments,
     count_tokens,
     split_text_losslessly,
 )
@@ -394,7 +395,9 @@ def _normalize_chunks(
     effective_encoder = encoder if encoder is not None else _ENCODER
     for chunk in chunks:
         parent_hash = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
-        segment_texts = split_text_losslessly(chunk.text, max_tokens=DEFAULT_MAX_TOKENS, encoder=effective_encoder)
+        segment_texts = coalesce_blank_segments(
+            split_text_losslessly(chunk.text, max_tokens=DEFAULT_MAX_TOKENS, encoder=effective_encoder)
+        )
         for index, text in enumerate(segment_texts):
             normalized.append(
                 replace(

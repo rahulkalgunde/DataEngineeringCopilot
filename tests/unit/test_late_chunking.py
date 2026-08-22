@@ -230,3 +230,56 @@ class TestGroupedDocumentEmbedding:
 
         out = await embed_document_grouped(chunks, naive_embed=naive, late_embedder=None, max_group_tokens=512)
         assert out == [[7.0, 7.0, 7.0, 7.0]]
+
+
+class TestBlankSegmentFiltering:
+    """Blank whitespace-only segments must never reach embedding providers."""
+
+    def test_coalesce_blank_segments_preserves_join(self):
+        from data_engineering_copilot.infrastructure.token_budget import coalesce_blank_segments
+
+        segs = ["real text here", "   \n\t ", "\n\n", "more real text"]
+        out = coalesce_blank_segments(segs)
+        assert out == ["real text here", "   \n\t \n\nmore real text"]
+        assert "".join(out) == "".join(segs), "reconstruction must stay byte-identical"
+        assert all(s.strip() for s in out), "no whitespace-only segments may remain"
+
+    def test_coalesce_all_blank_returns_empty(self):
+        from data_engineering_copilot.infrastructure.token_budget import coalesce_blank_segments
+
+        assert coalesce_blank_segments(["  ", "\n"]) == []
+
+    def test_pinned_builder_normalization_drops_blanks(self):
+        import hashlib
+
+        from data_engineering_copilot.domain.models import DocumentChunk
+        from data_engineering_copilot.services.pinned_index_builder import PinnedIndexBuilder
+
+        chunk = DocumentChunk(
+            chunk_id="c1",
+            source_name="s",
+            title="t",
+            url="u",
+            text="para one.\n\n\n\n\npara two.",
+        )
+        builder = PinnedIndexBuilder.__new__(PinnedIndexBuilder)
+        builder._max_embed_tokens = 3800
+        builder._max_embed_chars = 6000
+        builder._generation = "test-gen"
+        out = builder._normalize_chunk(chunk)
+        assert out, "chunk with real content must produce segments"
+        for seg in out:
+            assert seg.text.strip(), f"blank segment reached output: {seg.text!r}"
+        expected_parent = hashlib.sha256(b"para one.\n\n\n\n\npara two.").hexdigest()
+        assert all(seg.parent_content_hash == expected_parent for seg in out)
+
+    def test_entirely_blank_chunk_yields_no_segments(self):
+        from data_engineering_copilot.domain.models import DocumentChunk
+        from data_engineering_copilot.services.pinned_index_builder import PinnedIndexBuilder
+
+        builder = PinnedIndexBuilder.__new__(PinnedIndexBuilder)
+        builder._max_embed_tokens = 3800
+        builder._max_embed_chars = 6000
+        builder._generation = "test-gen"
+        blank = DocumentChunk(chunk_id="b", source_name="s", title="t", url="u", text=" \n\t ")
+        assert builder._normalize_chunk(blank) == []
