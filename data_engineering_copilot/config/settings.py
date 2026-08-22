@@ -895,7 +895,9 @@ class AppSettings(BaseSettings):
     llm_fallback_call_timeout: int = 30  # per-attempt timeout for non-primary fallback providers
 
     # Embedding fallback chain: ordered list of embedding providers to try on failure
-    embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia", "openrouter", "ollama"])
+    embedding_fallback_order: list[str] = Field(
+        default_factory=lambda: ["nvidia", "openrouter", "huggingface", "local-hf"]
+    )
 
     # Provider cooldown / routing
     provider_cooldown_seconds: int = 60

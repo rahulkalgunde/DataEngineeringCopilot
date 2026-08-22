@@ -87,7 +87,7 @@ async def _rag():
     """Function-scoped hermetic RAG service (doubles only)."""
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
 
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
@@ -222,7 +222,7 @@ async def test_answer_provenance_labels_multi_query_variants(_rag):
 
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)
@@ -272,7 +272,7 @@ async def test_provenance_reports_budget_dropped_segments() -> None:
     """
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
 
     big = [
         DocumentChunk(
@@ -342,7 +342,7 @@ async def test_rag_service_passes_rerank_pool_as_fused_limit() -> None:
 
     store = _RecordingStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)
@@ -410,7 +410,7 @@ async def test_reranker_scores_against_original_question() -> None:
 
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)
@@ -487,7 +487,7 @@ async def test_rag_service_does_not_read_cache_when_bypassed() -> None:
 
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)
@@ -520,7 +520,7 @@ async def test_rag_service_does_not_write_cache_when_bypassed() -> None:
 
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)
@@ -575,13 +575,13 @@ async def test_rejoin_sibling_chunks_collapses_split_parent_blocks() -> None:
             segment_total=2,
         ),
     ]
-    await store.upsert_chunks(chunks, [[0.1] * 768, [0.9] * 768])
+    await store.upsert_chunks(chunks, [[0.1] * 2048, [0.9] * 2048])
 
     service = AsyncRagService(
         config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
         vector_store=store,  # type: ignore[arg-type]
         llm_client=StubLLM(),
-        embedder=StubEmbedder(dimension=768),
+        embedder=StubEmbedder(dimension=2048),
     )
     try:
         # Both segments are in the retrieved set (as if both ranked).
@@ -611,13 +611,13 @@ async def test_rejoin_sibling_chunks_fail_open_when_no_parents() -> None:
     store = InMemoryVectorStore()
     await store.initialize()
     chunks = _build_chunks()
-    await store.upsert_chunks(chunks, [[0.1] * 768 for _ in chunks])
+    await store.upsert_chunks(chunks, [[0.1] * 2048 for _ in chunks])
 
     service = AsyncRagService(
         config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
         vector_store=store,  # type: ignore[arg-type]
         llm_client=StubLLM(),
-        embedder=StubEmbedder(dimension=768),
+        embedder=StubEmbedder(dimension=2048),
     )
     try:
         retrieved = [RetrievedChunk(chunk=c, distance=0.1, confidence=0.9) for c in chunks[:2]]
@@ -658,13 +658,13 @@ async def test_rejoin_sibling_chunks_caps_oversized_parent_block() -> None:
         )
         for i in range(40)
     ]
-    await store.upsert_chunks(chunks, [[0.1] * 768 for _ in chunks])
+    await store.upsert_chunks(chunks, [[0.1] * 2048 for _ in chunks])
 
     service = AsyncRagService(
         config=RagConfig(retrieval_top_k=5, confidence_threshold=0.0),
         vector_store=store,  # type: ignore[arg-type]
         llm_client=StubLLM(),
-        embedder=StubEmbedder(dimension=768),
+        embedder=StubEmbedder(dimension=2048),
     )
     try:
         retrieved = [RetrievedChunk(chunk=c, distance=0.1, confidence=0.9) for c in chunks]
@@ -692,7 +692,7 @@ async def test_rag_service_cache_enabled_false_skips_read_and_write() -> None:
 
     store = InMemoryVectorStore()
     await store.initialize()
-    embedder = StubEmbedder(dimension=768)
+    embedder = StubEmbedder(dimension=2048)
     chunks = _build_chunks()
     vectors = await embedder.embed_texts([c.text for c in chunks])
     await store.upsert_chunks(chunks, vectors)

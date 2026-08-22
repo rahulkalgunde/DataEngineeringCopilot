@@ -70,35 +70,42 @@ class TestLLMClientSingleAttempt:
 class TestEmbeddingRetry:
     @pytest.fixture
     def embeddings(self):
-        from data_engineering_copilot.infrastructure.async_embeddings import AsyncOllamaEmbeddings
+        from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+            OpenAICompatibleEmbeddings,
+        )
 
-        return AsyncOllamaEmbeddings(model_name="nomic-embed-text", retry_wait=wait_fixed(0))
+        return OpenAICompatibleEmbeddings(
+            api_key="test-key",
+            model_name="nvidia/nemotron-3-embed-1b",
+            embedding_dimension=2048,
+            retry_wait=wait_fixed(0),
+        )
 
     @pytest.mark.asyncio
     async def test_network_error_retries_then_raises(self, embeddings):
         """Retryable network errors (TimeoutException) are retried 3 times
         by tenacity, then re-raised as the original exception type."""
         with respx.mock:
-            respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(side_effect=httpx.TimeoutException("timeout"))
+            respx.post("https://openrouter.ai/api/v1/embeddings").mock(side_effect=httpx.TimeoutException("timeout"))
             with pytest.raises(httpx.TimeoutException, match="timeout"):
-                await embeddings._aollama_embed(["test"])
+                await embeddings._request_embeddings(["test"])
 
     @pytest.mark.asyncio
     async def test_connect_error_retries_then_raises(self, embeddings):
         """Retryable connection errors are retried 3 times, then re-raised."""
         with respx.mock:
-            respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(
+            respx.post("https://openrouter.ai/api/v1/embeddings").mock(
                 side_effect=httpx.ConnectError("connection refused")
             )
             with pytest.raises(httpx.ConnectError, match="connection refused"):
-                await embeddings._aollama_embed(["test"])
+                await embeddings._request_embeddings(["test"])
 
     @pytest.mark.asyncio
     async def test_success_after_retry_not_needed(self, embeddings):
         """When the first attempt succeeds, no retry is needed."""
         with respx.mock:
-            respx.post(f"{embeddings.ollama_base_url}/api/embed").mock(
-                return_value=httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+            respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+                return_value=httpx.Response(200, json={"data": [{"embedding": [0.1] * 2048, "index": 0}]})
             )
-            result = await embeddings._aollama_embed(["test"])
+            result = await embeddings._request_embeddings(["test"])
             assert len(result) == 1
