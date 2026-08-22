@@ -29,7 +29,12 @@ from data_engineering_copilot.infrastructure.spark_source_resolver import (
     SparkManifest,
     SparkSourceResolver,
 )
-from data_engineering_copilot.infrastructure.token_budget import DEFAULT_MAX_CHARS, count_tokens, split_text_losslessly
+from data_engineering_copilot.infrastructure.token_budget import (
+    DEFAULT_MAX_CHARS,
+    coalesce_blank_segments,
+    count_tokens,
+    split_text_losslessly,
+)
 from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_metadata import derive_spark_metadata
 from data_engineering_copilot.services.spark_rendered_chunker import SparkRenderedChunker
@@ -783,10 +788,12 @@ class SparkIndexBuilder:
         # leading/trailing whitespace), so hash the stripped text so the
         # parent hash stays consistent with lossless reconstruction.
         parent_hash = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
-        segment_texts = split_text_losslessly(
-            chunk.text,
-            max_tokens=self._max_embed_tokens,
-            max_chars=self._max_embed_chars,
+        segment_texts = coalesce_blank_segments(
+            split_text_losslessly(
+                chunk.text,
+                max_tokens=self._max_embed_tokens,
+                max_chars=self._max_embed_chars,
+            )
         )
 
         normalized: list[DocumentChunk] = []
