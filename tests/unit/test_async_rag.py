@@ -1948,6 +1948,36 @@ class TestStreamParity:
         return [p for p in payloads if p.get("type") == "done"]
 
     @pytest.mark.asyncio
+    async def test_stream_repairs_json_envelope_in_done_event(self, config, mock_embedder, mock_vector_store):
+        async def _tokens():
+            yield '{"status": "SUCCESS", '
+            yield '"answer": "Spark SQL is a module.", '
+            yield '"citations": ["Doc-1"], "missing_info": false}'
+
+        llm = MagicMock()
+        llm.generate_stream = MagicMock(return_value=_tokens())
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        service = self._make_service(config, mock_vector_store, llm, mock_embedder)
+        events = [e async for e in service.answer_stream("what is spark sql")]
+        payloads = [
+            json.loads(e[len("data: ") :].strip()) for e in events if isinstance(e, str) and e.startswith("data: ")
+        ]
+        done = [p for p in payloads if p.get("type") == "done"][-1]
+        assert done["text"] == "Spark SQL is a module."
+        assert done["repaired"] is True
+
+    @pytest.mark.asyncio
+    async def test_stream_plain_answer_unrepaired(self, config, mock_embedder, mock_vector_store, mock_llm):
+        mock_vector_store.query = AsyncMock(return_value=[self._make_chunk()])
+        service = self._make_service(config, mock_vector_store, mock_llm, mock_embedder)
+        events = [e async for e in service.answer_stream("what is spark sql")]
+        payloads = [
+            json.loads(e[len("data: ") :].strip()) for e in events if isinstance(e, str) and e.startswith("data: ")
+        ]
+        done = [p for p in payloads if p.get("type") == "done"][-1]
+        assert done["repaired"] is False
+
+    @pytest.mark.asyncio
     async def test_scope_refusal_is_not_cached(self, config, mock_embedder, mock_vector_store, mock_llm):
         scope = MagicMock()
         scope.verify = AsyncMock(return_value=False)
