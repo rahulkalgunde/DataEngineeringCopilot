@@ -31,7 +31,7 @@ def _settings(ollama_url):
 
     return make_settings(
         ollama_base_url=ollama_url,
-        embedding_model_name="nomic-embed-text",
+        local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         code_llm_provider="ollama",
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
@@ -169,10 +169,10 @@ async def _rag_real(_store, _settings, _ollama):
     """Function-scoped RAG service with the real Ollama LLM (quality smoke test)."""
 
     from data_engineering_copilot.domain.models import RagConfig
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
         LocalSentenceTransformerEmbeddings,
     )
-    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.services.async_rag import AsyncRagService
 
     store = AsyncQdrantVectorStore(
@@ -322,6 +322,9 @@ class TestRAGWireMocked:
     @pytest.mark.asyncio
     async def test_local_hf_embedder_returns_production_geometry(self):
         """In-process local-hf embedder returns production-geometry vectors."""
+        from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+            LocalSentenceTransformerEmbeddings,
+        )
         from tests.conftest import make_settings
 
         settings = make_settings(embedding_provider="local-hf")
@@ -333,31 +336,6 @@ class TestRAGWireMocked:
         )
         result = await embedder.embed_query("test query")
         assert len(result) == dim
-
-
-class TestHybridSearch:
-    """Integration tests for hybrid (dense + sparse BM25) search."""
-
-    async def test_hybrid_query_returns_results(self, _store, _populated):
-        """Hybrid query with both dense and sparse vectors returns results."""
-        store = _store
-        assert store._bm25 is not None
-
-        # BM25 should be fitted
-        assert store._bm25.is_frozen
-
-        # Query should use hybrid search (dense + sparse)
-        fake_emb = [0.01] * 2048
-
-        results = await store.query(
-            query_embedding=fake_emb,
-            top_k=5,
-            query_text="Apache Spark",
-        )
-
-        assert len(results) > 0
-        assert all(hasattr(r, "chunk") for r in results)
-
 
 
 class TestHybridSearch:

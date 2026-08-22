@@ -362,7 +362,6 @@ def integration_settings(ollama_url):
 
 
 @pytest.fixture
-@pytest.fixture
 def ollama_client(integration_settings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
