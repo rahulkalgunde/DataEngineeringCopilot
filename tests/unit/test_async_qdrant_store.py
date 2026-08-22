@@ -39,7 +39,7 @@ def sample_chunks():
 
 @pytest.fixture
 def sample_embeddings():
-    return [[0.1] * 768, [0.2] * 768]
+    return [[0.1] * 2048, [0.2] * 2048]
 
 
 async def test_init_creates_client_and_collection(mock_async_qdrant):
@@ -94,7 +94,7 @@ async def test_query_success(mock_async_qdrant):
     mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=1)
+    results = await store.query([0.1] * 2048, top_k=1)
 
     assert len(results) == 1
     assert results[0].chunk.chunk_id == "chunk1"
@@ -118,7 +118,7 @@ async def test_query_falls_back_to_point_id_when_payload_lacks_chunk_id(mock_asy
     mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=1)
+    results = await store.query([0.1] * 2048, top_k=1)
 
     assert len(results) == 1
     assert results[0].chunk.chunk_id == "550e8400-e29b-41d4-a716-446655440000"
@@ -145,7 +145,7 @@ async def test_query_deserializes_deployment_mode(mock_async_qdrant):
     mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=1)
+    results = await store.query([0.1] * 2048, top_k=1)
 
     assert len(results) == 1
     assert results[0].chunk.deployment_mode == "yarn"
@@ -165,7 +165,7 @@ async def test_query_deployment_mode_defaults_empty(mock_async_qdrant):
     mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=1)
+    results = await store.query([0.1] * 2048, top_k=1)
 
     assert len(results) == 1
     assert results[0].chunk.deployment_mode == ""
@@ -212,7 +212,7 @@ async def test_empty_source_filter_rejected(mock_async_qdrant):
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
 
     with pytest.raises(VectorStoreError):
-        await store.query([0.1] * 768, top_k=1, source_filter=[])
+        await store.query([0.1] * 2048, top_k=1, source_filter=[])
 
     mock_async_qdrant.query_points.assert_not_called()
 
@@ -250,7 +250,7 @@ async def test_query_hybrid_rrf_normalizes_confidence(mock_async_qdrant):
     store._bm25._frozen = True
     store._last_query_sparse = {"indices": [1], "values": [1.0]}
 
-    results = await store.query([0.1] * 768, top_k=1, query_text="apache spark")
+    results = await store.query([0.1] * 2048, top_k=1, query_text="apache spark")
 
     assert len(results) == 1
     expected = 0.0167 * 61 / 2
@@ -275,7 +275,7 @@ async def test_query_equal_rrf_profile_has_no_weights(mock_async_qdrant):
     store._last_query_sparse = {"indices": [1], "values": [1.0]}
 
     await store.query(
-        [0.1] * 768,
+        [0.1] * 2048,
         top_k=5,
         query_text="apache spark",
         source_filter=["spark"],
@@ -317,7 +317,7 @@ async def test_query_identifier_sparse_rrf_changes_only_weights(mock_async_qdran
     store._last_query_sparse = {"indices": [1], "values": [1.0]}
 
     await store.query(
-        [0.1] * 768,
+        [0.1] * 2048,
         top_k=5,
         query_text="apache spark",
         source_filter=["spark"],
@@ -335,7 +335,7 @@ async def test_query_identifier_sparse_rrf_changes_only_weights(mock_async_qdran
     assert len(call_kwargs["prefetch"]) == 2
     assert call_kwargs["prefetch"][0].using == "dense"
     assert call_kwargs["prefetch"][1].using == "sparse"
-    assert call_kwargs["prefetch"][0].query == [0.1] * 768
+    assert call_kwargs["prefetch"][0].query == [0.1] * 2048
     assert call_kwargs["prefetch"][0].filter is not None
     assert call_kwargs["prefetch"][1].filter is not None
 
@@ -355,7 +355,7 @@ async def test_query_hybrid_dense_fallback_keeps_raw_score(mock_async_qdrant):
     assert store._bm25 is not None
     store._bm25._frozen = True
 
-    results = await store.query([0.1] * 768, top_k=1)
+    results = await store.query([0.1] * 2048, top_k=1)
 
     assert len(results) == 1
     assert results[0].confidence == pytest.approx(0.8)
@@ -370,7 +370,7 @@ async def test_query_empty_results(mock_async_qdrant):
     mock_async_qdrant.query_points = AsyncMock(return_value=mock_response)
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=5)
+    results = await store.query([0.1] * 2048, top_k=5)
     assert results == []
 
 
@@ -598,7 +598,7 @@ async def test_query_404_raises_vector_store_error(mock_async_qdrant):
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
     with pytest.raises(VectorStoreError, match="not found"):
-        await store.query([0.1] * 768, top_k=5)
+        await store.query([0.1] * 2048, top_k=5)
 
 
 async def test_query_non_404_exception_reraised(mock_async_qdrant):
@@ -609,7 +609,7 @@ async def test_query_non_404_exception_reraised(mock_async_qdrant):
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
     with pytest.raises(RuntimeError, match="connection lost"):
-        await store.query([0.1] * 768, top_k=5)
+        await store.query([0.1] * 2048, top_k=5)
 
 
 async def test_scroll_urls_returns_distinct_urls(mock_async_qdrant):
@@ -710,7 +710,7 @@ async def test_query_substitutes_parent_context(mock_async_qdrant):
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
     store._client.retrieve = AsyncMock(return_value=[parent_hit])
 
-    results = await store.query([0.1] * 768, top_k=1, query_text="apache spark")
+    results = await store.query([0.1] * 2048, top_k=1, query_text="apache spark")
 
     assert len(results) == 1
     assert results[0].chunk.text == "PARENT CONTEXT TEXT"
@@ -739,7 +739,7 @@ async def test_query_keeps_child_text_when_parent_missing(mock_async_qdrant):
     mock_async_qdrant.retrieve = AsyncMock(return_value=[])
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
-    results = await store.query([0.1] * 768, top_k=1, query_text="apache spark")
+    results = await store.query([0.1] * 2048, top_k=1, query_text="apache spark")
 
     assert len(results) == 1
     assert results[0].chunk.text == "child text"
@@ -831,7 +831,7 @@ async def test_store_version_mismatch_fails_before_query(mock_async_qdrant, tmp_
         bm25_namespace=True,
     )
     with pytest.raises(VectorStoreError, match="version mismatch"):
-        await store.query([0.1] * 768, top_k=1, query_text="spark.sql.functions")
+        await store.query([0.1] * 2048, top_k=1, query_text="spark.sql.functions")
     mock_async_qdrant.query_points.assert_not_awaited()
 
 
@@ -865,7 +865,7 @@ async def test_store_version_mismatch_fails_before_upsert(mock_async_qdrant, tmp
         index_generation="gen-1",
     )
     with pytest.raises(VectorStoreError, match="version mismatch"):
-        await store.upsert_frozen_chunks([chunk], [[0.1] * 768])
+        await store.upsert_frozen_chunks([chunk], [[0.1] * 2048])
     mock_async_qdrant.upsert.assert_not_awaited()
 
 

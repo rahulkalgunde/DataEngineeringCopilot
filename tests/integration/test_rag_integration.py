@@ -67,7 +67,7 @@ def _store(_settings, qdrant_url):
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
     coll = f"rag_mod_{__name__.replace('.', '_')}"
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=coll, embedding_dimension=768)
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=coll, embedding_dimension=2048)
     loop = asyncio.new_event_loop()
     loop.run_until_complete(store.initialize())
     loop.close()
@@ -174,7 +174,7 @@ async def _rag_real(_store, _settings, _ollama):
     store = AsyncQdrantVectorStore(
         url=_store._url,
         collection_name=_store._collection_name,
-        embedding_dimension=768,
+        embedding_dimension=2048,
     )
     await store.initialize()
     embedder = AsyncOllamaEmbeddings(
@@ -359,7 +359,7 @@ class TestHybridSearch:
         assert store._bm25.is_frozen
 
         # Query should use hybrid search (dense + sparse)
-        fake_emb = [0.01] * 768
+        fake_emb = [0.01] * 2048
 
         results = await store.query(
             query_embedding=fake_emb,

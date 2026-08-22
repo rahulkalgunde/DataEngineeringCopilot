@@ -114,9 +114,9 @@ def test_reset_index_full_rebuild(qdrant_url, redis_url, pg_dsn, tmp_path, monke
     async def _seed_qdrant() -> None:
         from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
-        store = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=768)
+        store = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=2048)
         await store.initialize()
-        await store.upsert_chunks([chunk], [[0.1] * 768])
+        await store.upsert_chunks([chunk], [[0.1] * 2048])
         assert await store.count() == 1
         await store.close()
 
@@ -140,7 +140,7 @@ def test_reset_index_full_rebuild(qdrant_url, redis_url, pg_dsn, tmp_path, monke
         async def _verify_qdrant() -> None:
             from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
-            fresh = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=768)
+            fresh = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=2048)
             await fresh.initialize()
             assert await fresh.count() == 0
             await fresh.close()
@@ -207,9 +207,9 @@ def test_reset_qdrant_recreates_collection_and_deletes_bm25(qdrant_url, tmp_path
     async def _seed() -> None:
         from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
-        store = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=768)
+        store = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=2048)
         await store.initialize()
-        await store.upsert_chunks([chunk], [[0.1] * 768])
+        await store.upsert_chunks([chunk], [[0.1] * 2048])
         assert await store.count() == 1
         await store.close()
 
@@ -223,7 +223,7 @@ def test_reset_qdrant_recreates_collection_and_deletes_bm25(qdrant_url, tmp_path
         async def _verify() -> None:
             from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
-            fresh = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=768)
+            fresh = AsyncQdrantVectorStore(url=qdrant_url, collection_name="test_collection", embedding_dimension=2048)
             await fresh.initialize()
             assert await fresh.count() == 0
             await fresh.close()

@@ -44,7 +44,7 @@ class _FakeLLM(LLMClientProtocol):
 
 
 class _StubEmbedder:
-    def __init__(self, dim: int = 768) -> None:
+    def __init__(self, dim: int = 2048) -> None:
         self.dim = dim
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -148,7 +148,7 @@ async def _seed_store(store: AsyncQdrantVectorStore, chunks: list[DocumentChunk]
 @pytest.mark.asyncio
 async def test_window_query_assembles_window_evidence(qdrant_url, tmp_path):
     collection = f"itest_rag_window_{abs(hash(tmp_path)) % 10_000_000}"
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=768)
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=2048)
     await store.initialize()
     try:
         await _seed_store(store, _seed_chunks())
@@ -182,7 +182,7 @@ async def test_window_query_assembles_window_evidence(qdrant_url, tmp_path):
 @pytest.mark.asyncio
 async def test_nested_array_query_retrieves_filter_transform_aggregate(qdrant_url, tmp_path):
     collection = f"itest_rag_array_{abs(hash(tmp_path)) % 10_000_000}"
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=768)
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=2048)
     await store.initialize()
     try:
         await _seed_store(store, _seed_chunks())

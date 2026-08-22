@@ -30,7 +30,7 @@ def _make_chunk(idx: int, url: str = "https://example.com/page") -> DocumentChun
     )
 
 
-def _random_embedding(dim: int = 768) -> list[float]:
+def _random_embedding(dim: int = 2048) -> list[float]:
     """Generate a pseudo-random but deterministic embedding for testing."""
     h = hashlib.sha256(str(uuid.uuid4()).encode()).digest()
     raw = (h * 25)[:dim]
