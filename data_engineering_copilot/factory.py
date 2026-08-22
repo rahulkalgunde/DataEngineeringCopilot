@@ -1790,6 +1790,11 @@ def build_rag_service(
                 max_query_tokens=app_settings.colbert_max_query_tokens,
                 max_doc_tokens=app_settings.colbert_max_doc_tokens,
             )
+        elif app_settings.reranker_type == "pylate_colbert":
+            # True neural late-interaction via PyLate; optional [colbert] extra.
+            from data_engineering_copilot.services.pylate_colbert_reranker import PyLateColBERTReranker
+
+            reranker = PyLateColBERTReranker(model_name=app_settings.pylate_colbert_model)
         else:
             from data_engineering_copilot.services.llm_reranker import LLMReranker
 
