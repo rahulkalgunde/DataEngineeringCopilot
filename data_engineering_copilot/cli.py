@@ -3106,8 +3106,17 @@ def eval_fast_main(
     if pairs_path.exists():
         sanity_pairs = parse_eval_rows(pairs_path)
 
+    # Offline by construction: hardwire the in-process local-hf embedder so
+    # eval-fast never depends on .env provider routing or paid API keys.
+    from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+        LocalSentenceTransformerEmbeddings,
+    )
+
+    embedder = LocalSentenceTransformerEmbeddings(
+        model_name=settings.local_hf_embedding_model,
+        embedding_dimension=settings.get_embedding_dimension(),
+    )
     service = build_rag_service()
-    embedder = service.embedder
     store = service.vector_store
 
     async def _run() -> dict:
