@@ -28,7 +28,7 @@ class TestAsyncRagService:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -86,7 +86,7 @@ class TestAsyncRagService:
             vector_store=vector_store or MagicMock(query=AsyncMock(return_value=[])),
             llm_client=llm or MagicMock(generate=AsyncMock(return_value="answer")),
             code_llm_client=code_llm,
-            embedder=embedder or MagicMock(embed_query=AsyncMock(return_value=[0.1] * 768)),
+            embedder=embedder or MagicMock(embed_query=AsyncMock(return_value=[0.1] * 2048)),
             reranker=reranker,
             telemetry=telemetry,
             cache=cache,
@@ -909,7 +909,7 @@ class TestAsyncRagService:
 
         await service.answer("what is spark sql")
 
-        hyde_emb = [0.1] * 768
+        hyde_emb = [0.1] * 2048
         mock_embedder.embed_query.assert_any_call("Spark SQL is a module for structured data.")
         for call in mock_vs.query.await_args_list:
             assert call.args[0] == hyde_emb
@@ -1248,7 +1248,7 @@ class TestPhase7Scoring:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -1469,7 +1469,7 @@ class TestStepDetailsAndArtifacts:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -1687,7 +1687,7 @@ class TestEmptyAnswerGuardrail:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -1803,7 +1803,7 @@ class TestScopeGate:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -1903,7 +1903,7 @@ class TestStreamParity:
     @pytest.fixture
     def mock_embedder(self):
         m = MagicMock()
-        m.embed_query = AsyncMock(return_value=[0.1] * 768)
+        m.embed_query = AsyncMock(return_value=[0.1] * 2048)
         return m
 
     @pytest.fixture
@@ -2049,7 +2049,7 @@ class TestStreamInjectionScan:
         mock_llm = MagicMock()
         mock_llm.generate_stream = MagicMock(return_value=_tokens())
         mock_embedder = MagicMock()
-        mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+        mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 2048)
         poisoned = RetrievedChunk(
             chunk=DocumentChunk(
                 chunk_id="inj-1",
