@@ -20,7 +20,12 @@ from data_engineering_copilot.config.naming import resolve_naming, validate_nami
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import MAX_SAFE_TOKENS
-from data_engineering_copilot.infrastructure.token_budget import DEFAULT_MAX_CHARS, count_tokens, split_text_losslessly
+from data_engineering_copilot.infrastructure.token_budget import (
+    DEFAULT_MAX_CHARS,
+    coalesce_blank_segments,
+    count_tokens,
+    split_text_losslessly,
+)
 from data_engineering_copilot.services.prepared_source import PreparedSource
 from data_engineering_copilot.services.spark_index_builder import (
     CoverageRecord,
@@ -204,10 +209,12 @@ class PinnedIndexBuilder:
         from dataclasses import replace
 
         parent_hash = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
-        segment_texts = split_text_losslessly(
-            chunk.text,
-            max_tokens=self._max_embed_tokens,
-            max_chars=self._max_embed_chars,
+        segment_texts = coalesce_blank_segments(
+            split_text_losslessly(
+                chunk.text,
+                max_tokens=self._max_embed_tokens,
+                max_chars=self._max_embed_chars,
+            )
         )
         normalized: list[DocumentChunk] = []
         for index, text in enumerate(segment_texts):
