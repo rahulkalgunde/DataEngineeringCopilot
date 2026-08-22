@@ -293,6 +293,11 @@ make eval-retrieval-gate
 # dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
 ```
 
+**Dark-flag gates.** Enabling a retrieval flag requires its benchmark to pass first:
+- `late_chunking_enabled` → `make eval-fast` PASS **and** `dec eval-retrieval --compare-baseline` Recall@10 ≥ baseline − 0.01 (gains concentrate on long documents; Jina arXiv:2409.04701).
+- `mrl_multistage_enabled` → Recall@10 within −0.01 of baseline **and** p95 retrieval latency improved ≥ 20% on the same benchmark.
+- `reranker_type="pylate_colbert"` → `dec eval-rerank` nDCG@10 ≥ cross_encoder + 0.02 **and** p95 pool latency ≤ 2× cross_encoder.
+
 ### `make eval-set-baseline`
 Write a fresh retrieval baseline for the regression gate. Requires the output path via the `OUTPUT` variable.
 
