@@ -1175,7 +1175,7 @@ usage: dec eval-retrieval [-h] [--dataset DATASET] [--k K] [--output-dir DIR]
 
 ```bash
 make eval-set-baseline OUTPUT=tests/evaluation/benchmarks/baseline.json   # write a baseline
-make eval-retrieval-gate                                                  # compare against it (CI gate)
+make eval-retrieval-gate                                                  # compare against it (local gate)
 # equivalent: dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
 ```
 
