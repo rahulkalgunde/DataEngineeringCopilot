@@ -16,6 +16,7 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 
 ## Environment
 - Always `dec_venv/bin/python` / `dec_venv/bin/dec` — never bare `python`. Install: `uv pip install -e ".[dev]"` (`make install`).
+- **Embeddings**: `local-hf` = in-process HF sentence-transformers (`nvidia/Nemotron-3-Embed-1B-BF16`, 2048-dim) — Ollama is NOT an embedding provider; it serves LLMs only. `eval-fast` hardwires local-hf.
 - `dec_pydocs_venv/` is a second venv used only by `dec spark-render` (Sphinx toolchain for PySpark API docs). Ignore it otherwise.
 - Settings load `.env` → `.env.secrets` → `.env.local`. `_env_file=None` does **not** reliably isolate (third-party `load_dotenv()` re-injects `.env` into `os.environ`, which beats env files) — pass explicit kwargs to override.
 - Commands expected to take >90–120s: run in background with output to a log file and poll — never block the foreground (opencode.json RULE 1).

@@ -144,7 +144,7 @@ Progress is persisted to Redis via `IngestionProgressTracker` (pollable from Str
 | `AsyncDocumentationCrawler` | `build_async_crawler()` | concurrency=10 (max 40), delay=0.3s, per-domain=2 |
 | `MarkdownParser` | direct instantiation | min_words=40 |
 | `DocumentChunker` | `build_chunker()` | chunk_size=1000 chars, overlap=100 chars (for `sentence_preserving`) |
-| embedder | `build_embedder()` | provider chain, 768-dim default (nomic-embed-text) |
+| embedder | `build_embedder()` | provider chain; production geometry = Nemotron BF16 2048-dim via local-hf |
 | `AsyncQdrantVectorStore` | direct instantiation | collection=`data_engineering_docs`, hybrid=on |
 | `ContextualChunkEnricher` | `LLMContextSummarizer` wrapper | batch_size=20, queued to Redis worker |
 | `ApiDocExtractor` | direct instantiation | enabled when `api_extraction_enabled=True` |
@@ -368,11 +368,10 @@ Crawler → Queue[RawDocument | None] → Workers (4 concurrent) → Batch[Chunk
 
 ```
 Input:  list[str] — chunk texts (up to 256 per batch)
-Output: list[list[float]] — dense vectors (768-dim for nomic-embed-text)
+Output: list[list[float]] — dense vectors (2048-dim production geometry)
 ```
 
 **Provider:** Selected via `embedding_provider` + `embedding_fallback_order`. All calls route through the `ProviderFallbackChain` (see [Section 8](#8-provider-fallback-chain)):
-- **Ollama** via `POST /api/embed`: `{"model": "nomic-embed-text", "input": texts}`
 - **OpenRouter** via `POST /embeddings` — `nvidia/nemotron-3-embed-1b:free`
 - **NVIDIA** via `POST /embeddings` — `nvidia/nemotron-3-embed-1b`
 - **HuggingFace serverless** (`huggingface_serverless_embeddings.py`) — native `feature-extraction` pipeline route; prepends `query:`/`passage:` prefixes client-side (serverless backend ignores `prompt_name`)
@@ -388,14 +387,13 @@ Output: list[list[float]] — dense vectors (768-dim for nomic-embed-text)
 
 | Model | Dimensions |
 |---|---|
-| `nomic-embed-text` | 768 |
 | `mxbai-embed-large` | 1024 |
 | `snowflake-arctic-embed2` | 1024 |
 | `llama3.2:3b` | 3072 |
 | `nvidia/nemotron-3-embed-1b` | 2048 |
 | `nvidia/nemotron-3-embed-1b:free` | 2048 |
 | `nvidia/Nemotron-3-Embed-1B-BF16` | 2048 |
-| `text-embedding-004` | 768 |
+| `text-embedding-004` | 768 |  ← true Gemini model property, not a residue |
 
 ### Step 11 Qdrant Upsert (`infrastructure/async_qdrant_store.py:160-204`)
 
@@ -428,7 +426,7 @@ str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 **Hybrid mode** (default): Stores both dense and sparse vectors:
 ```python
 vectors_config = {
-    "dense": VectorParams(size=768, distance=COSINE),
+    "dense": VectorParams(size=2048, distance=COSINE),
 }
 sparse_vectors_config = {
     "sparse": SparseVectorParams(index=SparseIndexParams()),
@@ -481,7 +479,7 @@ The `BM25Tokenizer` (`infrastructure/bm25_tokenizer.py:198-220`) persists to dis
   ┌──────────────────────────────┐
   │ 3. EMBEDDING                 │
   │ CachedEmbedder → fallback    │
-  │ chain (768-dim)              │
+  │ chain (2048-dim)             │
   └──────────┬───────────────────┘
              │ query_embedding (list[float])
              ▼
@@ -696,7 +694,7 @@ Each query in `all_queries` gets its own embedding + vector store query. The ori
 
 ```
 Input:  effective_query (str)
-Output: query_embedding (list[float], 768-dim)
+Output: query_embedding (list[float], 2048-dim)
 ```
 
 The embedder is wrapped in `CachedEmbedder` (`factory.py`):
@@ -708,7 +706,7 @@ embedder = CachedEmbedder(embedder)  # LRU cache, max 1024 entries
 
 **Cache hit:** Returns cached `list[float]` immediately.
 **Cache miss:** Delegates to the fallback chain:
-- **Ollama** (`async_embeddings.py:113-118`): `POST /api/embed` with `{"model": "nomic-embed-text", "input": [text]}`
+- **local-hf** (`local_sentence_transformer_embeddings.py`): in-process sentence-transformers (Nemotron BF16), CPU, no network after one-time HF download
 - **OpenRouter/NVIDIA** (`async_openai_compatible_embeddings.py`): `POST /embeddings` with `{"model": "...", "input": [text]}`, truncating to per-model input limit (tokenizer_registry).
 - **HuggingFace serverless**: native `feature-extraction` route; prefixes `query:` for queries and `passage:` for documents client-side.
 - **local-hf**: local SentenceTransformer.
@@ -1293,7 +1291,6 @@ def _sse(data: dict) -> str:
 | `llm_provider` | `ollama` | `ollama`, `openrouter`, `nvidia`, `groq`, `gemini`, `cloudflare`, `cerebras`, ... | `settings.py:422` |
 | `llm_model` | `llama3.2:3b` | Any model name | `settings.py:423` |
 | `embedding_provider` | `ollama` | `ollama`, `openrouter`, `nvidia`, `huggingface`, `local-hf`, `gemini` | `settings.py:424` |
-| `embedding_model_name` | `nomic-embed-text` | Any Ollama model | `settings.py:403` |
 | `local_hf_embedding_model` | `nvidia/Nemotron-3-Embed-1B-BF16` | Any HF SentenceTransformer | `settings.py:408` |
 
 ### 5.3 Provider API Keys & Fallback Chains
