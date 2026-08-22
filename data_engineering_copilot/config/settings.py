@@ -626,6 +626,12 @@ class AppSettings(BaseSettings):
 
     # LLM Provider selection: "ollama" | "openrouter"
     # Embedding provider selection: "ollama" | "openrouter"
+    # Late chunking (Jina arXiv:2409.04701): whole-doc token pooling for
+    # parent-segment groups in offline builders. Dark until:
+    # make eval-fast PASS AND dec eval-retrieval --compare-baseline
+    # Recall@10 >= baseline - 0.01. Local sentence-transformers models only.
+    late_chunking_enabled: bool = False
+    late_chunking_max_tokens: int = 8192
     embedding_model_name: str = "nomic-embed-text"
     # Local HuggingFace embedding model (provider "local-hf"): runs
     # sentence-transformers on the local CPU, mirroring the reranker. Produces
