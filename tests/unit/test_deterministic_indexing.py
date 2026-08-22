@@ -99,7 +99,7 @@ async def test_upsert_frozen_chunks_length_mismatch(mock_async_qdrant, tmp_path)
     )
     store.fit_bm25_corpus(["spark sql"])
     with pytest.raises(ValueError, match="equal lengths"):
-        await store.upsert_frozen_chunks([_chunk("a", "c1")], [[0.1] * 768, [0.2] * 768])
+        await store.upsert_frozen_chunks([_chunk("a", "c1")], [[0.1] * 2048, [0.2] * 2048])
 
 
 async def test_upsert_frozen_chunks_requires_frozen(mock_async_qdrant, tmp_path) -> None:
@@ -112,7 +112,7 @@ async def test_upsert_frozen_chunks_requires_frozen(mock_async_qdrant, tmp_path)
         bm25_persist_path=tmp_path / "bm25.json",
     )
     with pytest.raises(ValueError, match="frozen"):
-        await store.upsert_frozen_chunks([_chunk("a", "c1")], [[0.1] * 768])
+        await store.upsert_frozen_chunks([_chunk("a", "c1")], [[0.1] * 2048])
 
 
 async def test_upsert_frozen_chunks_requires_generation(mock_async_qdrant, tmp_path) -> None:
@@ -127,7 +127,7 @@ async def test_upsert_frozen_chunks_requires_generation(mock_async_qdrant, tmp_p
     store.fit_bm25_corpus(["spark sql"])
     chunk = _chunk("a", "c1", generation="")
     with pytest.raises(ValueError, match="index_generation"):
-        await store.upsert_frozen_chunks([chunk], [[0.1] * 768])
+        await store.upsert_frozen_chunks([chunk], [[0.1] * 2048])
 
 
 async def test_upsert_frozen_chunks_writes_sparse(mock_async_qdrant, tmp_path) -> None:
@@ -141,7 +141,7 @@ async def test_upsert_frozen_chunks_writes_sparse(mock_async_qdrant, tmp_path) -
     )
     store.fit_bm25_corpus(["spark sql window functions"])
     chunks = [_chunk("spark sql window functions dense_rank", "c1")]
-    await store.upsert_frozen_chunks(chunks, [[0.1] * 768])
+    await store.upsert_frozen_chunks(chunks, [[0.1] * 2048])
     call_kwargs = mock_async_qdrant.upsert.call_args.kwargs
     batch = call_kwargs.get("points") or call_kwargs[1].get("points")
     assert batch is not None

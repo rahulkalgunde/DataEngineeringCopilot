@@ -61,7 +61,7 @@ def _make_store(**overrides):
         url="http://localhost:6333",
         collection_name="t",
         hybrid_search=True,
-        embedding_dimension=768,
+        embedding_dimension=2048,
         mrl_multistage_enabled=True,
         mrl_small_dim=4,
         **overrides,
@@ -97,7 +97,7 @@ class TestUpsertWritesSmallVector:
             url="http://localhost:6333",
             collection_name="t",
             hybrid_search=True,
-            embedding_dimension=768,
+            embedding_dimension=2048,
         )
         store._client = _CapturingClient()  # type: ignore[assignment]
         await store.upsert_chunks([_chunk()], [[0.6, 0.8, 0.1, 0.2, 0.3, 0.4]])
@@ -126,7 +126,7 @@ def _make_query_store(**overrides):
         url="http://localhost:6333",
         collection_name="t",
         hybrid_search=True,
-        embedding_dimension=768,
+        embedding_dimension=2048,
         mrl_multistage_enabled=True,
         mrl_small_dim=4,
         mrl_oversample_factor=4,
@@ -149,7 +149,7 @@ async def test_query_wraps_dense_prefetch_with_small_dim_stage():
     """Task B2: dense prefetch nests inside an oversampled small-dim prefetch."""
     store = _make_query_store()
     await store.initialize()  # collection_exists False -> creates (with dense_small)
-    await store.query([0.1] * 768, top_k=10, query_text="hello world")
+    await store.query([0.1] * 2048, top_k=10, query_text="hello world")
     kwargs = store._client.query_kwargs[-1]  # type: ignore[attr-defined]
     prefetches = kwargs["prefetch"]
     assert len(prefetches) == 2, "dense + sparse top-level prefetches expected"
@@ -162,4 +162,4 @@ async def test_query_wraps_dense_prefetch_with_small_dim_stage():
     assert inner.using == "dense_small"
     assert inner.limit == dense_outer.limit * 4
     assert len(inner.query) == 4  # small-dim query vector
-    assert dense_outer.query == [0.1] * 768 or list(dense_outer.query) == [0.1] * 768
+    assert dense_outer.query == [0.1] * 2048 or list(dense_outer.query) == [0.1] * 2048

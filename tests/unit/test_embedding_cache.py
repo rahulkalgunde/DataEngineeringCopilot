@@ -126,7 +126,7 @@ async def test_redis_embed_cache_key_namespaced_by_dimension():
 
 async def test_legacy_same_text_vector_not_served_after_dim_switch():
     """Regression: embedding_cache keyed by text hash only, so after a model
-    switch a stale 768-dim vector for the same text was served to a 2048-dim
+    switch a stale 2048-dim vector for the same text was served to a 2048-dim
     pipeline (crashing the semantic cache lookup). The dimension namespace
     must make legacy entries unreachable."""
 
@@ -135,7 +135,7 @@ async def test_legacy_same_text_vector_not_served_after_dim_switch():
             key = key.decode()
         if key.startswith("embed:cache:d"):
             return None
-        return json.dumps([0.1] * 768)
+        return json.dumps([0.1] * 2048)
 
     redis_client = AsyncMock()
     redis_client.get.side_effect = fake_get
