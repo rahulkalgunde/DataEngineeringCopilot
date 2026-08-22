@@ -154,7 +154,7 @@ class TestMultiStagePools:
 
         async def embed_fn(texts):
             embed_called.append(texts)
-            return [[0.1] * 768 for _ in texts]
+            return [[0.1] * 2048 for _ in texts]
 
         async def store_fn(chunks, vectors):
             store_called.append((len(chunks), len(vectors)))
@@ -207,7 +207,7 @@ class TestMultiStagePools:
         mock_code.extract = lambda chunks: list(chunks)
         service._code_block_parser = mock_code
 
-        service.embeddings.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        service.embeddings.embed_texts = AsyncMock(return_value=[[0.1] * 2048])
         service.vector_store.upsert_chunks = AsyncMock()
 
         # This simulates a pending_batch — already isolated from the shared list

@@ -158,7 +158,7 @@ def test_cli_bm25_status_with_frozen_cache(tmp_path, monkeypatch) -> None:
             {
                 "result": {
                     "status": "green",
-                    "config": {"params": {"sparse_vectors": {"sparse": {}}, "vectors": {"dense": {"size": 768}}}},
+                    "config": {"params": {"sparse_vectors": {"sparse": {}}, "vectors": {"dense": {"size": 2048}}}},
                 }
             }
         ).encode()
@@ -186,7 +186,7 @@ def test_cli_bm25_status_sparse_without_cache(tmp_path, monkeypatch) -> None:
             {
                 "result": {
                     "status": "green",
-                    "config": {"params": {"sparse_vectors": {"sparse": {}}, "vectors": {"dense": {"size": 768}}}},
+                    "config": {"params": {"sparse_vectors": {"sparse": {}}, "vectors": {"dense": {"size": 2048}}}},
                 }
             }
         ).encode()

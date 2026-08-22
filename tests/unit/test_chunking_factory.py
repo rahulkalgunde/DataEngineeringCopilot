@@ -57,7 +57,7 @@ class TestFactoryFunctionBehavior:
         settings = AppSettings(
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -81,7 +81,7 @@ class TestFactoryFunctionBehavior:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             min_semantic_similarity=0.7,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -93,7 +93,7 @@ class TestFactoryFunctionBehavior:
             max_chunk_words=None,
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         expected_max = int(250 * 1.5)
@@ -106,7 +106,7 @@ class TestFactoryFunctionBehavior:
             max_chunk_words=400,
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -132,7 +132,7 @@ class TestStrategySelection:
             settings = AppSettings(
                 chunking_strategy=strategy,
                 enable_semantic_chunking=True,
-                embedding_provider="ollama",
+                embedding_provider="local-hf",
             )
             chunker = build_chunker(settings)
             assert isinstance(chunker, SemanticChunker)
@@ -141,7 +141,7 @@ class TestStrategySelection:
         settings_semantic = AppSettings(
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker_semantic = build_chunker(settings_semantic)
         assert isinstance(chunker_semantic, SemanticChunker)
@@ -158,7 +158,7 @@ class TestSemanticChunkerConfiguration:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             embedding_model_name="nomic-embed-text",
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -172,7 +172,7 @@ class TestSemanticChunkerConfiguration:
             chunk_overlap_words=40,
             min_semantic_similarity=0.6,
             max_chunk_words=300,
-            embedding_provider="ollama",
+            embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
