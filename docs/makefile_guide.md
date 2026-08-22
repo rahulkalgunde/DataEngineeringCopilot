@@ -358,7 +358,7 @@ make dev
 # IMAGE_TAG=dev-<sha> docker compose --profile app build --build-arg GIT_SHA=<sha> backend-api
 # echo "dev-<sha>" > .docker-tag
 # IMAGE_TAG=dev-<sha> docker compose --profile app up -d --wait
-# docker exec ollama ollama pull nomic-embed-text
+# docker exec ollama ollama pull phi4-mini:3.8b   # LLM models only; embeddings are in-process (local-hf)
 # docker exec ollama ollama pull phi4-mini:3.8b
 # docker exec ollama ollama pull qwen2.5-coder:7b
 ```

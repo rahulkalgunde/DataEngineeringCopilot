@@ -46,7 +46,7 @@ is defined in `docker-compose.yml`, auto-merged with `docker-compose.override.ym
 
 | Target | What it does |
 |--------|--------------|
-| `make dev` | **First-time setup**: build image with `GIT_SHA` arg, write `.docker-tag`, `up -d --wait`, pull Ollama models `nomic-embed-text`, `phi4-mini:3.8b`, `qwen2.5-coder:7b` |
+| `make dev` | **First-time setup**: build image with `GIT_SHA` arg, write `.docker-tag`, `up -d --wait`, pull Ollama models `phi4-mini:3.8b`, `qwen2.5-coder:7b` (LLMs only; embeddings are in-process via local-hf) |
 | `make up` | Start stack with last built image (no rebuild) |
 | `make down` | Stop + remove containers (interactive confirm; `FORCE=1` to bypass) |
 | `make rebuild` | **Rebuild image + restart backend-api & celery_worker** — required after `pyproject.toml`/`uv.lock` changes |
