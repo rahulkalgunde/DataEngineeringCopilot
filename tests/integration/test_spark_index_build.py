@@ -23,7 +23,7 @@ _COMMIT = "fa33ea000a0bda9e5a3fa1af98e8e85b8cc5e4d4"
 
 
 class _FakeEmbedder:
-    def __init__(self, dim: int = 768) -> None:
+    def __init__(self, dim: int = 2048) -> None:
         self.dim = dim
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -134,7 +134,7 @@ class _FakeHeaderChunker:
 @pytest.mark.asyncio
 async def test_build_generation_in_qdrant(qdrant_url, tmp_path):
     collection = f"itest_spark_{abs(hash(tmp_path)) % 10_000_000}"
-    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=768)
+    store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=collection, embedding_dimension=2048)
     await store.initialize()
 
     try:

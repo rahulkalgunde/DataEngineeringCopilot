@@ -659,7 +659,7 @@ class TestRealChunkerThroughProcessRaw:
 
         chunker = DocumentChunker(chunk_size_chars=500, chunk_overlap_chars=100)
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 2048])
         vector_store_mock = MagicMock()
         vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
         vector_store_mock.upsert_chunks = AsyncMock()
@@ -689,7 +689,7 @@ class TestRealChunkerThroughProcessRaw:
 
         chunker = HeaderAwareChunker(chunk_size_words=75, overlap_words=15)
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 2048])
         vector_store_mock = MagicMock()
         vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
         vector_store_mock.upsert_chunks = AsyncMock()
@@ -1034,7 +1034,7 @@ class TestRouterThroughProcessRaw:
         counting_router = _CountingRouter(router)
 
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 2048])
         vector_store_mock = MagicMock()
         vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
 
@@ -1130,7 +1130,7 @@ class TestRouterThroughProcessRaw:
         generic = _SentenceChunker(DocumentChunker(chunk_size_chars=500))
         router = ChunkerRouter(generic_strategy=generic)
         embeddings_mock = MagicMock()
-        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
+        embeddings_mock.embed_texts = AsyncMock(return_value=[[0.1] * 2048, [0.2] * 2048])
         vector_store_mock = MagicMock()
         vector_store_mock.get_content_hash_for_url = AsyncMock(return_value=None)
 
