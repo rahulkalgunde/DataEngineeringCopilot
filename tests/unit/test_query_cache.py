@@ -144,7 +144,7 @@ class TestScopeIsolation:
         assert scope_fingerprint(a) != scope_fingerprint(b)
 
     def test_scope_fingerprint_differs_by_embedding_model(self):
-        a = CacheScope(embedding_model="nomic-embed-text", collection_name="docs")
+        a = CacheScope(embedding_model="test-embedder", collection_name="docs")
         b = CacheScope(embedding_model="bge-m3", collection_name="docs")
         assert scope_fingerprint(a) != scope_fingerprint(b)
 
@@ -177,10 +177,10 @@ class TestScopeIsolation:
 
     def test_embedding_model_change_invalidates_key(self):
         cache = QueryCache(exact_enabled=True, semantic_enabled=False, similarity_threshold=0.9)
-        scope_nomic = CacheScope(embedding_model="nomic-embed-text", collection_name="docs")
+        scope_legacy = CacheScope(embedding_model="test-embedder", collection_name="docs")
         scope_bge = CacheScope(embedding_model="bge-m3", collection_name="docs")
-        cache.set_exact("q", _answer(), scope=scope_nomic)
-        assert cache.get_exact("q", scope=scope_nomic) is not None
+        cache.set_exact("q", _answer(), scope=scope_legacy)
+        assert cache.get_exact("q", scope=scope_legacy) is not None
         assert cache.get_exact("q", scope=scope_bge) is None
 
     def test_semantic_entries_scoped_by_tenant(self):

@@ -1250,7 +1250,7 @@ class AppSettings(BaseSettings):
     # prefix as "dense_small" and prefetch with it at oversampled limits
     # before full-dim rescoring. Dark until: eval-retrieval Recall@10 within
     # -0.01 of baseline AND p95 retrieval latency improved >= 20%. Requires an
-    # MRL-capable dense model (nomic v1.5-class); new index generation needed.
+    # MRL-trained dense models only; new index generation needed.
     mrl_multistage_enabled: bool = False
     mrl_small_dim: int = 256
     mrl_oversample_factor: int = 4

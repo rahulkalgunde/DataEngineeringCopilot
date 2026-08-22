@@ -482,7 +482,7 @@ def pytest_collection_modifyitems(config, items):
 def integration_settings():
     """AppSettings tuned for integration testing (hermetic, Ollama-only)."""
     return make_settings(
-        embedding_model_name="nomic-embed-text",
+        local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         embedding_batch_size=32,
         retrieval_top_k=5,
         reranker_top_k=3,
@@ -503,6 +503,10 @@ def integration_settings():
 @pytest.fixture
 def embeddings_provider(integration_settings):
     """In-process local-hf embeddings provider."""
+    from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
+        LocalSentenceTransformerEmbeddings,
+    )
+
     return LocalSentenceTransformerEmbeddings(
         model_name=integration_settings.local_hf_embedding_model,
         embedding_dimension=integration_settings.get_embedding_dimension(),
