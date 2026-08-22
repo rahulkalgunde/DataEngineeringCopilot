@@ -361,10 +361,13 @@ class AsyncQdrantVectorStore:
                     await self._warn_unfrozen_bm25_desync()
                     sparse_vectors_list = [self._bm25.tokenize_query(c.text) for c in sub_chunks]
                     vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
+                    # MRL small-dim space exists only on hybrid collections.
+                    if self._mrl_enabled:
+                        vectors_dict["dense_small"] = [
+                            _mrl_small_vector(v, self._mrl_small_dim) for v in vectors
+                        ]
                 else:
                     vectors_dict = vectors
-                if self._mrl_enabled:
-                    vectors_dict["dense_small"] = [_mrl_small_vector(v, self._mrl_small_dim) for v in vectors]
 
                 await self._client.upsert(
                     collection_name=self._collection_name,

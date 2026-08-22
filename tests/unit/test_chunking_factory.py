@@ -157,7 +157,7 @@ class TestSemanticChunkerConfiguration:
         settings = AppSettings(
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
-            embedding_model_name="nomic-embed-text",
+            local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
             embedding_provider="local-hf",
         )
         chunker = build_chunker(settings)

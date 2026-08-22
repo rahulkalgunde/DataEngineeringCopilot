@@ -102,7 +102,7 @@ def e2e_redis_url() -> str:
 
 _OLLAMA_IMAGE = "ollama/ollama:0.32.4"
 _OLLAMA_HOME = pathlib.Path.home() / ".ollama"
-_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b"]
+_OLLAMA_MODELS = ["llama3.2:3b"]
 
 _ollama_container = None
 _e2e_ollama_url: str | None = None
