@@ -81,7 +81,7 @@ class LateChunkEmbedder:
                     continue
                 vec = token_vecs[tok_idx]
                 for j in range(dim):
-                    acc[j] += vec[j]
+                    acc[j] += float(vec[j])
                 count += 1
             if count == 0:
                 # Span matched no tokens (e.g. whitespace-only): zero vector.
