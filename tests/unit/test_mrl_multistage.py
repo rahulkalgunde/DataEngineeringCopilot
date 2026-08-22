@@ -103,3 +103,63 @@ class TestUpsertWritesSmallVector:
         await store.upsert_chunks([_chunk()], [[0.6, 0.8, 0.1, 0.2, 0.3, 0.4]])
         vectors = store._client.upserts[-1].vectors  # type: ignore[attr-defined]
         assert "dense_small" not in vectors
+
+
+class _QueryCapturingClient(_CapturingClient):
+    def __init__(self):
+        super().__init__()
+        self.query_kwargs: list[dict] = []
+
+    async def query_points(self, **kwargs):
+        self.query_kwargs.append(kwargs)
+
+        class R:
+            points: list = []
+
+        return R()
+
+
+def _make_query_store(**overrides):
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="t",
+        hybrid_search=True,
+        embedding_dimension=768,
+        mrl_multistage_enabled=True,
+        mrl_small_dim=4,
+        mrl_oversample_factor=4,
+        **overrides,
+    )
+    client = _QueryCapturingClient()
+    # minimal frozen BM25 so the hybrid path engages
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer()
+    tok.fit(["hello world", "spark sql functions"])
+    tok._frozen = True  # simulate post-fit freeze (no public freezer)
+    store._client = client  # type: ignore[assignment]
+    store._bm25 = tok
+    return store
+
+
+@pytest.mark.asyncio
+async def test_query_wraps_dense_prefetch_with_small_dim_stage():
+    """Task B2: dense prefetch nests inside an oversampled small-dim prefetch."""
+    store = _make_query_store()
+    await store.initialize()  # collection_exists False -> creates (with dense_small)
+    await store.query([0.1] * 768, top_k=10, query_text="hello world")
+    kwargs = store._client.query_kwargs[-1]
+    prefetches = kwargs["prefetch"]
+    assert len(prefetches) == 2, "dense + sparse top-level prefetches expected"
+    names = [p.using for p in prefetches]
+    assert "sparse" in names
+    # The dense entry is now an OUTER stage with an inner small-dim prefetch.
+    dense_outer = next(p for p in prefetches if p.using == "dense")
+    assert dense_outer.prefetch, "MRL outer prefetch must carry inner small-dim stage"
+    inner = dense_outer.prefetch[0]
+    assert inner.using == "dense_small"
+    assert inner.limit == dense_outer.limit * 4
+    assert len(inner.query) == 4  # small-dim query vector
+    assert dense_outer.query == [0.1] * 768 or list(dense_outer.query) == [0.1] * 768
