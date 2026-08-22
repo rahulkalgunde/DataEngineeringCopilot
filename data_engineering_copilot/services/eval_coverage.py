@@ -30,7 +30,11 @@ def resolve_generation_root(generation: str, data_root: Path | None = None) -> P
     data_root = data_root or (Path(__file__).resolve().parents[2] / "data")
     candidates = [
         data_root / "pinned_corpus" / generation,
+        # gen-build writes artifact dirs named after the collection
+        # (data_engineering_docs__<gen>) per the config/naming.py contract.
+        data_root / "pinned_corpus" / f"data_engineering_docs__{generation}",
         data_root / "spark_corpus" / generation,
+        data_root / "spark_corpus" / f"data_engineering_docs__{generation}",
         data_root / "spark_corpus" / f"spark-v{generation}",
     ]
     for cand in candidates:
