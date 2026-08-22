@@ -247,7 +247,7 @@ def test_env_local_overrides_env(tmp_path) -> None:
             "llm_provider": "ollama",
             "llm_model": "llama3.2:3b",
             "embedding_provider": "ollama",
-            "embedding_model_name": "nomic-embed-text",
+            "local_hf_embedding_model": "nvidia/Nemotron-3-Embed-1B-BF16",
             "ollama_base_url": "http://localhost:11434",
         }
         settings = AppSettings(**kwargs)

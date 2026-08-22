@@ -42,7 +42,7 @@ class TestTokenTracker:
         tt = TokenTracker()
         tt.record(prompt_tokens=100, completion_tokens=50, model="llama3.2:3b")
         tt.record(prompt_tokens=200, completion_tokens=100, model="llama3.2:3b")
-        tt.record(prompt_tokens=80, completion_tokens=20, model="nomic-embed-text")
+        tt.record(prompt_tokens=80, completion_tokens=20, model="test-emed-text")
         usage = tt.get_usage()
         assert usage.by_model["llama3.2:3b"]["prompt_tokens"] == 300
-        assert usage.by_model["nomic-embed-text"]["prompt_tokens"] == 80
+        assert usage.by_model["test-emed-text"]["prompt_tokens"] == 80

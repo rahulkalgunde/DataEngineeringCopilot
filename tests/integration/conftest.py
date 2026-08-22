@@ -242,7 +242,7 @@ def pg_dsn():
 
 _OLLAMA_IMAGE = "ollama/ollama:0.32.4"
 _OLLAMA_HOME = pathlib.Path.home() / ".ollama"
-_OLLAMA_MODELS = ["nomic-embed-text", "llama3.2:3b"]
+_OLLAMA_MODELS = ["llama3.2:3b"]
 
 _ollama_container = None
 _ollama_url: str | None = None
@@ -347,7 +347,7 @@ def integration_settings(ollama_url):
 
     return make_settings(
         ollama_base_url=ollama_url,
-        embedding_model_name="nomic-embed-text",
+        local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
         retrieval_top_k=5,

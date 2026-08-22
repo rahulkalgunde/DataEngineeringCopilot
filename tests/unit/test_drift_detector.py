@@ -37,7 +37,7 @@ class TestEvalSnapshot:
                 eval_dataset_hash="abc123",
                 git_commit="deadbeefcafe",
                 generation="pinned-test-123",
-                embedding_model="nomic-embed-text",
+                embedding_model="test-embedder",
                 reranker="nvidia/llama-nemotron-rerank-vl-1b-v2:free",
                 chunk_size=375,
                 chunk_overlap=90,
@@ -50,7 +50,7 @@ class TestEvalSnapshot:
             restored = loaded[0]
             assert restored.git_commit == "deadbeefcafe"
             assert restored.generation == "pinned-test-123"
-            assert restored.embedding_model == "nomic-embed-text"
+            assert restored.embedding_model == "test-embedder"
             assert restored.reranker == "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
             assert restored.chunk_size == 375
             assert restored.chunk_overlap == 90
