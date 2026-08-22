@@ -123,3 +123,110 @@ class TestContextLimit:
         out = await emb.embed_document_spans("alpha beta", [(0, 10)])
         expected = _normalize([0.5, 0.5, 0.0, 0.0])
         assert all(abs(a - b) < 1e-6 for a, b in zip(out[0], expected, strict=True))
+
+
+class TestGroupedDocumentEmbedding:
+    """Task A2: parent-grouped late embedding with graceful fallback."""
+
+    @pytest.mark.asyncio
+    async def test_groups_segments_by_parent_and_pools(self):
+
+        from data_engineering_copilot.domain.models import DocumentChunk
+        from data_engineering_copilot.infrastructure.late_chunking import embed_document_grouped
+
+        calls: list[str] = []
+
+        class TrackingEncoder(FakeEncoder):
+            def encode(self, texts, output_value=None):
+                calls.extend(texts)
+                return super().encode(texts, output_value=output_value)
+
+        emb = _make(dim=4)
+        emb._encoder = TrackingEncoder(dim=4)
+
+        def mk(cid, text, parent="", seg=0):
+            return DocumentChunk(
+                chunk_id=cid,
+                source_name="s",
+                title="t",
+                url="u",
+                text=text,
+                parent_content_hash=parent,
+                segment_index=seg,
+            )
+
+        chunks = [
+            mk("a1", "alpha beta", parent="p1", seg=0),
+            mk("a2", "gamma delta", parent="p1", seg=1),
+            mk("solo", "epsilon zeta"),
+        ]
+
+        async def naive(texts):
+            return [[9.0, 9.0, 9.0, 9.0] for _ in texts]
+
+        out = await embed_document_grouped(
+            chunks,
+            naive_embed=naive,
+            late_embedder=lambda: emb,
+            max_group_tokens=512,
+        )
+        assert len(out) == 3
+        # a1/a2 come from ONE pooled encoding of the joined pseudo-document.
+        assert len(calls) == 1
+        assert "alpha beta\ngamma delta" in calls[0]
+        assert out[0] != out[1], "different spans must yield different vectors"
+        # Unparented chunk uses the naive path.
+        assert out[2] == [9.0, 9.0, 9.0, 9.0]
+
+    @pytest.mark.asyncio
+    async def test_overflow_falls_back_to_naive_for_everything(self):
+        from data_engineering_copilot.domain.models import DocumentChunk
+        from data_engineering_copilot.infrastructure.late_chunking import embed_document_grouped
+
+        emb = _make(dim=4)
+        emb.max_tokens = 2  # force overflow
+
+        def mk(cid, text, parent=""):
+            return DocumentChunk(
+                chunk_id=cid,
+                source_name="s",
+                title="t",
+                url="u",
+                text=text,
+                parent_content_hash=parent,
+                segment_index=0,
+            )
+
+        chunks = [mk("a", "one two three four five six seven eight nine ten", parent="p")]
+        warnings: list[str] = []
+
+        async def naive(texts):
+            warnings.append("naive")
+            return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+        out = await embed_document_grouped(chunks, naive_embed=naive, late_embedder=lambda: emb, max_group_tokens=512)
+        assert out == [[1.0, 0.0, 0.0, 0.0]]
+        assert warnings, "must fall back to naive embedding"
+
+    @pytest.mark.asyncio
+    async def test_no_late_embedder_uses_naive(self):
+        from data_engineering_copilot.domain.models import DocumentChunk
+        from data_engineering_copilot.infrastructure.late_chunking import embed_document_grouped
+
+        chunks = [
+            DocumentChunk(
+                chunk_id="a",
+                source_name="s",
+                title="t",
+                url="u",
+                text="hello world",
+                parent_content_hash="p",
+                segment_index=0,
+            )
+        ]
+
+        async def naive(texts):
+            return [[7.0, 7.0, 7.0, 7.0] for _ in texts]
+
+        out = await embed_document_grouped(chunks, naive_embed=naive, late_embedder=None, max_group_tokens=512)
+        assert out == [[7.0, 7.0, 7.0, 7.0]]

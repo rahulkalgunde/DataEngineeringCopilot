@@ -14,6 +14,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from data_engineering_copilot.domain.models import DocumentChunk
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import _load_model
@@ -91,3 +96,57 @@ class LateChunkEmbedder:
             norm = math.sqrt(sum(x * x for x in mean))
             pooled.append([x / norm for x in mean] if norm > 0 else mean)
         return pooled
+
+
+async def embed_document_grouped(
+    chunks: list[DocumentChunk],
+    *,
+    naive_embed: Callable[[list[str]], Awaitable[list[list[float]]]],
+    late_embedder: Callable[[], LateChunkEmbedder] | None,
+    max_group_tokens: int = 8192,
+) -> list[list[float]]:
+    """Embed *chunks* with parent-grouped late chunking and graceful fallback.
+
+    Segments sharing a non-empty ``parent_content_hash`` are joined into a
+    pseudo-document (sorted by ``segment_index``) and pooled per segment span;
+    unparented chunks go through the naive path directly. Any late-chunking
+    failure (missing local model, context overflow, runtime error) falls back
+    to ``naive_embed`` for the ENTIRE batch — builds never fail because of
+    this feature.
+    """
+
+    if late_embedder is None or not chunks:
+        return await naive_embed([c.text for c in chunks])
+
+    groups: dict[str, list[int]] = {}
+    for idx, chunk in enumerate(chunks):
+        key = chunk.parent_content_hash if chunk.parent_content_hash else f"__solo__:{chunk.chunk_id}"
+        if not chunk.parent_content_hash:
+            continue  # solos always take the naive path below
+        groups.setdefault(key, []).append(idx)
+
+    try:
+        late = late_embedder()
+        vectors: list[list[float]] = [[] for _ in chunks]
+        for _key, idxs in groups.items():
+            ordered = sorted(idxs, key=lambda i: chunks[i].segment_index)
+            pseudo_text = "\n".join(chunks[i].text for i in ordered)
+            spans: list[tuple[int, int]] = []
+            cursor = 0
+            for i in ordered:
+                text_len = len(chunks[i].text)
+                spans.append((cursor, cursor + text_len))
+                cursor += text_len + len("\n")
+            pooled = await late.embed_document_spans(pseudo_text, spans)
+            for pos, i in enumerate(ordered):
+                vectors[i] = pooled[pos]
+        # Naive-embed every chunk that stayed outside late grouping.
+        solo_idxs = [i for i in range(len(chunks)) if not vectors[i]]
+        if solo_idxs:
+            solo_vecs = await naive_embed([chunks[i].text for i in solo_idxs])
+            for pos, i in enumerate(solo_idxs):
+                vectors[i] = solo_vecs[pos]
+        return vectors
+    except Exception as exc:
+        logger.warning("late_chunking_fallback_to_naive reason=%s chunks=%d", type(exc).__name__, len(chunks))
+        return await naive_embed([c.text for c in chunks])

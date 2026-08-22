@@ -34,6 +34,8 @@ from data_engineering_copilot.services.spark_index_builder import (
 
 logger = logging.getLogger(__name__)
 
+from data_engineering_copilot.infrastructure.late_chunking import LateChunkEmbedder  # noqa: E402
+
 if TYPE_CHECKING:
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
@@ -64,10 +66,16 @@ class PinnedIndexBuilder:
         max_embed_tokens: int = MAX_SAFE_TOKENS,
         max_embed_chars: int = DEFAULT_MAX_CHARS,
         output_dir: Path | None = None,
+        late_chunking_enabled: bool = False,
+        late_chunking_max_tokens: int = 8192,
+        late_chunking_model_name: str = "",
     ) -> None:
         naming = resolve_naming(generation)
         validate_naming(naming)
         self._store = store
+        self._late_chunking_enabled = late_chunking_enabled
+        self._late_chunking_max_tokens = late_chunking_max_tokens
+        self._late_chunking_model_name = late_chunking_model_name
         self._embedder = embedder
         self._generation = generation
         self._embedding_batch_size = embedding_batch_size
@@ -149,6 +157,30 @@ class PinnedIndexBuilder:
         )
 
     async def _embed_all(self, chunks: list[DocumentChunk]) -> list[list[float]]:
+        if self._late_chunking_enabled:
+            from data_engineering_copilot.infrastructure.late_chunking import embed_document_grouped
+
+            if not self._late_chunking_model_name:
+                logger.warning("late_chunking enabled without model name; using naive embedding")
+                self._late_chunking_enabled = False
+
+            def _late() -> LateChunkEmbedder:
+                return LateChunkEmbedder(self._late_chunking_model_name, max_tokens=self._late_chunking_max_tokens)
+
+            async def naive(batch_texts: list[str]) -> list[list[float]]:
+                out: list[list[float]] = []
+                for i in range(0, len(batch_texts), self._embedding_batch_size):
+                    out.extend(
+                        await _embed_batch_with_retry(self._embedder, batch_texts[i : i + self._embedding_batch_size])
+                    )
+                return out
+
+            return await embed_document_grouped(
+                chunks,
+                naive_embed=naive,
+                late_embedder=_late,
+                max_group_tokens=self._late_chunking_max_tokens,
+            )
         vectors: list[list[float]] = []
         for i in range(0, len(chunks), self._embedding_batch_size):
             batch = [c.text for c in chunks[i : i + self._embedding_batch_size]]
