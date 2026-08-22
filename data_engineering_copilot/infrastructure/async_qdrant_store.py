@@ -536,13 +536,31 @@ class AsyncQdrantVectorStore:
                     # cross-encoder reranker (when enabled) then does the precise
                     # selection from this larger pool.
                     prefetch_limit = effective_fused_limit
-                    query_kwargs["prefetch"] = [
-                        models.Prefetch(
+                    dense_prefetch = models.Prefetch(
+                        query=query_embedding,
+                        using="dense",
+                        limit=prefetch_limit,
+                        filter=query_filter,
+                    )
+                    if self._mrl_enabled:
+                        # MRL multistage: an oversampled small-dim ANN stage
+                        # feeds the full-dim rescore above it.
+                        dense_prefetch = models.Prefetch(
                             query=query_embedding,
                             using="dense",
                             limit=prefetch_limit,
                             filter=query_filter,
-                        ),
+                            prefetch=[
+                                models.Prefetch(
+                                    query=_mrl_small_vector(list(query_embedding), self._mrl_small_dim),
+                                    using="dense_small",
+                                    limit=prefetch_limit * self._mrl_oversample_factor,
+                                    filter=query_filter,
+                                )
+                            ],
+                        )
+                    query_kwargs["prefetch"] = [
+                        dense_prefetch,
                         models.Prefetch(
                             query=sparse,
                             using="sparse",
