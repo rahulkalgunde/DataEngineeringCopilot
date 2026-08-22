@@ -66,6 +66,11 @@ dev = [
     "tree-sitter>=0.20",
     "tree-sitter-python>=0.20",
 ]
+colbert = [
+    # True neural late-interaction reranking (PyLate). Optional extra: NOT
+    # installed in CI; enable locally with `uv pip install -e ".[colbert]"`.
+    "pylate>=1.1",
+]
 
 [project.scripts]
 dec = "main:main"

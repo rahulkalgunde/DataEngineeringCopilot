@@ -1148,8 +1148,11 @@ class AppSettings(BaseSettings):
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_cloud_timeout_seconds: int = 30
     # "colbert" = lexical char-trigram MaxSim proxy (see colbert_reranker.py),
-    # NOT neural late-interaction.
+    # NOT neural late-interaction. "pylate_colbert" = true neural late
+    # interaction via PyLate (optional [colbert] extra). Gate: dec eval-rerank
+    # nDCG@10 >= cross_encoder + 0.02 AND p95 pool latency <= 2x cross_encoder.
     reranker_type: str = "cross_encoder"
+    pylate_colbert_model: str = "colbert-ir/colbertv2.0"
     reranker_pool_size: int = 0
     reranker_doc_truncation_chars: int = 2000
     reranker_selective_threshold: float = 1.0
