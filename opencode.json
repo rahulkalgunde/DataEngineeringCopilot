@@ -81,7 +81,19 @@
     "=== RULE 13: TWO-TIER VERIFICATION CADENCE ===",
     "1. PER-CHANGE (after every edit, ~5-10s): run ONLY on the files you touched — `ruff check <files> --fix`, `ruff format <files>`, `pyright <files>`, and one targeted `pytest tests/unit/<specific_test> -v -n 0` for the behavior changed.",
     "2. MILESTONE ONLY (feature/issue complete, before asking to finish/commit, ~1-2 min): full repo gate once — `ruff check data_engineering_copilot/ tests/ --fix`, `ruff format data_engineering_copilot/ tests/`, `pyright data_engineering_copilot/ tests/`, `pytest tests/unit/ -n 6`.",
-    "3. NEVER run the full suite after every micro-edit — it is a waste of time and goes red on the next edit anyway. The full run is the FINAL gate only (catches cross-module surprises: import wiring, shared fixtures, cache scope changes)."
+    "3. NEVER run the full suite after every micro-edit — it is a waste of time and goes red on the next edit anyway. The full run is the FINAL gate only (catches cross-module surprises: import wiring, shared fixtures, cache scope changes).",
+    "=== RULE 14: FREE AGENTIC-CODING MODEL FALLBACK LADDER (live-verified 2026-08-21) ===",
+    "1. When the active model returns 429/timeout/EOL or degrades (per RULE 10.5), switch via /models in this verified order: (1) openrouter/poolside/laguna-xs-2.1:free, (2) openrouter/cohere/north-mini-code:free, (3) openrouter/nvidia/nemotron-3-super-120b-a12b:free, (4) openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (slow, use for 1M-context planning), (5) nvidia/nvidia/nemotron-3.5-lightning-30b-a3b (NVIDIA direct), (6) openrouter/stealth/ox-alpha (stealth preview).",
+    "2. NEVER route work to: deepseek-ai/deepseek-v4-flash-0731 on NVIDIA direct (hangs indefinitely); z-ai/glm-5.2 (EOL upstream 2026-08-21; OpenRouter :free route exists but flaky — emergency only); google/gemma-4-26b-a4b-it:free (chat works, tool-call route persistently throttled).",
+    "3. Free-tier budget: OpenRouter 20 req/min and 50 req/day account-wide without $10 lifetime credits; NVIDIA ~36 RPM. Never send proprietary code through free routes — providers may train on inputs.",
+    "=== RULE 15: TURN DISCIPLINE & SILENT-STOP PREVENTION (added 2026-08-22) ===",
+    "Context: the free model endpoint intermittently 503s mid-stream, ending turns early. These rules minimize damage and make recovery mechanical.",
+    "1. NEVER END A TURN ON NARRATION: any sentence announcing work ('Writing X now:') MUST be followed by the actual tool call within the same turn. Announcement is never the last thing in a turn.",
+    "2. COMPLETE UNITS PER TURN: finish test → implement → verify → commit as one continuous tool-call chain before yielding. Yield only at genuine review checkpoints or real blockers.",
+    "3. SMALL GENERATIONS: never emit a single output larger than ~400 lines. Write large documents/files in sections via multiple Write/Edit calls — stream deaths then cost seconds, not deliverables.",
+    "4. STATE/NEXT FOOTER: when a turn must end early for ANY reason (blocker, context pressure, user interruption), the final line must be 'STATE: <what is done> NEXT: <exact next action>'. Never end with open-ended silence.",
+    "5. MECHANICAL RESUME ON '?': on any user nudge ('?', 'continue', status question), FIRST read the artifact trail (git log -5, latest plans/*.md checkboxes, latest sessions/*.md Next Steps), THEN continue exactly where it stopped. No re-planning, no re-research.",
+    "6. NO STATUS THEATER: do not answer 'are you stuck?' with analysis of being stuck — resume work in the same turn and report results."
   ],
   "lsp": {
     "pyright": {
@@ -89,6 +101,83 @@
         "dec_venv/bin/pyright",
         "--stdio"
       ]
+    }
+  },
+  "provider": {
+    "nvidia": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM (Free Tier)",
+      "env": ["NVIDIA_API_KEY"],
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}"
+      },
+      "models": {
+        "nvidia/nemotron-3.5-lightning-30b-a3b": {
+          "name": "Nemotron 3.5 Lightning 30B A3B (NVIDIA free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1000000, "output": 16384 }
+        },
+        "nvidia/nemotron-3-super-120b-a12b": {
+          "name": "Nemotron 3 Super 120B A12B (NVIDIA free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1000000, "output": 16384 }
+        },
+        "nvidia/nemotron-3-ultra-550b-a55b": {
+          "name": "Nemotron 3 Ultra 550B A55B (NVIDIA free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1000000, "output": 16384 }
+        }
+      }
+    },
+    "openrouter": {
+      "models": {
+        "poolside/laguna-xs-2.1:free": {
+          "name": "Poolside Laguna XS 2.1 (free)",
+          "tool_call": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 262144, "output": 16384 }
+        },
+        "poolside/laguna-s-2.1:free": {
+          "name": "Poolside Laguna S 2.1 (free)",
+          "tool_call": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 262144, "output": 16384 }
+        },
+        "cohere/north-mini-code:free": {
+          "name": "Cohere North Mini Code (free)",
+          "tool_call": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 256000, "output": 16384 }
+        },
+        "nvidia/nemotron-3-super-120b-a12b:free": {
+          "name": "Nemotron 3 Super 120B A12B (OR free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 262144, "output": 16384 }
+        },
+        "nvidia/nemotron-3-ultra-550b-a55b:free": {
+          "name": "Nemotron 3 Ultra 550B A55B (OR free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1000000, "output": 16384 }
+        },
+        "stealth/ox-alpha": {
+          "name": "Ox Alpha (stealth preview, free)",
+          "tool_call": true,
+          "reasoning": true,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1048576, "output": 16384 }
+        }
+      }
     }
   },
   "permission": {
