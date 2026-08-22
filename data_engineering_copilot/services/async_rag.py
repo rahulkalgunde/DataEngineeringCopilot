@@ -1710,6 +1710,7 @@ class AsyncRagService:
                         "type": "done",
                         "text": "I cannot answer this question because it is outside my knowledge repository.",
                         "confidence": 0.0,
+                        "repaired": False,
                         "groundedness_score": None,
                         "groundedness_claims": [],
                     }
@@ -1819,6 +1820,10 @@ class AsyncRagService:
         if validated is not None:
             full_text = validated.answer
 
+        # Structured-envelope repair (parity with answer()): clean what the
+        # terminal done event carries; streamed tokens stay raw (SSE contract).
+        full_text, _stream_repaired = self._repair_stream_envelope(full_text, intent)
+
         # Scope gate BEFORE trace/cache write: refusals must never be cached,
         # and the trace must record the text actually returned.
         scope_refused = False
@@ -1876,6 +1881,7 @@ class AsyncRagService:
                 "type": "done",
                 "text": full_text,
                 "confidence": confidence,
+                "repaired": _stream_repaired,
                 "groundedness_score": groundedness_score,
                 "groundedness_claims": list(unsupported_claims),
             }
@@ -2733,6 +2739,44 @@ class AsyncRagService:
             extra_candidates.append(await llm_client.generate(prompt))
         logger.info("self_consistency_applied intent=%s samples=%d", intent, len(extra_candidates) + 1)
         return select_most_consistent([answer_text, *extra_candidates])
+
+    def _repair_stream_envelope(self, full_text: str, intent: str) -> tuple[str, bool]:
+        """Unwrap/repair a structured-answer envelope in the stream terminal
+        event (parity with answer()'s parse path). Returns (text, repaired).
+
+        Already-streamed tokens are raw by SSE contract; this only cleans what
+        the ``done`` event carries. json-repair salvages truncated/malformed
+        envelopes from degraded-fallback providers that ignore
+        ``response_format``.
+        """
+        if intent in CODE_INTENTS:
+            return full_text, False
+        # Only treat the text as an envelope when it actually looks like one;
+        # the permissive fallback parser would otherwise report any prose as
+        # a parsed "answer".
+        probe = full_text.strip()
+        if probe.startswith("```"):
+            probe = probe.strip("` \n")
+        if not probe.startswith("{"):
+            return full_text, False
+        parsed = parse_structured_rag_response(full_text)
+        if parsed.answer:
+            return parsed.answer.strip(), True
+        try:
+            import json_repair
+
+            repaired_obj = json_repair.loads(full_text)
+            if isinstance(repaired_obj, dict):
+                candidate = str(repaired_obj.get("answer") or "")
+                if candidate.strip():
+                    return candidate.strip(), True
+            repaired_str = json_repair.dumps(repaired_obj) if not isinstance(repaired_obj, str) else repaired_obj
+            reparsed = parse_structured_rag_response(repaired_str)
+            if reparsed.answer:
+                return reparsed.answer.strip(), True
+        except Exception:
+            logger.debug("stream envelope repair found no envelope", exc_info=True)
+        return full_text, False
 
     def _record_token_usage_and_cost(self, llm_client: LLMClientProtocol, generation_span: Any, trace: Any) -> None:
         """Record provider token usage on the token tracker and emit
