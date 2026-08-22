@@ -2770,7 +2770,7 @@ class AsyncRagService:
                 candidate = str(repaired_obj.get("answer") or "")
                 if candidate.strip():
                     return candidate.strip(), True
-            repaired_str = json_repair.dumps(repaired_obj) if not isinstance(repaired_obj, str) else repaired_obj
+            repaired_str = json.dumps(repaired_obj) if not isinstance(repaired_obj, str) else repaired_obj
             reparsed = parse_structured_rag_response(repaired_str)
             if reparsed.answer:
                 return reparsed.answer.strip(), True
