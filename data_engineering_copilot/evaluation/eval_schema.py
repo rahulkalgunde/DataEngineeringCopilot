@@ -108,11 +108,20 @@ def validate_eval_row(row: dict) -> list[str]:
     kind = kind_of(row)
 
     if kind is EvalKind.RECALL:
-        if not row.get("expected_terms"):
-            err("recall row must specify non-empty expected_terms")
-        if oos and row.get("expected_urls"):
+        terms = row.get("expected_terms")
+        urls = row.get("expected_urls")
+        # Junk-term hygiene: reject the old `source?` fragments and other non-tokens
+        # that caused 403/500 rows to fail coverage spuriously (see T7 post-mortem).
+        if isinstance(terms, list):
+            for t in terms:
+                s = str(t).strip()
+                if "?" in s or len(s) < 2:
+                    err(f"expected_terms contains junk token {t!r} (must be >=2 chars, no '?')")
+        if not terms and not urls:
+            err("recall row must specify expected_terms or expected_urls")
+        if oos and urls:
             err("out-of-scope row must not carry expected_urls")
-        if not oos and not row.get("expected_urls"):
+        if not oos and not urls:
             err("in-scope recall row must specify expected_urls")
     else:
         if not str(row.get("ground_truth") or "").strip():
