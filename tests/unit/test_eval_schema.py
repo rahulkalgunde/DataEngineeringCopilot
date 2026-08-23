@@ -53,7 +53,8 @@ class TestValidateEvalRow:
 
     def test_recall_without_terms(self):
         row = {"id": "x", "question": "q", "expected_urls": ["u"]}
-        assert any("expected_terms" in e for e in validate_eval_row(row))
+        # URL-only recall is valid after hygiene (T7) — terms are optional when urls present
+        assert validate_eval_row(row) == []
 
     def test_oos_cannot_have_urls(self):
         row = {"id": "oos-1", "question": "q", "out_of_scope": True, "expected_terms": ["t"], "expected_urls": ["u"]}
