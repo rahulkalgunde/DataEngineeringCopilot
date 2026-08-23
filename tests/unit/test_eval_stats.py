@@ -29,6 +29,19 @@ def test_small_improvement_within_tolerance_passes():
     assert ok is True
 
 
+def test_rerun_noise_within_tolerance_passes_despite_wide_ci():
+    # Real-world case (2026-08-23): identical-harness rerun drifted -0.012
+    # (0.247 vs baseline 0.259, n=219/220); bootstrap CI half-width ~±0.08 so a
+    # ci_low-based rule breached -0.02 even though the retriever was unchanged.
+    # Verdict must gate on the point delta, not the CI low.
+    base = [1.0] * 57 + [0.0] * 163  # mean 0.259
+    cur = [0.0] * 165 + [1.0] * 54  # mean 0.247, decorrelated from base
+    ok, delta, (lo, _hi) = regression_verdict(cur, base, tolerance=0.02)
+    assert -0.02 <= delta < 0
+    assert ok is True
+    assert lo < -0.02  # CI alone would have failed the gate
+
+
 def test_empty_inputs_pass_trivially():
     ok, delta, (lo, hi) = regression_verdict([], [])
     assert ok is True and delta == 0.0 and (lo, hi) == (0.0, 0.0)

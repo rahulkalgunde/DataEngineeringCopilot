@@ -248,7 +248,7 @@ eval-retrieval:
 # Baseline is tests/evaluation/benchmarks/baseline_inscope.json (220 rows, R@10=0.259).
 # Exits non-zero if any gate fails. Use in CI as a required status check.
 eval-retrieval-gate:
-	dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10
+	dec_venv/bin/dec eval-retrieval --dataset tests/evaluation/golden/recall_inscope.jsonl --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10 --batch-size 55
 
 # $0 reranker smoke: freeze 10 pools, replay ($0 for subsequent reruns)
 eval-rerank-smoke:
