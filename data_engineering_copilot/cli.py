@@ -2872,11 +2872,22 @@ def eval_chunking_main(
         return 2
 
     print(f"{'Strategy':<15} {'IoU':>6} {'Prec':>6} {'B-Sim':>6} {'Fract':>6}")
+    gates = report.get("gates") or {}
     for strat, m in report.items():
+        if not isinstance(m, dict) or "iou" not in m:
+            continue
         print(
             f"{strat:<15} {m['iou']:>6.3f} {m['precision']:>6.3f} "
             f"{m['boundary_similarity']:>6.3f} {m['fracture_rate']:>6.3f}"
         )
+    if gates:
+        verdict = "✅" if gates.get("fracture_ok") else "❌"
+        print(
+            f"\n{verdict} fracture gate: worst={gates.get('worst_fracture_rate', 0):.3f} "
+            f"threshold<={gates.get('fracture_threshold', 0):.2f}"
+        )
+        if not gates.get("fracture_ok"):
+            return 1
     print(f"\nReport written to {output}")
     return 0
 
