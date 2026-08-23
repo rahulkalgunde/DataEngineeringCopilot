@@ -2396,6 +2396,7 @@ def eval_retrieval_main(
     output_dir: str | None = None,
     compare_baseline: str | None = None,
     pool_file: str | None = None,
+    batch_size: int | None = None,
 ) -> int:
     """Source-agnostic retrieval-only evaluation (Recall@K / MRR / Precision@K per intent).
 
@@ -2473,6 +2474,150 @@ def eval_retrieval_main(
     async def run_eval() -> list[dict]:
         if service.reranker is not None and not replay:
             await service.reranker.initialize()
+
+        # Batched path: chunk queries, gather per batch with 2s backoff on RetrievalError.
+        # Preserve order, reuse existing pool logic, no new deps.
+        if batch_size is not None and batch_size > 0:
+
+            async def _single(item: dict, global_idx: int) -> dict:
+                query = item.get("question") or ""
+                if not query:
+                    return {"_skip": True}
+                intent = item.get("intent", "unknown")
+                expected = [u for u in (item.get("expected_urls") or []) if u]
+                qid = str(item.get("id", f"q{global_idx}"))
+                prov: list[dict] = []
+                if replay:
+                    cand = pools.get(qid) or pools.get(query, [])
+                    t_start = t_end = _time.perf_counter()
+                    retrieved = rank_from_pool(cand, k)
+                else:
+                    t_start = _time.perf_counter()
+                    answer = await service.answer(
+                        query,
+                        provenance=prov,
+                        bypass_cache=True,
+                        retrieval_only=True,
+                        expected_urls=expected,
+                    )
+                    t_end = _time.perf_counter()
+                    retrieved = [c.url for c in answer.sources]
+                    if pool_file:
+                        pools[qid] = [
+                            {
+                                "url": c.url,
+                                "dense_score": float(getattr(c, "dense_score", 0.0) or 0.0),
+                                "sparse_score": float(getattr(c, "sparse_score", 0.0) or 0.0),
+                                "fused_score": float(getattr(c, "confidence", 0.0) or 0.0),
+                            }
+                            for c in answer.sources
+                        ]
+                try:
+                    row = _eval_retrieval_row(query, intent, expected, retrieved, k)
+                except Exception as exc:  # noqa: BLE001
+                    return {"id": qid, "question": query, "error": str(exc), "_intent": intent}
+                row["id"] = qid
+                row["question"] = query
+                row["_intent"] = intent
+                row["ndcg"] = ndcg_at_k(retrieved, expected, k)
+                row["recall_at_5"] = recall_at_k(retrieved, expected, 5)
+                row["recall_at_20"] = recall_at_k(retrieved, expected, 20)
+                row["latency_ms"] = (t_end - t_start) * 1000.0
+                return row
+
+            rows: list[dict] = []
+            # Chunk into batches, gather per batch to bound Qdrant concurrency.
+            for batch_start in range(0, len(queries), batch_size):
+                batch = queries[batch_start : batch_start + batch_size]
+                indices = list(range(batch_start + 1, batch_start + len(batch) + 1))
+                # 2s backoff retry on RetrievalError / Vector store query failed (transient Qdrant overload).
+                attempt = 0
+                batch_rows: list[dict] | None = None
+                while True:
+                    try:
+                        tasks = [_single(item, idx) for item, idx in zip(batch, indices, strict=False)]
+                        batch_rows = await asyncio.gather(*tasks)
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        from data_engineering_copilot.domain.exceptions import RetrievalError
+
+                        msg = str(exc)
+                        is_retryable = (
+                            isinstance(exc, RetrievalError)
+                            or "Vector store query failed" in msg
+                            or "RetrievalError" in type(exc).__name__
+                        )
+                        if is_retryable and attempt == 0:
+                            print(f"⚠️  batch {batch_start // batch_size + 1} failed ({exc}); retrying in 2s...")
+                            await asyncio.sleep(2)
+                            attempt += 1
+                            continue
+                        if is_retryable and attempt == 1:
+                            print(
+                                f"⚠️  batch {batch_start // batch_size + 1} retry failed; falling back to sequential with 2s backoff..."
+                            )
+                            await asyncio.sleep(2)
+                            # Sequential fallback preserves order and avoids thundering herd.
+                            batch_rows = []
+                            for item, idx in zip(batch, indices, strict=False):
+                                try:
+                                    r = await _single(item, idx)
+                                except Exception as seq_exc:  # noqa: BLE001
+                                    smsg = str(seq_exc)
+                                    is_seq_retryable = (
+                                        isinstance(seq_exc, RetrievalError)
+                                        or "Vector store query failed" in smsg
+                                        or "RetrievalError" in type(seq_exc).__name__
+                                    )
+                                    if is_seq_retryable:
+                                        await asyncio.sleep(2)
+                                        try:
+                                            r = await _single(item, idx)
+                                        except Exception as seq_exc2:  # noqa: BLE001
+                                            qid = str(item.get("id", f"q{idx}"))
+                                            q = item.get("question") or ""
+                                            r = {
+                                                "id": qid,
+                                                "question": q,
+                                                "error": str(seq_exc2),
+                                                "_intent": item.get("intent", "unknown"),
+                                            }
+                                    else:
+                                        qid = str(item.get("id", f"q{idx}"))
+                                        q = item.get("question") or ""
+                                        r = {
+                                            "id": qid,
+                                            "question": q,
+                                            "error": str(seq_exc),
+                                            "_intent": item.get("intent", "unknown"),
+                                        }
+                                batch_rows.append(r)
+                            break
+                        raise
+                assert batch_rows is not None
+                # Preserve order: batch_rows aligns with batch order.
+                for item, row, g_idx in zip(batch, batch_rows, indices, strict=False):
+                    if row.get("_skip"):
+                        continue
+                    if "error" in row:
+                        print(f"[{g_idx}/{len(queries)}] {row.get('id', '')}: ERROR {row['error']}")
+                        rows.append(row)
+                        continue
+                    intent = row.pop("_intent", "unknown")
+                    per_intent.setdefault(intent, []).append(row["recall"])
+                    per_intent_mrr.setdefault(intent, []).append(row["mrr"])
+                    per_intent_prec.setdefault(intent, []).append(row["precision"])
+                    rows.append(row)
+                    print(
+                        f"[{g_idx}/{len(queries)}] {item.get('id', '')} intent={intent}: "
+                        f"R@{k}={row['recall']:.2f} MRR={row['mrr']:.2f} P@{k}={row['precision']:.2f}"
+                    )
+                # 2s backoff between batches to avoid Qdrant thundering herd (only if not last batch).
+                if batch_start + batch_size < len(queries):
+                    await asyncio.sleep(2)
+            return rows
+
+        # Legacy sequential path (batch_size=None) — behavior unchanged for regression safety.
         rows = []
         for i, item in enumerate(queries, 1):
             query = item.get("question") or ""
@@ -4238,6 +4383,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Frozen candidate pools JSON. Existing file => offline replay; else fetch+save.",
     )
+    eval_retrieval_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size for batched retrieval (e.g. 55 for 220-row inscope). None = legacy sequential (single batch).",
+    )
 
     eval_chunking_parser = subparsers.add_parser(
         "eval-chunking",
@@ -4750,6 +4901,7 @@ def main() -> None:
                     output_dir=getattr(args, "output_dir", None),
                     compare_baseline=getattr(args, "compare_baseline", None),
                     pool_file=getattr(args, "pool_file", None),
+                    batch_size=getattr(args, "batch_size", None),
                 )
             )
         elif args.command == "eval-chunking":
