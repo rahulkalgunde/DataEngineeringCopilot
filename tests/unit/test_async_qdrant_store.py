@@ -708,6 +708,7 @@ async def test_query_substitutes_parent_context(mock_async_qdrant):
     parent_hit.payload = {"text": "PARENT CONTEXT TEXT"}
 
     store = AsyncQdrantVectorStore(url="http://localhost:6333", collection_name="test")
+    assert store._client is not None
     store._client.retrieve = AsyncMock(return_value=[parent_hit])
 
     results = await store.query([0.1] * 2048, top_k=1, query_text="apache spark")

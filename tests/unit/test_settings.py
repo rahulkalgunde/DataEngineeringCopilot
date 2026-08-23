@@ -190,7 +190,7 @@ def test_huggingface_api_key_alias_reads_hf_token(tmp_path) -> None:
     env_file.write_text("HF_TOKEN=hf_secret\n", encoding="utf-8")
     from data_engineering_copilot.config.settings import AppSettings
 
-    settings = AppSettings(_env_file=env_file)
+    settings = AppSettings(_env_file=env_file)  # type: ignore[call-arg]
     assert settings.huggingface_api_key.get_secret_value() == "hf_secret"
 
 
