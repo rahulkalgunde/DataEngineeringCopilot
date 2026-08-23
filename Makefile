@@ -233,6 +233,12 @@ mutate:
 mutate-results:
 	$(PYTHON) -m mutmut results
 
+# Shared-box coordination: register heavy runs in /tmp/opencode/ACTIVE_RUNS.md
+# and run this before launching builds/tests/evals (see AGENTS.md Environment).
+runcheck:
+	@echo "=== Registered runs ==="; cat /tmp/opencode/ACTIVE_RUNS.md 2>/dev/null || echo "(none registered)"
+	@echo "=== Live heavy processes ==="; ps aux | grep -E "make (rebuild|dev)|pytest|dec (evaluate|eval-|probe-|ingest|gen-)|docker build|refreeze" | grep -v grep | awk '{printf "  pid=%s cpu=%s%% %s %s %s\n", $$2, $$3, $$11, $$12, $$13}' | head -8 || true
+
 test-ci:
 	$(PYTEST) tests/unit/ -v --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
 	$(PYTEST) tests/integration/ -v -n 0 --reruns 2 --reruns-delay 1
