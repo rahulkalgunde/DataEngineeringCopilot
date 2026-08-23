@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from typing import cast
 
+from data_engineering_copilot.cli_catalog import main as catalog_probe_main
 from data_engineering_copilot.cli_llm_probe import main as llm_probe_main
 from data_engineering_copilot.cli_monitor import main as monitor_main
 from data_engineering_copilot.config.logging import setup_logging
@@ -2581,7 +2582,7 @@ def eval_retrieval_main(
         if base_pq and cur_pq:
             from data_engineering_copilot.evaluation.stats import regression_verdict
 
-            ok, delta, (lo, hi) = regression_verdict([r["recall"] for r in scored], [p["recall"] for p in base_pq])
+            ok, delta, (lo, hi) = regression_verdict(cur_pq, base_pq)
             print(f"Δ recall@k = {delta:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]")
             if not ok:
                 print(f"❌ Retrieval regression vs baseline (CI low {lo:+.4f} below −0.02 tolerance)")
@@ -4409,6 +4410,50 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the embedding provider probe (LLM providers only).",
     )
+    catalog_parser = subparsers.add_parser(
+        "probe-catalog",
+        help="Probe free_forever catalog models and build ranked fallback JSON (live by default).",
+    )
+    catalog_parser.add_argument(
+        "--providers",
+        nargs="*",
+        default=None,
+        help="Probe only these providers (default: all free_forever models). E.g. --providers openrouter groq.",
+    )
+    catalog_parser.add_argument(
+        "--purpose",
+        type=str,
+        default=None,
+        help="Filter purpose for recommended order (global, answer, code, ...).",
+    )
+    catalog_parser.add_argument(
+        "--prompt",
+        type=str,
+        default="Reply with exactly: pong",
+        help="Prompt to send (default: 'Reply with exactly: pong').",
+    )
+    catalog_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Per-provider timeout in seconds (default: 10).",
+    )
+    catalog_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output catalog as JSON to stdout.",
+    )
+    catalog_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Offline mode — no network, writes SKIP skeleton.",
+    )
+    catalog_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output path for catalog JSON (default: settings.provider_catalog_path).",
+    )
 
     # FLASH-executor driver for the general RAG improvement plan
     rag_plan_parser = subparsers.add_parser(
@@ -4805,6 +4850,16 @@ def main() -> None:
                 json_output=args.json,
                 verbose=args.verbose,
                 no_embeddings=args.no_embeddings,
+            )
+        elif args.command == "probe-catalog":
+            catalog_probe_main(
+                providers=args.providers,
+                purpose=args.purpose,
+                prompt=args.prompt,
+                timeout=args.timeout,
+                json_output=args.json,
+                offline=args.offline,
+                output=args.output,
             )
         elif args.command == "rag-plan":
             from data_engineering_copilot.plan_executor import PlanOptions, run_plan
