@@ -107,8 +107,9 @@ def stratified_sample(rows: list, n: int, key) -> list:
     for r in sorted(rows, key=lambda r: r.id or ""):
         strata.setdefault(key(r) or "default", []).append(r)
     out: list = []
+    max_depth = max((len(b) for b in strata.values()), default=0)
     depth = 0
-    while len(out) < n and any(strata.values()):
+    while len(out) < n and depth < max_depth:
         for bucket in strata.values():
             if depth < len(bucket) and len(out) < n:
                 out.append(bucket[depth])
