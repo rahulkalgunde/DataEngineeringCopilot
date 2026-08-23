@@ -397,6 +397,11 @@ async def evaluate_generation(
     rows = load_generation_dataset(dataset_path)
     if (generator is None or judge is None) and settings is None:
         raise ValueError("settings must be provided when generator/judge are not injected")
+    empty = [r.id or r.question[:40] for r in rows if not (r.contexts and any(c.strip() for c in r.contexts))]
+    if empty:
+        raise ValueError(
+            f"generation dataset has {len(empty)} rows with empty contexts (e.g. {empty[:2]!r}) — fix dataset before paid run"
+        )
     from data_engineering_copilot.infrastructure.provider_fallback import UsageLedger
 
     UsageLedger.reset()
