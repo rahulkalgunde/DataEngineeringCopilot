@@ -61,6 +61,7 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec cancel](#dec-cancel)
   - [dec ingestion-monitor](#dec-ingestion-monitor)
   - [dec probe-llm](#dec-probe-llm)
+  - [dec probe-catalog](#dec-probe-catalog)
   - [dec version (not implemented)](#dec-version-not-implemented)
 - [Cheat sheet](#cheat-sheet)
 - [Common workflows](#common-workflows)
@@ -110,6 +111,7 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `gen-activate` / `gen-rollback` | No | Yes | No | No | No |
 | `gen-reset` | No | Yes | No | No | No |
 | `gen-stale` | No | Yes | No | No | No |
+| `probe-llm`, `probe-catalog` | No (direct HTTP to LLM providers) | No | No | No | Yes (LLM providers; `probe-catalog` probes the curated `free_tier_models.json` inventory) |
 | `health`, `status`, `config`, `inspect-db` | `status` checks workers | Yes (except health/config degrade gracefully) | Yes | Yes (status) | Yes (health) |
 
 > `dec ingest`, `dec cancel`, and `dec ingestion-monitor` talk to the FastAPI server at `http://localhost:8000`. Start it with `make dev` (first time) or `make up` (subsequent).
@@ -1825,6 +1827,58 @@ dec probe-llm --no-embeddings
 
 ---
 
+### `dec probe-catalog`
+
+Probe the **curated `free_forever` inventory** (`config/free_tier_models.json`) and build a smart fallback order. Unlike `dec probe-llm` (which probes whatever is wired in `LLM_PROVIDER`/`LLM_FALLBACK_ORDER`), this probes the *inventory* — every `(provider, model)` that should be `$0-forever` — via the same `LLMClient`/`_build_purpose_llm_client` path, records `status/latency/category`, keeps the **fastest OK per provider**, and writes `data/provider_catalog.json` (gitignored) with `generated_at`, `probes[]`, and `recommended_fallback_order{global,answer,code, rewrite, …}`. When `CATALOG_AUTO_ORDER=true` (`config/settings.py:565`, `.env:40`), `factory.py:680` `get_catalog_fallback_order()` feeds that ranked order to every `ProviderFallbackChain` (fail-open to `LLM_FALLBACK_ORDER` when missing/stale).
+
+```
+usage: dec probe-catalog [-h] [--providers [PROVIDERS ...]] [--purpose PURPOSE]
+                         [--prompt PROMPT] [--timeout TIMEOUT] [--json]
+                         [--offline] [--output OUTPUT]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--providers` | str list | all in `free_tier_models.json` | Filter, e.g. `--providers openrouter groq`. |
+| `--purpose` | str | all | Purpose for ranking: `global`, `answer`, `code`, `rewrite`, `groundedness`, `intent`, `enrichment`, `evaluation`. `answer`/`code` require `supports_structured_output`. |
+| `--prompt` | str | `Reply with exactly: pong` | Prompt sent to each `POST /v1/chat/completions`. Keep short to save quota. |
+| `--timeout` | float | `10` | Per-provider HTTP timeout in seconds. |
+| `--json` | flag | off | Print catalog JSON to stdout (also written to file). |
+| `--offline` | flag | off | No network — writes `SKIP` skeletons (hermetic, CI-friendly). |
+| `--output` | path | `settings.provider_catalog_path` (`data/provider_catalog.json`) | Alternate output path. |
+
+**Inventory (`config/free_tier_models.json:1`, v1.1, 14 models):** `ollama/phi4-mini:3.8b`+`qwen2.5-coder:7b`, `openrouter/openrouter/free`+`nvidia/nemotron-3-nano-30b-a3b:free`, `zai/glm-4.7-flash`, `groq/openai/gpt-oss-20b`, `cerebras/gpt-oss-120b`, `gemini/gemma-4-31b-it`, `nvidia/nemotron-3-nano-30b-a3b`, `anyapi/nvidia/nemotron-3-nano-30b-a3b:free`, `llm7/default` (`rag_suitable=false`), `agnes/agnes-2.5-flash`, `opencodezen/deepseek-v4-flash-free`, `cloudflare/@cf/meta/llama-3.1-8b-instruct-fast`. Removed after live 404/402: `openrouter/z-ai/glm-4.5-air:free`, `openrouter/google/gemma-3-27b-it:free`, `openrouter/qwen/qwen3-coder:free`, `zai/glm-4.5-flash`, `siliconflow/Qwen/Qwen3-8B` (balance), `huggingface` (embedding).
+
+**Ranking:** `services/provider_catalog.py:114` `compute_recommended_order()` keeps the fastest `OK` per provider (dedup) with `is_rag_suitable` (`context>=8192`, `answer`/`code` needs `supports_structured_output`), then sorts by `latency_ms`. `ollama` never ranked (degraded fallback). Result per purpose — e.g. live 2026-08-23 `global ["cerebras","nvidia","groq","cloudflare","anyapi","openrouter","gemini","zai"]`, `answer ["cerebras","nvidia","groq","anyapi","openrouter","gemini","zai"]` (see `docs/provider_catalog.md`).
+
+**Examples**
+
+```bash
+# Full live probe (14 calls, respects SlidingWindowRateLimiter)
+dec_venv/bin/dec probe-catalog --json | jq .recommended_fallback_order
+
+# Only two providers, offline skeleton (no keys, no quota)
+dec_venv/bin/dec probe-catalog --providers openrouter groq --offline --json
+
+# Purpose-filtered, custom output
+dec_venv/bin/dec probe-catalog --purpose answer --output /tmp/answer_catalog.json --json
+
+# Verify factory sees it (when CATALOG_AUTO_ORDER=true)
+dec_venv/bin/python -c "from config.settings import settings; from factory import get_catalog_fallback_order; print(get_catalog_fallback_order('answer', settings))"
+```
+
+**Behaviour & gotchas**
+
+- Each entry is one `POST /chat/completions` via the real `LLMClient` (same `max_tokens_field`, `Authorization`, redacted logs). Missing `*_API_KEY` → `SKIP` `CONFIG: … is required` (no HTTP). Embedding-only `local-hf` → `SKIP`. `huggingface` as LLM → `SKIP` unsupported.
+- `FAIL` categories come from `infrastructure/provider_fallback.py:159` `categorize_provider_error` (`rate_limited` with `Retry-After`, `authentication_error`, `permanent_error` for 404, `invalid_request` for 401 `ModelError`). `zai` 429 `code 1305` means quota exhausted — will re-enter when reset.
+- Stale/missing catalog (`services/provider_catalog.py:191` `is_catalog_stale` > `catalog_stale_days` default 7) returns `None` and `factory` falls back to `LLM_FALLBACK_ORDER` with `warning catalog_auto_order_stale`.
+- Each live probe consumes 1 request against the provider’s free quota (e.g. Groq 27 RPM, Cerebras 4 RPM) — run `--offline` in CI.
+- Full reference: `docs/provider_catalog.md`.
+
+**Exit codes**: `0` catalog written (even if some probes FAIL); `2` bad `--purpose` or missing `free_tier_models.json`.
+
+---
+
 ### `dec version` (not implemented)
 
 `dec version` is **not** a valid command — argparse rejects it:
@@ -1888,7 +1942,8 @@ The API exposes the build/version info instead: `GET /api/v1/version` (git SHA +
 | Inspect the vector DB | `dec inspect-db` |
 | Cancel a task | `dec cancel <task-id>` |
 | Live dashboard | `dec ingestion-monitor --task-id <task-id> --interval 5` |
-| Check which LLM providers work | `dec probe-llm` |
+| Check which LLM providers work (wired chain) | `dec probe-llm` |
+| Check curated free_forever inventory & build ranked fallback | `dec probe-catalog --json` |
 | Launch Streamlit | `dec ui` (then run the printed command) |
 
 ---
@@ -1927,7 +1982,14 @@ dec evaluate
 
 **Diagnosing LLM provider health** — when `dec ask` feels slow or answers degrade (silent fallback), find out exactly which provider works and why others fail:
 ```bash
-dec probe-llm                       # every LLM + embedding provider, one call each
-dec probe-llm --purpose code        # just the code chain (e.g. a failing code_llm_provider)
-dec probe-llm --json                # machine-readable, pipe to jq / log it
+dec probe-llm                       # every wired LLM + embedding provider, one call each
+dec probe-llm --purpose code        # just the code chain
+dec probe-llm --json                # machine-readable
+
+# Diagnose the curated free_forever inventory & refresh the smart fallback (used when CATALOG_AUTO_ORDER=true)
+dec probe-catalog --json            # probes free_tier_models.json → data/provider_catalog.json
+dec probe-catalog --providers openrouter groq --offline --json  # offline skeleton
+
+# Verify what the factory will actually use
+dec_venv/bin/python -c "from data_engineering_copilot.config.settings import settings; from data_engineering_copilot.factory import get_catalog_fallback_order; print(get_catalog_fallback_order('answer', settings))"
 ```
