@@ -285,6 +285,10 @@ eval-set-baseline:
 eval-judge-calibrate:
 	dec_venv/bin/dec eval-judge-calibrate
 
+# Human labeling UI for judge calibration rows (zero LLM calls).
+label-calibration:
+	dec_venv/bin/streamlit run data_engineering_copilot/ui/label_calibration.py
+
 # Launch the Streamlit UI (requires a running stack: `make dev`).
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
