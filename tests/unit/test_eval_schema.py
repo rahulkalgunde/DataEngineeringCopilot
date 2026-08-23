@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from data_engineering_copilot.evaluation.eval_schema import (
     EvalKind,
+    dataset_version_of,
     kind_of,
     parse_eval_rows,
     validate_eval_row,
@@ -72,6 +73,16 @@ class TestValidateEvalRow:
         row = {"id": "x", "question": "q", "contexts": ["c"]}
         assert any("ground_truth" in e for e in validate_eval_row(row))
 
+    def test_dataset_version_field_is_accepted(self):
+        row = {
+            "id": "spark-window-1",
+            "question": "How do I window?",
+            "expected_terms": ["Window"],
+            "expected_urls": ["https://example.com/window.md"],
+            "dataset_version": "2026-08-23",
+        }
+        assert validate_eval_row(row) == []
+
 
 class TestParseWrite:
     def test_roundtrip(self, tmp_path):
@@ -84,3 +95,32 @@ class TestParseWrite:
         path = tmp_path / "eval.jsonl"
         path.write_text('{"id":"a","question":"q"}\n\n{"id":"b","question":"q2"}\n', encoding="utf-8")
         assert len(parse_eval_rows(path)) == 2
+
+    def test_skips_version_header_comment(self, tmp_path):
+        path = tmp_path / "eval.jsonl"
+        path.write_text(
+            '# version: 2026-08-23\n{"id":"a","question":"q"}\n{"id":"b","question":"q2"}\n', encoding="utf-8"
+        )
+        assert [r["id"] for r in parse_eval_rows(path)] == ["a", "b"]
+
+
+class TestDatasetVersionOf:
+    def test_reads_version_header(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text('# version: 2026-08-23\n{"id":"a","question":"q"}\n', encoding="utf-8")
+        assert dataset_version_of(path) == "2026-08-23"
+
+    def test_no_header_returns_none(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text('{"id":"a","question":"q"}\n', encoding="utf-8")
+        assert dataset_version_of(path) is None
+
+    def test_non_version_header_returns_none(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text('# golden set v1 (hand-curated)\n{"id":"a","question":"q"}\n', encoding="utf-8")
+        assert dataset_version_of(path) is None
+
+    def test_empty_file_returns_none(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text("", encoding="utf-8")
+        assert dataset_version_of(path) is None

@@ -11,8 +11,10 @@ PATTERNS = ("recall_*.jsonl", "qa_*.jsonl")
 
 def _rows(path: pathlib.Path):
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            yield json.loads(line)
+        line = line.strip()
+        if not line or line.startswith("#"):  # blank / version-header comments
+            continue
+        yield json.loads(line)
 
 
 def test_all_golden_schema_rows_validate():
