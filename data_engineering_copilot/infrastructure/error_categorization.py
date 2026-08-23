@@ -84,7 +84,22 @@ def categorize_provider_error(exc: Exception, provider: str, model: str) -> Prov
             original=exc,
         )
 
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, TimeoutError, OSError)):
+    if isinstance(
+        exc,
+        (
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.TransportError,
+            httpx.ProtocolError,
+            httpx.DecodingError,
+            TimeoutError,
+            OSError,
+        ),
+    ):
+        # TransportError/ProtocolError cover mid-stream drops (ReadError,
+        # RemoteProtocolError, ...) that often carry EMPTY messages — these
+        # are transient connection failures, not permanent provider faults
+        # (2026-08-23: NVIDIA rerank benched on ReadError("") misclassification).
         return ProviderError(ProviderErrorCategory.RETRYABLE, provider, model, original=exc)
 
     lower_msg = str(exc).lower()
