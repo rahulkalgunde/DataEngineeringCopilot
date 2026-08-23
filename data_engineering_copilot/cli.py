@@ -2752,22 +2752,97 @@ def eval_retrieval_main(
         base_recall = float((baseline.get("overall") or {}).get("recall@k", 1.0))
         base_pq = [p["recall"] for p in (baseline.get("per_query") or []) if "recall" in p]
         cur_pq = [r["recall"] for r in scored]
+        # Honest inscope gate settings (config/settings.py) with fallbacks for tests.
+        try:
+            from data_engineering_copilot.config.settings import settings as _gate_settings
+
+            global_tol = float(getattr(_gate_settings, "retrieval_gate_global_tolerance", 0.02))
+            global_floor = float(getattr(_gate_settings, "retrieval_gate_global_floor", 0.24))
+            per_intent_tol = float(getattr(_gate_settings, "retrieval_gate_per_intent_tolerance", 0.05))
+            per_intent_min_n = int(getattr(_gate_settings, "retrieval_gate_per_intent_min_n", 5))
+        except Exception:  # noqa: BLE001
+            global_tol, global_floor, per_intent_tol, per_intent_min_n = 0.02, 0.24, 0.05, 5
         if base_pq and cur_pq:
             from data_engineering_copilot.evaluation.stats import regression_verdict
 
-            ok, delta, (lo, hi) = regression_verdict(cur_pq, base_pq)
-            print(f"Δ recall@k = {delta:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]")
+            ok, delta, (lo, hi) = regression_verdict(cur_pq, base_pq, tolerance=global_tol)
+            print(f"Δ recall@k = {delta:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}] (tolerance −{global_tol:.2f})")
             if not ok:
-                print(f"❌ Retrieval regression vs baseline (CI low {lo:+.4f} below −0.02 tolerance)")
+                print(f"❌ Retrieval regression vs baseline (CI low {lo:+.4f} below −{global_tol:.2f} tolerance)")
                 return 1
             print("✅ No retrieval regression vs baseline (CI-aware verdict)")
-        elif overall["recall@k"] < base_recall - 0.02:
+            # Absolute floor for 220-row inscope (baseline_inscope 0.259 -0.02 ≈0.24)
+            if overall["recall@k"] < global_floor:
+                print(f"❌ Retrieval below absolute floor {global_floor:.2f}: Recall@{k} {overall['recall@k']:.3f}")
+                return 1
+        elif overall["recall@k"] < base_recall - global_tol:
             print("⚠️  Baseline lacks per_query data; legacy point rule applied")
-            print(f"❌ Retrieval regression: Recall@{k} {overall['recall@k']:.3f} < baseline {base_recall:.3f}")
+            print(
+                f"❌ Retrieval regression: Recall@{k} {overall['recall@k']:.3f} < baseline {base_recall:.3f} −{global_tol:.2f}"
+            )
             return 1
         else:
             print("⚠️  Baseline lacks per_query data; legacy point rule applied")
-            print(f"✅ No retrieval regression vs baseline Recall@{k}={base_recall:.3f}")
+            print(f"✅ No retrieval regression vs baseline Recall@{k}={base_recall:.3f} (tol −{global_tol:.2f})")
+        # Per-intent honest gates: R@10 >= max(0, baseline_intent -0.05) where n>=5.
+        per_intent_baseline = baseline.get("per_intent") or {}
+        if per_intent_baseline:
+            per_intent_failures: list[str] = []
+            print(
+                f"\nPer-intent deltas (honest inscope: R@{k} >= max(0, baseline-{per_intent_tol:.2f}) where n>={per_intent_min_n}):"
+            )
+            # Optional bootstrap CIs per intent when per_query vectors can be grouped.
+            try:
+                from data_engineering_copilot.evaluation.stats import bootstrap_ci as _bootstrap_ci
+            except Exception:  # noqa: BLE001
+                _bootstrap_ci = None  # type: ignore[assignment]
+            # Build cur per-intent recall lists for CI if available from rows grouped by intent.
+            # Rows already aggregated in per_intent_metrics, but also have scored rows without intent;
+            # reconstruct per-intent vectors from per_intent dict plus scored grouping.
+            for intent, cur_m in sorted(per_intent_metrics.items()):
+                base_m = per_intent_baseline.get(intent)
+                if base_m is None:
+                    print(f"  [{intent}] no baseline — skip (cur R@{k}={cur_m['recall@k']:.3f} n={cur_m['n']})")
+                    continue
+                base_r = float(base_m.get("recall@k", 0.0))
+                cur_r = float(cur_m.get("recall@k", 0.0))
+                delta = cur_r - base_r
+                n_cur = int(cur_m.get("n", 0))
+                n_base = int(base_m.get("n", 0))
+                if min(n_cur, n_base) < per_intent_min_n:
+                    print(
+                        f"  [{intent}] n={n_cur}/{n_base} < {per_intent_min_n} — skip (Δ={delta:+.3f} cur={cur_r:.3f} base={base_r:.3f})"
+                    )
+                    continue
+                required = max(0.0, base_r - per_intent_tol)
+                passed = cur_r >= required - 1e-9
+                status = "✅" if passed else "❌"
+                ci_note = ""
+                # If bootstrap_ci available and we have enough samples, show delta CI hint
+                if _bootstrap_ci is not None and n_cur >= 5 and n_base >= 5:
+                    # Can't do paired CI without aligned per_query intent vectors; show per-intent CI widths instead
+                    try:
+                        cur_ci = _bootstrap_ci(per_intent.get(intent, []) or [cur_r])
+                        ci_note = f" cur CI [{cur_ci[0]:.2f},{cur_ci[1]:.2f}]"
+                    except Exception:  # noqa: BLE001
+                        ci_note = ""
+                print(
+                    f"  {status} [{intent}] Δ={delta:+.3f} cur={cur_r:.3f} base={base_r:.3f} gate≥{required:.3f} (n={n_cur}){ci_note}"
+                )
+                if not passed:
+                    per_intent_failures.append(intent)
+            # Intents in baseline but missing in current (e.g., no queries for that intent)
+            for intent in sorted(per_intent_baseline):
+                if intent not in per_intent_metrics:
+                    print(
+                        f"  [..] [{intent}] missing in current run — skip (baseline n={per_intent_baseline[intent].get('n', 0)})"
+                    )
+            if per_intent_failures:
+                print(
+                    f"❌ Per-intent regression: {', '.join(per_intent_failures)} below max(0, baseline-{per_intent_tol:.2f})"
+                )
+                return 1
+            print(f"✅ Per-intent gates passed (tolerance {per_intent_tol:.2f} where n>={per_intent_min_n})")
 
     return 0
 
