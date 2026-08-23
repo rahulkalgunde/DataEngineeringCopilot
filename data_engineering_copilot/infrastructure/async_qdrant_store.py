@@ -363,9 +363,7 @@ class AsyncQdrantVectorStore:
                     vectors_dict = {"dense": vectors, "sparse": sparse_vectors_list}
                     # MRL small-dim space exists only on hybrid collections.
                     if self._mrl_enabled:
-                        vectors_dict["dense_small"] = [
-                            _mrl_small_vector(v, self._mrl_small_dim) for v in vectors
-                        ]
+                        vectors_dict["dense_small"] = [_mrl_small_vector(v, self._mrl_small_dim) for v in vectors]
                 else:
                     vectors_dict = vectors
 
