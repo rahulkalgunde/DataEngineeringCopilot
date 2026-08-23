@@ -2,6 +2,8 @@
 
 **Last updated**: August 2026
 
+> **Live system:** the curated `free_forever` inventory + live probes + ranked fallback are now codified in `docs/provider_catalog.md` (and `config/free_tier_models.json` → `data/provider_catalog.json` via `dec probe-catalog`). This index is historical research; see `provider_catalog.md` for the current `CATALOG_AUTO_ORDER` system and 2026-08-23 probe results.
+
 ## Summary Table
 
 | Provider | Free Tier | Key Limits | File |

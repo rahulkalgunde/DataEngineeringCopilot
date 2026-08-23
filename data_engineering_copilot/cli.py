@@ -2360,17 +2360,22 @@ def _compute_spark_eval_metrics(results: list[dict]) -> dict:
 
 
 def _eval_retrieval_row(query: str, intent: str, expected: list[str], retrieved: list[str], k: int) -> dict:
-    """Compute Recall@K, Precision@K, MRR@K for a single query against expected URLs."""
+    """Compute Recall@K, Precision@K, MRR@K for a single query against expected URLs.
+
+    Hit sets are DEDUPED: sources may return several chunks from the same
+    page, and counting each duplicate inflated recall past 1.0 on real runs.
+    """
     relevant = set(expected)
-    topk = (retrieved or [])[:k]
-    hits = [u for u in topk if u in relevant]
-    recall = (len(hits) / len(relevant)) if relevant else 1.0
-    precision = (len(hits) / k) if k else 0.0
+    topk_hits = {u for u in (retrieved or [])[:k] if u in relevant}
+    recall = (len(topk_hits) / len(relevant)) if relevant else 1.0
+    precision = (len(topk_hits) / k) if k else 0.0
+    seen: set[str] = set()
     mrr = 0.0
     for rank, u in enumerate(retrieved or [], 1):
         if u in relevant:
-            mrr = 1.0 / rank
-            break
+            if u not in seen:
+                mrr = 1.0 / rank
+                break
     return {"query": query, "intent": intent, "recall": recall, "precision": precision, "mrr": mrr}
 
 

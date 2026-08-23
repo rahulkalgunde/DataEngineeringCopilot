@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import redis.asyncio as aioredis
 import redis.exceptions
@@ -666,6 +666,78 @@ def _build_chain_clients(
     return clients
 
 
+def get_catalog_fallback_order(purpose: str, app_settings: AppSettings) -> list[str] | None:
+    """Return catalog-driven order for *purpose* if catalog_auto_order is enabled.
+
+    Fail-open: missing/stale/empty catalog returns ``None``.
+    """
+    if not getattr(app_settings, "catalog_auto_order", False):
+        return None
+    try:
+        from data_engineering_copilot.services.provider_catalog import (  # noqa: PLC0415
+            get_catalog_fallback_order as _get_order,
+        )
+        from data_engineering_copilot.services.provider_catalog import (
+            is_catalog_stale,
+            load_provider_catalog,
+        )
+
+        catalog = load_provider_catalog(app_settings.provider_catalog_path)
+        if catalog is None:
+            logger.info("catalog_auto_order_no_catalog", purpose=purpose)
+            return None
+        if is_catalog_stale(catalog, stale_days=getattr(app_settings, "catalog_stale_days", 7)):
+            logger.warning("catalog_auto_order_stale", purpose=purpose, generated_at=catalog.generated_at)
+            return None
+        order = _get_order(purpose, catalog)
+        if order:
+            logger.info("catalog_auto_order_used", purpose=purpose, order=order)
+            return order
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog_auto_order_failed", purpose=purpose, error=str(exc))
+    return None
+
+
+def get_catalog_embedding_order(app_settings: AppSettings) -> list[str] | None:
+    if not getattr(app_settings, "catalog_auto_order", False):
+        return None
+    try:
+        from data_engineering_copilot.services.provider_catalog import (  # noqa: PLC0415
+            is_catalog_stale,
+            load_provider_catalog,
+        )
+
+        catalog = load_provider_catalog(app_settings.provider_catalog_path)
+        if catalog is None or is_catalog_stale(catalog, stale_days=getattr(app_settings, "catalog_stale_days", 7)):
+            return None
+        if catalog.embedding_fallback_order:
+            logger.info("catalog_embedding_order_used", order=catalog.embedding_fallback_order)
+            return list(catalog.embedding_fallback_order)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog_embedding_order_failed", error=str(exc))
+    return None
+
+
+def get_catalog_rerank_order(app_settings: AppSettings) -> list[str] | None:
+    if not getattr(app_settings, "catalog_auto_order", False):
+        return None
+    try:
+        from data_engineering_copilot.services.provider_catalog import (  # noqa: PLC0415
+            is_catalog_stale,
+            load_provider_catalog,
+        )
+
+        catalog = load_provider_catalog(app_settings.provider_catalog_path)
+        if catalog is None or is_catalog_stale(catalog, stale_days=getattr(app_settings, "catalog_stale_days", 7)):
+            return None
+        if catalog.rerank_fallback_order:
+            logger.info("catalog_rerank_order_used", order=catalog.rerank_fallback_order)
+            return list(catalog.rerank_fallback_order)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog_rerank_order_failed", error=str(exc))
+    return None
+
+
 def _build_llm_chain_config(
     purpose: str,
     app_settings: AppSettings,
@@ -679,18 +751,22 @@ def _build_llm_chain_config(
 
     limiters = provider_rate_limiters or {}
 
-    # Determine primary provider and fallback order
+    # Catalog auto-order: when enabled and a fresh probe catalog exists, use
+    # fastest-OK-per-provider order; otherwise fall back to settings order.
+    # Explicit purpose_provider pin wins over catalog.
     if purpose_provider and purpose_provider.strip():
         primary = purpose_provider.strip().lower()
-        # Build ordered list: primary first, then rest from llm_fallback_order
         ordered = [primary]
         for p in app_settings.llm_fallback_order:
             p_lower = p.lower()
             if p_lower not in ordered:
                 ordered.append(p_lower)
     else:
-        # No pinned primary — use llm_fallback_order as-is
-        ordered = [p.lower() for p in app_settings.llm_fallback_order]
+        catalog_order = get_catalog_fallback_order(purpose, app_settings)
+        if catalog_order is not None:
+            ordered = [p.lower() for p in catalog_order]
+        else:
+            ordered = [p.lower() for p in app_settings.llm_fallback_order]
 
     # Build ProviderConfig for each
     providers_config: list[ProviderConfig] = []
@@ -878,13 +954,17 @@ def _build_embedding_chain_config(
 
     limiters = provider_rate_limiters or {}
 
-    # Determine fallback order from purpose-specific or global
+    # Determine fallback order from purpose-specific, catalog, or global
     if purpose == "enrichment" and app_settings.enrichment_embedding_provider:
         ordered = [app_settings.enrichment_embedding_provider.lower()]
     elif purpose == "evaluation" and app_settings.evaluation_embedding_provider:
         ordered = [app_settings.evaluation_embedding_provider.lower()]
     else:
-        ordered = [p.lower() for p in app_settings.embedding_fallback_order]
+        catalog_order = get_catalog_embedding_order(app_settings)
+        if catalog_order is not None:
+            ordered = catalog_order
+        else:
+            ordered = [p.lower() for p in app_settings.embedding_fallback_order]
 
     providers_config: list[ProviderConfig] = []
     for provider_name in ordered:
@@ -1082,8 +1162,11 @@ def _build_rerank_chain_config(
     limiters = provider_rate_limiters or {}
     timeout = app_settings.rerank_cloud_timeout_seconds
 
+    catalog_rerank = get_catalog_rerank_order(app_settings)
+    rerank_order = catalog_rerank if catalog_rerank is not None else app_settings.rerank_fallback_order
+
     providers_config: list[ProviderConfig] = []
-    for provider_name in app_settings.rerank_fallback_order:
+    for provider_name in rerank_order:
         provider_name = provider_name.lower()
         try:
             client = None
@@ -1321,10 +1404,18 @@ def build_chunker(app_settings: AppSettings = settings):
                 strategy=strategy,
                 similarity=app_settings.min_semantic_similarity,
             )
+            from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+
+            embedding_chain = build_embedding_fallback_chain(
+                purpose="global",
+                app_settings=app_settings,
+                provider_rate_limiters=_build_provider_rate_limiters(app_settings),
+                health_registry=_build_provider_health_registry(app_settings),
+            )
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
                 overlap_words=app_settings.chunk_overlap_words,
-                embedding_model=build_embedder(app_settings),
+                embedding_model=FallbackEmbedder(embedding_chain),
                 min_semantic_similarity=app_settings.min_semantic_similarity,
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
@@ -1566,12 +1657,20 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
 
     parser = _build_content_aware_parser()
 
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder
+
+    ingestion_chain = build_embedding_fallback_chain(
+        purpose="global",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
     return AsyncIngestionService(
         settings=app_settings,
         crawler=build_async_crawler(app_settings),
         parser=parser,
         chunker=build_chunker(app_settings),
-        embeddings=build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower())),
+        embeddings=FallbackEmbedder(ingestion_chain),
         vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
@@ -1744,7 +1843,15 @@ def build_rag_service(
         mrl_small_dim=app_settings.mrl_small_dim,
         mrl_oversample_factor=app_settings.mrl_oversample_factor,
     )
-    embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
+    from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder as _FallbackEmbedder
+
+    _rag_chain = build_embedding_fallback_chain(
+        purpose="global",
+        app_settings=app_settings,
+        provider_rate_limiters=provider_rate_limiters,
+        health_registry=health_registry,
+    )
+    embedder: Any = _FallbackEmbedder(_rag_chain)  # type: ignore[assignment]
     if app_settings.embedding_cache_enabled:
         from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
 
@@ -1921,8 +2028,17 @@ def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = 
 
     embedder = None
     try:
-        provider_rate_limiters = _build_provider_rate_limiters(app_settings)
-        embedder = build_embedder(app_settings, provider_rate_limiters.get(app_settings.embedding_provider.lower()))
+        from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder as _FallbackEmbedderLab
+
+        _lab_rate = _build_provider_rate_limiters(app_settings)
+        _lab_health = _build_provider_health_registry(app_settings)
+        _lab_chain = build_embedding_fallback_chain(
+            purpose="global",
+            app_settings=app_settings,
+            provider_rate_limiters=_lab_rate,
+            health_registry=_lab_health,
+        )
+        embedder = _FallbackEmbedderLab(_lab_chain)
     except Exception as exc:  # noqa: BLE001 - lab degrades to no embedding step
         logger.warning("pipeline_lab_embedder_unavailable", error=repr(exc))
         embedder = None

@@ -5,7 +5,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-data/
+data/**
+!data/provider_catalog.example.json
 logs/
 qdrant_db/
 dec_venv/
