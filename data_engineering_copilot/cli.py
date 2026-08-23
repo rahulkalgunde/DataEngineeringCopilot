@@ -2418,6 +2418,30 @@ def eval_retrieval_main(
         print(f"❌ Evaluation dataset not found at {dataset_path}")
         return 2
 
+    # Pre-flight: corpus–golden scope check — warn before any LLM/embedding spend.
+    try:
+        from data_engineering_copilot.config.settings import resolve_active_generation
+        from data_engineering_copilot.evaluation.eval_schema import parse_eval_rows
+        from data_engineering_copilot.services.eval_coverage import CoverageValidator, resolve_generation_root
+
+        project_root = pathlib.Path(__file__).resolve().parents[1]
+        gen = resolve_active_generation()
+        root = resolve_generation_root(gen, project_root / "data")
+        if root is not None and dataset_path.suffix == ".jsonl":
+            vrows = parse_eval_rows(dataset_path)
+            vrep = CoverageValidator(root).report(vrows)
+            if vrep["fail"]:
+                pct = 100 * vrep["fail"] / max(1, vrep["rows"])
+                print(
+                    f"⚠️  pre-flight: {vrep['fail']}/{vrep['rows']} rows uncoverable "
+                    f"against {gen!r} ({pct:.0f}% — expected_urls/terms not in index). "
+                    "Results will understate retriever quality; fix golden or regenerate corpus."
+                )
+                if pct > 50:
+                    print("   → For an inscope-only run use --dataset tests/evaluation/golden/recall_inscope.jsonl")
+    except Exception:  # noqa: BLE001 — pre-flight is advisory, never blocks
+        pass
+
     queries = []
     with open(dataset_path) as f:
         for line in f:
