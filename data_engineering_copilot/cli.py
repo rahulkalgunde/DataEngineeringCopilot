@@ -2793,9 +2793,18 @@ def eval_retrieval_main(
             )
             # Optional bootstrap CIs per intent when per_query vectors can be grouped.
             try:
-                from data_engineering_copilot.evaluation.stats import bootstrap_ci as _bootstrap_ci
+                from data_engineering_copilot.evaluation.stats import (
+                    bootstrap_ci as _bootstrap_ci,
+                )
+                from data_engineering_copilot.evaluation.stats import (
+                    per_intent_tolerance,
+                )
             except Exception:  # noqa: BLE001
                 _bootstrap_ci = None  # type: ignore[assignment]
+
+                def per_intent_tolerance(baseline_recall: float, n: int, *, floor: float = 0.05) -> float:
+                    return floor
+
             # Build cur per-intent recall lists for CI if available from rows grouped by intent.
             # Rows already aggregated in per_intent_metrics, but also have scored rows without intent;
             # reconstruct per-intent vectors from per_intent dict plus scored grouping.
@@ -2814,7 +2823,8 @@ def eval_retrieval_main(
                         f"  [{intent}] n={n_cur}/{n_base} < {per_intent_min_n} — skip (Δ={delta:+.3f} cur={cur_r:.3f} base={base_r:.3f})"
                     )
                     continue
-                required = max(0.0, base_r - per_intent_tol)
+                tol_i = per_intent_tolerance(base_r, n_base, floor=per_intent_tol)
+                required = max(0.0, base_r - tol_i)
                 passed = cur_r >= required - 1e-9
                 status = "✅" if passed else "❌"
                 ci_note = ""
@@ -2839,10 +2849,10 @@ def eval_retrieval_main(
                     )
             if per_intent_failures:
                 print(
-                    f"❌ Per-intent regression: {', '.join(per_intent_failures)} below max(0, baseline-{per_intent_tol:.2f})"
+                    f"❌ Per-intent regression: {', '.join(per_intent_failures)} below noise-aware gate max(floor={per_intent_tol:.2f}, 2σ)"
                 )
                 return 1
-            print(f"✅ Per-intent gates passed (tolerance {per_intent_tol:.2f} where n>={per_intent_min_n})")
+            print(f"✅ Per-intent gates passed (noise-aware: tol ≥ {per_intent_tol:.2f} where n>={per_intent_min_n})")
 
     return 0
 

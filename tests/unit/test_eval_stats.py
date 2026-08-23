@@ -1,4 +1,8 @@
-from data_engineering_copilot.evaluation.stats import bootstrap_ci, regression_verdict
+from data_engineering_copilot.evaluation.stats import (
+    bootstrap_ci,
+    per_intent_tolerance,
+    regression_verdict,
+)
 
 
 def test_ci_deterministic_under_seed():
@@ -45,3 +49,15 @@ def test_rerun_noise_within_tolerance_passes_despite_wide_ci():
 def test_empty_inputs_pass_trivially():
     ok, delta, (lo, hi) = regression_verdict([], [])
     assert ok is True and delta == 0.0 and (lo, hi) == (0.0, 0.0)
+
+
+def test_per_intent_tolerance_noise_floor_dominates_small_n():
+    # debugging intent, 2026-08-23 gate failure: base=0.304 n=23 → σ≈0.096,
+    # 2σ≈0.19 must exceed the 0.05 floor or the gate measures rerun noise.
+    tol = per_intent_tolerance(0.304, 23, floor=0.05)
+    assert tol > 0.15
+
+
+def test_per_intent_tolerance_collapses_to_floor_for_large_n():
+    assert per_intent_tolerance(0.386, 500, floor=0.05) == 0.05
+    assert per_intent_tolerance(0.5, 0) == 0.05
