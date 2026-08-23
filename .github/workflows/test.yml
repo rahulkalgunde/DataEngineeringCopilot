@@ -55,6 +55,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # full history so diff-cover can compare against origin/main
+          fetch-depth: 0
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -70,6 +72,9 @@ jobs:
 
       - name: Unit Tests
         run: uv run make test-ci-unit
+
+      - name: Changed-code coverage gate (>=90% on lines touched vs main)
+        run: uv run make test-cov-gate
 
       - name: Upload coverage
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
