@@ -64,7 +64,8 @@ def test_parse_score_clamps_and_extracts():
     # clamps out-of-range
     assert _parse_score('{"score": 9}', 0.0, 1.0) == 1.0
     assert _parse_score('{"score": -1}', 0.0, 1.0) == 0.0
-    assert _parse_score("", 0.0, 1.0) == 0.0
+    # no-match is None (distinct from a legit zero score)
+    assert _parse_score("", 0.0, 1.0) is None
 
 
 def test_load_generation_dataset_reads_frozen_rows():
