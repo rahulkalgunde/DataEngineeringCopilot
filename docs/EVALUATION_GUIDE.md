@@ -692,11 +692,13 @@ Repo-enforced gates (hardcoded constants or settings defaults — treat these as
 
 | Metric | Target | Enforced by |
 |---|---|---|
-| Faithfulness (judge) | ≥ 0.85 | `eval-generation` gate |
-| Answer relevance (judge) | ≥ 0.80 | `eval-generation` gate |
-| Rubric correctness | ≥ 4.0 / 5 | `eval-generation` gate |
+| Faithfulness (judge) | ≥ 0.85 | `eval-generation` gate (`settings.generation_faithfulness_gate`) |
+| Answer relevance (judge) | ≥ 0.80 | `eval-generation` gate (`settings.generation_relevance_gate`) |
+| Rubric correctness | ≥ 4.0 / 5 | `eval-generation` gate (`settings.generation_rubric_gate`) |
 | Term/source recall (Spark set, in-scope avg) | ≥ 0.90 | `evaluate --spark` gate |
-| Recall@K vs baseline | within −0.02 | `eval-retrieval --compare-baseline` gate |
+| Recall@10 vs baseline (honest inscope 220 rows) | ≥ baseline_inscope 0.259 −0.02 (absolute ≥0.24) | `eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json` — `settings.retrieval_gate_global_tolerance` / `retrieval_gate_global_floor` |
+| Recall@10 per-intent (n≥5) | ≥ max(0, baseline_intent −0.05) — e.g. how_to 0.386→0.336, code_example 0.40→0.35, api_lookup 0.071→0.021 | `eval-retrieval --compare-baseline` per-intent deltas (with `evaluation/stats.py:bootstrap_ci` CIs when per_query vectors present) — `settings.retrieval_gate_per_intent_tolerance` / `retrieval_gate_per_intent_min_n` |
+| Cohen's κ (judge calibration) | ≥ 0.60 (raw ≥0.80) | `eval-judge-calibrate` gate (`settings.judge_kappa_gate` / `judge_raw_gate`, `evaluation/judge_calibration.py:KAPPA_GATE`) |
 | Source recall Δ vs baseline | ≥ −0.01 | optimization benchmark |
 | MRR Δ vs baseline | ≥ −0.02 | optimization benchmark |
 | Identifier recall Δ | ≥ **+0.05** (required improvement) | optimization benchmark |
@@ -707,6 +709,8 @@ Repo-enforced gates (hardcoded constants or settings defaults — treat these as
 | Over-token-budget chunk | > 3800 tokens flagged | `eval-fast` heuristic |
 | Drift alerts | faithfulness 0.8, context_recall 0.7, context_precision 0.6, answer_relevancy 0.7, confidence 0.5 | `DriftDetector` defaults |
 | Judge determinism | `evaluation_temperature = 0.0` | settings default |
+
+**Honest inscope vs legacy baseline:** the 500-row `recall_all.jsonl` baseline was URL-mismatched (R@10=0.272 undercounts real retrieval; overall Recall@10 is inflated/deflated by out-of-scope rows). The honest gate uses `tests/evaluation/benchmarks/baseline_inscope.json` (220 inscope rows, R@10=0.259 with dedup) — global floor 0.24 and per-intent `max(0, baseline−0.05)` where n≥5 (e.g. `comparative` n=3 is skipped). See `data_engineering_copilot/config/settings.py:retrieval_gate_*` and `docs/rag_flaw_prevention_plan.md:F3`.
 
 General guidance beyond the repo gates: prefer Recall-oriented gates for
 retrieval (missing evidence is fatal; a slightly noisy top-k is recoverable by
@@ -727,7 +731,9 @@ worse than incompleteness); when a metric moves, diff the provenance
 | `make eval-fast` | `dec eval-fast` — 5-layer zero-LLM integrity gate | local (needs Qdrant) |
 | `make eval-coverage` | `dec eval-coverage` — corpus alignment gate | local |
 | `make eval-retrieval` | `dec eval-retrieval --k 10` | local |
-| `make eval-retrieval-gate` | `dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10` | local gate |
+| `make eval-retrieval-gate` | `dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10` (prints global Δ with 95% bootstrap CI + per-intent Δ vs `max(0, baseline−0.05)` where n≥5) | local gate |
+| `make eval-rerank-smoke` | `dec eval-rerank --pool-file /tmp/rerank_pool_smoke.json --k 10` freeze + `$0` replay — reranker A/B without LLM | local ($0 replay) |
+| `make eval-prompt-aug-smoke` | `dec eval-prompt-aug --dataset tests/evaluation/golden/prompt_aug_eval_sample.jsonl --mode template` — fully hermetic, no infra | local ($0) |
 | `make eval-set-baseline OUTPUT=path` | write a fresh baseline | local |
 | `make eval-gen-source SOURCE=name [LIMIT=n]` | `dec gen-synthetic-eval` | local |
 | `make eval-golden-consolidate` | consolidate golden sets + coverage validation | local |

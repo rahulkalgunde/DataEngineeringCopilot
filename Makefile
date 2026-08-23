@@ -243,10 +243,12 @@ eval-fast:
 eval-retrieval:
 	dec_venv/bin/dec eval-retrieval --k 10
 
-# Retrieval regression gate: run benchmark and compare against baseline JSON.
+# Retrieval regression gate: run benchmark and compare against honest inscope baseline.
+# Prints global Δ with 95% bootstrap CI + per-intent Δ vs max(0, baseline-0.05) where n>=5.
+# Baseline is tests/evaluation/benchmarks/baseline_inscope.json (220 rows, R@10=0.259).
 # Exits non-zero if any gate fails. Use in CI as a required status check.
 eval-retrieval-gate:
-	dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline.json --k 10
+	dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10
 
 # Generate synthetic recall eval set for one source (deterministic + coverage-gated).
 eval-gen-source:
