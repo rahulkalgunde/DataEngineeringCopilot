@@ -12,6 +12,59 @@ from data_engineering_copilot.evaluation.chunking_gold import (
     validate_gold_doc,
 )
 
+_ALLOWED_SOCKET_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+@pytest.fixture(autouse=True)
+def _block_external_sockets(request, monkeypatch):
+    """Fail fast when a unit test opens a non-loopback TCP connection.
+
+    Mirrors Haystack's ``request_blocker`` / LangChain's ``--disable-socket``
+    habit: unit tests are hermetic, so an outbound connection means a mock was
+    forgotten and a real provider/API would be hit (hang or paid call in CI).
+    Loopback and AF_UNIX stay allowed so local servers and unix transports
+    keep working. Integration-marked tests collected here are exempt.
+    """
+    import socket
+
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+
+    real_socket = socket.socket
+    real_create_connection = socket.create_connection
+
+    def _assert_local(address: object) -> None:
+        host = address[0] if isinstance(address, tuple) else None
+        if isinstance(host, str) and host.lower() not in _ALLOWED_SOCKET_HOSTS:
+            raise RuntimeError(
+                f"unit test attempted external connection to {host!r} — "
+                "mock the transport (respx/aresponses/fake double) instead"
+            )
+
+    class _GuardedSocket(real_socket):
+        def connect(self, address):  # type: ignore[override]
+            _assert_local(address)
+            return super().connect(address)
+
+        def connect_ex(self, address):  # type: ignore[override]
+            _assert_local(address)
+            return super().connect_ex(address)
+
+    def _guarded_socket(*args, **kwargs):
+        family = args[0] if args else kwargs.get("family", socket.AF_INET)
+        if family in (socket.AF_INET, socket.AF_INET6):
+            return _GuardedSocket(*args, **kwargs)
+        return real_socket(*args, **kwargs)
+
+    def _guarded_create_connection(address, *args, **kwargs):
+        _assert_local(address)
+        return real_create_connection(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "socket", _guarded_socket)
+    monkeypatch.setattr(socket, "create_connection", _guarded_create_connection)
+    yield
+
 
 @pytest.fixture(autouse=True)
 def _mock_sentence_transformers():
