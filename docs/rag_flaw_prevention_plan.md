@@ -1,7 +1,7 @@
 # RAG Flaw Prevention Plan — enforced checks so no session repeats the 2-day waste
 
-**Date:** 2026-08-23 12:30 → updated 2026-08-23 14:00 (eval-optimization follow-ups)
-**Status:** IMPLEMENTED (4/4 core guards live) + FOLLOW-UPS QUEUED (6 high-value items below)
+**Date:** 2026-08-23 12:30 → updated 2026-08-23 14:00 (eval-optimization follow-ups) → 2026-08-23 16:00 (F1–F5 SHIPPED)
+**Status:** IMPLEMENTED (4/4 core guards live) + FOLLOW-UPS DONE (F1–F5 shipped `33c1857..f16507e`; F6 was already green)
 **Context:** 2 days instrumenting eval that measured URL-string mismatch + junk-term noise. Live RAG was healthy (R@10=0.784 inscope); the validator was not. External cross-check (RAGAS/DeepEval/Phoenix, RAGBench/TRACe, KG-RAG audit: correctness <60%, 12 LLM-as-judge biases) confirms these are the top failure modes.
 
 ## Pattern taxonomy — local evidence × external canon
@@ -25,9 +25,9 @@
 
 Remaining 3 external patterns (empty-context `fast_eval`, RAG evaluator duplicate URLs `services/rag_evaluation.py:100,128`, scope drift `generation alias fail-open`) are documented above and queued as single-line fixes for next session — each <10 LOC, none blocking today.
 
-## Follow-ups: Evaluation Strategy Optimization (audit 2026-08-23)
+## Follow-ups: Evaluation Strategy Optimization (audit 2026-08-23) — ALL SHIPPED 2026-08-23
 
-High-value, low-effort queue — each <1h, 0 LLM except where noted. Priority order is ROI.
+F1–F5 landed via parallel lanes (`33c1857`..`f16507e`). Two gate-calibration fixes found while validating: verdict gates on point delta (CI as context) and per-intent tolerance is noise-aware `max(0.05, 2σ)` — a fixed −0.05 at n=23 measures rerun variance (measured swing −0.087), not regressions.
 
 ### F1. Batched inscope baseline (unblocks honest gates)
 - **Why:** 220-row `recall_inscope.jsonl` is correct scope but `eval-retrieval` on 220 rows times out under Qdrant load (Vector store query failed on 220). 37-row `baseline_inscope.json` understates variance.
