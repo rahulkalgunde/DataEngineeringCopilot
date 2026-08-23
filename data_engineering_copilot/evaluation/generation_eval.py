@@ -190,17 +190,21 @@ def load_generation_dataset(path: str) -> list[GenerationEvalRow]:
     return rows
 
 
-def _parse_score(text: str, lo: float, hi: float) -> float:
-    """Extract a numeric score from a judge response (JSON or bare number)."""
+def _parse_score(text: str, lo: float, hi: float) -> float | None:
+    """Extract a numeric score from a judge response (JSON or bare number).
+
+    Returns None when nothing parseable is found — distinct from a legitimate
+    zero score, which callers must not retry on.
+    """
     if not text:
-        return 0.0
+        return None
     m = re.search(r'\{[^{}]*"score"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)', text)
     if m:
         return min(hi, max(lo, float(m.group(1))))
     m = re.search(r"(-?[0-9]+(?:\.[0-9]+)?)", text)
     if m:
         return min(hi, max(lo, float(m.group(1))))
-    return 0.0
+    return None
 
 
 async def _judge_call_with_retry(
@@ -211,11 +215,15 @@ async def _judge_call_with_retry(
     *,
     max_retries: int = 3,
 ) -> float:
-    """Call judge + parse with retry on empty/unparseable output (0.0 return)."""
+    """Call judge + parse with retry ONLY on unparseable output.
+
+    A parsed 0 is a valid verdict (common for faithfulness refusals) and must
+    return immediately — retrying it tripled spend for zero information.
+    """
     for attempt in range(max_retries):
         raw = await judge.generate(prompt)
         s = _parse_score(raw, lo, hi)
-        if s > 0.0:
+        if s is not None:
             return s
         if attempt < max_retries - 1:
             print(f"    judge-retry {attempt + 2}/{max_retries}: unparseable (raw={raw[:80]!r})")
