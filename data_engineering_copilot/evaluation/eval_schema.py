@@ -10,7 +10,13 @@ Two record kinds share one schema:
   ``ground_truth``, ``contexts``, ``source_name``.
 
 Optional metadata on either kind: ``source_name``, ``doc_type``, ``intent``,
-``complexity``, ``abstraction``.
+``complexity``, ``abstraction``. Rows may also carry an optional
+``dataset_version`` string; validators ignore it.
+
+Files may start with a header comment line (first line starting with ``#``,
+e.g. ``# version: 2026-08-23``); :func:`dataset_version_of` reads it back and
+parsers skip comment lines. Files without a header have no version — all
+historical golden files.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ QA_FIELDS = ("ground_truth", "contexts")
 METADATA_FIELDS = ("source_name", "doc_type", "intent", "complexity", "abstraction")
 
 _SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_VERSION_HEADER_RE = re.compile(r"^version\s*[:=]\s*(.+)$", re.IGNORECASE)
 
 
 class EvalKind(StrEnum):
@@ -72,15 +79,38 @@ def kind_of(row: dict) -> EvalKind:
 
 
 def parse_eval_rows(path: str | Path) -> list[dict]:
-    """Read a JSONL evaluation file into a list of row dicts."""
+    """Read a JSONL evaluation file into a list of row dicts.
+
+    Blank lines and comment lines starting with ``#`` (e.g. a
+    ``# version: 2026-08-23`` header) are skipped.
+    """
     rows: list[dict] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line:
+            if not line or line.startswith("#"):
                 continue
             rows.append(json.loads(line))
     return rows
+
+
+def dataset_version_of(path: str | Path) -> str | None:
+    """Return the dataset version declared in the file's header comment.
+
+    The header is the first non-blank line when it starts with ``#``; a line
+    like ``# version: 2026-08-23`` yields ``"2026-08-23"``. Returns ``None``
+    for files without a version header (all historical golden files).
+    """
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith("#"):
+                return None  # data began before any header
+            match = _VERSION_HEADER_RE.match(stripped.lstrip("#").strip())
+            return match.group(1).strip() if match else None
+    return None
 
 
 def validate_eval_row(row: dict) -> list[str]:

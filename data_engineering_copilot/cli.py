@@ -3486,7 +3486,11 @@ def eval_coverage_main(
     (exit 1) when any row is orphaned/unanswerable; exit 2 on bad input.
     """
     from data_engineering_copilot.config.settings import resolve_active_generation
-    from data_engineering_copilot.evaluation.eval_schema import parse_eval_rows, validate_eval_row
+    from data_engineering_copilot.evaluation.eval_schema import (
+        dataset_version_of,
+        parse_eval_rows,
+        validate_eval_row,
+    )
     from data_engineering_copilot.services.eval_coverage import CoverageValidator, resolve_generation_root
 
     project_root = pathlib.Path(__file__).resolve().parents[1]
@@ -3506,6 +3510,8 @@ def eval_coverage_main(
     validator = CoverageValidator(root)
     total_rows = total_fail = 0
     file_reports = []
+    git_sha: str | None = None
+    coverage_matrix: dict = {}
     for p in paths:
         if not p.exists():
             print(f"❌ Dataset not found: {p}")
@@ -3520,7 +3526,17 @@ def eval_coverage_main(
         report = validator.report(rows)
         total_rows += report["rows"]
         total_fail += report["fail"]
-        file_reports.append({"file": p.name, "rows": report["rows"], "pass": report["pass"], "fail": report["fail"]})
+        git_sha = report["git_sha"]
+        coverage_matrix = report["coverage_matrix"]
+        file_reports.append(
+            {
+                "file": p.name,
+                "rows": report["rows"],
+                "pass": report["pass"],
+                "fail": report["fail"],
+                "version": dataset_version_of(p),
+            }
+        )
         for fail in report["failures"]:
             print(
                 f"  ❌ {p.name} {fail['id']}: missing_urls={fail['missing_urls'][:2]} "
@@ -3533,6 +3549,7 @@ def eval_coverage_main(
                 {
                     "generation": gen,
                     "corpus_root": str(root),
+                    "git_sha": git_sha,
                     "files": file_reports,
                     "rows": total_rows,
                     "pass": total_rows - total_fail,
@@ -3543,8 +3560,18 @@ def eval_coverage_main(
         )
     else:
         print(f"\nGeneration: {gen}  (corpus: {root.name}, {validator.indexed_url_count} indexed URLs)")
+        if git_sha:
+            print(f"Dataset git sha: {git_sha}")
+        print("Coverage matrix (intent × doc_type):")
+        for cell, n in coverage_matrix["counts"].items():
+            print(f"  {cell:<44} n={n}")
+        if coverage_matrix["empty_cells"]:
+            print(
+                f"  ⚠️ empty cells (target ≥1 query per intent × doc_type): {', '.join(coverage_matrix['empty_cells'])}"
+            )
         for fr in file_reports:
-            print(f"  {fr['file']:<36} rows={fr['rows']:>3} pass={fr['pass']:>3} fail={fr['fail']:>3}")
+            ver = f" version={fr['version']}" if fr["version"] else ""
+            print(f"  {fr['file']:<36} rows={fr['rows']:>3} pass={fr['pass']:>3} fail={fr['fail']:>3}{ver}")
         print(f"Total: {total_rows} rows, {total_rows - total_fail} pass, {total_fail} fail")
 
     return 1 if total_fail else 0

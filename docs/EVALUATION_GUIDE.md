@@ -202,6 +202,13 @@ usage: dec eval-coverage [--dataset DATASET] [--generation GEN] [--json]
 - Default validates **all** recall-format files in `tests/evaluation/`.
 - Exit codes: `0` all pass · `1` any row fails · `2` bad input/no corpus.
 
+**Provenance & coverage matrix:** the report prints the dataset **git sha**
+(`git rev-parse --short HEAD`) next to the generation and each file's
+`# version:` header value (when present). It also prints an **intent ×
+doc_type coverage matrix**, flagging cells with 0 rows — target ≥1 query per
+cell (RAGBench-style completeness; an empty cell means that intent/doc_type
+combination is never measured).
+
 ```bash
 make eval-coverage                                        # merge prerequisite
 dec eval-coverage --dataset tests/evaluation/recall_claude.jsonl --json
@@ -682,6 +689,15 @@ Governance: golden datasets are the regression-gate source of truth. When
 behavior intentionally changes, update the dataset consciously and expect metric
 deltas — don't silently accept drift. Every edit must pass the schema gate and
 `eval-coverage`.
+
+**Golden versioning:** golden files may start with a header comment line such
+as `# version: 2026-08-23` — parsers skip comment lines and
+`evaluation/eval_schema.py:dataset_version_of()` reads it back (`None` when
+absent). Rows may also carry an optional `dataset_version` field (schema-valid,
+ignored by validators). **Never compare metrics across dataset versions**: a
+delta between runs on different versions (or different git shas — printed by
+`dec eval-coverage`) attributes to the data, not the code. The coverage matrix
+(intent × doc_type, ≥1 query per cell) is surfaced in the same report.
 
 ---
 
