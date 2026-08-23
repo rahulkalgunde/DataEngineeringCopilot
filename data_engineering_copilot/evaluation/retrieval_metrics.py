@@ -13,10 +13,17 @@ def recall_at_k(retrieved: list[str], expected: list[str], k: int) -> float:
 
 
 def ndcg_at_k(retrieved: list[str], expected: list[str], k: int) -> float:
+    """nDCG@K with binary relevance, deduped — duplicate URLs from multi-chunk
+    pages must not earn DCG credit twice (they pushed nDCG past 1.0)."""
     if not expected:
         return 0.0
     exp_set = set(expected)
-    dcg = sum(1.0 / math.log2(i + 1) for i, url in enumerate(retrieved[:k], start=1) if url in exp_set)
+    seen: set[str] = set()
+    dcg = 0.0
+    for i, url in enumerate(retrieved[:k], start=1):
+        if url in exp_set and url not in seen:
+            dcg += 1.0 / math.log2(i + 1)
+            seen.add(url)
     ideal_hits = min(len(exp_set), k)
     idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_hits + 1))
     return dcg / idcg if idcg else 0.0

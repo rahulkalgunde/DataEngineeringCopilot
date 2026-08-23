@@ -17,7 +17,6 @@ import pytest
 
 @pytest.mark.integration
 @pytest.mark.ollama
-
 class TestOllamaClientGeneration:
     @pytest.mark.asyncio
     async def test_generate_returns_nonempty(self, ollama_client):
