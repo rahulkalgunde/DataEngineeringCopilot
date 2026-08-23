@@ -753,7 +753,12 @@ def _build_llm_chain_config(
 
     # Catalog auto-order: when enabled and a fresh probe catalog exists, use
     # fastest-OK-per-provider order; otherwise fall back to settings order.
-    # Explicit purpose_provider pin wins over catalog.
+    # Explicit purpose_provider pin wins over catalog. When the caller omits
+    # the pin, derive it from settings.{purpose}_llm_provider so the documented
+    # per-purpose env pins stay authoritative everywhere (a missing arg must
+    # not silently demote a pinned provider behind catalog auto-order).
+    if not (purpose_provider and purpose_provider.strip()):
+        purpose_provider = getattr(app_settings, f"{purpose}_llm_provider", "") or ""
     if purpose_provider and purpose_provider.strip():
         primary = purpose_provider.strip().lower()
         ordered = [primary]
