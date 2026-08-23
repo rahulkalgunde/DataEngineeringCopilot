@@ -1,5 +1,6 @@
 from data_engineering_copilot.evaluation.stats import (
     bootstrap_ci,
+    error_rate_ok,
     per_intent_tolerance,
     regression_verdict,
 )
@@ -61,3 +62,12 @@ def test_per_intent_tolerance_noise_floor_dominates_small_n():
 def test_per_intent_tolerance_collapses_to_floor_for_large_n():
     assert per_intent_tolerance(0.386, 500, floor=0.05) == 0.05
     assert per_intent_tolerance(0.5, 0) == 0.05
+
+
+def test_error_rate_gate():
+    # 2026-08-23: Qdrant wobble dropped 11/220 (5%) with zero surfacing —
+    # survivorship bias moved R@10 more than the regression tolerance.
+    assert error_rate_ok(0, 220) is True
+    assert error_rate_ok(4, 220) is True  # ≤2%
+    assert error_rate_ok(5, 220) is False  # >2%: infra failure, not a result
+    assert error_rate_ok(1, 0) is True  # empty run trivially healthy

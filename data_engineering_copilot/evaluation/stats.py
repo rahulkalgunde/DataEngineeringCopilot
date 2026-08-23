@@ -81,3 +81,16 @@ def per_intent_tolerance(
         return floor
     sigma = math.sqrt(max(baseline_recall, 0.0) * (1 - min(max(baseline_recall, 0.0), 1.0)) / n)
     return max(floor, 2 * sigma)
+
+
+def error_rate_ok(n_failed: int, n_total: int, *, max_rate: float = 0.02) -> bool:
+    """Harness-health gate: eval must not silently drop queries.
+
+    Excluding errored queries biases every metric upward (survivorship bias):
+    on 2026-08-23 a Qdrant wobble dropped 11/220 queries with zero surfacing,
+    moving R@10 by more than the regression tolerance itself. Runs failing
+    this gate must be treated as infra failures, not retrieval results.
+    """
+    if n_total <= 0:
+        return True
+    return n_failed / n_total <= max_rate
