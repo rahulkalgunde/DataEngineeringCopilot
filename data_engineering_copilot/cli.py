@@ -2689,8 +2689,12 @@ def eval_retrieval_main(
         return sum(xs) / len(xs) if xs else 0.0
 
     scored = [r for r in rows if "recall" in r]
+    failed = [r for r in rows if "error" in r]
     lats = [r["latency_ms"] for r in scored]
     overall = {
+        "n": len(scored),
+        "n_total": len(rows),
+        "n_failed": len(failed),
         "recall@k": _avg([r["recall"] for r in scored]),
         "mrr@k": _avg([r["mrr"] for r in scored]),
         "precision@k": _avg([r["precision"] for r in scored]),
@@ -2700,7 +2704,6 @@ def eval_retrieval_main(
         "latency_ms_p50": percentile(lats, 0.5),
         "latency_ms_p95": percentile(lats, 0.95),
         "k": k,
-        "n": len(scored),
     }
     per_intent_metrics = {
         intent: {
@@ -2715,6 +2718,11 @@ def eval_retrieval_main(
     print("\n" + "=" * 40)
     print("Retrieval Evaluation Summary")
     print(f"Queries: {overall['n']} (k={k})")
+    if failed:
+        print(
+            f"⚠️  {len(failed)}/{len(rows)} queries FAILED and are excluded from metrics "
+            f"(survivorship bias — see error_rate gate)"
+        )
     print(f"Overall Recall@{k}:   {overall['recall@k']:.3f}")
     print(f"Overall MRR@{k}:      {overall['mrr@k']:.3f}")
     print(f"Overall Precision@{k}: {overall['precision@k']:.3f}")
@@ -2744,6 +2752,17 @@ def eval_retrieval_main(
         if not baseline_path.exists():
             print(f"⚠️  Baseline not found at {baseline_path}; skipping regression gate.")
             return 0
+        # Harness-health gate BEFORE any comparison: a run that dropped queries
+        # is an infra failure, and comparing its survivors against the baseline
+        # manufactures fake regressions (or hides real ones).
+        from data_engineering_copilot.evaluation.stats import error_rate_ok
+
+        if not error_rate_ok(len(failed), len(rows)):
+            print(
+                f"❌ Harness unhealthy: {len(failed)}/{len(rows)} queries errored "
+                f"(>2%). Fix infra and rerun — metrics from this run are not trustworthy."
+            )
+            return 1
         try:
             baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
