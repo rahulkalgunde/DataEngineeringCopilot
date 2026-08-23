@@ -1980,6 +1980,13 @@ dec evaluate
 
 **Iterating on config** — edit `.env`/`.env.secrets`/`.env.local`, then confirm the resolved values with `dec config` before running ingestion.
 
+**After changing chunking/reranking**
+```bash
+make eval-rerank-smoke       # freeze 10 pools, replay ($0 — run pool replay first)
+make eval-prompt-aug-smoke   # $0 template check
+# After changing chunking/reranking: run the $0 pool replay first
+```
+
 **Diagnosing LLM provider health** — when `dec ask` feels slow or answers degrade (silent fallback), find out exactly which provider works and why others fail:
 ```bash
 dec probe-llm                       # every wired LLM + embedding provider, one call each
