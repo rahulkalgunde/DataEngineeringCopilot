@@ -386,11 +386,12 @@ async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
         vec = await embed(query)
         retrieved = await store.query(vec, top_k=10, query_text=query)
         urls = [r.chunk.url.rstrip("/") for r in retrieved]
-        hit = sum(1 for u in expected_urls if u in urls)
-        recall = hit / len(expected_urls) if expected_urls else 1.0
-        context_precision = hit / len(urls) if urls else 0.0
+        unique_urls = list(dict.fromkeys(urls))
+        hit = sum(1 for u in expected_urls if u in set(unique_urls))
+        recall = hit / len(expected_urls) if expected_urls else 0.0
+        context_precision = hit / len(unique_urls) if unique_urls else 0.0
         mrr = 0.0
-        for rank, u in enumerate(urls, 1):
+        for rank, u in enumerate(unique_urls, 1):
             if u in expected_urls:
                 mrr = 1.0 / rank
                 break
