@@ -246,6 +246,38 @@ class HeaderAwareChunker:
                 )
             )
 
+        # Flaw-pattern #7 guard (context fragmentation): a headed section whose
+        # body alone exceeds the word budget must be split into word windows,
+        # exactly like heading-less text is — otherwise it silently becomes one
+        # oversized chunk and every retrieval inside it drags the whole section
+        # into context. Windows keep the section's header/heading_path so no
+        # fragment loses its parent context.
+        windowed: list[_RawSection] = []
+        for section in sections:
+            if not section.text or len(section.text.split()) <= self.chunk_size_words:
+                windowed.append(section)
+                continue
+            words = section.text.split()
+            cursor = section.start
+            for w in range(0, len(words), self.chunk_size_words):
+                window_text = " ".join(words[w : w + self.chunk_size_words])
+                idx = text.find(window_text, cursor)
+                wstart = idx if idx != -1 else cursor
+                wend = wstart + len(window_text)
+                cursor = wend
+                windowed.append(
+                    _RawSection(
+                        header=section.header,
+                        level=section.level,
+                        heading_path=section.heading_path,
+                        text=window_text,
+                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(window_text)),
+                        start=wstart,
+                        end=wend,
+                    )
+                )
+        sections = windowed
+
         return sections
 
     # ------------------------------------------------------------------

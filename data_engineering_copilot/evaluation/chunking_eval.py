@@ -30,10 +30,21 @@ def _build_chunker(strategy: str):
     if strategy == "sentence":
         return SentencePreservingChunker(max_tokens=3800, max_chars=6000)
     if strategy == "header":
-        return HeaderAwareChunker(chunk_size_words=375, overlap_words=90, min_chunk_words=10)
+        # min_chunk_words follows the production formula (cli.py ingest path):
+        # chunk_size_words * 0.1 — keeps the eval measuring what ships.
+        return HeaderAwareChunker(chunk_size_words=375, overlap_words=90, min_chunk_words=int(375 * 0.1))
     if strategy == "structured":
         return StructuredDataChunker(max_tokens=3800, max_chars=6000)
     raise ValueError(f"Unsupported strategy for chunking eval: {strategy!r}")
+
+
+# Flaw-pattern #7 gate: fraction of headers/code-fences torn by a chunk
+# boundary. Splitting prose mid-paragraph is normal; tearing a header line or
+# a code fence detaches context (table from caption, code from its prose).
+# Measured baseline 2026-08-23: all strategies score 0.0 on the synthetic
+# corpus; 0.25 catches the onset of structural tearing while leaving room
+# for a rare legitimate boundary landing inside a one-line node.
+FRACTURE_GATE_THRESHOLD = 0.25
 
 
 BUILTIN_STRATEGIES = ["recursive", "sentence", "header", "structured"]
@@ -85,6 +96,14 @@ def run_chunking_eval(strategy: str, gold_source: str, output_path: str) -> dict
             "fracture_rate": sum(fractures) / len(fractures) if fractures else 0.0,
             "doc_count": len(gold_docs),
         }
+
+    # Flaw-pattern #7 verdict: machine-readable so CI can gate without parsing prose.
+    worst_fracture = max(m["fracture_rate"] for m in report.values())
+    report["gates"] = {
+        "fracture_ok": worst_fracture <= FRACTURE_GATE_THRESHOLD,
+        "fracture_threshold": FRACTURE_GATE_THRESHOLD,
+        "worst_fracture_rate": worst_fracture,
+    }
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as fh:
