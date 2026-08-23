@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 
 import pytest
 from pydantic import SecretStr
@@ -265,6 +266,35 @@ def test_no_duplicate_embed_concurrency() -> None:
 def test_validate_all_passes_on_defaults() -> None:
     settings = make_settings()
     settings.validate_all()  # must not raise
+
+
+def test_retrieval_gate_defaults_match_inscope_baseline() -> None:
+    settings = make_settings()
+    baseline_path = (
+        pathlib.Path(__file__).resolve().parent.parent / "evaluation" / "benchmarks" / "baseline_inscope.json"
+    )
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    base_r10 = float(baseline["overall"]["recall@k"])
+
+    # Global gate: R@10 >= honest inscope baseline (220 rows) − 0.02, with an
+    # absolute floor ≈ 0.259 − 0.02.
+    assert settings.retrieval_gate_global_tolerance == pytest.approx(0.02)
+    assert settings.retrieval_gate_global_floor == pytest.approx(
+        base_r10 - settings.retrieval_gate_global_tolerance, abs=0.01
+    )
+    # Per-intent gate: R@10 >= max(0, baseline_intent − 0.05) where n >= 5.
+    assert settings.retrieval_gate_per_intent_tolerance == pytest.approx(0.05)
+    assert settings.retrieval_gate_per_intent_min_n == 5
+    # The inscope baseline must actually carry per-intent data for the gate.
+    assert baseline.get("per_intent"), "baseline_inscope.json missing per_intent block"
+
+
+def test_generation_gate_defaults_unchanged() -> None:
+    settings = make_settings()
+    assert settings.generation_faithfulness_gate == pytest.approx(0.85)
+    assert settings.generation_relevance_gate == pytest.approx(0.80)
+    assert settings.generation_rubric_gate == pytest.approx(4.0)
+    assert settings.judge_kappa_gate == pytest.approx(0.60)
 
 
 def test_validate_all_detects_conflicts() -> None:

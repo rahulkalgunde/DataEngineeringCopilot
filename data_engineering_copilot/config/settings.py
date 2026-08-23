@@ -1285,6 +1285,23 @@ class AppSettings(BaseSettings):
     # recall <= -0.01, MRR <= -0.02) passes. Enabling it invalidates every
     # legacy BM25 cache: a new generation must be built and activated.
     namespace_bm25_enabled: bool = False
+    # Retrieval regression gates — honest inscope baseline (220 rows,
+    # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global
+    # gate: R@10 >= baseline - 0.02 (absolute floor 0.24 for 220-row, i.e.
+    # baseline_inscope overall -0.02). Per-intent gate (n>=5):
+    # R@10 >= max(0, baseline_intent -0.05). CIs via
+    # evaluation/stats.py:bootstrap_ci / regression_verdict. Keep dark-flag
+    # comments above.
+    retrieval_gate_global_tolerance: float = 0.02
+    retrieval_gate_per_intent_tolerance: float = 0.05
+    retrieval_gate_global_floor: float = 0.24
+    retrieval_gate_per_intent_min_n: int = 5
+    # Generation-layer gates (mirrors evaluation/generation_eval.py + judge_calibration.py)
+    generation_faithfulness_gate: float = 0.85
+    generation_relevance_gate: float = 0.80
+    generation_rubric_gate: float = 4.0
+    judge_kappa_gate: float = 0.60
+    judge_raw_gate: float = 0.80
     # Semantic cache
     semantic_cache_threshold: float = 0.95
     semantic_cache_ttl: int = 3600
