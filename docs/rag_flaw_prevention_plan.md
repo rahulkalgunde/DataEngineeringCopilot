@@ -1,7 +1,7 @@
 # RAG Flaw Prevention Plan — enforced checks so no session repeats the 2-day waste
 
-**Date:** 2026-08-23 12:30 → updated 2026-08-23 14:00 (eval-optimization follow-ups) → 2026-08-23 16:00 (F1–F5 SHIPPED)
-**Status:** IMPLEMENTED (4/4 core guards live) + FOLLOW-UPS DONE (F1–F5 shipped `33c1857..f16507e`; F6 was already green)
+**Date:** 2026-08-23 12:30 → 14:00 (F1–F6 queued) → 16:00 (F1–F5 SHIPPED) → 17:00 (flaw #7 SHIPPED — all 7 patterns enforced)
+**Status:** COMPLETE — all 7 flaw patterns have live CI guards
 **Context:** 2 days instrumenting eval that measured URL-string mismatch + junk-term noise. Live RAG was healthy (R@10=0.784 inscope); the validator was not. External cross-check (RAGAS/DeepEval/Phoenix, RAGBench/TRACe, KG-RAG audit: correctness <60%, 12 LLM-as-judge biases) confirms these are the top failure modes.
 
 ## Pattern taxonomy — local evidence × external canon
@@ -14,7 +14,7 @@
 | 4 | **Duplicate-URL inflation** | `cli.py:2369` R@10=7.0, `retrieval_metrics.py:24` nDCG=1.195 | fabs/Weaviate: dedupe before `pytrec_eval` | Set-dedup via `topk_hits={...}` — pinned by 9 tests |
 | 5 | **Scope drift** — golden asks what corpus cannot answer | `cli.py:2416` golden=500 rows vs `ci-repro`=71k chunks but wrong URL dialect; `__ci-repro` only 2 Claude doc sites in live alias | RAGBench 5-domain diversity + Statsig "version golden alongside code" | `cli.py:2421` pre-flight warning (soft, 2s) + `recall_inscope.jsonl` (220 rows) |
 | 6 | **Uncalibrated LLM-as-judge** | `provider_fallback.py:59 degraded_fallback` last-resort bias | DataAspirant κ=0.31 before calibration; 12 bias types | `judge_calibration.py` Cohen's κ gate + majority-vote labeler (78/80 unanimous) |
-| 7 | **Context fragmentation** (tables/headers split) | Chunking eval `test-chunking` exists but no `header in chunk` CI assert | Oracle RAG chunking, Coverge overlap >20% duplicate | `eval-chunking` gold-span + overlap 10-15% (next session) |
+| 7 | **Context fragmentation** (tables/headers split) | **SHIPPED `48eb658`**: oversized headed sections were never windowed → one giant chunk per long section; header-carry invariant + fracture gate (≤0.25) + 5–20% overlap guard in CI (`test_context_fragmentation_guards.py`) | Oracle RAG chunking, Coverge overlap >20% duplicate | `eval-chunking` gates verdict + 6 guard tests |
 
 ## The 4 enforced checks (what now blocks the 2-day loop)
 
