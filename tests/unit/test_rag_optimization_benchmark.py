@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -138,7 +139,8 @@ class TestRunRetrievalBenchmark:
         # Q1 hits expected at rank 1 (MRR 1.0, recall 1.0); Q2 misses (0, 0).
         assert report["source_recall_mean"] == 0.5
         assert report["mrr_mean"] == 0.5
-        q1 = next(r for r in report["results"] if r["id"] == "q1")
+        results = cast(list[dict[str, Any]], report["results"])
+        q1 = next(r for r in results if r["id"] == "q1")
         assert q1["source_recall"] == 1.0
         assert q1["mrr"] == 1.0
         assert q1["final_context_size"] == len("context")
@@ -160,7 +162,8 @@ class TestRunRetrievalBenchmark:
         )
         rows = [_row("q1", question="Q1", expected_urls=[url])]
         report = asyncio.run(run_retrieval_benchmark(service, rows))
-        q1 = report["results"][0]
+        results = cast(list[dict[str, Any]], report["results"])
+        q1 = results[0]
         assert q1["duplicate_rate"] == pytest.approx(0.3333, abs=1e-4)
         assert q1["source_coverage"] == 2
         assert report["duplicate_rate_mean"] == pytest.approx(0.3333, abs=1e-4)
@@ -199,7 +202,8 @@ class TestRunRetrievalBenchmark:
         rows = [_row("q1", question="Q1"), _row("q2", question="Q2")]
         report = asyncio.run(run_retrieval_benchmark(service, rows))
         assert report["rows_failed"] == 2
-        assert all("error" in r for r in report["results"])
+        results = cast(list[dict[str, Any]], report["results"])
+        assert all("error" in r for r in results)
         assert report["rows_ok"] == 0
 
 
@@ -248,31 +252,36 @@ class TestCompareBenchmarks:
         baseline = self._report(identifier_recall=0.7)
         candidate = self._report(identifier_recall=0.72)
         cmp = compare_benchmarks(baseline, candidate)
-        assert cmp["gates"]["identifier_improved"] is False
+        gates = cast(dict[str, bool], cmp["gates"])
+        assert gates["identifier_improved"] is False
 
     def test_recall_regression_fails(self):
         baseline = self._report(source_recall_mean=0.8)
         candidate = self._report(source_recall_mean=0.78)
         cmp = compare_benchmarks(baseline, candidate)
-        assert cmp["gates"]["recall_regression_ok"] is False
+        gates = cast(dict[str, bool], cmp["gates"])
+        assert gates["recall_regression_ok"] is False
 
     def test_generic_recall_regression_fails(self):
         baseline = self._report(generic_recall=0.9)
         candidate = self._report(generic_recall=0.88)
         cmp = compare_benchmarks(baseline, candidate)
-        assert cmp["gates"]["generic_recall_regression_ok"] is False
+        gates = cast(dict[str, bool], cmp["gates"])
+        assert gates["generic_recall_regression_ok"] is False
 
     def test_generic_recall_regression_within_tolerance_passes(self):
         baseline = self._report(generic_recall=0.9)
         candidate = self._report(generic_recall=0.89)
         cmp = compare_benchmarks(baseline, candidate)
-        assert cmp["gates"]["generic_recall_regression_ok"] is True
+        gates = cast(dict[str, bool], cmp["gates"])
+        assert gates["generic_recall_regression_ok"] is True
 
     def test_provider_calls_not_reduced_enough(self):
         baseline = self._report(provider_calls_total=10)
         candidate = self._report(provider_calls_total=9)
         cmp = compare_benchmarks(baseline, candidate)
-        assert cmp["gates"]["provider_calls_reduced"] is False
+        gates = cast(dict[str, bool], cmp["gates"])
+        assert gates["provider_calls_reduced"] is False
 
 
 class TestExcludedProviders:
