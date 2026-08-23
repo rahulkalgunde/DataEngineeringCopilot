@@ -6,6 +6,7 @@ delta distribution reflects per-query pairing. Deterministic under seed.
 
 from __future__ import annotations
 
+import math
 import random
 import statistics
 
@@ -60,3 +61,23 @@ def regression_verdict(
     hi = _percentile_rank(deltas, 0.975)
     mean_delta = statistics.fmean(cur) - statistics.fmean(base)
     return (mean_delta >= -tolerance, mean_delta, (lo, hi))
+
+
+def per_intent_tolerance(
+    baseline_recall: float,
+    n: int,
+    *,
+    floor: float = 0.05,
+) -> float:
+    """Noise-aware per-intent gate tolerance: max(floor, 2σ of the baseline mean).
+
+    A fixed tolerance below the binomial noise floor gates rerun variance, not
+    regressions: at n=23, p=0.30 the 1σ sampling error is ~±0.10, so a −0.05
+    point rule flips on identical code+index (measured 2026-08-23: debugging
+    intent swung −0.087 across two runs of an unchanged harness). 2σ keeps the
+    gate above noise for small n while collapsing to ``floor`` for large n.
+    """
+    if n <= 0:
+        return floor
+    sigma = math.sqrt(max(baseline_recall, 0.0) * (1 - min(max(baseline_recall, 0.0), 1.0)) / n)
+    return max(floor, 2 * sigma)
