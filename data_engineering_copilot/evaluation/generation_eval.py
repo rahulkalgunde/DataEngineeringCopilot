@@ -26,6 +26,7 @@ import statistics
 from dataclasses import asdict, dataclass, field
 
 from data_engineering_copilot.config.settings import AppSettings
+from data_engineering_copilot.evaluation.judge_cache import JudgeCache, judge_cache_key
 from data_engineering_copilot.factory import build_llm_fallback_chain
 from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
@@ -93,6 +94,26 @@ class GenerationEvalRow:
     contexts: list[str]
     ground_truth: str
     id: str = ""
+    intent: str = "factual"
+    probe: str = ""
+    expect_refusal: bool = False
+
+
+def stratified_sample(rows: list, n: int, key) -> list:
+    """Deterministic round-robin sample across strata (rows sorted by id first)."""
+    if n <= 0 or not rows:
+        return []
+    strata: dict[str, list] = {}
+    for r in sorted(rows, key=lambda r: r.id or ""):
+        strata.setdefault(key(r) or "default", []).append(r)
+    out: list = []
+    depth = 0
+    while len(out) < n and any(strata.values()):
+        for bucket in strata.values():
+            if depth < len(bucket) and len(out) < n:
+                out.append(bucket[depth])
+        depth += 1
+    return out
 
 
 @dataclass
@@ -105,6 +126,9 @@ class GenerationEvalReport:
     # within ±1 of the primary judge (MT-Bench-style agreement check).
     # None when no second judge was supplied.
     judge_agreement: float | None = None
+    llm_usage: dict | None = None
+    pairwise: dict | None = None
+    robustness: dict | None = None
     passed: bool = False
 
     def to_dict(self) -> dict:
@@ -118,6 +142,13 @@ class GenerationEvalReport:
             f"- **Answer relevance** (gate >= {RELEVANCE_GATE}): {self.relevance_mean:.3f}",
             f"- **Rubric correctness** (gate >= {RUBRIC_GATE}): {self.rubric_mean:.3f}",
             f"- **Passed gates:** {self.passed}",
+            *(
+                [
+                    f"- **Pairwise vs baseline:** win={self.pairwise['win']} tie={self.pairwise['tie']} loss={self.pairwise['loss']}"
+                ]
+                if self.pairwise
+                else []
+            ),
             "",
             "## Per-row",
             "",
@@ -150,6 +181,9 @@ def load_generation_dataset(path: str) -> list[GenerationEvalRow]:
                     contexts=list(d.get("contexts") or []),
                     ground_truth=d.get("ground_truth") or d.get("answer") or "",
                     id=d.get("id") or "",
+                    intent=d.get("intent", "factual"),
+                    probe=d.get("probe", ""),
+                    expect_refusal=bool(d.get("expect_refusal", False)),
                 )
             )
     return rows
@@ -168,29 +202,165 @@ def _parse_score(text: str, lo: float, hi: float) -> float:
     return 0.0
 
 
+async def _judge_call_with_retry(
+    judge,
+    prompt: str,
+    lo: float,
+    hi: float,
+    *,
+    max_retries: int = 3,
+) -> float:
+    """Call judge + parse with retry on empty/unparseable output (0.0 return)."""
+    for attempt in range(max_retries):
+        raw = await judge.generate(prompt)
+        s = _parse_score(raw, lo, hi)
+        if s > 0.0:
+            return s
+        if attempt < max_retries - 1:
+            print(f"    judge-retry {attempt + 2}/{max_retries}: unparseable (raw={raw[:80]!r})")
+    return 0.0
+
+
+def resolve_judge(*, local, cloud, enabled: bool, threshold: float, band: float):
+    """Return the judge object used by score_* functions.
+
+    Cascade semantics live at SCORING level: we wrap the LOCAL judge so that
+    scores landing inside [threshold-band, threshold+band] are re-scored by the
+    cloud chain. When disabled, the primary (cloud/evaluation) chain is used
+    directly — identical to today's behavior.
+    """
+    if not enabled or local is None or cloud is None:
+        return cloud if cloud is not None else local
+
+    class _BandEscalating:
+        async def generate(self, prompt: str) -> str:
+            reply = await local.generate(prompt)
+            try:
+                obj = json.loads(reply)
+                s = float(obj.get("score"))
+            except Exception:  # noqa: BLE001 — unparseable => escalate
+                return await cloud.generate(prompt)
+            if abs(s - threshold) <= band:
+                return await cloud.generate(prompt)
+            return reply
+
+    return _BandEscalating()
+
+
+def pairwise_verdict(score_a_ord1: float, score_b_ord1: float, score_a_ord2: float, score_b_ord2: float) -> str:
+    """MT-Bench-style swapped-order verdict. 'A'/'B' only on consistent wins.
+
+    Scores are (judge_score_for_A, judge_score_for_B) in each ordering.
+    Position-swap cancels positional bias: A wins only if preferred in BOTH orderings.
+    """
+    a_wins_1 = score_a_ord1 > score_b_ord1
+    b_wins_1 = score_b_ord1 > score_a_ord1
+    a_wins_2 = score_a_ord2 > score_b_ord2
+    b_wins_2 = score_b_ord2 > score_a_ord2
+    if a_wins_1 and a_wins_2:
+        return "A"
+    if b_wins_1 and b_wins_2:
+        return "B"
+    return "TIE"
+
+
+def load_baseline_answers(path: str) -> dict[str, str]:
+    """Load baseline answers JSONL ({id, answer}) -> id -> answer."""
+    import pathlib as _pl
+
+    p = _pl.Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"baseline answers not found: {p}")
+    out: dict[str, str] = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        d = json.loads(line)
+        out[d["id"]] = d.get("answer", "")
+    return out
+
+
 async def _generate_answer(generator, prompt: str) -> str:
     return (await generator.generate(prompt)).strip()
 
 
-async def score_faithfulness(judge, question: str, answer: str, contexts: list[str], n_trials: int = 1) -> float:
+async def score_faithfulness(
+    judge,
+    question: str,
+    answer: str,
+    contexts: list[str],
+    n_trials: int = 1,
+    cache: JudgeCache | None = None,
+    model_id: str = "",
+) -> float:
     context = "\n\n".join(contexts)
     prompt = _FAITHFULNESS_PROMPT.format(question=question, context=context, answer=answer)
-    scores = [(_parse_score(await judge.generate(prompt), 0.0, 1.0)) for _ in range(max(1, n_trials))]
+    scores = []
+    for _ in range(max(1, n_trials)):
+        ck = judge_cache_key(model_id, "faithfulness-v1", question, answer, context) if cache else ""
+        hit = await cache.get(ck) if cache else None
+        if hit is not None:
+            scores.append(float(hit["score"]))
+            continue
+        s = await _judge_call_with_retry(judge, prompt, 0.0, 1.0)
+        if cache:
+            await cache.put(ck, {"score": s})
+        scores.append(s)
     return statistics.fmean(scores)
 
 
-async def score_relevance(judge, question: str, answer: str, n_trials: int = 1) -> float:
+async def score_relevance(
+    judge,
+    question: str,
+    answer: str,
+    n_trials: int = 1,
+    cache: JudgeCache | None = None,
+    model_id: str = "",
+) -> float:
     prompt = _RELEVANCE_PROMPT.format(question=question, answer=answer)
-    scores = [(_parse_score(await judge.generate(prompt), 0.0, 1.0)) for _ in range(max(1, n_trials))]
+    scores = []
+    for _ in range(max(1, n_trials)):
+        ck = judge_cache_key(model_id, "relevance-v1", question, answer, "") if cache else ""
+        hit = await cache.get(ck) if cache else None
+        if hit is not None:
+            scores.append(float(hit["score"]))
+            continue
+        s = await _judge_call_with_retry(judge, prompt, 0.0, 1.0)
+        if cache:
+            await cache.put(ck, {"score": s})
+        scores.append(s)
     return statistics.fmean(scores)
 
 
 async def score_rubric(
-    judge, question: str, answer: str, ground_truth: str, contexts: list[str], n_trials: int = 3
+    judge,
+    question: str,
+    answer: str,
+    ground_truth: str,
+    contexts: list[str],
+    n_trials: int = 3,
+    cache: JudgeCache | None = None,
+    model_id: str = "",
+    epsilon: float | None = None,
 ) -> float:
+    """Rubric score with optional adaptive early-stop (epsilon on last two trials)."""
     context = "\n\n".join(contexts)
     prompt = _RUBRIC_PROMPT.format(question=question, context=context, answer=answer, ground_truth=ground_truth)
-    scores = [(_parse_score(await judge.generate(prompt), 1.0, 5.0)) for _ in range(max(1, n_trials))]
+    scores: list[float] = []
+    cap = max(1, n_trials)
+    while len(scores) < cap:
+        ck = judge_cache_key(model_id, "rubric-v1", question, f"{answer}\x00{ground_truth}", context) if cache else ""
+        hit = await cache.get(ck) if cache else None
+        if hit is not None:
+            s = float(hit["score"])
+        else:
+            s = await _judge_call_with_retry(judge, prompt, 1.0, 5.0)
+            if cache:
+                await cache.put(ck, {"score": s})
+        scores.append(s)
+        if epsilon is not None and len(scores) >= 2 and abs(scores[-1] - scores[-2]) <= epsilon:
+            break
     return statistics.fmean(scores)
 
 
@@ -203,6 +373,9 @@ async def evaluate_generation(
     judge_b=None,
     n_trials: int = 3,
     intent: str = "factual",
+    sample: int = 0,
+    stratify_by: str = "intent",
+    compare_answers: dict[str, str] | None = None,
 ) -> GenerationEvalReport:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
@@ -215,22 +388,68 @@ async def evaluate_generation(
     rows = load_generation_dataset(dataset_path)
     if (generator is None or judge is None) and settings is None:
         raise ValueError("settings must be provided when generator/judge are not injected")
+    from data_engineering_copilot.infrastructure.provider_fallback import UsageLedger
+
+    UsageLedger.reset()
+    probe_rows = [r for r in rows if r.expect_refusal]
+    rows = [r for r in rows if not r.expect_refusal]
+    if sample and sample > 0:
+        keyfn = (lambda r: getattr(r, "source_name", "")) if stratify_by == "source_name" else (lambda r: r.intent)
+        total = len(rows)
+        rows = stratified_sample(rows, sample, keyfn)
+        print(f"Stratified sample: {len(rows)} of {total} rows (by {stratify_by})")
     if generator is None:
         assert settings is not None
         generator = build_llm_fallback_chain(purpose="answer", app_settings=settings)
     if judge is None:
         assert settings is not None
         judge = build_llm_fallback_chain(purpose="evaluation", app_settings=settings)
+    if settings is not None and getattr(settings, "judge_cascade_enabled", False):
+        local_judge = build_llm_fallback_chain(purpose="evaluation", app_settings=settings)
+        judge = resolve_judge(
+            local=local_judge,
+            cloud=judge,
+            enabled=True,
+            threshold=0.85,
+            band=getattr(settings, "judge_cascade_band", 0.15),
+        )
     pb = PromptBuilder()
+
+    cache: JudgeCache | None = None
+    if settings is not None and getattr(settings, "judge_cache_enabled", False):
+        try:
+            from data_engineering_copilot.factory import get_shared_redis_client
+
+            cache = JudgeCache(
+                enabled=True,
+                ttl_days=getattr(settings, "judge_cache_ttl_days", 30),
+                client=get_shared_redis_client(),
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-open contract
+            logger.warning("judge cache disabled for this run: %s", exc)
+            cache = None
+    model_id = str(getattr(judge, "model_id", "") or "evaluation-chain")
 
     results: list[dict] = []
     for row in rows:
         context_str = "\n\n".join(row.contexts)
         prompt = pb.build_rag_prompt(context=context_str, question=row.question, intent=intent)
         answer = await _generate_answer(generator, prompt)
-        faith = await score_faithfulness(judge, row.question, answer, row.contexts, n_trials=n_trials)
-        rel = await score_relevance(judge, row.question, answer, n_trials=n_trials)
-        rubric = await score_rubric(judge, row.question, answer, row.ground_truth, row.contexts, n_trials=n_trials)
+        faith = await score_faithfulness(
+            judge, row.question, answer, row.contexts, n_trials=n_trials, cache=cache, model_id=model_id
+        )
+        rel = await score_relevance(judge, row.question, answer, n_trials=n_trials, cache=cache, model_id=model_id)
+        rubric = await score_rubric(
+            judge,
+            row.question,
+            answer,
+            row.ground_truth,
+            row.contexts,
+            n_trials=n_trials,
+            cache=cache,
+            model_id=model_id,
+            epsilon=getattr(settings, "adaptive_trial_epsilon", None) if settings else None,
+        )
         results.append(
             {
                 "id": row.id,
@@ -254,6 +473,20 @@ async def evaluate_generation(
     rubric_mean = statistics.fmean([r["rubric"] for r in results]) if results else 0.0
 
     judge_agreement: float | None = None
+    robustness: dict | None = None
+    if probe_rows:
+        from data_engineering_copilot.evaluation.robustness_probes import looks_like_refusal
+
+        refusals_ok = 0
+        for r in probe_rows:
+            ctx = "\n\n".join(r.contexts)
+            prompt = f"Answer using ONLY this context.\nCONTEXT:\n{ctx}\n\nQUESTION:\n{r.question}"
+            ans = await _generate_answer(generator, prompt)
+            if looks_like_refusal(ans):
+                refusals_ok += 1
+        robustness = {"total": len(probe_rows), "refusal_correct": refusals_ok}
+        print(f"Robustness probes: {refusals_ok}/{len(probe_rows)} refusals correct")
+
     if judge_b is not None and results:
         agreements: list[float] = []
         for row in rows:
@@ -263,6 +496,27 @@ async def evaluate_generation(
             agreements.append(1.0 if abs(rubric_a - rubric_b) <= 1.0 else 0.0)
         judge_agreement = statistics.fmean(agreements)
 
+    pairwise: dict | None = None
+    if compare_answers and results:
+        wins = ties = losses = 0
+        for row in rows:
+            if row.id not in compare_answers:
+                continue
+            cur_rubric = next((r["rubric"] for r in results if r["id"] == row.id), 0.0)
+            base_answer = compare_answers[row.id]
+            base_rubric = await score_rubric(
+                judge, row.question, base_answer, row.ground_truth, row.contexts, n_trials=1
+            )
+            verdict = pairwise_verdict(cur_rubric, base_rubric, base_rubric, cur_rubric)
+            if verdict == "A":
+                wins += 1
+            elif verdict == "B":
+                losses += 1
+            else:
+                ties += 1
+        pairwise = {"win": wins, "tie": ties, "loss": losses}
+        print(f"Pairwise vs baseline: win={wins} tie={ties} loss={losses}")
+
     passed = faith_mean >= FAITHFULNESS_GATE and rel_mean >= RELEVANCE_GATE and rubric_mean >= RUBRIC_GATE
     return GenerationEvalReport(
         rows=results,
@@ -270,6 +524,9 @@ async def evaluate_generation(
         relevance_mean=rel_mean,
         rubric_mean=rubric_mean,
         judge_agreement=judge_agreement,
+        llm_usage=UsageLedger.snapshot(),
+        pairwise=pairwise,
+        robustness=robustness,
         passed=passed,
     )
 

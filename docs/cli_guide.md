@@ -47,6 +47,8 @@ The `dec` command-line utility drives the Data Engineering Copilot from a termin
   - [dec eval-assembly](#dec-eval-assembly)
   - [dec eval-prompt-aug](#dec-eval-prompt-aug)
   - [dec eval-chunking](#dec-eval-chunking)
+  - [dec eval-judge-calibrate](#dec-eval-judge-calibrate)
+  - [dec eval-proxy-validate](#dec-eval-proxy-validate)
   - [dec gen-synthetic-eval](#dec-gen-synthetic-eval)
   - [dec rag-plan](#dec-rag-plan)
   - [dec config](#dec-config)
@@ -86,6 +88,8 @@ All commands read configuration from `.env` → `.env.secrets` → `.env.local` 
 | `eval-generation` | No | No | No | No | Yes — LLM only (`answer` generator + `evaluation` judge chains) |
 | `eval-prompt-aug --mode llm` | No | No | No | No | Yes — LLM only |
 | `eval-chunking`, `eval-prompt-aug --mode template` | No | No | No | No | No (fully offline) |
+| `eval-judge-calibrate` | No | No | No | No | Yes — LLM only (evaluation judge chain) |
+| `eval-proxy-validate` | No (direct RAG) | Yes | Yes | No | Embedder + LLM (judge chain) |
 | `reenrich`, `retry-failed`, `unskip` | No (in-process, direct ingestion) | Yes | Yes | Yes | Yes |
 | `reset-index` | No | Yes | Yes | If set | No |
 | `reset-qdrant` | No | Yes | No | No | No |
@@ -1109,13 +1113,19 @@ LLM-as-judge metrics with hard gates; latency is deliberately not measured.
 
 ```
 usage: dec eval-generation [-h] [--dataset DATASET] [--n-trials N] [--output PATH]
+                           [--judge-provider-b PROVIDER] [--sample N]
+                           [--stratify-by {intent,source_name}] [--compare PATH]
 ```
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--dataset` | path | `tests/evaluation/eval_dataset.jsonl` | JSONL rows with `question`, `contexts` (frozen gold context list), and `ground_truth` (or `answer`). |
-| `--n-trials` | int | `3` | Judge trials averaged per row for the rubric score (dampens judge variance). |
+| `--n-trials` | int | `3` | Judge trials averaged per row for the rubric score (dampens judge variance). Adaptive early-stop when `adaptive_trial_epsilon` is set. |
 | `--output` | path | None (stdout only) | Write the full JSON report to this path. |
+| `--judge-provider-b` | str | None | Optional second judge provider for inter-judge agreement check. |
+| `--sample` | int | `0` | Evaluate a deterministic stratified subset of N rows (dev loop). `0` = all rows. |
+| `--stratify-by` | choice | `intent` | Stratification key for `--sample`: `intent` or `source_name`. |
+| `--compare` | path | None | Baseline answers JSONL (`{id, answer}`) for position-swapped pairwise A/B comparison. |
 
 **Metrics & gates**
 
@@ -1138,6 +1148,8 @@ usage: dec eval-generation [-h] [--dataset DATASET] [--n-trials N] [--output PAT
 dec eval-generation
 dec eval-generation --n-trials 5 --output .rag_eval/gen_eval.json
 dec eval-generation --dataset tests/evaluation/golden/qa_spark.jsonl
+dec eval-generation --sample 10 --output /tmp/quick_gen.json   # dev loop: fast check
+dec eval-generation --compare baseline_answers.jsonl            # pairwise A/B
 ```
 
 **Exit codes**: `0` all gates passed; `2` any gate failed; `1` dataset missing.
@@ -1155,7 +1167,7 @@ when overall Recall@K drops below baseline − 0.02.
 
 ```
 usage: dec eval-retrieval [-h] [--dataset DATASET] [--k K] [--output-dir DIR]
-                          [--compare-baseline BASELINE]
+                          [--compare-baseline BASELINE] [--pool-file PATH]
 ```
 
 | Option | Type | Default | Description |
@@ -1163,7 +1175,8 @@ usage: dec eval-retrieval [-h] [--dataset DATASET] [--k K] [--output-dir DIR]
 | `--dataset` | path | `tests/evaluation/golden/recall_all.jsonl` | Recall-format JSONL (`question`; optional `intent`, `expected_urls`). |
 | `--k` | int | `10` | Cutoff position for Recall/MRR/Precision. |
 | `--output-dir` | dir | None (summary only) | Write machine-readable `retrieval_eval.json` here (consumed by `make eval-set-baseline`). |
-| `--compare-baseline` | path | None | Baseline `retrieval_eval.json`; fail (exit 1) when Recall@K < baseline − 0.02. |
+| `--compare-baseline` | path | None | Baseline `retrieval_eval.json`; fail (exit 1) when Recall@K < baseline − 0.02. With per-query data in baseline, uses CI-aware paired-bootstrap regression verdict (95% CI, −0.02 tolerance). |
+| `--pool-file` | path | None | Save/load frozen candidate pools (JSON). First run saves; replay mode skips service calls entirely ($0 for subsequent reruns). |
 
 **Behavior**
 - Retrieval always bypasses the cache (`bypass_cache=True`) so stale answers never skew a benchmark run.
@@ -1315,6 +1328,54 @@ Report written to /tmp/chunking_eval.json
 Gold data lives in `tests/evaluation/golden/chunking/{synthetic_gold,human_slice}.jsonl`. Pair with the unit-level suite `make test-chunking` (invariants/metrics/snapshots).
 
 **Exit codes**: `0` success; `2` evaluation failure (unsupported strategy, missing gold data).
+
+---
+
+### `dec eval-judge-calibrate`
+
+Judge-vs-human calibration harness: scores the evaluation-chain judge against
+human-labeled rows and computes raw agreement + Cohen's κ. Industry gate:
+**raw ≥ 0.80 AND κ ≥ 0.60**. The `judge_cascade_enabled` flag may only be
+turned on after this command passes.
+
+```
+usage: dec eval-judge-calibrate [--dataset PATH] [--provider PROVIDER]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/golden/judge_calibration.jsonl` | JSONL with `question`, `contexts`, `answer`, `human_faithfulness` (0/1), `human_relevance` (0/1), `needs_label` (false when labeled). |
+| `--provider` | str | None | Pin judge provider; default = evaluation chain order. |
+
+**Behavior**: exits `2` when unlabeled rows remain; exits `1` when gates fail;
+exits `0` on pass. Requires human labels first — see the scaffold file for the
+format.
+
+**Exit codes**: `0` gate passed; `1` gate failed; `2` unlabeled rows present or dataset missing.
+
+---
+
+### `dec eval-proxy-validate`
+
+Paid, opt-in validation proving the confidence-proxy recall (used in dashboards)
+tracks true relevance. Judges a deterministic sample of queries against the
+LLM-evaluation chain; compares proxy labels (confidence ≥ 0.45) vs judge labels.
+
+```
+usage: dec eval-proxy-validate [--dataset PATH] [--sample N] [--k K]
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--dataset` | path | `tests/evaluation/golden/recall_inscope.jsonl` | Recall-format JSONL. Falls back to `recall_all.jsonl` if primary missing. |
+| `--sample` | int | `30` | Deterministic sample size (all if fewer). |
+| `--k` | int | `5` | Top-K chunks to judge per query. |
+
+**Behavior**: prints raw agreement + κ over all chunk-level judgments. Guidance:
+raw ≥ 0.80 keeps proxy dashboards trustworthy; below → recalibrate threshold or
+rely on eval-retrieval ground truth.
+
+**Exit codes**: `0` raw ≥ 0.80; `1` raw < 0.80; `2` dataset missing.
 
 ---
 

@@ -226,7 +226,7 @@ test-eval:
 test-eval-data:
 	$(PYTEST) tests/unit/test_eval_datasets_schema.py tests/unit/test_eval_schema.py \
 		tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py \
-		tests/unit/test_synthetic_generator.py -v
+		tests/unit/test_synthetic_generator.py tests/unit/test_golden_schema_gate.py -v
 
 # Corpus-coverage gate (local / real-infra): validates every recall eval row
 # against the ACTIVE generation's indexed corpus.
@@ -280,6 +280,10 @@ eval-set-baseline:
 	@dec_venv/bin/dec eval-retrieval --output-dir tests/evaluation/benchmarks --k 10
 	@mv tests/evaluation/benchmarks/retrieval_eval.json $(OUTPUT)
 	@echo "✅ Baseline written to $(OUTPUT)"
+
+# Judge-vs-human calibration gate (labels required before first run).
+eval-judge-calibrate:
+	dec_venv/bin/dec eval-judge-calibrate
 
 # Launch the Streamlit UI (requires a running stack: `make dev`).
 streamlit:
