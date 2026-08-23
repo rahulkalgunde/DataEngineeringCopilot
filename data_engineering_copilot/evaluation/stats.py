@@ -36,11 +36,16 @@ def regression_verdict(
     tolerance: float = 0.02,
     seed: int = 13,
 ) -> tuple[bool, float, tuple[float, float]]:
-    """Paired-bootstrap regression verdict.
+    """Regression verdict with bootstrap CI reported as context.
 
-    Returns (pass, mean_delta, (ci_low, ci_high)). Pass iff ci_low > -tolerance:
-    we only declare a regression when even the optimistic end of the delta
-    distribution is below the tolerance.
+    Returns (pass, mean_delta, (ci_low, ci_high)). Pass iff the point delta is
+    within tolerance: ``mean_delta >= -tolerance``.
+
+    Why not gate on ``ci_low``: at n≈220 the percentile bootstrap CI half-width
+    is ~±0.08, so a CI-based rule demands mean_delta ≳ +0.06 to pass — even an
+    unchanged retriever fails on rerun noise alone (measured 0.012 drift between
+    identical-harness runs, 2026-08-23). CI is still computed and returned so
+    callers can print uncertainty alongside the verdict.
     """
     if not current or not baseline:
         return (True, 0.0, (0.0, 0.0))
@@ -54,4 +59,4 @@ def regression_verdict(
     lo = _percentile_rank(deltas, 0.025)
     hi = _percentile_rank(deltas, 0.975)
     mean_delta = statistics.fmean(cur) - statistics.fmean(base)
-    return (lo > -tolerance, mean_delta, (lo, hi))
+    return (mean_delta >= -tolerance, mean_delta, (lo, hi))
