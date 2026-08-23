@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import pathlib
@@ -2372,11 +2373,24 @@ def _eval_retrieval_row(query: str, intent: str, expected: list[str], retrieved:
     return {"query": query, "intent": intent, "recall": recall, "precision": precision, "mrr": mrr}
 
 
+def _disable_rewrites_for_eval(service) -> str:
+    """Detach the query rewriter so retrieval-only eval makes zero LLM calls.
+
+    Retrieval quality is a property of retriever+index; live rewrites add a
+    confound AND cost ~1 LLM call per query. Eval runs must be deterministic
+    and free.
+    """
+    with contextlib.suppress(AttributeError):
+        service.query_rewriter = None
+    return "disabled"
+
+
 def eval_retrieval_main(
     dataset: str | None = None,
     k: int = 10,
     output_dir: str | None = None,
     compare_baseline: str | None = None,
+    pool_file: str | None = None,
 ) -> int:
     """Source-agnostic retrieval-only evaluation (Recall@K / MRR / Precision@K per intent).
 
@@ -2388,7 +2402,9 @@ def eval_retrieval_main(
     unparseable baseline is treated as a warning, not a failure.
     """
     import asyncio
+    import time as _time
 
+    from data_engineering_copilot.evaluation.retrieval_metrics import ndcg_at_k, percentile, recall_at_k
     from data_engineering_copilot.factory import build_rag_service
 
     dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
@@ -2411,13 +2427,22 @@ def eval_retrieval_main(
 
     print(f"Loaded {len(queries)} retrieval evaluation queries (dataset: {dataset_path.name})\n")
     service = build_rag_service()
+    rewrite_mode = _disable_rewrites_for_eval(service)
+    print(f"Eval rewrite mode: {rewrite_mode} (zero-LLM retrieval eval)")
+
+    from data_engineering_copilot.evaluation.candidate_pool import load_pool, rank_from_pool, save_pool
+
+    pools = load_pool(pool_file) if pool_file else {}
+    replay = bool(pools)
+    if replay:
+        print(f"REPLAY mode: {len(pools)} frozen pools loaded — no vector-DB/LLM calls")
 
     per_intent: dict[str, list[float]] = {}
     per_intent_mrr: dict[str, list[float]] = {}
     per_intent_prec: dict[str, list[float]] = {}
 
     async def run_eval() -> list[dict]:
-        if service.reranker is not None:
+        if service.reranker is not None and not replay:
             await service.reranker.initialize()
         rows = []
         for i, item in enumerate(queries, 1):
@@ -2426,11 +2451,19 @@ def eval_retrieval_main(
                 continue
             intent = item.get("intent", "unknown")
             expected = [u for u in (item.get("expected_urls") or []) if u]
+            qid = str(item.get("id", f"q{i}"))
             prov: list[dict] = []
-            try:
+            if replay:
+                cand = pools.get(qid) or pools.get(query, [])
+                t_start = t_end = _time.perf_counter()
+                retrieved = rank_from_pool(cand, k)
+                answer = None  # no service call in replay mode
+            else:
                 # retrieval_only=True measures raw retrieval (the GraphRAG / CRAG
                 # LLM augmentations are skipped there) so the benchmark stays fast
-                # and reflects base retrieval quality.
+                # and reflects base retrieval quality. Pool depth = service's
+                # configured retrieval_top_k.
+                t_start = _time.perf_counter()
                 answer = await service.answer(
                     query,
                     provenance=prov,
@@ -2438,12 +2471,28 @@ def eval_retrieval_main(
                     retrieval_only=True,
                     expected_urls=expected,
                 )
+                t_end = _time.perf_counter()
+                retrieved = [c.url for c in answer.sources]
+                if pool_file:
+                    pools[qid] = [
+                        {
+                            "url": c.url,
+                            "dense_score": float(getattr(c, "dense_score", 0.0) or 0.0),
+                            "sparse_score": float(getattr(c, "sparse_score", 0.0) or 0.0),
+                            "fused_score": float(getattr(c, "confidence", 0.0) or 0.0),
+                        }
+                        for c in answer.sources
+                    ]
+            try:
+                row = _eval_retrieval_row(query, intent, expected, retrieved, k)
             except Exception as exc:  # noqa: BLE001
-                print(f"[{i}/{len(queries)}] {item.get('id', '')}: ERROR {exc}")
-                rows.append({"id": item.get("id", f"q{i}"), "question": query, "error": str(exc)})
+                print(f"[{i}/{len(queries)}] {qid}: ERROR {exc}")
+                rows.append({"id": qid, "question": query, "error": str(exc)})
                 continue
-            retrieved = [c.url for c in answer.sources]
-            row = _eval_retrieval_row(query, intent, expected, retrieved, k)
+            row["ndcg"] = ndcg_at_k(retrieved, expected, k)
+            row["recall_at_5"] = recall_at_k(retrieved, expected, 5)
+            row["recall_at_20"] = recall_at_k(retrieved, expected, 20)
+            row["latency_ms"] = (t_end - t_start) * 1000.0
             rows.append(row)
             per_intent.setdefault(intent, []).append(row["recall"])
             per_intent_mrr.setdefault(intent, []).append(row["mrr"])
@@ -2455,6 +2504,9 @@ def eval_retrieval_main(
         return rows
 
     rows = asyncio.run(run_eval())
+    if pool_file and not replay:
+        save_pool(pool_file, pools)
+        print(f"Pool written: {pool_file} ({len(pools)} queries)")
     if not rows:
         print("❌ No evaluation results produced")
         return 5
@@ -2463,10 +2515,16 @@ def eval_retrieval_main(
         return sum(xs) / len(xs) if xs else 0.0
 
     scored = [r for r in rows if "recall" in r]
+    lats = [r["latency_ms"] for r in scored]
     overall = {
         "recall@k": _avg([r["recall"] for r in scored]),
         "mrr@k": _avg([r["mrr"] for r in scored]),
         "precision@k": _avg([r["precision"] for r in scored]),
+        "ndcg@k": _avg([r.get("ndcg", 0.0) for r in scored]),
+        "recall_at_5": _avg([r.get("recall_at_5", 0.0) for r in scored]),
+        "recall_at_20": _avg([r.get("recall_at_20", 0.0) for r in scored]),
+        "latency_ms_p50": percentile(lats, 0.5),
+        "latency_ms_p95": percentile(lats, 0.95),
         "k": k,
         "n": len(scored),
     }
@@ -2486,13 +2544,24 @@ def eval_retrieval_main(
     print(f"Overall Recall@{k}:   {overall['recall@k']:.3f}")
     print(f"Overall MRR@{k}:      {overall['mrr@k']:.3f}")
     print(f"Overall Precision@{k}: {overall['precision@k']:.3f}")
+    print(f"Overall nDCG@{k}:     {overall['ndcg@k']:.3f}")
+    print(f"Recall@5: {overall['recall_at_5']:.3f}  Recall@20: {overall['recall_at_20']:.3f}")
+    print(f"Latency ms p50/p95: {overall['latency_ms_p50']:.0f}/{overall['latency_ms_p95']:.0f}")
     for intent, m in sorted(per_intent_metrics.items()):
         print(f"  [{intent}] R@{k}={m['recall@k']:.3f} MRR={m['mrr@k']:.3f} P@{k}={m['precision@k']:.3f} (n={m['n']})")
 
     if output_dir is not None:
         out = pathlib.Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        payload = {"overall": overall, "per_intent": per_intent_metrics}
+        payload = {
+            "overall": overall,
+            "per_intent": per_intent_metrics,
+            "rewrite_mode": rewrite_mode,
+            "per_query": [
+                {"id": r.get("id", ""), "recall": r["recall"], "mrr": r["mrr"], "ndcg": r.get("ndcg", 0.0)}
+                for r in scored
+            ],
+        }
         (out / "retrieval_eval.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"\nMetrics written to {out / 'retrieval_eval.json'}")
 
@@ -2507,10 +2576,24 @@ def eval_retrieval_main(
             print(f"⚠️  Could not parse baseline {baseline_path}: {exc}; skipping gate.")
             return 0
         base_recall = float((baseline.get("overall") or {}).get("recall@k", 1.0))
-        if overall["recall@k"] < base_recall - 0.02:
+        base_pq = [p["recall"] for p in (baseline.get("per_query") or []) if "recall" in p]
+        cur_pq = [r["recall"] for r in scored]
+        if base_pq and cur_pq:
+            from data_engineering_copilot.evaluation.stats import regression_verdict
+
+            ok, delta, (lo, hi) = regression_verdict([r["recall"] for r in scored], [p["recall"] for p in base_pq])
+            print(f"Δ recall@k = {delta:+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]")
+            if not ok:
+                print(f"❌ Retrieval regression vs baseline (CI low {lo:+.4f} below −0.02 tolerance)")
+                return 1
+            print("✅ No retrieval regression vs baseline (CI-aware verdict)")
+        elif overall["recall@k"] < base_recall - 0.02:
+            print("⚠️  Baseline lacks per_query data; legacy point rule applied")
             print(f"❌ Retrieval regression: Recall@{k} {overall['recall@k']:.3f} < baseline {base_recall:.3f}")
             return 1
-        print(f"✅ No retrieval regression vs baseline Recall@{k}={base_recall:.3f}")
+        else:
+            print("⚠️  Baseline lacks per_query data; legacy point rule applied")
+            print(f"✅ No retrieval regression vs baseline Recall@{k}={base_recall:.3f}")
 
     return 0
 
@@ -2702,6 +2785,9 @@ def eval_generation_main(
     n_trials: int = 3,
     output: str | None = None,
     judge_provider_b: str | None = None,
+    sample: int = 0,
+    stratify_by: str = "intent",
+    compare: str | None = None,
 ) -> int:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
@@ -2711,13 +2797,23 @@ def eval_generation_main(
     """
     import asyncio
 
-    from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+    from data_engineering_copilot.evaluation.cost_estimate import enforce_cost_gate, estimate_calls
+    from data_engineering_copilot.evaluation.generation_eval import (
+        evaluate_generation,
+        load_baseline_answers,
+        load_generation_dataset,
+    )
 
     default_dataset = pathlib.Path(__file__).parent.parent / "tests" / "evaluation" / "eval_dataset.jsonl"
     eval_path = pathlib.Path(dataset) if dataset else default_dataset
     if not eval_path.exists():
         print(f"❌ Evaluation dataset not found at {eval_path}")
         return 1
+
+    n_rows = len(load_generation_dataset(str(eval_path)))
+    estimate = estimate_calls("eval-generation", n_rows, n_trials=n_trials)
+    enforce_cost_gate("eval-generation", estimate)
+    print(f"💰 Estimated ~{estimate} paid LLM calls ({n_rows} rows)")
 
     async def _run():
         judge_b = None
@@ -2729,7 +2825,15 @@ def eval_generation_main(
                 app_settings=settings,
                 purpose_provider=judge_provider_b,
             )
-        return await evaluate_generation(str(eval_path), settings, n_trials=n_trials, judge_b=judge_b)
+        return await evaluate_generation(
+            str(eval_path),
+            settings,
+            n_trials=n_trials,
+            judge_b=judge_b,
+            sample=sample,
+            stratify_by=stratify_by,
+            compare_answers=load_baseline_answers(compare) if compare else None,
+        )
 
     report = asyncio.run(_run())
     print(report.to_markdown())
@@ -2740,6 +2844,121 @@ def eval_generation_main(
     return 0 if report.passed else 2
 
 
+def eval_judge_calibrate_main(dataset: str | None = None, provider: str | None = None) -> int:
+    """Score the evaluation-chain judge against human labels."""
+    import json as _json
+    import pathlib as _pathlib
+
+    from data_engineering_copilot.evaluation.judge_calibration import (
+        KAPPA_GATE,
+        RAW_GATE,
+        agreement,
+        verdict_for,
+    )
+
+    path = _pathlib.Path(dataset or "tests/evaluation/golden/judge_calibration.jsonl")
+    if not path.exists():
+        print(f"❌ calibration dataset missing: {path}")
+        return 2
+    rows = [_json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    unlabeled = [r for r in rows if r.get("needs_label") or r.get("human_faithfulness", -1) < 0]
+    if unlabeled:
+        print(
+            f"❌ {len(unlabeled)} rows still need human labels "
+            f"(fill human_faithfulness/human_relevance in {{0,1}}, set needs_label=false)"
+        )
+        return 2
+
+    from data_engineering_copilot.evaluation.generation_eval import _judge_call_with_retry
+    from data_engineering_copilot.factory import build_llm_fallback_chain
+
+    settings_obj = __import__("data_engineering_copilot.config.settings", fromlist=["settings"]).settings
+    judge = build_llm_fallback_chain("evaluation", app_settings=settings_obj)
+
+    async def _score(r: dict) -> float:
+        context = " ".join(r.get("contexts") or [])[:3000]
+        prompt = (
+            "You are a strict faithfulness grader. Context is the only truth.\n"
+            f"CONTEXT:\n{context}\n"
+            f"ANSWER:\n{(r.get('answer') or '')[:2000]}\n"
+            'Output ONLY JSON: {"score": <float 0.0-1.0>}'
+        )
+        return await _judge_call_with_retry(judge, prompt, 0.0, 1.0)
+
+    import asyncio as _asyncio
+
+    async def _run_all() -> list[float]:
+        return list(await _asyncio.gather(*[_score(r) for r in rows]))
+
+    scores = _asyncio.run(_run_all())
+    y_true_f = [int(r["human_faithfulness"] >= 0.5) for r in rows]
+    y_pred_f = [int(s >= 0.5) for s in scores]
+    raw_f, kappa_f = agreement(y_true_f, y_pred_f)
+    passed = verdict_for(raw_f, kappa_f)
+    print(
+        f"faithfulness: raw={raw_f:.3f} kappa={kappa_f:.3f} "
+        f"(gates raw>={RAW_GATE}, kappa>={KAPPA_GATE}) -> "
+        f"{'PASS' if passed else 'FAIL'}"
+    )
+    return 0 if passed else 1
+
+
+def eval_proxy_validate_main(dataset: str | None = None, sample: int = 30, k: int = 5) -> int:
+    """Judge a deterministic sample of queries; compare proxy labels vs LLM-judge."""
+    import asyncio as _asyncio
+    import json as _json
+    import pathlib as _pathlib
+
+    path = _pathlib.Path(dataset or "tests/evaluation/golden/recall_inscope.jsonl")
+    if not path.exists():
+        alt = _pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
+        if not alt.exists():
+            print(f"❌ dataset missing: {path}")
+            return 2
+        path = alt
+    rows = [_json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    idx = _deterministic_sample_indices(n_total=len(rows), n_sample=sample)
+    picked = [rows[i] for i in idx]
+    print(f"(PAID) judging {len(picked)} queries x top-{k} chunks with the evaluation chain to validate proxy recall…")
+
+    from data_engineering_copilot.config.settings import settings as _settings
+    from data_engineering_copilot.evaluation.judge_calibration import agreement
+    from data_engineering_copilot.factory import build_llm_fallback_chain, build_rag_service
+
+    service = build_rag_service(_settings)
+    judge_chain = build_llm_fallback_chain("evaluation", app_settings=_settings)
+
+    async def _one(row: dict) -> tuple[list[int], list[int]]:
+        res = await service.answer(question=row["question"], retrieval_only=True, bypass_cache=True)
+        chunks = list(res.sources)[:k]
+        proxy_labels = [int(float(getattr(c, "confidence", 0.0) or 0.0) >= 0.45) for c in chunks]
+        judged: list[int] = []
+        for c in chunks:
+            prompt = (
+                'Is this chunk relevant to the question? Answer JSON {"score": 0-or-1}.\n'
+                f"QUESTION:\n{row['question']}\nCHUNK:\n{getattr(c, 'text', '')[:1500]}"
+            )
+            from data_engineering_copilot.evaluation.generation_eval import _judge_call_with_retry
+
+            score = await _judge_call_with_retry(judge_chain, prompt, 0.0, 1.0)
+            judged.append(int(score >= 0.5))
+        return proxy_labels, judged
+
+    async def _all() -> list[tuple[list[int], list[int]]]:
+        return await _asyncio.gather(*[_one(r) for r in picked])
+
+    pairs = _asyncio.run(_all())
+    proxy_flat = [p for pl, _ in pairs for p in pl]
+    judge_flat = [j for _, jl in pairs for j in jl]
+    raw, kappa = agreement(proxy_flat, judge_flat)
+    print(f"proxy-vs-judge agreement over {len(proxy_flat)} chunk judgments: raw={raw:.3f} kappa={kappa:.3f}")
+    print(
+        "Guidance: raw >= 0.80 keeps proxy dashboards trustworthy; below => "
+        "recalibrate threshold 0.45 or rely on eval-retrieval ground truth."
+    )
+    return 0 if raw >= 0.80 else 1
+
+
 def evaluate(
     verbose: bool = False,
     dataset: str | None = None,
@@ -2747,6 +2966,7 @@ def evaluate(
     experiment_name: str | None = None,
     dataset_name: str | None = None,
     output_dir: str | None = None,
+    ragas: bool = False,
 ) -> None:
     """Run RAG evaluation on golden dataset.
 
@@ -2790,6 +3010,11 @@ def evaluate(
             print(f"❌ No queries with source_name={source!r} in {eval_path}")
             sys.exit(1)
 
+    from data_engineering_copilot.evaluation.cost_estimate import enforce_cost_gate, estimate_calls
+
+    estimate = estimate_calls("evaluate", len(queries), ragas=ragas)
+    enforce_cost_gate("evaluate", estimate)
+    print(f"💰 Estimated ~{estimate} paid LLM calls ({len(queries)} rows)")
     print(f"Loaded {len(queries)} evaluation queries (dataset: {eval_path.name})\n")
 
     # Run evaluation
@@ -2874,20 +3099,24 @@ def evaluate(
         )
 
     # RAGAS metrics (context_recall, context_precision, faithfulness, answer_relevancy)
+    # Opt-in only: RAGAS costs ~18-20 paid LLM calls per query.
     ragas_report = None
-    try:
-        from data_engineering_copilot.services.ragas_evaluation import RagasEvaluator
+    if not ragas:
+        print("RAGAS evaluation skipped (opt in with --ragas)")
+    else:
+        try:
+            from data_engineering_copilot.services.ragas_evaluation import RagasEvaluator
 
-        evaluator = RagasEvaluator()
-        ragas_report = evaluator.evaluate(
-            questions=[r["query"] for r in results],
-            answers=[r["answer"] for r in results],
-            contexts=[r["contexts"] for r in results],
-            ground_truth=[r["ground_truth"] for r in results] if any(r["ground_truth"] for r in results) else None,
-        )
-    except Exception as e:
-        print(f"\n⚠️  RAGAS evaluation failed: {e}")
-        ragas_report = None
+            evaluator = RagasEvaluator()
+            ragas_report = evaluator.evaluate(
+                questions=[r["query"] for r in results],
+                answers=[r["answer"] for r in results],
+                contexts=[r["contexts"] for r in results],
+                ground_truth=[r["ground_truth"] for r in results] if any(r["ground_truth"] for r in results) else None,
+            )
+        except Exception as e:
+            print(f"\n⚠️  RAGAS evaluation failed: {e}")
+            ragas_report = None
 
     if ragas_report is not None:
         print("\nRAGAS Metrics:")
@@ -2972,6 +3201,30 @@ def evaluate(
             print("\n📊 First eval recorded — baseline will be established on next run")
 
 
+def _is_recall_file(p: pathlib.Path) -> bool:
+    from data_engineering_copilot.evaluation.eval_schema import EvalKind, kind_of
+
+    for line in p.read_text(encoding="utf-8").splitlines()[:5]:
+        if not line.strip():
+            continue
+        return kind_of(json.loads(line)) is EvalKind.RECALL
+    return False
+
+
+def _default_coverage_paths(evals_dir: pathlib.Path) -> list[pathlib.Path]:
+    """All recall-format dataset files: top-level legacy set + golden recalls."""
+    candidates = sorted(evals_dir.glob("*.jsonl")) + sorted((evals_dir / "golden").glob("*.jsonl"))
+    return [p for p in candidates if _is_recall_file(p)]
+
+
+def _deterministic_sample_indices(*, n_total: int, n_sample: int, seed: int = 13) -> list[int]:
+    import random as _random
+
+    rng = _random.Random(seed)
+    n = max(0, min(n_sample, n_total))
+    return rng.sample(range(n_total), n)
+
+
 def eval_coverage_main(
     dataset: str | None = None,
     generation: str | None = None,
@@ -2984,7 +3237,7 @@ def eval_coverage_main(
     (exit 1) when any row is orphaned/unanswerable; exit 2 on bad input.
     """
     from data_engineering_copilot.config.settings import resolve_active_generation
-    from data_engineering_copilot.evaluation.eval_schema import EvalKind, kind_of, parse_eval_rows, validate_eval_row
+    from data_engineering_copilot.evaluation.eval_schema import parse_eval_rows, validate_eval_row
     from data_engineering_copilot.services.eval_coverage import CoverageValidator, resolve_generation_root
 
     project_root = pathlib.Path(__file__).resolve().parents[1]
@@ -2996,14 +3249,7 @@ def eval_coverage_main(
         print(f"❌ No corpus found for generation {gen!r} (checked data/pinned_corpus, data/spark_corpus)")
         return 2
 
-    def _is_recall_file(p: pathlib.Path) -> bool:
-        for line in p.read_text(encoding="utf-8").splitlines()[:5]:
-            if not line.strip():
-                continue
-            return kind_of(json.loads(line)) is EvalKind.RECALL
-        return False
-
-    paths = [pathlib.Path(dataset)] if dataset else sorted(p for p in evals_dir.glob("*.jsonl") if _is_recall_file(p))
+    paths = [pathlib.Path(dataset)] if dataset else _default_coverage_paths(evals_dir)
     if not paths:
         print("❌ No recall-format evaluation datasets found")
         return 2
@@ -3806,6 +4052,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write machine-readable retrieval diagnostics (provenance + metrics JSON) to this directory.",
     )
+    eval_parser.add_argument(
+        "--ragas",
+        action="store_true",
+        help="Run optional deep-dive RAGAS metrics (~18-20 extra paid LLM calls per query). Default: off.",
+    )
 
     # Generation-layer evaluation (retrieval frozen)
     eval_gen_parser = subparsers.add_parser(
@@ -3833,6 +4084,23 @@ def build_parser() -> argparse.ArgumentParser:
             "(report.judge_agreement = fraction of rows where the two judges' "
             "rubric scores differ by <= 1)."
         ),
+    )
+    eval_gen_parser.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="Evaluate a deterministic stratified subset of N rows (dev loop). 0 = all rows.",
+    )
+    eval_gen_parser.add_argument(
+        "--stratify-by",
+        choices=["intent", "source_name"],
+        default="intent",
+        help="Stratification key for --sample (default: intent).",
+    )
+    eval_gen_parser.add_argument(
+        "--compare",
+        default=None,
+        help="Baseline answers JSONL ({id, answer}) for position-swapped A/B.",
     )
 
     # Config
@@ -3936,6 +4204,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to a baseline retrieval_eval.json; fail (exit 1) on Recall@K regression.",
     )
+    eval_retrieval_parser.add_argument(
+        "--pool-file",
+        default=None,
+        help="Frozen candidate pools JSON. Existing file => offline replay; else fetch+save.",
+    )
 
     eval_chunking_parser = subparsers.add_parser(
         "eval-chunking",
@@ -3961,6 +4234,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_chunking_parser.add_argument("--output", default="/tmp/chunking_eval.json", help="Output JSON path.")
     eval_chunking_parser.set_defaults(func=eval_chunking_main)
+
+    # Judge-vs-human calibration harness
+    calib_parser = subparsers.add_parser(
+        "eval-judge-calibrate",
+        help="Score judge agreement vs human labels (kappa gate 0.6/raw 0.8).",
+    )
+    calib_parser.add_argument(
+        "--dataset",
+        default="tests/evaluation/golden/judge_calibration.jsonl",
+    )
+    calib_parser.add_argument(
+        "--provider",
+        default=None,
+        help="Pin judge provider; default = evaluation chain order.",
+    )
+    calib_parser.set_defaults(func=eval_judge_calibrate_main)
+
+    # Proxy-recall validation (paid, opt-in)
+    proxyval_parser = subparsers.add_parser(
+        "eval-proxy-validate",
+        help="(Paid) LLM-judge a deterministic sample to validate confidence-proxy recall.",
+    )
+    proxyval_parser.add_argument(
+        "--dataset",
+        default="tests/evaluation/golden/recall_inscope.jsonl",
+    )
+    proxyval_parser.add_argument("--sample", type=int, default=30)
+    proxyval_parser.add_argument("--k", type=int, default=5)
+    proxyval_parser.set_defaults(func=eval_proxy_validate_main)
 
     # Synthetic recall-eval generation
     synth_parser = subparsers.add_parser(
@@ -4269,6 +4571,7 @@ def main() -> None:
                     experiment_name=getattr(args, "experiment_name", None),
                     dataset_name=getattr(args, "dataset_name", None),
                     output_dir=getattr(args, "output_dir", None),
+                    ragas=getattr(args, "ragas", False),
                 )
         elif args.command == "eval-generation":
             sys.exit(
@@ -4277,6 +4580,9 @@ def main() -> None:
                     n_trials=getattr(args, "n_trials", 3),
                     output=getattr(args, "output", None),
                     judge_provider_b=getattr(args, "judge_provider_b", None),
+                    sample=getattr(args, "sample", 0),
+                    stratify_by=getattr(args, "stratify_by", "intent"),
+                    compare=getattr(args, "compare", None),
                 )
             )
         elif args.command == "eval-coverage":
@@ -4370,6 +4676,7 @@ def main() -> None:
                     k=getattr(args, "k", 10),
                     output_dir=getattr(args, "output_dir", None),
                     compare_baseline=getattr(args, "compare_baseline", None),
+                    pool_file=getattr(args, "pool_file", None),
                 )
             )
         elif args.command == "eval-chunking":
@@ -4378,6 +4685,21 @@ def main() -> None:
                     strategy=getattr(args, "strategy", "all"),
                     gold=getattr(args, "gold", "all"),
                     output=getattr(args, "output", "/tmp/chunking_eval.json"),
+                )
+            )
+        elif args.command == "eval-judge-calibrate":
+            sys.exit(
+                eval_judge_calibrate_main(
+                    dataset=getattr(args, "dataset", None),
+                    provider=getattr(args, "provider", None),
+                )
+            )
+        elif args.command == "eval-proxy-validate":
+            sys.exit(
+                eval_proxy_validate_main(
+                    dataset=getattr(args, "dataset", None),
+                    sample=getattr(args, "sample", 30),
+                    k=getattr(args, "k", 5),
                 )
             )
         elif args.command == "gen-synthetic-eval":

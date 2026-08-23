@@ -34,6 +34,22 @@ JUDGE_FILTER_DEFAULT = '[{"type": "string", "column": "name", "operator": "=", "
 MAX_JUDGE_CONTEXT_CHARS = 12000
 
 
+def warn_if_unsampled(*, sample_rate: float, max_items: int | None) -> None:
+    """Log guidance when production judging would score every trace.
+
+    Judging every trace burns paid LLM calls; recommended operating point is a
+    tiered sample rate (0.05-0.2) and/or an explicit ``--max-items`` cap.
+    """
+    if sample_rate < 1.0 or (max_items is not None and max_items > 0):
+        return
+    logger.warning(
+        "langfuse-evaluate is UNSAMPLED (sample_rate=%.2f, no --max-items): "
+        "this judges every trace and burns paid LLM calls. Recommended: "
+        "set LANGFUSE_SAMPLE_RATE between 0.05 and 0.2 and/or pass --max-items.",
+        sample_rate,
+    )
+
+
 def _coerce_answer(output: Any) -> Any:
     """Extract the real answer text from structured trace outputs.
 
@@ -221,6 +237,7 @@ def run_batched_trace_evaluation(
     Returns a ``BatchEvaluationResult`` from the v4 SDK, or ``None`` when
     Langfuse is unavailable or the run is sampled out.
     """
+    warn_if_unsampled(sample_rate=settings.langfuse_sample_rate, max_items=max_items)
     if max_items is None and random.random() >= settings.langfuse_sample_rate:
         logger.info("Production trace evaluation sampled out (sample_rate=%s)", settings.langfuse_sample_rate)
         return None

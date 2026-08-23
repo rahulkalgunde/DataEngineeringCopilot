@@ -467,7 +467,20 @@ class ProviderFallbackChain[T, R]:
         token limits are baked into the underlying clients at factory time
         (see ``provider_capabilities.py``), not per-call.
         """
-        return cast(str, await self.execute(cast(T, prompt)))
+        result = cast(str, await self.execute(cast(T, prompt)))
+        try:
+            usage = self.last_usage
+            UsageLedger.record(
+                getattr(self._config, "purpose", "llm") or "llm",
+                {
+                    "calls": 1,
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                },
+            )
+        except Exception:  # noqa: BLE001 - accounting must never break generation
+            pass
+        return result
 
     async def _call_with_health_stream(
         self,
@@ -668,3 +681,28 @@ class ProviderFallbackChain[T, R]:
                 await provider.client.close()
         if self._config.degraded_fallback and hasattr(self._config.degraded_fallback.client, "close"):
             await self._config.degraded_fallback.client.close()
+
+
+class UsageLedger:
+    """Process-wide accumulator of LLM usage by role (offline eval reporting).
+
+    Deliberately tiny and exception-free at call sites: accounting must never
+    break generation. Reset at the start of an eval run to scope the totals.
+    """
+
+    _totals: dict[str, dict[str, int]] = {}
+
+    @classmethod
+    def record(cls, role: str, usage: dict) -> None:
+        bucket = cls._totals.setdefault(role, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+        bucket["calls"] += int(usage.get("calls", 1))
+        bucket["prompt_tokens"] += int(usage.get("prompt_tokens", 0) or 0)
+        bucket["completion_tokens"] += int(usage.get("completion_tokens", 0) or 0)
+
+    @classmethod
+    def snapshot(cls) -> dict[str, dict[str, int]]:
+        return {k: dict(v) for k, v in cls._totals.items()}
+
+    @classmethod
+    def reset(cls) -> None:
+        cls._totals.clear()
