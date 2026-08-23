@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
-from data_engineering_copilot.services.eval_coverage import CoverageValidator, resolve_generation_root
+from data_engineering_copilot.services.eval_coverage import CoverageValidator, git_short_sha, resolve_generation_root
 
 
 def _build_generation(tmp_path):
@@ -29,6 +30,13 @@ def _build_generation(tmp_path):
         for r in rows:
             f.write(json.dumps(r) + "\n")
     return gen
+
+
+def _evidence() -> dict:
+    return {
+        "expected_terms": ["orderBy"],
+        "expected_urls": ["https://raw.githubusercontent.com/apache/spark/abc/docs/window.md"],
+    }
 
 
 class TestResolveGenerationRoot:
@@ -141,3 +149,57 @@ class TestCoverageValidator:
     def test_term_present_case_insensitive(self, tmp_path, term):
         v = CoverageValidator(_build_generation(tmp_path))
         assert v.term_present(term, source="Apache Spark 4.0.0")
+
+    def test_report_includes_git_sha_and_coverage_matrix(self, tmp_path):
+        v = CoverageValidator(_build_generation(tmp_path))
+        evidence = {
+            "expected_terms": ["orderBy"],
+            "expected_urls": ["https://raw.githubusercontent.com/apache/spark/abc/docs/window.md"],
+        }
+        rows = [
+            {"id": "a", "question": "q", "intent": "how_to", "doc_type": "guide", **evidence},
+            {"id": "b", "question": "q2", "intent": "how_to", "doc_type": "api_reference", **evidence},
+            {"id": "c", "question": "q3", "intent": "factual", "doc_type": "guide", **evidence},
+        ]
+        rep = v.report(rows)
+        assert isinstance(rep["git_sha"], str) or rep["git_sha"] is None
+        assert rep["coverage_matrix"]["counts"] == {
+            "how_to|guide": 1,
+            "how_to|api_reference": 1,
+            "factual|guide": 1,
+        }
+        # RAGBench-style: every intent × doc_type cell needs ≥1 query
+        assert rep["coverage_matrix"]["empty_cells"] == ["factual|api_reference"]
+
+    def test_report_flags_empty_cells_for_unset_metadata(self, tmp_path):
+        v = CoverageValidator(_build_generation(tmp_path))
+        rows = [
+            {"id": "a", "question": "q1", "intent": "how_to", **_evidence()},
+            {"id": "b", "question": "q2", "intent": "how_to", **_evidence()},
+        ]
+        matrix = v.report(rows)["coverage_matrix"]
+        assert matrix["counts"] == {"how_to|(unset)": 2}
+        assert matrix["empty_cells"] == []
+
+
+class TestGitShortSha:
+    def test_real_repo_returns_head_sha(self, tmp_path):
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", *args],
+                cwd=tmp_path,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+
+        git("init", "-q")
+        git("-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-qm", "init")
+        expected = git("rev-parse", "--short", "HEAD").strip()
+        assert expected
+        assert git_short_sha(tmp_path) == expected
+
+    def test_missing_repo_returns_none(self, tmp_path):
+        empty = tmp_path / "not_a_repo"
+        empty.mkdir()
+        assert git_short_sha(empty) is None

@@ -8,16 +8,42 @@ generation).
 
 Reading the generation's ``chunks.jsonl`` (plus ``coverage.json`` when present)
 builds an in-memory url -> text index. 15k chunks is well within memory.
+
+Provenance extras in :meth:`CoverageValidator.report` (dataset ``git_sha``,
+intent × doc_type ``coverage_matrix``) are advisory and fail open — they never
+change pass/fail verdicts.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from collections import Counter
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def git_short_sha(cwd: Path | None = None) -> str | None:
+    """Best-effort short HEAD sha of the surrounding git repo.
+
+    Dataset provenance is advisory: returns ``None`` outside a repo or when
+    git is unavailable/slow, never raises.
+    """
+    workdir = str(cwd or Path(__file__).resolve().parents[2])
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+            cwd=workdir,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() or None
 
 
 def resolve_generation_root(generation: str, data_root: Path | None = None) -> Path | None:
@@ -204,7 +230,12 @@ class CoverageValidator:
         return [self.validate_row(row) for row in rows]
 
     def report(self, rows: list[dict]) -> dict:
-        """Aggregate a coverage report across rows."""
+        """Aggregate a coverage report across rows.
+
+        Adds dataset provenance (``git_sha``) and an intent × doc_type
+        ``coverage_matrix``; cross-product cells with zero rows are listed in
+        ``empty_cells`` (RAGBench-style completeness: ≥1 query per cell).
+        """
         verdicts = self.validate_rows(rows)
         by_source: Counter = Counter()
         by_status: Counter = Counter()
@@ -215,10 +246,27 @@ class CoverageValidator:
         for row, v in zip(rows, verdicts, strict=False):
             src = row.get("source_name") or ("out_of_scope" if v["out_of_scope"] else "unknown")
             by_source[src] += 1
+
+        cell_counts: Counter = Counter()
+        for row in rows:
+            intent = str(row.get("intent") or "").strip() or "(unset)"
+            doc_type = str(row.get("doc_type") or "").strip() or "(unset)"
+            cell_counts[f"{intent}|{doc_type}"] += 1
+        intents = sorted({cell.rsplit("|", 1)[0] for cell in cell_counts})
+        doc_types = sorted({cell.rsplit("|", 1)[1] for cell in cell_counts})
+        empty_cells = sorted({f"{i}|{d}" for i in intents for d in doc_types} - set(cell_counts))
+
         return {
             "rows": len(rows),
             "pass": by_status["pass"],
             "fail": by_status["fail"],
             "by_source": dict(by_source),
             "failures": [v for v in verdicts if v["status"] == "fail"],
+            "git_sha": git_short_sha(),
+            "coverage_matrix": {
+                "intents": intents,
+                "doc_types": doc_types,
+                "counts": dict(sorted(cell_counts.items())),
+                "empty_cells": empty_cells,
+            },
         }
