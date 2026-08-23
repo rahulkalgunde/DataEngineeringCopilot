@@ -340,7 +340,9 @@ class ProviderFallbackChain[T, R]:
                 model=provider.client.model,
                 category=p_err.category.value,
                 retry_after=p_err.retry_after,
-                error=str(exc),
+                # Transport exceptions (httpx.ReadError etc.) often carry an
+                # empty message; the type name is the only diagnostic signal.
+                error=f"{type(exc).__name__}: {exc}".strip(": "),
             )
             raise p_err from exc
 

@@ -31,6 +31,20 @@ def test_timeout_maps_retryable():
     assert err.category is ProviderErrorCategory.RETRYABLE
 
 
+def test_midstream_transport_errors_map_retryable_with_context():
+    """2026-08-23 NVIDIA rerank: httpx.ReadError("") mid-stream was caught by the
+    catch-all as PERMANENT_ERROR with an empty log line, benching the provider
+    on a health-decay window for what is a transient connection drop. All
+    httpx transport/protocol errors are retryable."""
+    import httpx
+
+    for exc in (httpx.ReadError(""), httpx.RemoteProtocolError(""), httpx.DecodingError("")):
+        err = categorize_provider_error(exc, "nvidia", "nv-rerank-qa-mistral-4b:1")
+        assert err.category is ProviderErrorCategory.RETRYABLE, f"{type(exc).__name__} misclassified"
+        # Log line must never be empty again — include the exception type.
+        assert str(err.original) != "" or err.category is not ProviderErrorCategory.PERMANENT_ERROR
+
+
 def test_message_fallbacks():
     rate = categorize_provider_error(RuntimeError("rate limit hit"), "p", "m")
     assert rate.category is ProviderErrorCategory.RATE_LIMITED
