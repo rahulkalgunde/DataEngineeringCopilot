@@ -1,0 +1,200 @@
+{
+  "version": "1.2",
+  "description": "Curated free_forever models per provider for RAG fallback \u2014 pruned 2026-08-23 after live probe. Now covers LLM + embedding + rerank fallback lists (each maps to settings embedding_fallback_order / rerank_fallback_order).",
+  "updated": "2026-08-23",
+  "models": [
+    {
+      "provider": "ollama",
+      "model": "phi4-mini:3.8b",
+      "tier": "free_forever",
+      "context_window": 8192,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "local CPU \u2014 degraded fallback, env OLLAMA_MODEL"
+    },
+    {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "tier": "free_forever",
+      "context_window": 8192,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "local code specialist"
+    },
+    {
+      "provider": "openrouter",
+      "model": "openrouter/free",
+      "tier": "free_forever",
+      "context_window": 128000,
+      "max_tokens_field": "max_completion_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "router picks any :free model \u2014 OK 1924ms 2026-08-23"
+    },
+    {
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "tier": "free_forever",
+      "context_window": 128000,
+      "max_tokens_field": "max_completion_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 1400ms 2026-08-23 \u2014 fastest openrouter"
+    },
+    {
+      "provider": "zai",
+      "model": "glm-4.7-flash",
+      "tier": "free_forever",
+      "context_window": 128000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "ZAI free-forever \u2014 OK 4207ms 2026-08-23 (glm-4.5-flash timed out)"
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "tier": "free_forever",
+      "context_window": 131072,
+      "max_tokens_field": "max_completion_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 760ms 2026-08-23"
+    },
+    {
+      "provider": "cerebras",
+      "model": "gpt-oss-120b",
+      "tier": "free_forever",
+      "context_window": 8192,
+      "max_tokens_field": "max_completion_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 707ms 2026-08-23 \u2014 env CEREBRAS_MODEL=gpt-oss-120b"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemma-4-31b-it",
+      "tier": "free_forever",
+      "context_window": 1000000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 1942ms via gemma-4-31b-it (gemini-2.5-flash deprecated 404)"
+    },
+    {
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3-nano-30b-a3b",
+      "tier": "free_forever",
+      "context_window": 128000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 734ms \u2014 NVIDIA NIM free Developer tier"
+    },
+    {
+      "provider": "anyapi",
+      "model": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "tier": "free_forever",
+      "context_window": 128000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "OK 1355ms \u2014 :free suffix required"
+    },
+    {
+      "provider": "llm7",
+      "model": "default",
+      "tier": "free_forever",
+      "context_window": 8192,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": false,
+      "rag_suitable": false,
+      "notes": "OK 948ms \u2014 aggregator, excluded from answer/code (no structured output)"
+    },
+    {
+      "provider": "agnes",
+      "model": "agnes-2.5-flash",
+      "tier": "free_forever",
+      "context_window": 512000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": false,
+      "rag_suitable": true,
+      "notes": "OK 2111ms \u2014 long context, no structured output"
+    },
+    {
+      "provider": "opencodezen",
+      "model": "deepseek-v4-flash-free",
+      "tier": "free_forever",
+      "context_window": 64000,
+      "max_tokens_field": "max_completion_tokens",
+      "supports_structured_output": false,
+      "rag_suitable": true,
+      "notes": "FAIL 400 upstream unavailable 2026-08-23 \u2014 keep but deprioritized"
+    },
+    {
+      "provider": "cloudflare",
+      "model": "@cf/meta/llama-3.1-8b-instruct-fast",
+      "tier": "free_forever",
+      "context_window": 8192,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": false,
+      "rag_suitable": true,
+      "notes": "Cloudflare Workers AI \u2014 env CLOUDFLARE_MODEL, not probed yet (needs account_id)"
+    }
+  ],
+  "embedding_models": [
+    {
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3-embed-1b",
+      "tier": "free_forever",
+      "dimension": 2048,
+      "notes": "NVIDIA NIM free Developer tier 40 RPM / 1000 RPD \u2014 OK via OpenAI-compatible /embeddings"
+    },
+    {
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3-embed-1b:free",
+      "tier": "free_forever",
+      "dimension": 2048,
+      "notes": "OpenRouter free embedding \u2014 :free suffix, OK"
+    },
+    {
+      "provider": "huggingface",
+      "model": "nvidia/Nemotron-3-Embed-1B-BF16",
+      "tier": "free_forever",
+      "dimension": 2048,
+      "notes": "HF serverless feature-extraction 4 RPM / 900 RPD \u2014 needs HF_TOKEN"
+    },
+    {
+      "provider": "local-hf",
+      "model": "nvidia/Nemotron-3-Embed-1B-BF16",
+      "tier": "free_forever",
+      "dimension": 2048,
+      "notes": "local sentence-transformers, offline, always available \u2014 used as last resort"
+    }
+  ],
+  "rerank_models": [
+    {
+      "provider": "openrouter",
+      "model": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+      "tier": "free_forever",
+      "url": "https://openrouter.ai/api/v1/rerank",
+      "notes": "OpenRouter free rerank \u2014 OK"
+    },
+    {
+      "provider": "nvidia",
+      "model": "nv-rerank-qa-mistral-4b:1",
+      "tier": "free_forever",
+      "url": "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking",
+      "notes": "NVIDIA reranking free tier"
+    },
+    {
+      "provider": "huggingface",
+      "model": "BAAI/bge-reranker-v2-m3",
+      "tier": "free_forever",
+      "url": "https://router.huggingface.co/hf-inference",
+      "notes": "HF rerank 4 RPM \u2014 used as cloud rerank, local cross-encoder is degraded fallback"
+    }
+  ]
+}

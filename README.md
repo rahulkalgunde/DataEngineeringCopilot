@@ -89,11 +89,12 @@ Settings load from three `.env` files in order (later files override earlier):
 ### Models
 
 - **Class defaults**: `llm_provider=ollama`, `llm_model=llama3.2:3b`, `embedding_provider=ollama` (`data_engineering_copilot/config/settings.py`). Ollama is the last-resort degraded fallback in every chain.
-- **Answer purpose**: defaults to OpenRouter free tier (`answer_llm_provider=openrouter`, `answer_llm_model=openrouter/free`); rewrite/groundedness/intent/evaluation default to Groq.
-- **LLM fallback chain** (`llm_fallback_order`): cloudflare → groq → nvidia → gemini → cerebras → sambanova → mistral → zai → llm7 → agnes → anyapi → ollama_cloud → ollama. Providers without configured keys are skipped, so with no API keys everything routes to Ollama.
-- **Embedding fallback chain**: nvidia → openrouter → ollama.
+- **Answer purpose**: defaults to OpenRouter free tier (`answer_llm_provider=openrouter`, `answer_llm_model=google/gemma-4-31b-it:free`); rewrite/groundedness/intent/evaluation default to Groq/Gemini.
+- **LLM fallback chain** (`llm_fallback_order`): `cerebras → nvidia → groq → cloudflare → anyapi → openrouter → gemini → zai → sambanova → mistral → llm7 → agnes → ollama_cloud → ollama` — kept in sync with the live free_forever probe. Providers without configured keys are skipped, so with no API keys everything routes to Ollama.
+- **Free_forever catalog** (`config/free_tier_models.json:1` → `data/provider_catalog.json:1`): curated 14 `$0-forever` models (not `$1 credit`), live-probed by `dec probe-catalog` (keeps fastest OK per provider, per-purpose via `services/provider_catalog.py:114`). When `CATALOG_AUTO_ORDER=true` (`.env:40`) the factory prefers that latency-sorted order over `LLM_FALLBACK_ORDER` (fail-open to static order when missing/stale). See `docs/provider_catalog.md` for inventory, ranking, and probe results (2026-08-23: 9 OK, cerebras 443ms fastest).
+- **Embedding fallback chain**: nvidia → openrouter → huggingface → local-hf (local-hf is offline, always available).
 
-All LLM/embedding calls route through `ProviderFallbackChain` (health-scored provider selection, Redis-backed). See `docs/RAG_SYSTEM_LEARNER_GUIDE.md` for the full tour.
+All LLM/embedding/rerank calls route through `ProviderFallbackChain` (`infrastructure/provider_fallback.py:162`, health-scored, Redis-backed). See `docs/RAG_SYSTEM_LEARNER_GUIDE.md` for the full tour and `docs/provider_catalog.md` for the catalog.
 
 ## Docker
 
@@ -146,6 +147,11 @@ dec eval-prompt-aug / eval-chunking / evaluate / eval-coverage
 dec gen-manifest → gen-build → gen-validate → gen-activate   # atomic alias switch
 dec gen-rollback / gen-stale / gen-reset
 # Spark-only mirror: spark-manifest / spark-render / spark-build / spark-activate ...
+
+# Provider catalog (free_forever probes + smart fallback)
+dec probe-catalog --json      # live probe 14 models → data/provider_catalog.json (fastest OK per provider)
+dec probe-llm --json          # probe wired LLM + embedding providers
+dec probe-catalog --offline   # skeleton, no network (CI)
 
 # Reset granularity (coarse → fine)
 dec reset-index               # Qdrant + BM25 + Redis + PG
