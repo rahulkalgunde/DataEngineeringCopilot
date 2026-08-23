@@ -2372,10 +2372,9 @@ def _eval_retrieval_row(query: str, intent: str, expected: list[str], retrieved:
     seen: set[str] = set()
     mrr = 0.0
     for rank, u in enumerate(retrieved or [], 1):
-        if u in relevant:
-            if u not in seen:
-                mrr = 1.0 / rank
-                break
+        if u in relevant and u not in seen:
+            mrr = 1.0 / rank
+            break
     return {"query": query, "intent": intent, "recall": recall, "precision": precision, "mrr": mrr}
 
 
