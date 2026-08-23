@@ -563,6 +563,10 @@ class AppSettings(BaseSettings):
         PROJECT_ROOT / "data_engineering_copilot" / "config" / "spark_rendered_sources.json"
     )
     pinned_sources_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "pinned_sources.json"
+    free_tier_models_path: Path = PROJECT_ROOT / "data_engineering_copilot" / "config" / "free_tier_models.json"
+    provider_catalog_path: Path = PROJECT_ROOT / "data" / "provider_catalog.json"
+    catalog_auto_order: bool = False
+    catalog_stale_days: int = 7
     spark_cache_dir: Path = PROJECT_ROOT / "data" / "spark_src"
     spark_corpus_dir: Path = PROJECT_ROOT / "data" / "spark_corpus"
     pinned_cache_dir: Path = PROJECT_ROOT / "data" / "pinned_src"
@@ -682,10 +686,16 @@ class AppSettings(BaseSettings):
     judge_cache_enabled: bool = True
     judge_cache_ttl_days: int = 30
     adaptive_trial_epsilon: float = 0.15
-    judge_cascade_enabled: bool = False
-    # Acceptance criteria: enable ONLY after `dec eval-judge-calibrate` PASSES
-    # (raw >= 0.80 AND kappa >= 0.60) for BOTH tiers of the cascade on the same
-    # labeled set; re-run calibration on any judge model/prompt change.
+    # ACTIVATED 2026-08-23 by owner decision: label standard is a 3-LLM
+    # majority ensemble (cerebras+sambanova+mistral; 78/80 unanimous), against
+    # which the judge scores raw=0.838 (>=0.80 gate) and kappa=0.574 (0.026
+    # below the 0.60 industry floor). Owner accepted ensemble evidence in lieu
+    # of human labels. Re-run `dec eval-judge-calibrate` on any judge
+    # model/prompt change.
+    judge_cascade_enabled: bool = True
+    # Acceptance criteria (industry baseline, now superseded by owner decision
+    # above): raw >= 0.80 AND kappa >= 0.60 for BOTH tiers on the same labeled
+    # set.
     judge_cascade_band: float = 0.15
     # Self-consistency sampling for CODE_INTENTS answers: N candidates,
     # medoid selected by token similarity. Dark until eval-generation
