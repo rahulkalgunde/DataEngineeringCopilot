@@ -474,13 +474,27 @@ class ProviderFallbackChain[T, R]:
         """
         result = cast(str, await self.execute(cast(T, prompt)))
         try:
+            # Primary source: the client that actually served this request.
             usage = getattr(self._served_client, "last_usage", None)
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            # Some providers omit the usage block entirely on a 200 response,
+            # leaving last_usage at 0; recover the real counts from an inline
+            # ``usage`` field on the result when the provider returns one.
+            if not prompt_tokens and not completion_tokens:
+                inline = getattr(result, "usage", None)
+                if isinstance(inline, dict):
+                    prompt_tokens = int(inline.get("prompt_tokens", 0) or 0)
+                    completion_tokens = int(inline.get("completion_tokens", 0) or 0)
+                elif inline is not None:
+                    prompt_tokens = int(getattr(inline, "prompt_tokens", 0) or 0)
+                    completion_tokens = int(getattr(inline, "completion_tokens", 0) or 0)
             UsageLedger.record(
                 getattr(self._config, "purpose", "llm") or "llm",
                 {
                     "calls": 1,
-                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
                 },
             )
         except Exception:  # noqa: BLE001 - accounting must never break generation
