@@ -1,6 +1,6 @@
 ---
 name: docker-compose
-description: Use for ANY task involving the DataEngineeringCopilot Docker stack — docker compose, docker-compose.yml, Makefile docker targets (make dev/up/down/rebuild/prune), container health, image rebuilds, dependency-hash staleness, Ollama model pulls, or the profile-gated backend-api/celery_worker. Triggers: docker, compose, container, image, rebuild, staleness, qdrant/redis/postgres/ollama service, make dev/up/down, Dockerfile, volumes.
+description: "Use for ANY task involving the DataEngineeringCopilot Docker stack — docker compose, docker-compose.yml, Makefile docker targets (make dev/up/down/rebuild/prune), container health, image rebuilds, dependency-hash staleness, Ollama model pulls, or the profile-gated backend-api/celery_worker. Triggers: docker, compose, container, image, rebuild, staleness, qdrant/redis/postgres/ollama service, make dev/up/down, Dockerfile, volumes."
 ---
 
 # DataEngineeringCopilot Docker Compose
@@ -75,6 +75,8 @@ exist but are deprecated — use the primary targets.
   them casually.
 - **Never** run `docker compose down -v`, `docker volume rm/prune` without
   explicit user approval (permissions in `opencode.json` deny them).
+- **CPU contention**: the Docker build (context -> layers transfer) consumes
+  all cores. Start builds with `setsid make rebuild & disown`, then poll `tail -f` or check `.docker-tag` modification time. Wait until build completes before running the xdist test suite — concurrent runs kill workers (`node down: Not properly terminated`).
 - **override file behavior**: `docker-compose.override.yml` auto-loads only when
   no `-f` is passed. It (a) runs `celery_worker` under `watchfiles` for
   auto-reload, and (b) sets `pull_policy: always` on the floating-tag images

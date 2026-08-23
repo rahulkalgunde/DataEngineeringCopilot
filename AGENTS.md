@@ -19,7 +19,8 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 - **Embeddings**: `local-hf` = in-process HF sentence-transformers (`nvidia/Nemotron-3-Embed-1B-BF16`, 2048-dim) — Ollama is NOT an embedding provider; it serves LLMs only. `eval-fast` hardwires local-hf.
 - `dec_pydocs_venv/` is a second venv used only by `dec spark-render` (Sphinx toolchain for PySpark API docs). Ignore it otherwise.
 - Settings load `.env` → `.env.secrets` → `.env.local`. `_env_file=None` does **not** reliably isolate (third-party `load_dotenv()` re-injects `.env` into `os.environ`, which beats env files) — pass explicit kwargs to override.
-- Commands expected to take >90–120s: run in background with output to a log file and poll — never block the foreground (opencode.json RULE 1).
+- Commands expected to take >90–120s: run in background with output to a log file and poll — never block the foreground (opencode.json RULE 1). Detach with `setsid <cmd> & disown`; a plain `nohup … &` child can be killed when the tool call times out.
+- Serialize heavy CPU jobs: let `make rebuild`/`make dev` finish before running the xdist suite — concurrent runs starve pytest workers (`node down: Not properly terminated`).
 
 ## Session conventions (from opencode.json `instructions`)
 - Implementation plans → `plans/YYYY-MM-DD_HH-MM_plan.md`; on session exit save context → `sessions/YYYY-MM-DD_HH-MM_session.md`; "resume" = load latest of both and continue.

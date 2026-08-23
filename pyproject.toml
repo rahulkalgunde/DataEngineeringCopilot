@@ -66,6 +66,8 @@ dev = [
     "markdown-it-py>=3.0",
     "tree-sitter>=0.20",
     "tree-sitter-python>=0.20",
+    "diff-cover>=9.0",
+    "mutmut>=3.0",
 ]
 colbert = [
     # True neural late-interaction reranking (PyLate). Optional extra: NOT
@@ -131,4 +133,18 @@ known-first-party = ["data_engineering_copilot"]
 [tool.pyright]
 typeCheckingMode = "basic" # Use "basic" for existing projects, "strict" ONLY for brand new code
 reportMissingTypeStubs = false # Stops it from complaining about poorly-typed third-party libraries
+
+[tool.mutmut]
+# Scoped mutation testing: only critical pure-logic modules, run locally via
+# `make mutate`. NOT in CI (runtime cost; CI stays hermetic and time-boxed).
+source_paths = [
+    "data_engineering_copilot/services/text_filter.py",
+    "data_engineering_copilot/infrastructure/provider_capabilities.py",
+    "data_engineering_copilot/services/prompt_injection.py",
+]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/test_text_filter.py",
+    "tests/unit/test_provider_capabilities.py",
+    "tests/unit/test_input_guardrails.py",
+]
 

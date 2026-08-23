@@ -1,5 +1,6 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
+DIFFCOVER := dec_venv/bin/diff-cover
 PROJECT_NAME := dataengineeringcopilot
 COMPOSE := docker compose --profile app
 GIT_SHA := $(shell git rev-parse --short HEAD)
@@ -209,6 +210,28 @@ test-e2e:
 
 test-ci-unit:
 	$(PYTEST) tests/unit/ -v --durations=20 --durations-min=0.3 --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
+
+# Changed-code coverage gate (diff-cover). Fails if lines touched vs
+# origin/main are <90% covered by the unit suite. Needs coverage.xml from a
+# preceding test run with --cov-report=xml. CI runs this after test-ci-unit;
+# locally run `make test-unit-cov` first.
+DIFF_THRESHOLD ?= 90
+test-unit-cov:
+	$(PYTEST) tests/unit/ -q --cov=data_engineering_copilot --cov-branch --cov-report=xml -n 6 --dist worksteal
+
+test-cov-gate:
+	@if [ ! -f coverage.xml ]; then \
+		echo "coverage.xml missing — generating via test-unit-cov first"; \
+		$(MAKE) --no-print-directory test-unit-cov; \
+	fi
+	$(DIFFCOVER) coverage.xml --compare-branch origin/main --fail-under=$(DIFF_THRESHOLD)
+
+# Scoped mutation testing (local-only, NOT in CI — see [tool.mutmut] scope).
+mutate:
+	$(PYTHON) -m mutmut run
+
+mutate-results:
+	$(PYTHON) -m mutmut results
 
 test-ci:
 	$(PYTEST) tests/unit/ -v --cov=data_engineering_copilot --cov-report=xml --cov-report=term-missing
