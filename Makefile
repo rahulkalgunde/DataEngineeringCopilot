@@ -289,6 +289,10 @@ eval-judge-calibrate:
 label-calibration:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/label_calibration.py
 
+# Auto-label calibration rows: 3-LLM majority vote (paid, ~240 calls).
+label-calibration-auto:
+	dec_venv/bin/python -m data_engineering_copilot.evaluation.majority_label
+
 # Launch the Streamlit UI (requires a running stack: `make dev`).
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
