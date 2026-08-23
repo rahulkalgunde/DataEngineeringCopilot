@@ -1936,12 +1936,16 @@ def render_metrics_tab() -> None:
 
     # --- Session Summary Cards ---
     st.markdown("### Session Summary")
-    col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+    st.info(
+        "Retrieval accuracy is **not** measured here — confidence scores are not relevance. "
+        "For accuracy-grade Recall/MRR/nDCG run `dec eval-retrieval` against the golden datasets.",
+        icon=":material/insights:",
+    )
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
     col_s1.metric("Total Queries", summary["total_queries"])
     col_s2.metric("Answered", summary["answered_queries"])
     col_s3.metric("Answer Rate", f"{summary['answer_rate']:.0%}")
-    col_s4.metric("Avg MRR", f"{summary['avg_proxy_mrr']:.3f}")
-    col_s5.metric("Avg Answer Length (words)", summary["avg_answer_length"])
+    col_s4.metric("Avg Answer Length (words)", summary["avg_answer_length"])
 
     st.divider()
 

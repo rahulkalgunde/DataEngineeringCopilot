@@ -20,10 +20,9 @@ logger = logging.getLogger(__name__)
 class RetrievalMetrics:
     """Confidence-proxy retrieval metrics.
 
-    These are NOT ground-truth accuracy: "relevant" means a chunk's fused
-    confidence exceeds a fixed 0.45 proxy threshold, not that it matches a
-    labeled qrel. For accuracy-grade metrics use the eval harnesses
-    (``dec eval-retrieval`` / ``eval-rerank``) against golden datasets.
+    **Important:** these are computed from a confidence-threshold proxy (0.45
+    cutoff), NOT ground truth. For accuracy-grade numbers use ``dec
+    eval-retrieval`` / ``dec eval-rerank`` against golden datasets.
     """
 
     query: str
