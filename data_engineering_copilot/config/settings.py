@@ -679,6 +679,14 @@ class AppSettings(BaseSettings):
     generation_presence_penalty: float = 0.0
     generation_top_p: float = 1.0
     evaluation_temperature: float = 0.0
+    judge_cache_enabled: bool = True
+    judge_cache_ttl_days: int = 30
+    adaptive_trial_epsilon: float = 0.15
+    judge_cascade_enabled: bool = False
+    # Acceptance criteria: enable ONLY after `dec eval-judge-calibrate` PASSES
+    # (raw >= 0.80 AND kappa >= 0.60) for BOTH tiers of the cascade on the same
+    # labeled set; re-run calibration on any judge model/prompt change.
+    judge_cascade_band: float = 0.15
     # Self-consistency sampling for CODE_INTENTS answers: N candidates,
     # medoid selected by token similarity. Dark until eval-generation
     # faithfulness >= baseline AND p95 latency stays within budget.
