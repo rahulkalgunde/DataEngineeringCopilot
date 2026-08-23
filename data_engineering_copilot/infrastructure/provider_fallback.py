@@ -191,6 +191,10 @@ class ProviderFallbackChain[T, R]:
         self._router = router
         self._error_categorizer = config.error_categorizer or _default_categorizer
         self._last_error: ProviderError | None = None
+        # Client that actually served the most recent successful execute() —
+        # used for usage accounting (first-provider last_usage is stale/wrong
+        # whenever the router or fallback picked a different provider).
+        self._served_client: Any = None
 
     async def execute(self, request: T) -> R:
         """Execute request through the fallback chain."""
@@ -311,6 +315,7 @@ class ProviderFallbackChain[T, R]:
         start = time.monotonic()
         try:
             result = await provider.client.call(request)
+            self._served_client = provider.client
             latency = time.monotonic() - start
             if router is not None:
                 await router.record_success(provider.name, provider.client.model, latency)
@@ -469,13 +474,13 @@ class ProviderFallbackChain[T, R]:
         """
         result = cast(str, await self.execute(cast(T, prompt)))
         try:
-            usage = self.last_usage
+            usage = getattr(self._served_client, "last_usage", None)
             UsageLedger.record(
                 getattr(self._config, "purpose", "llm") or "llm",
                 {
                     "calls": 1,
-                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
                 },
             )
         except Exception:  # noqa: BLE001 - accounting must never break generation
