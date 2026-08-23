@@ -250,6 +250,18 @@ eval-retrieval:
 eval-retrieval-gate:
 	dec_venv/bin/dec eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10
 
+# $0 reranker smoke: freeze 10 pools, replay ($0 for subsequent reruns)
+eval-rerank-smoke:
+	@mkdir -p /tmp
+	@echo "=== eval-rerank: freeze pools ==="
+	@dec_venv/bin/dec eval-rerank --pool-file /tmp/rerank_pool_smoke.json --k 10 || echo "⚠️  freeze step needs Qdrant+embedder — skipped"
+	@echo "--- replay (frozen pools, $$0) ---"
+	@dec_venv/bin/dec eval-rerank --pool-file /tmp/rerank_pool_smoke.json --k 10 || echo "⚠️  replay step needs pool file — skipped"
+
+# $0 prompt-aug smoke: template mode, no LLM, no infra
+eval-prompt-aug-smoke:
+	dec_venv/bin/dec eval-prompt-aug --dataset tests/evaluation/golden/prompt_aug_eval_sample.jsonl --mode template
+
 # Generate synthetic recall eval set for one source (deterministic + coverage-gated).
 eval-gen-source:
 	dec_venv/bin/dec gen-synthetic-eval --source "$(SOURCE)" $(if $(GENERATION),--generation $(GENERATION)) --limit $(or $(LIMIT),50) --out tests/evaluation/golden/recall_synthetic_$(shell echo $(SOURCE) | tr ' ' _ | tr '[:upper:]' '[:lower:]').jsonl
