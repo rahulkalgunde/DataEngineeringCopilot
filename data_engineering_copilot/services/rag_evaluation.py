@@ -91,13 +91,13 @@ class RetrievalEvaluator:
         """Evaluate retrieval against expected URLs (normalized)."""
         from data_engineering_copilot.evaluation.rag_optimization_benchmark import _norm_url
 
-        retrieved_urls = [_norm_url(r.chunk.url) for r in retrieved]
+        retrieved_urls = list(dict.fromkeys(_norm_url(r.chunk.url) for r in retrieved))
         expected = {_norm_url(u) for u in expected_urls}
 
         if not retrieved_urls:
             return {"precision": 0.0, "recall": 0.0, "mrr": 0.0}
 
-        hits = sum(1 for url in retrieved_urls if url in expected)
+        hits = sum(1 for url in set(retrieved_urls) if url in expected)
         precision = hits / len(retrieved_urls)
         recall = hits / len(expected) if expected else 0.0
 
@@ -119,13 +119,13 @@ class RetrievalEvaluator:
         """Compute Precision@K against expected URLs."""
         from data_engineering_copilot.evaluation.rag_optimization_benchmark import _norm_url
 
-        retrieved_urls = [_norm_url(r.chunk.url) for r in retrieved[:k]]
+        retrieved_urls = list(dict.fromkeys(_norm_url(r.chunk.url) for r in retrieved[:k]))
         expected = {_norm_url(u) for u in expected_urls}
 
         if not retrieved_urls:
             return 0.0
 
-        hits = sum(1 for url in retrieved_urls if url in expected)
+        hits = sum(1 for url in set(retrieved_urls) if url in expected)
         return hits / len(retrieved_urls) if retrieved_urls else 0.0
 
 
