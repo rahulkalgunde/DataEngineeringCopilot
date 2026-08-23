@@ -713,7 +713,7 @@ Repo-enforced gates (hardcoded constants or settings defaults — treat these as
 | Rubric correctness | ≥ 4.0 / 5 | `eval-generation` gate (`settings.generation_rubric_gate`) |
 | Term/source recall (Spark set, in-scope avg) | ≥ 0.90 | `evaluate --spark` gate |
 | Recall@10 vs baseline (honest inscope 220 rows) | ≥ baseline_inscope 0.259 −0.02 (absolute ≥0.24) | `eval-retrieval --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json` — `settings.retrieval_gate_global_tolerance` / `retrieval_gate_global_floor` |
-| Recall@10 per-intent (n≥5) | ≥ max(0, baseline_intent −0.05) — e.g. how_to 0.386→0.336, code_example 0.40→0.35, api_lookup 0.071→0.021 | `eval-retrieval --compare-baseline` per-intent deltas (with `evaluation/stats.py:bootstrap_ci` CIs when per_query vectors present) — `settings.retrieval_gate_per_intent_tolerance` / `retrieval_gate_per_intent_min_n` |
+| Recall@10 per-intent (n≥5) | ≥ max(0, baseline_intent − tol_i) where `tol_i = max(0.05, 2σ)` and σ=√(p(1−p)/n_base) — noise-aware: at n=23 the 2σ term dominates (gates rerun variance, not regressions); at n≥200 it collapses to the −0.05 floor | `eval-retrieval --compare-baseline` per-intent deltas (with `evaluation/stats.py:bootstrap_ci` CIs when per_query vectors present) — `settings.retrieval_gate_per_intent_tolerance` (floor) / `retrieval_gate_per_intent_min_n` / `stats.py:per_intent_tolerance` |
 | Cohen's κ (judge calibration) | ≥ 0.60 (raw ≥0.80) | `eval-judge-calibrate` gate (`settings.judge_kappa_gate` / `judge_raw_gate`, `evaluation/judge_calibration.py:KAPPA_GATE`) |
 | Source recall Δ vs baseline | ≥ −0.01 | optimization benchmark |
 | MRR Δ vs baseline | ≥ −0.02 | optimization benchmark |
