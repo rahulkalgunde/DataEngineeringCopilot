@@ -233,16 +233,24 @@ class TestRagasEvaluator:
         captured = {}
 
         class FakeMetric:
-            def __init__(self):
+            def __init__(self, name: str):
+                self.name = name
                 self.llm = None
                 self.embeddings = None
 
-        metrics = [FakeMetric() for _ in range(4)]
+        metrics = [
+            FakeMetric("context_recall"),
+            FakeMetric("context_precision"),
+            FakeMetric("faithfulness"),
+            FakeMetric("answer_relevancy"),
+        ]
 
         def fake_evaluate(dataset, metrics=None, llm=None, **kwargs):
             captured["llm"] = llm
             captured["metrics"] = metrics
-            return _mock_result(MOCK_METRICS)
+            # Input-faithful double: ragas only reports metrics it ran.
+            selected = {m.name for m in (metrics or [])}
+            return _mock_result({k: v for k, v in MOCK_METRICS.items() if k in selected})
 
         fake_llm_wrapper = MagicMock()
         fake_embed_wrapper = MagicMock()
@@ -252,19 +260,36 @@ class TestRagasEvaluator:
             patch.object(ev, "_build_runtime", return_value=(fake_llm_wrapper, fake_embed_wrapper)),
         ):
             ev._metrics = metrics
+
+            # With ground truth: all four metrics run, same objects.
+            result = ev.evaluate(
+                questions=["q"],
+                answers=["a"],
+                contexts=[["c"]],
+                ground_truth=["ref"],
+            )
+            assert captured["metrics"] == metrics  # same objects, full membership
+            assert all(m.llm is fake_llm_wrapper for m in captured["metrics"])
+            assert result is not None
+
+            # Without ground truth: same objects minus context_recall.
             result = ev.evaluate(
                 questions=["q"],
                 answers=["a"],
                 contexts=[["c"]],
             )
 
-        assert captured["llm"] is fake_llm_wrapper
-        assert captured["metrics"] is metrics
+        selected = captured["metrics"]
+        recall = next(m for m in metrics if m.name == "context_recall")
+        assert recall not in selected
+        assert len(selected) == 3
+        assert all(m.llm is fake_llm_wrapper and m.embeddings is fake_embed_wrapper for m in selected)
         for metric in metrics:
             assert metric.llm is fake_llm_wrapper
             assert metric.embeddings is fake_embed_wrapper
+        # context_recall didn't run without reference; wrapper scores it 0.0.
         assert result is not None
-        assert result.context_recall == 0.8
+        assert result.context_recall == 0.0
 
     def test_build_runtime_defaults_use_adaptive_routing(self):
         from data_engineering_copilot.services.ragas_adapters import (

@@ -3433,7 +3433,10 @@ def evaluate(
         print(f"  answer_relevancy:  {ragas_report.answer_relevancy:.3f}")
         print(f"  overall:           {ragas_report.overall:.3f}")
     else:
-        print("\nRAGAS evaluation skipped: 'ragas' package not installed.")
+        print(
+            "\nRAGAS evaluation unavailable — see RAGAS failure above "
+            "(missing ground_truth columns or provider errors), not a missing package."
+        )
 
     # Phase 6 (Task 6.1): upload evaluated rows to a Langfuse dataset
     from data_engineering_copilot.evaluation.langfuse_datasets import upload_evaluation_dataset_rows

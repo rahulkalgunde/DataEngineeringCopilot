@@ -105,6 +105,18 @@ class RagasEvaluator:
         self._evaluate: Callable[..., Any] | None = None
         self._metrics: list[Any] | None = None
 
+    def _select_metrics(self, *, with_reference: bool) -> list[Any]:
+        """Metrics to run for this batch.
+
+        context_recall needs the ``reference`` column, so it is excluded when
+        ground truth is absent. Membership is the only difference — the same
+        metric objects flow through so llm/embeddings wiring sticks.
+        """
+        all_metrics = self._metrics or []
+        if with_reference:
+            return list(all_metrics)
+        return [m for m in all_metrics if getattr(m, "name", "") != "context_recall"]
+
     def _lazy_init(self) -> bool:
         if self._evaluate is not None:
             return True
@@ -242,6 +254,12 @@ class RagasEvaluator:
         if ground_truth:
             data["ground_truth"] = ground_truth
 
+        # Explicit selection contract: context_recall requires a `reference`
+        # column, so it runs only when ground truth is supplied. The returned
+        # list contains the SAME metric objects (wiring below mutates them);
+        # only membership changes between the two modes.
+        metrics = self._select_metrics(with_reference=bool(ground_truth))
+
         dataset = Dataset.from_dict(data)
         llm_wrapper, embeddings_wrapper = self._build_runtime(llm, embeddings)
         if self._metrics:
@@ -255,7 +273,7 @@ class RagasEvaluator:
 
         result = evaluate_fn(
             dataset=dataset,
-            metrics=self._metrics,
+            metrics=metrics,
             llm=llm_wrapper,
             run_config=RunConfig(timeout=self.run_timeout, max_workers=self.max_workers),
         )
