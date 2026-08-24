@@ -3,9 +3,16 @@
 No live LLM/judge calls: a fake generator and fake judge are injected so the
 scoring pipeline (prompt build -> generate -> parse -> aggregate -> gate) is
 exercised deterministically.
+
+Doubles are input-faithful (canonical pattern:
+tests/unit/test_doubles_fidelity.py::_RecordingJudge): judge scores derive
+from prompt-kind keywords and generator answers derive from the prompt text
+itself; unknown prompt shapes fail loudly instead of being guessed.
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -21,39 +28,74 @@ from data_engineering_copilot.evaluation.generation_eval import (
     score_rubric,
 )
 
+_MUST_NOT_GUESS = "unrecognized prompt shape — double must not guess"
+
+
+def _mapped_judge_reply(scores: dict[str, str], prompt: str) -> str:
+    """Keyword->payload derivation; unknown prompt shapes fail loudly."""
+    for needle, payload in scores.items():
+        if needle in prompt:
+            return payload
+    raise AssertionError(f"{_MUST_NOT_GUESS}: {prompt[:80]}")
+
+
+def _extract_question(prompt: str) -> str:
+    for needle in ("Question: ", "QUESTION:\n"):
+        if needle in prompt:
+            return prompt.rsplit(needle, 1)[-1].split("\n", 1)[0].strip()
+    raise AssertionError(f"{_MUST_NOT_GUESS}: {prompt[:80]}")
+
+
+def _extract_first_context_line(prompt: str) -> str:
+    for pattern in (
+        r"<context_data_[^>]*>\n(?:\[DENSITY:[^\]]*\]\n)?(.*)",
+        r"CONTEXT:\n(.*)\n\nQUESTION:",
+    ):
+        m = re.search(pattern, prompt, re.DOTALL)
+        if m:
+            return m.group(1).split("\n", 1)[0].strip()
+    raise AssertionError(f"{_MUST_NOT_GUESS}: {prompt[:80]}")
+
+
+def _faithful_answer(prompt: str) -> str:
+    """Deterministic answer derived FROM the prompt: embeds the question
+    substring and the first context line so distinct rows yield distinct
+    answers."""
+    return (
+        f"From the provided documentation, on '{_extract_question(prompt)}': "
+        f"grounded statement citing '{_extract_first_context_line(prompt)}'."
+    )
+
 
 class FakeGenerator:
     async def generate(self, prompt: str) -> str:
-        return (
-            "Apache Spark is a unified analytics engine for large-scale data "
-            "processing with APIs in Scala, Java, Python, and R."
-        )
+        return _faithful_answer(prompt)
 
 
 class FakeJudgeHigh:
     """Returns strong scores so all gates should pass."""
 
+    _SCORES = {
+        "faithfulness grader": '{"score": 0.95}',
+        "answer relevance": '{"score": 0.88}',
+        "answer-quality judge": '{"score": 5}',
+    }
+
     async def generate(self, prompt: str) -> str:
-        if "faithfulness grader" in prompt:
-            return '{"score": 0.95}'
-        if "answer relevance" in prompt:
-            return '{"score": 0.88}'
-        if "answer-quality judge" in prompt:
-            return '{"score": 5}'
-        return '{"score": 0.5}'
+        return _mapped_judge_reply(self._SCORES, prompt)
 
 
 class FakeJudgeLow:
     """Returns weak scores so gates should fail."""
 
+    _SCORES = {
+        "faithfulness grader": '{"score": 0.40}',
+        "answer relevance": '{"score": 0.50}',
+        "answer-quality judge": '{"score": 2}',
+    }
+
     async def generate(self, prompt: str) -> str:
-        if "faithfulness grader" in prompt:
-            return '{"score": 0.40}'
-        if "answer relevance" in prompt:
-            return '{"score": 0.50}'
-        if "answer-quality judge" in prompt:
-            return '{"score": 2}'
-        return '{"score": 0.0}'
+        return _mapped_judge_reply(self._SCORES, prompt)
 
 
 def test_parse_score_clamps_and_extracts():
@@ -149,7 +191,7 @@ class _StubJudge:
 
 class _StubGenerator:
     async def generate(self, prompt: str, **kwargs: object) -> str:
-        return "Grounded answer restating the context."
+        return _faithful_answer(prompt)
 
 
 def _write_dataset(tmp_path, rows=3):

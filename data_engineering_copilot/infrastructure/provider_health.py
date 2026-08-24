@@ -281,6 +281,23 @@ class ProviderHealthRegistry:
             until = max(ph.cooldown_until, mh.cooldown_until if mh is not None else 0.0)
             return max(0.0, until - time.monotonic())
 
+    def min_cooldown_remaining(self) -> float:
+        """Return the minimum cooldown remaining across all providers/models,
+        or 0.0 if at least one provider/model is available."""
+        with self._lock:
+            min_remaining = float("inf")
+            any_available = False
+            for ph in self._providers.values():
+                for mh in ph.models.values():
+                    remaining = max(0.0, mh.cooldown_until - time.monotonic())
+                    if remaining == 0.0:
+                        any_available = True
+                    elif remaining < min_remaining:
+                        min_remaining = remaining
+            if any_available:
+                return 0.0
+            return min_remaining if min_remaining != float("inf") else 0.0
+
     def get_model_health(self, provider: str, model: str) -> ModelHealth | None:
         with self._lock:
             ph = self._providers.get(provider)

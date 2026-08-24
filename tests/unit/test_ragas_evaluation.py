@@ -282,7 +282,7 @@ class TestRagasEvaluator:
         selected = captured["metrics"]
         recall = next(m for m in metrics if m.name == "context_recall")
         assert recall not in selected
-        assert len(selected) == 3
+        assert len(selected) == 2
         assert all(m.llm is fake_llm_wrapper and m.embeddings is fake_embed_wrapper for m in selected)
         for metric in metrics:
             assert metric.llm is fake_llm_wrapper

@@ -115,7 +115,8 @@ class RagasEvaluator:
         all_metrics = self._metrics or []
         if with_reference:
             return list(all_metrics)
-        return [m for m in all_metrics if getattr(m, "name", "") != "context_recall"]
+        excluded = {"context_recall", "context_precision"}  # both require `reference`
+        return [m for m in all_metrics if getattr(m, "name", "") not in excluded]
 
     def _lazy_init(self) -> bool:
         if self._evaluate is not None:
