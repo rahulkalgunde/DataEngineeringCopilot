@@ -23,6 +23,17 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 - Serialize heavy CPU jobs: let `make rebuild`/`make dev` finish before running the xdist suite — concurrent runs starve pytest workers (`node down: Not properly terminated`).
 - Shared box, possibly parallel sessions: run `make runcheck` and register every heavy job (pid/log/eta) in `/tmp/opencode/ACTIVE_RUNS.md` before launching; deregister when done.
 
+## No-Leak Protocol (defect-class → gate)
+Every recurring defect class gets an executable gate; gates run in `make lint`/unit suite or as named targets:
+| Class | Gate |
+|---|---|
+| Lying test doubles | fidelity registry `tests/unit/test_doubles_fidelity.py` (+ rule above); doubles travel with consumer changes |
+| Config mutation | `scripts/lint_env.py` in `make lint` + `tests/unit/test_env_lint.py`; edit .env only via anchored `^KEY=` edits |
+| Stale derived goldens | provenance sidecars + `make eval-data-stale`; generators must write `.provenance.json` |
+| Multi-path pin divergence | `test_purpose_pin_precedence.py` parametrized over ALL purposes |
+| Container/env drift | `make env-verify` after ANY .env edit or container recreate |
+Ratchet: a defect class recurring twice MUST get a gate in the fixing commit.
+
 ## Session conventions (from opencode.json `instructions`)
 - Implementation plans → `plans/YYYY-MM-DD_HH-MM_plan.md`; on session exit save context → `sessions/YYYY-MM-DD_HH-MM_session.md`; "resume" = load latest of both and continue.
 - Check CI health (`gh run list`) at first session of the day and fix red runs before other work; `/check-ci` drives the same loop.
