@@ -251,6 +251,14 @@ eval-sweep-parallel:
 			> /tmp/opencode/esweep.lane$$i.log 2>&1 < /dev/null & done
 	@echo "LANES=$(LANES) launched; outputs -> /tmp/opencode/esweep.lane*.json (poll logs esweep.lane*.log)"
 
+# G3: fail when derived golden artifacts are stale vs their provenance sources.
+eval-data-stale:
+	$(PYTHON) scripts/check_derived_staleness.py tests/evaluation/golden
+
+# G5: fail when running containers' provider pins drift from .env.
+env-verify:
+	$(PYTHON) scripts/verify_container_env.py
+
 # S7-lite: refresh provider catalog from live probes so catalog_auto_order and
 # recommended orders reflect current latency/availability (~60-90s, all free).
 catalog-refresh:
@@ -370,6 +378,7 @@ mirror-claude-docs:
 
 lint:
 	$(PYTHON) -m ruff check data_engineering_copilot/ tests/
+	@$(PYTHON) scripts/lint_env.py .env
 
 format:
 	$(PYTHON) -m ruff format data_engineering_copilot/ tests/
