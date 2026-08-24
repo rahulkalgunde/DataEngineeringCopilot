@@ -70,3 +70,28 @@ class TestPurposePinBeatsCatalog:
         )
         chain = build_llm_fallback_chain(purpose="evaluation", app_settings=s)
         assert _provider_names(chain)[0] == "cerebras"
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    ["answer", "rewrite", "groundedness", "intent", "enrichment", "evaluation", "code"],
+)
+def test_every_purpose_pin_wins_over_catalog(purpose, tmp_path):
+    """Property (G4): for EVERY purpose, a settings pin must head the chain even
+    when catalog_auto_order would order differently — the 2026-08-24 mis-route
+    class must be impossible on any path."""
+    from tests.conftest import make_settings
+
+    s = make_settings(
+        catalog_auto_order=True,
+        provider_catalog_path=_catalog(tmp_path, {purpose: ["cerebras"]}),
+        **{
+            f"{purpose}_llm_provider": "opencodezen",
+            "opencodezen_model": "x-preview-f-free",
+            "opencodezen_api_key": "oc-test",
+            "cerebras_api_key": "cb-test",
+            "_test_allow_non_ollama": True,
+        },
+    )
+    chain = build_llm_fallback_chain(purpose=purpose, app_settings=s)
+    assert _provider_names(chain)[0] == "opencodezen"

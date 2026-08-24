@@ -12,6 +12,12 @@ _REFUSAL_MARKERS = (
     "do not have",
     "does not contain",
     "not enough information",
+    # JSON-structured refusals (structured output with missing_info/answer: null)
+    '"missing_info": true',
+    '"answer": null',
+    '"answer": null,',
+    '"missing_info": true',
+    '"answer": "null"',
 )
 
 

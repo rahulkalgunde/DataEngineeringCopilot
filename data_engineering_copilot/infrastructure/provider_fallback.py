@@ -9,6 +9,7 @@ Supports both LLM and Embedding providers via protocol.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -254,6 +255,48 @@ class ProviderFallbackChain[T, R]:
                 attempted.append({"provider": provider.name, "outcome": f"failed:{p_err.category.value}"})
 
         # Degraded fallback
+        if degraded:
+            logger.warning(
+                "all_external_unavailable",
+                skipped=attempted,
+                fallback=degraded.name,
+            )
+            entries, result = await self._try_degraded(degraded, request, len(main) + 1, total)
+            attempted.extend(entries)
+            if result is not None:
+                return result
+
+        # All external providers failed — wait for cooldown and retry once (only for transient errors)
+        transient_categories = {
+            ProviderErrorCategory.RATE_LIMITED,
+            ProviderErrorCategory.TEMPORARY_UNAVAILABLE,
+            ProviderErrorCategory.RETRYABLE,
+        }
+        last_error_category = self._last_error.category if isinstance(self._last_error, ProviderError) else None
+        if last_error_category in transient_categories:
+            wait_time = self._health.min_cooldown_remaining()
+            if wait_time > 0:
+                wait_time = min(wait_time, 30.0)  # cap at 30s
+                logger.info("all_providers_cooling_down", wait_seconds=round(wait_time, 1))
+                await asyncio.sleep(wait_time)
+                # Retry the chain once after cooldown
+                for position, provider in enumerate(main, start=1):
+                    available, reason, available_in = self._provider_gate(provider)
+                    if not available:
+                        continue
+                    logger.info(
+                        "provider_call",
+                        provider=provider.name,
+                        model=provider.client.model,
+                        position=f"{position}/{total}",
+                        reason="available_after_cooldown",
+                    )
+                    try:
+                        return await self._call_with_health(provider, request)
+                    except ProviderError as p_err:
+                        self._last_error = p_err
+                        # fall through to degraded
+
         if degraded:
             logger.warning(
                 "all_external_unavailable",
