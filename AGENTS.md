@@ -38,6 +38,7 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 - Host-side Redis probe needs auth: `redis://:local_secure_password_123@localhost:6379/0` (compose Redis runs with `requirepass`).
 - Markers are strict (`--strict-markers`); the vocabulary lives in `pyproject.toml`.
 - Refactors must ship a behavioral test with a real object; test-double contracts are pinned in `tests/unit/test_doubles_contract.py`.
+- **Test doubles are input-faithful**: output derives from the received input (or calls are recorded and asserted). Constant-output doubles only where the real contract is genuinely constant. Fidelity contracts live in `tests/unit/test_doubles_fidelity.py` and travel with consumer changes.
 
 ## Docker
 - `backend-api` and `celery_worker` are gated behind `--profile app`; bare `docker compose up` starts infra only. Use `make dev` (first time: build + pull Ollama models) / `make up`.
