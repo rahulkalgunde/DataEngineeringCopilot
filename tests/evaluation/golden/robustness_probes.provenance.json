@@ -1,0 +1,7 @@
+{
+  "generated_at": "2026-08-24T10:48:19.628767+00:00",
+  "sources": {
+    "tests/evaluation/golden/qa_spark.jsonl": "665257539ca6",
+    "tests/evaluation/golden/qa_claude_platform.jsonl": "dfc85edaf80c"
+  }
+}
