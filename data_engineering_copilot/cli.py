@@ -3077,6 +3077,8 @@ def eval_generation_main(
     sample: int = 0,
     stratify_by: str = "intent",
     compare: str | None = None,
+    concurrency: int = 0,
+    judges_csv: str | None = None,
 ) -> int:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
@@ -3106,6 +3108,18 @@ def eval_generation_main(
 
     async def _run():
         judge_b = None
+        judge_list: list = []
+        if judges_csv:
+            from data_engineering_copilot.factory import build_llm_fallback_chain
+
+            for prov in [p.strip() for p in judges_csv.split(",") if p.strip()]:
+                judge_list.append(
+                    build_llm_fallback_chain(
+                        "evaluation",
+                        app_settings=settings,
+                        purpose_provider=prov,
+                    )
+                )
         if judge_provider_b:
             from data_engineering_copilot.factory import build_llm_fallback_chain
 
@@ -3119,9 +3133,13 @@ def eval_generation_main(
             settings,
             n_trials=n_trials,
             judge_b=judge_b,
+            judges=judge_list or None,
             sample=sample,
             stratify_by=stratify_by,
             compare_answers=load_baseline_answers(compare) if compare else None,
+            row_concurrency=(
+                concurrency if concurrency > 0 else int(getattr(settings, "eval_row_concurrency", 1) or 1)
+            ),
         )
 
     report = asyncio.run(_run())
@@ -4390,6 +4408,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of judge trials averaged for the rubric score (default: 3).",
     )
     eval_gen_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=0,
+        help="Rows scored in-flight (0 = use settings.eval_row_concurrency, default 1).",
+    )
+    eval_gen_parser.add_argument(
+        "--judges",
+        help="Comma-separated extra judge providers for 3-judge majority "
+        "(e.g. 'anyapi,gemini'). Primary judge comes from evaluation purpose; "
+        "per-row metric = median across judges.",
+    )
+    eval_gen_parser.add_argument(
         "--output",
         help="Optional path to write the JSON report.",
     )
@@ -4949,6 +4979,8 @@ def main() -> None:
                     sample=getattr(args, "sample", 0),
                     stratify_by=getattr(args, "stratify_by", "intent"),
                     compare=getattr(args, "compare", None),
+                    concurrency=getattr(args, "concurrency", 0),
+                    judges_csv=getattr(args, "judges", None),
                 )
             )
         elif args.command == "eval-coverage":

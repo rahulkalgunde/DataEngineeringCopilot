@@ -19,6 +19,7 @@ judge variance. No latency measurement is performed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -380,11 +381,13 @@ async def evaluate_generation(
     generator=None,
     judge=None,
     judge_b=None,
+    judges: list | None = None,
     n_trials: int = 3,
     intent: str = "factual",
     sample: int = 0,
     stratify_by: str = "intent",
     compare_answers: dict[str, str] | None = None,
+    row_concurrency: int = 1,
 ) -> GenerationEvalReport:
     """Evaluate the generation layer alone on a frozen gold-context dataset.
 
@@ -395,7 +398,7 @@ async def evaluate_generation(
     judges' scores differ by at most 1 point (LLM-judge reliability check).
     """
     rows = load_generation_dataset(dataset_path)
-    if (generator is None or judge is None) and settings is None:
+    if (generator is None or (judge is None and not judges)) and settings is None:
         raise ValueError("settings must be provided when generator/judge are not injected")
     empty = [r.id or r.question[:40] for r in rows if not (r.contexts and any(c.strip() for c in r.contexts))]
     if empty:
@@ -415,7 +418,7 @@ async def evaluate_generation(
     if generator is None:
         assert settings is not None
         generator = build_llm_fallback_chain(purpose="answer", app_settings=settings)
-    if judge is None:
+    if judge is None and not judges:
         assert settings is not None
         judge = build_llm_fallback_chain(purpose="evaluation", app_settings=settings)
     if settings is not None and getattr(settings, "judge_cascade_enabled", False):
@@ -443,18 +446,18 @@ async def evaluate_generation(
             logger.warning("judge cache disabled for this run: %s", exc)
             cache = None
     model_id = str(getattr(judge, "model_id", "") or "evaluation-chain")
+    if judges:
+        n_trials = 1  # majority mode: breadth across judges replaces depth per judge
 
-    results: list[dict] = []
-    for row in rows:
-        context_str = "\n\n".join(row.contexts)
-        prompt = pb.build_rag_prompt(context=context_str, question=row.question, intent=intent)
-        answer = await _generate_answer(generator, prompt)
+    sem = asyncio.Semaphore(max(1, int(row_concurrency)))
+
+    async def _score_with(j, row, answer):
         faith = await score_faithfulness(
-            judge, row.question, answer, row.contexts, n_trials=n_trials, cache=cache, model_id=model_id
+            j, row.question, answer, row.contexts, n_trials=n_trials, cache=cache, model_id=model_id
         )
-        rel = await score_relevance(judge, row.question, answer, n_trials=n_trials, cache=cache, model_id=model_id)
-        rubric = await score_rubric(
-            judge,
+        rel = await score_relevance(j, row.question, answer, n_trials=n_trials, cache=cache, model_id=model_id)
+        rub = await score_rubric(
+            j,
             row.question,
             answer,
             row.ground_truth,
@@ -464,23 +467,47 @@ async def evaluate_generation(
             model_id=model_id,
             epsilon=getattr(settings, "adaptive_trial_epsilon", None) if settings else None,
         )
-        results.append(
-            {
-                "id": row.id,
-                "question": row.question,
-                "answer": answer,
-                "faithfulness": faith,
-                "relevance": rel,
-                "rubric": rubric,
-            }
-        )
-        logger.info(
-            "generation_eval_row id=%s faithfulness=%.3f relevance=%.3f rubric=%.3f",
-            row.id,
-            faith,
-            rel,
-            rubric,
-        )
+        return faith, rel, rub
+
+    async def _eval_row(row) -> dict:
+        async with sem:
+            context_str = "\n\n".join(row.contexts)
+            prompt = pb.build_rag_prompt(context=context_str, question=row.question, intent=intent)
+            answer = await _generate_answer(generator, prompt)
+            if judges:
+                votes = await asyncio.gather(*[_score_with(j, row, answer) for j in judges])
+                faith = statistics.median(v[0] for v in votes)
+                rel = statistics.median(v[1] for v in votes)
+                rubric = statistics.median(v[2] for v in votes)
+                out = {
+                    "id": row.id,
+                    "question": row.question,
+                    "answer": answer,
+                    "faithfulness": faith,
+                    "relevance": rel,
+                    "rubric": rubric,
+                    "judge_votes": [{"faithfulness": f, "relevance": r, "rubric": b} for f, r, b in votes],
+                }
+            else:
+                faith, rel, rubric = await _score_with(judge, row, answer)
+                out = {
+                    "id": row.id,
+                    "question": row.question,
+                    "answer": answer,
+                    "faithfulness": faith,
+                    "relevance": rel,
+                    "rubric": rubric,
+                }
+            logger.info(
+                "generation_eval_row id=%s faithfulness=%.3f relevance=%.3f rubric=%.3f",
+                row.id,
+                faith,
+                rel,
+                rubric,
+            )
+            return out
+
+    results = list(await asyncio.gather(*[_eval_row(r) for r in rows]))
 
     faith_mean = statistics.fmean([r["faithfulness"] for r in results]) if results else 0.0
     rel_mean = statistics.fmean([r["relevance"] for r in results]) if results else 0.0
@@ -501,7 +528,7 @@ async def evaluate_generation(
         robustness = {"total": len(probe_rows), "refusal_correct": refusals_ok}
         print(f"Robustness probes: {refusals_ok}/{len(probe_rows)} refusals correct")
 
-    if judge_b is not None and results:
+    if judge_b is not None and not judges and results:
         agreements: list[float] = []
         for row in rows:
             answer = next(r["answer"] for r in results if r["id"] == row.id)
@@ -510,8 +537,19 @@ async def evaluate_generation(
             agreements.append(1.0 if abs(rubric_a - rubric_b) <= 1.0 else 0.0)
         judge_agreement = statistics.fmean(agreements)
 
+    if judges and results:
+        # majority mode: pairwise rubric agreement across all judge pairs,
+        # averaged over rows (|Δ| <= 1 counts as agreement).
+        per_row: list[float] = []
+        for r in results:
+            rubs = [v["rubric"] for v in r.get("judge_votes", [])]
+            pairs = [(a, b) for i, a in enumerate(rubs) for b in rubs[i + 1 :]]
+            if pairs:
+                per_row.append(statistics.fmean([1.0 if abs(x - y) <= 1.0 else 0.0 for x, y in pairs]))
+        judge_agreement = statistics.fmean(per_row) if per_row else None
+
     pairwise: dict | None = None
-    if compare_answers and results:
+    if compare_answers and results and not judges:
         wins = ties = losses = 0
         for row in rows:
             if row.id not in compare_answers:

@@ -216,3 +216,95 @@ async def test_no_second_judge_leaves_agreement_none(tmp_path):
         n_trials=1,
     )
     assert report.judge_agreement is None
+
+
+class TestRowConcurrency:
+    async def test_concurrent_matches_serial_and_preserves_order(self, tmp_path):
+        import asyncio
+
+        from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+        dataset = _write_dataset(tmp_path, rows=6)
+
+        async def run(conc):
+            return await evaluate_generation(
+                str(dataset),
+                settings=None,
+                generator=FakeGenerator(),
+                judge=FakeJudgeHigh(),
+                n_trials=1,
+                row_concurrency=conc,
+            )
+
+        serial, parallel = await asyncio.gather(run(1), run(4))
+        assert [r["id"] for r in parallel.rows] == [r["id"] for r in serial.rows]
+        assert parallel.faithfulness_mean == pytest.approx(serial.faithfulness_mean)
+        assert parallel.rubric_mean == pytest.approx(serial.rubric_mean)
+        assert parallel.passed == serial.passed
+
+    async def test_semaphore_actually_overlaps_rows(self, tmp_path):
+        import asyncio
+
+        from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+        state = {"in_flight": 0, "max_seen": 0}
+
+        class SlowGen:
+            async def generate(self, prompt: str) -> str:
+                state["in_flight"] += 1
+                state["max_seen"] = max(state["max_seen"], state["in_flight"])
+                await asyncio.sleep(0.05)
+                state["in_flight"] -= 1
+                return "answer"
+
+        dataset = _write_dataset(tmp_path, rows=6)
+        await evaluate_generation(
+            str(dataset),
+            settings=None,
+            generator=SlowGen(),
+            judge=FakeJudgeHigh(),
+            n_trials=1,
+            row_concurrency=3,
+        )
+        assert state["max_seen"] >= 2
+
+
+class TestMajorityJudges:
+    async def test_median_suppresses_outlier_and_reports_votes(self, tmp_path):
+        from data_engineering_copilot.evaluation.generation_eval import evaluate_generation
+
+        class JudgeMid:
+            model_id = "mid"
+
+            async def generate(self, prompt: str) -> str:
+                if "faithfulness" in prompt:
+                    return '{"score": 0.70}'
+                if "relevance" in prompt:
+                    return '{"score": 0.60}'
+                return '{"score": 4}'
+
+        class JudgeOutlier:
+            model_id = "outlier"
+
+            async def generate(self, prompt: str) -> str:
+                return (
+                    '{"score": 0.10}'
+                    if "faithfulness" in prompt
+                    else ('{"score": 1}' if "answer-quality judge" in prompt else '{"score": 0.10}')
+                )
+
+        dataset = _write_dataset(tmp_path, rows=2)
+        report = await evaluate_generation(
+            str(dataset),
+            settings=None,
+            generator=FakeGenerator(),
+            judges=[FakeJudgeHigh(), JudgeMid(), JudgeOutlier()],
+            n_trials=1,
+        )
+        # votes per row: faith [.95,.70,.10] -> median .70 ; rubric [5,4,1] -> 4
+        assert report.rows[0]["judge_votes"]
+        assert len(report.rows[0]["judge_votes"]) == 3
+        assert report.faithfulness_mean == pytest.approx(0.70)
+        assert report.rubric_mean == pytest.approx(4.0)
+        # pairwise rubric agreement: (5,4)->1, (4,1)->0, (5,1)->0 => 1/3
+        assert report.judge_agreement == pytest.approx(1 / 3)

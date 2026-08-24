@@ -686,6 +686,10 @@ class AppSettings(BaseSettings):
     judge_cache_enabled: bool = True
     judge_cache_ttl_days: int = 30
     adaptive_trial_epsilon: float = 0.15
+    # Max rows scored in-flight by eval-generation (S1 speed work, 2026-08-24).
+    # 1 preserves the historical serial behavior; 3-8 is the sweet spot given
+    # calibrated free-tier RPMs (groq 27, anyapi 81, gemini 27).
+    eval_row_concurrency: int = 1
     # ACTIVATED 2026-08-23 by owner decision: label standard is a 3-LLM
     # majority ensemble (cerebras+sambanova+mistral; 78/80 unanimous), against
     # which the judge scores raw=0.838 (>=0.80 gate) and kappa=0.574 (0.026
@@ -1294,7 +1298,10 @@ class AppSettings(BaseSettings):
     # comments above.
     retrieval_gate_global_tolerance: float = 0.02
     retrieval_gate_per_intent_tolerance: float = 0.05
-    retrieval_gate_global_floor: float = 0.24
+    # Tracks tests/evaluation/benchmarks/baseline_inscope.json overall R@10
+    # minus global_tolerance. Updated 2026-08-24 for the clean 220-row freeze
+    # (R@10=0.273): 0.25 ≈ 0.273 − 0.02 (was 0.24 under the 0.259 baseline).
+    retrieval_gate_global_floor: float = 0.25
     retrieval_gate_per_intent_min_n: int = 5
     # Generation-layer gates (mirrors evaluation/generation_eval.py + judge_calibration.py)
     generation_faithfulness_gate: float = 0.85

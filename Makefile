@@ -1,6 +1,7 @@
 PYTHON := dec_venv/bin/python
 PYTEST := $(PYTHON) -m pytest
 DIFFCOVER := dec_venv/bin/diff-cover
+DEC := dec_venv/bin/dec
 PROJECT_NAME := dataengineeringcopilot
 COMPOSE := docker compose --profile app
 GIT_SHA := $(shell git rev-parse --short HEAD)
@@ -232,6 +233,28 @@ mutate:
 
 mutate-results:
 	$(PYTHON) -m mutmut results
+
+# S2: parallel eval sweep — split DATASET into LANES shards, one eval-generation
+# process per shard. JUDGES is optional comma list for 3-judge majority.
+LANES ?= 3
+JUDGES ?=
+eval-sweep-parallel:
+	@test -n "$(DATASET)" || { echo "usage: make eval-sweep-parallel DATASET=tests/evaluation/golden/qa_spark.jsonl [LANES=3] [JUDGES=anyapi,gemini]"; exit 1; }
+	$(PYTHON) scripts/split_jsonl.py $(DATASET) /tmp/opencode/esweep $(LANES)
+	@rm -f /tmp/opencode/esweep.lane*.done
+	@for i in $$(seq 1 $(LANES)); do \
+		setsid env FORCE=1 dec_venv/bin/dec eval-generation \
+			--dataset /tmp/opencode/esweep.lane$$i.jsonl \
+			$(if $(JUDGES),--judges "$(JUDGES)",) \
+			--concurrency $(CONCURRENCY) \
+			--output /tmp/opencode/esweep.lane$$i.json \
+			> /tmp/opencode/esweep.lane$$i.log 2>&1 < /dev/null & done
+	@echo "LANES=$(LANES) launched; outputs -> /tmp/opencode/esweep.lane*.json (poll logs esweep.lane*.log)"
+
+# S7-lite: refresh provider catalog from live probes so catalog_auto_order and
+# recommended orders reflect current latency/availability (~60-90s, all free).
+catalog-refresh:
+	$(DEC) probe-catalog --purpose evaluation --timeout 12 --output data/provider_catalog.json
 
 # Shared-box coordination: register heavy runs in /tmp/opencode/ACTIVE_RUNS.md
 # and run this before launching builds/tests/evals (see AGENTS.md Environment).
