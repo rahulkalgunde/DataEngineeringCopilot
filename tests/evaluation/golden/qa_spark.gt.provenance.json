@@ -1,0 +1,7 @@
+{
+  "generated_at": "2026-08-25T04:04:35.371053+00:00",
+  "generator": "answer-purpose fallback chain",
+  "sources": {
+    "tests/evaluation/golden/qa_spark.jsonl": "665257539ca6"
+  }
+}
