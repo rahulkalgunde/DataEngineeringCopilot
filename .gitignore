@@ -40,8 +40,10 @@ Thumbs.db
 .vscode/
 .opencode/
 opencode.json
-profil*
-profil*/
+profiling-output/
+.profiling/
+profiler_reports/
+profiling_archive_*/
 .ollama_cache/
 .bm25_cache/
 .index_state/
@@ -56,3 +58,5 @@ dec_pydocs_venv/
 graphify-out/
 .agents/
 docs/research/
+profiling-output/
+.profiling/
