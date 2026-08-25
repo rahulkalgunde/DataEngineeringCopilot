@@ -1,63 +1,65 @@
 {
   "overall": {
-    "recall@k": 0.2590909090909091,
-    "mrr@k": 0.14563401875901877,
-    "precision@k": 0.026363636363636367,
-    "ndcg@k": 0.17041491364323652,
-    "recall_at_5": 0.19318181818181818,
-    "recall_at_20": 0.27045454545454545,
-    "latency_ms_p50": 45951.375069475034,
-    "latency_ms_p95": 147681.0674468812,
-    "k": 10,
-    "n": 220
+    "n": 220,
+    "n_total": 220,
+    "n_failed": 0,
+    "recall@k": 0.2727272727272727,
+    "mrr@k": 0.15305260396169487,
+    "precision@k": 0.02772727272727273,
+    "ndcg@k": 0.17708414924344676,
+    "recall_at_5": 0.21136363636363636,
+    "recall_at_20": 0.3159090909090909,
+    "latency_ms_p50": 25594.381670001894,
+    "latency_ms_p95": 68174.11353761272,
+    "k": 10
   },
   "per_intent": {
     "synthesis": {
-      "recall@k": 0.13636363636363635,
-      "mrr@k": 0.11539502164502165,
-      "precision@k": 0.018181818181818184,
+      "recall@k": 0.18181818181818182,
+      "mrr@k": 0.15800865800865802,
+      "precision@k": 0.022727272727272728,
       "n": 22
     },
     "factual": {
-      "recall@k": 0.16279069767441862,
-      "mrr@k": 0.054134366925064605,
-      "precision@k": 0.016279069767441864,
+      "recall@k": 0.20930232558139536,
+      "mrr@k": 0.10295395818651633,
+      "precision@k": 0.020930232558139535,
       "n": 43
     },
     "how_to": {
-      "recall@k": 0.38596491228070173,
-      "mrr@k": 0.24860763018657756,
-      "precision@k": 0.03859649122807018,
+      "recall@k": 0.42105263157894735,
+      "mrr@k": 0.22041214146477303,
+      "precision@k": 0.04210526315789474,
       "n": 57
     },
     "troubleshooting": {
-      "recall@k": 0.26666666666666666,
-      "mrr@k": 0.11619047619047619,
-      "precision@k": 0.02666666666666667,
+      "recall@k": 0.4,
+      "mrr@k": 0.2911111111111111,
+      "precision@k": 0.04000000000000001,
       "n": 15
     },
     "code_example": {
       "recall@k": 0.4,
-      "mrr@k": 0.3125,
+      "mrr@k": 0.18928571428571428,
       "precision@k": 0.04,
       "n": 10
     },
     "debugging": {
-      "recall@k": 0.30434782608695654,
-      "mrr@k": 0.1670807453416149,
-      "precision@k": 0.030434782608695653,
+      "recall@k": 0.21739130434782608,
+      "mrr@k": 0.08145586297760211,
+      "precision@k": 0.021739130434782608,
       "n": 23
     },
     "api_lookup": {
-      "recall@k": 0.07142857142857142,
-      "mrr@k": 0.014285714285714287,
-      "precision@k": 0.0071428571428571435,
+      "recall@k": 0.0,
+      "mrr@k": 0.0,
+      "precision@k": 0.0,
       "n": 14
     },
     "configuration": {
-      "recall@k": 0.2727272727272727,
-      "mrr@k": 0.123989898989899,
-      "precision@k": 0.027272727272727275,
+      "recall@k": 0.24242424242424243,
+      "mrr@k": 0.15369277187459005,
+      "precision@k": 0.024242424242424242,
       "n": 33
     },
     "comparative": {
@@ -77,9 +79,9 @@
     },
     {
       "id": "claude-code-factual-023",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-code-factual-029",
@@ -132,8 +134,8 @@
     {
       "id": "claude-agent-skills-013",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
     },
     {
       "id": "claude-code-code-example-087",
@@ -162,7 +164,7 @@
     {
       "id": "claude-platform-synthesis-076",
       "recall": 0.0,
-      "mrr": 0.0625,
+      "mrr": 0.0,
       "ndcg": 0.0
     },
     {
@@ -185,15 +187,15 @@
     },
     {
       "id": "claude-code-code-example-081",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
     },
     {
       "id": "claude-code-code-example-085",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "claude-code-factual-022",
@@ -252,8 +254,8 @@
     {
       "id": "claude-code-mcp-053",
       "recall": 1.0,
-      "mrr": 0.16666666666666666,
-      "ndcg": 0.3562071871080222
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "claude-platform-how-to-003",
@@ -281,9 +283,9 @@
     },
     {
       "id": "cc-commands-026",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "claude-code-synthesis-066",
@@ -366,14 +368,14 @@
     {
       "id": "claude-structured-outputs-004",
       "recall": 1.0,
-      "mrr": 0.16666666666666666,
-      "ndcg": 0.3562071871080222
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "cc-gateway-027",
-      "recall": 1.0,
-      "mrr": 0.125,
-      "ndcg": 0.31546487678572877
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
     },
     {
       "id": "claude-code-factual-024",
@@ -408,8 +410,8 @@
     {
       "id": "claude-code-code-example-086",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "claude-code-factual-033",
@@ -438,8 +440,8 @@
     {
       "id": "claude-code-troubleshooting-070",
       "recall": 1.0,
-      "mrr": 0.1,
-      "ndcg": 0.2890648263178879
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-synthesis-071",
@@ -456,8 +458,8 @@
     {
       "id": "cc-monitoring-024",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "claude-platform-configuration-034",
@@ -467,9 +469,9 @@
     },
     {
       "id": "airflow-how-to-018",
-      "recall": 1.0,
-      "mrr": 0.14285714285714285,
-      "ndcg": 0.3333333333333333
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
     },
     {
       "id": "claude-platform-how-to-011",
@@ -480,14 +482,14 @@
     {
       "id": "claude-platform-factual-031",
       "recall": 1.0,
-      "mrr": 0.25,
-      "ndcg": 0.43067655807339306
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "claude-vision-011",
-      "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "claude-platform-factual-017",
@@ -497,15 +499,15 @@
     },
     {
       "id": "claude-code-how-to-006",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "claude-platform-configuration-039",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "airflow-how-to-009",
@@ -545,9 +547,9 @@
     },
     {
       "id": "claude-code-troubleshooting-076",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "claude-platform-how-to-001",
@@ -557,9 +559,9 @@
     },
     {
       "id": "claude-platform-debugging-065",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "claude-code-how-to-015",
@@ -576,7 +578,7 @@
     {
       "id": "airflow-how-to-008",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.07142857142857142,
       "ndcg": 0.0
     },
     {
@@ -611,9 +613,9 @@
     },
     {
       "id": "claude-platform-factual-027",
-      "recall": 1.0,
-      "mrr": 0.16666666666666666,
-      "ndcg": 0.3562071871080222
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "claude-code-factual-035",
@@ -642,8 +644,8 @@
     {
       "id": "claude-prompt-caching-002",
       "recall": 1.0,
-      "mrr": 0.3333333333333333,
-      "ndcg": 0.5
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "claude-platform-how-to-010",
@@ -702,8 +704,8 @@
     {
       "id": "claude-code-configuration-039",
       "recall": 1.0,
-      "mrr": 0.1,
-      "ndcg": 0.2890648263178879
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-code-factual-020",
@@ -719,15 +721,15 @@
     },
     {
       "id": "claude-code-troubleshooting-071",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-factual-020",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-debugging-068",
@@ -767,15 +769,15 @@
     },
     {
       "id": "claude-code-factual-036",
-      "recall": 1.0,
-      "mrr": 0.1,
-      "ndcg": 0.2890648263178879
-    },
-    {
-      "id": "claude-code-synthesis-061",
       "recall": 0.0,
       "mrr": 0.0,
       "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-061",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-synthesis-069",
@@ -792,7 +794,7 @@
     {
       "id": "airflow-configuration-045",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.09090909090909091,
       "ndcg": 0.0
     },
     {
@@ -815,9 +817,9 @@
     },
     {
       "id": "claude-code-how-to-011",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "claude-platform-how-to-008",
@@ -858,8 +860,8 @@
     {
       "id": "claude-streaming-003",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "claude-code-how-to-009",
@@ -876,7 +878,7 @@
     {
       "id": "airflow-debugging-067",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.09090909090909091,
       "ndcg": 0.0
     },
     {
@@ -905,15 +907,15 @@
     },
     {
       "id": "claude-code-debugging-057",
-      "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "cc-settings-020",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "claude-code-configuration-046",
@@ -929,15 +931,15 @@
     },
     {
       "id": "claude-code-troubleshooting-074",
-      "recall": 1.0,
-      "mrr": 0.14285714285714285,
-      "ndcg": 0.3333333333333333
-    },
-    {
-      "id": "claude-code-how-to-016",
       "recall": 0.0,
       "mrr": 0.0,
       "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-how-to-016",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-configuration-047",
@@ -971,9 +973,9 @@
     },
     {
       "id": "claude-code-code-example-078",
-      "recall": 1.0,
-      "mrr": 0.125,
-      "ndcg": 0.31546487678572877
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "claude-platform-configuration-035",
@@ -996,8 +998,8 @@
     {
       "id": "claude-platform-debugging-063",
       "recall": 1.0,
-      "mrr": 0.25,
-      "ndcg": 0.43067655807339306
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "claude-compliance-009",
@@ -1014,8 +1016,8 @@
     {
       "id": "claude-code-configuration-037",
       "recall": 1.0,
-      "mrr": 0.2,
-      "ndcg": 0.38685280723454163
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-code-debugging-054",
@@ -1032,14 +1034,14 @@
     {
       "id": "claude-tool-use-005",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "claude-code-how-to-002",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-synthesis-074",
@@ -1049,9 +1051,9 @@
     },
     {
       "id": "claude-platform-debugging-060",
-      "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "recall": 0.0,
+      "mrr": 0.09090909090909091,
+      "ndcg": 0.0
     },
     {
       "id": "claude-platform-how-to-007",
@@ -1061,9 +1063,9 @@
     },
     {
       "id": "claude-platform-factual-015",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "claude-tool-use-049",
@@ -1097,15 +1099,15 @@
     },
     {
       "id": "claude-platform-debugging-059",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "claude-mcp-050",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-configuration-043",
@@ -1116,8 +1118,8 @@
     {
       "id": "claude-thinking-012",
       "recall": 1.0,
-      "mrr": 1.0,
-      "ndcg": 1.0
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "claude-platform-troubleshooting-080",
@@ -1133,15 +1135,15 @@
     },
     {
       "id": "claude-code-debugging-051",
-      "recall": 1.0,
-      "mrr": 0.14285714285714285,
-      "ndcg": 0.3333333333333333
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "cc-permissions-025",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
     },
     {
       "id": "claude-code-code-example-080",
@@ -1151,9 +1153,9 @@
     },
     {
       "id": "claude-code-factual-025",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "claude-platform-configuration-045",
@@ -1176,7 +1178,7 @@
     {
       "id": "claude-beta-api-008",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.06666666666666667,
       "ndcg": 0.0
     },
     {
@@ -1260,20 +1262,20 @@
     {
       "id": "claude-prompt-caching-048",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "airflow-factual-029",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.09090909090909091,
       "ndcg": 0.0
     },
     {
       "id": "claude-platform-configuration-032",
-      "recall": 1.0,
-      "mrr": 0.16666666666666666,
-      "ndcg": 0.3562071871080222
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     },
     {
       "id": "claude-platform-factual-026",
@@ -1289,15 +1291,15 @@
     },
     {
       "id": "claude-platform-debugging-066",
-      "recall": 1.0,
-      "mrr": 0.25,
-      "ndcg": 0.43067655807339306
-    },
-    {
-      "id": "claude-platform-troubleshooting-077",
       "recall": 0.0,
       "mrr": 0.0,
       "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-troubleshooting-077",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "claude-platform-factual-014",
@@ -1356,8 +1358,8 @@
     {
       "id": "cc-mcp-017",
       "recall": 1.0,
-      "mrr": 0.5,
-      "ndcg": 0.6309297535714575
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "mh-claude-stream-messages-007",
@@ -1385,9 +1387,9 @@
     },
     {
       "id": "claude-platform-api-lookup-052",
-      "recall": 1.0,
-      "mrr": 0.2,
-      "ndcg": 0.38685280723454163
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
     }
   ]
 }

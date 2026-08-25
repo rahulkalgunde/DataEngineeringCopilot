@@ -69,7 +69,7 @@ class TestRagasResultSelectionFidelity:
         from tests.unit.test_ragas_evaluation import MOCK_METRICS
 
         ev = RagasEvaluator()
-        captured = {}
+        _ = {}  # captured unused but required by closure
 
         class NamedMetric:
             def __init__(self, name: str):
