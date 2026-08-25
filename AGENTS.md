@@ -103,3 +103,5 @@ Entry: `main.py:main` → `cli.py`. Full list with per-command infra requirement
 
 ## graphify
 If `graphify-out/graph.json` exists, answer codebase questions with `graphify query "<q>"` (or `path`/`explain`) before raw grep, and run `graphify update .` after modifying code (AST-only, no API cost). The directory is commonly dirty from hook updates — that is not a reason to skip it.
+
+- **NVIDIA model discovery**: use https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&q=agentic — consider ONLY models marked Free Endpoint + agentic. `settings.nvidia_model` ids not listed there 404 on the API (calibration 2026-08-24).

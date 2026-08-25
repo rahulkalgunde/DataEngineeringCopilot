@@ -1007,3 +1007,13 @@ class TestAnyAPIProvider:
         object.__setattr__(s, "anyapi_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="ANYAPI_API_KEY is required"):
             _build_purpose_llm_client(provider="anyapi", model="test", app_settings=s)
+
+
+def test_ollama_purpose_budget_respected_over_num_predict():
+    """P5.1: degraded/ollama judge calls were capped at ollama_num_predict(512),
+    truncating RAGAS judges (LLMDidNotFinish -> NaN). Purpose budget must win."""
+    from data_engineering_copilot.factory import _build_purpose_llm_client
+
+    s = _make_settings(llm_provider="ollama")
+    client = _build_purpose_llm_client(provider="ollama", model="", purpose="evaluation", app_settings=s)
+    assert client._max_tokens == 1536  # purpose_max_tokens["evaluation"], not 512

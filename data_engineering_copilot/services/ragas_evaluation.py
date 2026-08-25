@@ -31,7 +31,7 @@ import os
 import sys
 import types
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,7 @@ class RagasEvalResult:
     faithfulness: float
     answer_relevancy: float
     overall: float
+    skipped_metrics: list[str] = field(default_factory=list)
 
 
 class RagasEvaluator:
@@ -289,6 +290,13 @@ class RagasEvaluator:
                 return 0.0
             return _aggregate_ragas_scores(scores, key)
 
+        selected_names = {getattr(m, "name", "") for m in metrics}
+        skipped = [
+            name
+            for name in ("context_recall", "context_precision", "faithfulness", "answer_relevancy")
+            if name not in selected_names
+        ]
+
         recall = _score("context_recall")
         precision = _score("context_precision")
         faithful = _score("faithfulness")
@@ -300,4 +308,5 @@ class RagasEvaluator:
             faithfulness=faithful,
             answer_relevancy=relevancy,
             overall=recall * 0.3 + faithful * 0.4 + relevancy * 0.3,
+            skipped_metrics=skipped,
         )
