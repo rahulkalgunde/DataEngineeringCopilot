@@ -21,6 +21,7 @@ from data_engineering_copilot.evaluation.generation_eval import (
     RELEVANCE_GATE,
     RUBRIC_GATE,
     GenerationEvalReport,
+    _extract_answer_text,
     evaluate_generation,
     load_generation_dataset,
     score_faithfulness,
@@ -350,3 +351,26 @@ class TestMajorityJudges:
         assert report.rubric_mean == pytest.approx(4.0)
         # pairwise rubric agreement: (5,4)->1, (4,1)->0, (5,1)->0 => 1/3
         assert report.judge_agreement == pytest.approx(1 / 3)
+
+
+class TestExtractAnswerText:
+    def test_structured_null_answer_becomes_canonical_refusal(self):
+        from data_engineering_copilot.evaluation.generation_eval import _extract_answer_text
+
+        raw = '{"answer": null, "citations": [], "missing_info": true}'
+        out = _extract_answer_text(raw)
+        assert "Insufficient context" in out
+        from data_engineering_copilot.evaluation.robustness_probes import looks_like_refusal
+
+        assert looks_like_refusal(out) is True
+
+    def test_structured_answer_extracted(self):
+        raw = '{"answer": "Broadcast joins ship tables to executors.", "citations": [1]}'
+        assert _extract_answer_text(raw) == "Broadcast joins ship tables to executors."
+
+    def test_plain_text_passthrough(self):
+        assert _extract_answer_text("plain answer") == "plain answer"
+
+    def test_malformed_json_passthrough(self):
+        raw = "{not json but starts with brace"
+        assert _extract_answer_text(raw) == raw

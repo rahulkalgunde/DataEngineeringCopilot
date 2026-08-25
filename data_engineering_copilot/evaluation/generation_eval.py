@@ -292,7 +292,30 @@ def load_baseline_answers(path: str) -> dict[str, str]:
 
 
 async def _generate_answer(generator, prompt: str) -> str:
-    return (await generator.generate(prompt)).strip()
+    return _extract_answer_text((await generator.generate(prompt)).strip())
+
+
+def _extract_answer_text(raw: str) -> str:
+    """Normalize generator output for scoring.
+
+    Structured doc-intent answers arrive as raw JSON
+    (``{"answer": ..., "missing_info": ...}``). Extract the human answer so
+    faithfulness/relevance judge clean text; a null answer with missing_info
+    collapses to a canonical refusal sentence that matches the refusal
+    markers used by the robustness scorer. Non-JSON output passes through.
+    """
+    if not raw.startswith("{"):
+        return raw
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+    if not isinstance(data, dict) or "answer" not in data:
+        return raw
+    answer = data.get("answer")
+    if answer is None or (isinstance(answer, str) and not answer.strip()):
+        return "Insufficient context to answer."
+    return str(answer).strip()
 
 
 async def score_faithfulness(

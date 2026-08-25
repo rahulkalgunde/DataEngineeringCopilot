@@ -278,6 +278,7 @@ class RagasEvaluator:
             metrics=metrics,
             llm=llm_wrapper,
             run_config=RunConfig(timeout=self.run_timeout, max_workers=self.max_workers),
+            show_progress=False,  # tqdm bars carry literal '%' into stdlib %-logging (TypeError)
         )
 
         # RAGAS returns an EvaluationResult; `result[key]` is a per-sample score
