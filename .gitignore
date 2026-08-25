@@ -53,3 +53,4 @@ coverage.xml
 RAG_PIPELINE_TRACE.md
 dec_pydocs_venv/
 .rag_eval/
+graphify-out/
