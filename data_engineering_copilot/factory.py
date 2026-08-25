@@ -325,12 +325,18 @@ def _build_purpose_llm_client(
 
     if eff_provider == "ollama":
         llm_base = app_settings.llm_ollama_base_url or app_settings.ollama_base_url
+        # Respect the per-purpose token budget (parity with other providers);
+        # ollama_num_predict only applies to the purpose-less/global path
+        # (legacy contract pinned by test_ollama_sends_max_tokens_not_ignored_options).
+        purpose_budget = (
+            app_settings.purpose_max_tokens.get(purpose.lower()) if purpose and purpose.lower() != "global" else None
+        )
         return _make(
             base_url=f"{llm_base}/v1",
             model=eff_model,
             api_key="",
             timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
-            max_tokens=app_settings.ollama_num_predict,
+            max_tokens=purpose_budget or app_settings.ollama_num_predict,
             connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
             pool_timeout_seconds=app_settings.ollama_pool_timeout_seconds,
         )

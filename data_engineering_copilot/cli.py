@@ -3427,10 +3427,10 @@ def evaluate(
 
     if ragas_report is not None:
         print("\nRAGAS Metrics:")
-        print(f"  context_recall:    {ragas_report.context_recall:.3f}")
-        print(f"  context_precision: {ragas_report.context_precision:.3f}")
-        print(f"  faithfulness:      {ragas_report.faithfulness:.3f}")
-        print(f"  answer_relevancy:  {ragas_report.answer_relevancy:.3f}")
+        skipped = set(getattr(ragas_report, "skipped_metrics", []) or [])
+        for name in ("context_recall", "context_precision", "faithfulness", "answer_relevancy"):
+            note = "  (skipped: no reference)" if name in skipped else ""
+            print(f"  {name}:{note} {getattr(ragas_report, name, 0.0):.3f}")
         print(f"  overall:           {ragas_report.overall:.3f}")
     else:
         print(
