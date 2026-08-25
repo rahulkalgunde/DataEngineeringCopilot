@@ -259,6 +259,10 @@ eval-data-stale:
 env-verify:
 	$(PYTHON) scripts/verify_container_env.py
 
+# C1: fail when chunks.jsonl per-source counts diverge from live Qdrant.
+corpus-index-drift:
+	$(PYTHON) scripts/verify_corpus_index.py
+
 # S7-lite: refresh provider catalog from live probes so catalog_auto_order and
 # recommended orders reflect current latency/availability (~60-90s, all free).
 catalog-refresh:
