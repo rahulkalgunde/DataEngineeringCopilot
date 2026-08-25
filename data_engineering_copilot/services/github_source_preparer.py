@@ -68,6 +68,8 @@ class GithubSourcePreparer:
         resolver = SparkSourceResolver(self._config, self._cache_dir)
         manifest = resolver.resolve()
         chunks, coverage = await self._chunk_manifest(manifest)
+        cache_root = manifest.root
+        manifest_hash = manifest.manifest_hash
         return PreparedSource(
             slug=self._config.slug,
             source_name=self._config.name,
@@ -75,6 +77,8 @@ class GithubSourcePreparer:
             commit=self._config.commit,
             chunks=tuple(chunks),
             coverage=tuple(coverage),
+            cache_root=cache_root,
+            manifest_hash=manifest_hash,
         )
 
     async def _chunk_manifest(self, manifest: SparkManifest) -> tuple[list[DocumentChunk], list[CoverageRecord]]:

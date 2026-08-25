@@ -96,6 +96,8 @@ class UrlIndexPreparer:
             commit=commit,
             chunks=tuple(chunks),
             coverage=tuple(coverage),
+            cache_root=manifest.root,
+            manifest_hash=manifest.manifest_hash,
         )
 
     def _build_documents(self, manifest: UrlIndexManifest) -> list[ParsedDocument]:

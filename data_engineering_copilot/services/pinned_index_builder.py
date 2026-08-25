@@ -132,6 +132,7 @@ class PinnedIndexBuilder:
 
         self._write_chunks_jsonl(normalized)
         self._write_coverage([record for package in packages for record in package.coverage])
+        self._write_provenance(packages)
 
         per_source_chunk_counts = {
             package.slug: sum(1 for c in normalized if c.source_name == package.source_name) for package in packages
@@ -295,6 +296,45 @@ class PinnedIndexBuilder:
             json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _write_provenance(self, packages: Sequence[PreparedSource]) -> None:
+        """Write a ``.provenance.json`` sidecar per source for staleness gating.
+
+        Each file is named ``provenance-<slug>.json`` and contains:
+        - ``generated_at``: ISO timestamp
+        - ``generator``: fixed string "pinned-index-builder"
+        - ``generation``: the generation ID
+        - ``source``: metadata about the source (slug, name, type, commit, manifest_hash)
+        - ``sources``: mapping of source file path (relative to cwd) → sha12 hash
+
+        This schema is backward-compatible with ``check_derived_staleness.py``
+        which reads the top-level ``sources`` dict and re-hashes each file.
+        """
+        if self._output_dir is None:
+            return
+        from data_engineering_copilot.config.settings import load_pinned_sources
+
+        config_map = {src.slug: src for src in load_pinned_sources()}
+        for package in packages:
+            config = config_map.get(package.slug)
+            source_type = config.type if config else "unknown"
+            prov = {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "generator": "pinned-index-builder",
+                "generation": self._generation,
+                "source": {
+                    "slug": package.slug,
+                    "name": package.source_name,
+                    "type": source_type,
+                    "commit": package.commit,
+                    "manifest_hash": package.manifest_hash,
+                },
+                "sources": package.provenance_sources(),
+            }
+            (self._output_dir / f"provenance-{package.slug}.json").write_text(
+                json.dumps(prov, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
 
 def _reject_duplicate_ids(chunks: list[DocumentChunk]) -> None:
