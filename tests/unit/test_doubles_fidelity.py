@@ -99,6 +99,45 @@ class TestRagasResultSelectionFidelity:
             full = ev.evaluate(questions=["q"], answers=["a"], contexts=[["c"]], ground_truth=["ref"])
             partial = ev.evaluate(questions=["q"], answers=["a"], contexts=[["c"]])
 
+        assert full is not None
         assert full.context_recall == pytest.approx(MOCK_METRICS["context_recall"])
         # selection excluded recall -> KeyError path -> wrapper scores 0.0
+        assert partial is not None
         assert partial.context_recall == 0.0
+
+
+@pytest.mark.unit
+class TestStubLLMFidelity:
+    """StubLLM contract: gap_trigger -> GAP_ANSWER, else fixed answer.
+    Scope exemption: for grounding/prompt-shape assertions use fail-loud
+    judges (_RecordingJudge pattern) — StubLLM intentionally answers."""
+
+    async def test_gap_trigger_routes_to_gap_answer(self):
+        from data_engineering_copilot.services.query_cache import _NON_ANSWER_MARKERS
+        from tests.doubles.llm import StubLLM
+
+        llm = StubLLM()
+        out = await llm.generate("What is the capital of France?")
+        assert any(m.search(out.lower()) for m in _NON_ANSWER_MARKERS)
+
+    async def test_non_gap_prompt_returns_fixed_answer(self):
+        from tests.doubles.llm import StubLLM
+
+        llm = StubLLM(answer="fixed spark answer")
+        out = await llm.generate("Explain broadcast joins")
+        assert out == "fixed spark answer"
+        assert llm.call_count == 1
+
+
+@pytest.mark.unit
+class TestStaticLLMExemption:
+    """CONSTANT-OK by design: consumers assert call_count/plumbing only.
+    Exemption documented in class docstring (tests/doubles/llm.py)."""
+
+    async def test_constant_output_with_call_counting(self):
+        from tests.doubles.llm import StaticLLM
+
+        llm = StaticLLM(answer="same")
+        assert await llm.generate("q1") == "same"
+        assert await llm.generate("totally different q2") == "same"
+        assert llm.call_count == 2
