@@ -117,11 +117,11 @@
       "type": "github",
       "name": "Delta Lake Documentation",
       "slug": "delta",
-      "version": "v4.3.1",
+      "version": "v4.4.0",
       "license": "Apache-2.0",
       "repository": "https://github.com/delta-io/delta.git",
-      "ref": "v4.3.1",
-      "commit": "54ce02692567fc3e5107a3ae69ebeccdffa7edfe",
+      "ref": "v4.4.0",
+      "commit": "88c008d55b38fb8f49a9a80982004cb5b06a2b59",
       "streams": [
         {
           "name": "docs",
