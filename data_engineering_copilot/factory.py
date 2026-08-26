@@ -16,6 +16,7 @@ from data_engineering_copilot.domain.protocols import EmbedderProtocol, LLMClien
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import OpenAICompatibleEmbeddings
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+from data_engineering_copilot.infrastructure.cooldown_aware_router import CooldownAwareEmbeddingRouter
 from data_engineering_copilot.infrastructure.crawl_cache import CrawlCache, NoOpCrawlCache
 from data_engineering_copilot.infrastructure.crawl_db import PostgresCrawlFrontierDB
 from data_engineering_copilot.infrastructure.error_categorization import categorize_provider_error
@@ -987,12 +988,13 @@ def _build_embedding_chain_config(
                     dimension = app_settings.embedding_model_dimensions.get(
                         app_settings.nvidia_embedding_model, app_settings.default_embedding_dimension
                     )
+                    batch_size = app_settings.embedding_batch_sizes.get("nvidia", app_settings.embedding_batch_size)
                     client = OpenAICompatibleEmbeddings(
                         api_key=api_key,
                         model_name=app_settings.nvidia_embedding_model,
                         base_url=app_settings.nvidia_base_url,
                         embedding_dimension=dimension,
-                        batch_size=app_settings.embedding_batch_size,
+                        batch_size=batch_size,
                         rate_limiter=limiters.get("nvidia"),
                         include_provider_param=False,
                         token_counter=token_counter_for(app_settings.nvidia_embedding_model),
@@ -1004,12 +1006,13 @@ def _build_embedding_chain_config(
                     dimension = app_settings.embedding_model_dimensions.get(
                         app_settings.openrouter_embedding_model, app_settings.default_embedding_dimension
                     )
+                    batch_size = app_settings.embedding_batch_sizes.get("openrouter", app_settings.embedding_batch_size)
                     client = OpenAICompatibleEmbeddings(
                         api_key=api_key,
                         model_name=app_settings.openrouter_embedding_model,
                         base_url=app_settings.openrouter_base_url,
                         embedding_dimension=dimension,
-                        batch_size=app_settings.embedding_batch_size,
+                        batch_size=batch_size,
                         rate_limiter=limiters.get("openrouter"),
                         include_provider_param=True,
                         token_counter=token_counter_for(app_settings.openrouter_embedding_model),
@@ -1021,12 +1024,13 @@ def _build_embedding_chain_config(
                     dimension = app_settings.embedding_model_dimensions.get(
                         app_settings.gemini_embedding_model, app_settings.default_embedding_dimension
                     )
+                    batch_size = app_settings.embedding_batch_sizes.get("gemini", app_settings.embedding_batch_size)
                     client = OpenAICompatibleEmbeddings(
                         api_key=api_key,
                         model_name=app_settings.gemini_embedding_model,
                         base_url=app_settings.gemini_base_url,
                         embedding_dimension=dimension,
-                        batch_size=app_settings.embedding_batch_size,
+                        batch_size=batch_size,
                         rate_limiter=limiters.get("gemini"),
                         include_provider_param=False,
                         token_counter=token_counter_for(app_settings.gemini_embedding_model),
@@ -1038,12 +1042,15 @@ def _build_embedding_chain_config(
                     dimension = app_settings.embedding_model_dimensions.get(
                         app_settings.huggingface_embedding_model, app_settings.default_embedding_dimension
                     )
+                    batch_size = app_settings.embedding_batch_sizes.get(
+                        "huggingface", app_settings.embedding_batch_size
+                    )
                     client = HuggingFaceServerlessEmbeddings(
                         api_key=api_key,
                         model_name=app_settings.huggingface_embedding_model,
                         base_url=app_settings.huggingface_base_url,
                         embedding_dimension=dimension,
-                        batch_size=app_settings.embedding_batch_size,
+                        batch_size=batch_size,
                         rate_limiter=limiters.get("huggingface"),
                         token_counter=token_counter_for(app_settings.huggingface_embedding_model),
                     )
@@ -1053,7 +1060,7 @@ def _build_embedding_chain_config(
                     embedding_dimension=app_settings.embedding_model_dimensions.get(
                         app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
                     ),
-                    batch_size=app_settings.embedding_batch_size,
+                    batch_size=app_settings.embedding_batch_sizes.get("local-hf", app_settings.embedding_batch_size),
                 )
 
             if client is not None:
@@ -1135,6 +1142,14 @@ def build_embedding_fallback_chain(
         return client  # type: ignore[return-value]
 
     chain = ProviderFallbackChain(config, health)
+
+    if config.degraded_fallback is not None:
+        chain = CooldownAwareEmbeddingRouter(
+            chain=chain,
+            health=health,
+            max_cooldown_wait_s=app_settings.max_cooldown_wait_s,
+        )
+
     logger.info(
         "embedding_fallback_chain_built",
         purpose=purpose,
@@ -1142,6 +1157,7 @@ def build_embedding_fallback_chain(
             [(p.name, getattr(p.client, "model_name", getattr(p.client, "model", "unknown"))) for p in config.providers]
         ),
         degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
+        cooldown_aware=True,
     )
     return chain
 
@@ -1333,14 +1349,6 @@ def build_embedder(
             token_counter=token_counter_for(app_settings.gemini_embedding_model),
             declared_input_limit=declared_input_limit(app_settings.gemini_embedding_model),
         )
-    elif provider == "local-hf":
-        return LocalSentenceTransformerEmbeddings(
-            model_name=app_settings.local_hf_embedding_model,
-            embedding_dimension=app_settings.embedding_model_dimensions.get(
-                app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
-            ),
-            batch_size=app_settings.embedding_batch_size,
-        )
     elif provider == "huggingface":
         api_key = app_settings.huggingface_api_key.get_secret_value()
         if not api_key:
@@ -1353,13 +1361,21 @@ def build_embedder(
             batch_size=app_settings.embedding_batch_size,
             token_counter=token_counter_for(app_settings.huggingface_embedding_model),
         )
+    elif provider == "local-hf":
+        return LocalSentenceTransformerEmbeddings(
+            model_name=app_settings.local_hf_embedding_model,
+            embedding_dimension=app_settings.embedding_model_dimensions.get(
+                app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
+            ),
+            batch_size=app_settings.embedding_batch_sizes.get("local-hf", app_settings.embedding_batch_size),
+        )
     elif provider == "groq":
         raise ValueError(
-            "Groq does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', or 'local-hf'."
+            "Groq does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', 'huggingface', or 'local-hf'."
         )
     elif provider == "cerebras":
         raise ValueError(
-            "Cerebras does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', or 'local-hf'."
+            "Cerebras does not support embeddings. Set embedding_provider to 'nvidia', 'openrouter', 'gemini', 'huggingface', or 'local-hf'."
         )
     else:
         raise ValueError(
@@ -1385,15 +1401,16 @@ def build_evaluation_embeddings(
     )
 
     # Convert unified chain back to legacy tuple format for backward compatibility
-    if isinstance(chain, ProviderFallbackChain):
-        return [(p.name, p.client) for p in chain._config.providers] + (  # type: ignore[return-value]
-            [(chain._config.degraded_fallback.name, chain._config.degraded_fallback.client)]
-            if chain._config.degraded_fallback
+    inner = chain.inner if isinstance(chain, CooldownAwareEmbeddingRouter) else chain
+    if isinstance(inner, ProviderFallbackChain):
+        return [(p.name, p.client) for p in inner._config.providers] + (  # type: ignore[return-value]
+            [(inner._config.degraded_fallback.name, inner._config.degraded_fallback.client)]
+            if inner._config.degraded_fallback
             else []
         )
     else:
         # Single embedder
-        return [("primary", chain)]
+        return [("primary", chain)]  # type: ignore[reportReturnType]
 
 
 def build_chunker(app_settings: AppSettings = settings):

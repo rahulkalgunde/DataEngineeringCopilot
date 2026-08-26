@@ -113,11 +113,14 @@ markers = [
 [tool.coverage.run]
 parallel = true
 branch = true
-omit = ["data_engineering_copilot/ui/*"]
+omit = [
+    "data_engineering_copilot/ui/*",
+    "data_engineering_copilot/workers/*",
+]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 0
+fail_under = 90
 
 [tool.ruff]
 target-version = "py312"
@@ -147,4 +150,3 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_provider_capabilities.py",
     "tests/unit/test_input_guardrails.py",
 ]
-

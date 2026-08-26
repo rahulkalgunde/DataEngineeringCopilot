@@ -79,6 +79,9 @@ jobs:
       - name: Changed-code coverage gate (>=90% on lines touched vs main)
         run: uv run make test-cov-gate
 
+      - name: Total coverage gate (>=90% overall)
+        run: uv run make test-cov-total
+
       - name: Upload coverage
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         if: always()

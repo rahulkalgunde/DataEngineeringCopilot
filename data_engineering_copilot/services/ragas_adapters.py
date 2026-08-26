@@ -28,6 +28,7 @@ import types
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
+from data_engineering_copilot.infrastructure.cooldown_aware_router import CooldownAwareEmbeddingRouter
 from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
 
 logger = logging.getLogger(__name__)
@@ -154,8 +155,9 @@ class AdaptiveRagasEmbeddings(BaseRagasEmbeddings):
     async def _execute_embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(self._chain, ProviderFallbackChain):
             return await self._chain.execute(texts)
-        else:
-            return await self._chain.embed_texts(texts)
+        if isinstance(self._chain, CooldownAwareEmbeddingRouter):
+            return await self._chain.inner.execute(texts)
+        return await self._chain.embed_texts(texts)
 
     async def close(self) -> None:
         if hasattr(self._chain, "close"):

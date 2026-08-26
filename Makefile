@@ -218,7 +218,12 @@ test-ci-unit:
 # locally run `make test-unit-cov` first.
 DIFF_THRESHOLD ?= 90
 test-unit-cov:
-	$(PYTEST) tests/unit/ -q --cov=data_engineering_copilot --cov-branch --cov-report=xml -n 6 --dist worksteal
+	$(PYTEST) tests/unit/ -q --cov=data_engineering_copilot --cov-branch --cov-report=xml --cov-report=term-missing -n 6 --dist worksteal
+
+# Total coverage gate — fails if overall coverage < 90%.
+# This is the "90% unit test coverage" gate. Runs in CI after test-ci-unit.
+test-cov-total:
+	$(PYTEST) tests/unit/ -q --cov=data_engineering_copilot --cov-branch --cov-report=term-missing --no-header -n 6 --dist worksteal
 
 test-cov-gate:
 	@if [ ! -f coverage.xml ]; then \

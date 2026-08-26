@@ -20,6 +20,16 @@ class EmbeddingError(CoreDomainException):
     """Raised when embedding generation fails."""
 
 
+class EmbeddingCrashError(EmbeddingError):
+    """Raised when an embedding subprocess crashes (segfault, SIGKILL).
+
+    Unlike ``EmbeddingError`` (which covers catchable API failures),
+    ``EmbeddingCrashError`` signals that the embedding worker process died
+    silently and the batch must be retried — possibly with a different
+    provider or fallback strategy.
+    """
+
+
 class RerankError(CoreDomainException):
     """Raised when provider reranking fails."""
 

@@ -305,12 +305,18 @@ def build_catalog_probe_entries(models: list[CatalogModel], kind: str = "llm") -
 
 
 def compute_embedding_order(probes: list[ProbeEntry]) -> list[str]:
-    """Fastest OK embedding provider per provider (dedup)."""
+    """Fastest OK embedding provider per provider (dedup).
+
+    local-hf is excluded — it was removed from the fallback chain to avoid
+    slow CPU-bound embedding when external providers are available.
+    """
     best: dict[str, ProbeEntry] = {}
     for p in probes:
         if p.status != "OK":
             continue
         if p.kind != "embedding":
+            continue
+        if p.provider == "local-hf":
             continue
         cur = best.get(p.provider)
         if (

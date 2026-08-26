@@ -1413,11 +1413,16 @@ def gen_build(generation: str | None = None) -> int:
             }
         )
         print("  late chunking: ENABLED (dark-flag benchmark build)")
-    builder = PinnedIndexBuilder(store, embedder, gen, **builder_kwargs)  # type: ignore[arg-type]
+    builder = PinnedIndexBuilder(store, embedder, gen, settings=settings, **builder_kwargs)  # type: ignore[arg-type]
     try:
         report = asyncio.run(builder.build(packages))
     except Exception as exc:
-        print(f"❌ Pinned build failed: {exc}")
+        ckpt = artifact_root / "embedding_checkpoint.json"
+        if ckpt.exists():
+            print(f"❌ Pinned build failed: {exc}")
+            print(f"   Checkpoint saved → re-run `dec gen-build --generation {gen}` to resume embedding.")
+        else:
+            print(f"❌ Pinned build failed: {exc}")
         return 5
     print(f"✅ Pinned build complete: generation={report.generation}")
     print(f"  Chunks: {report.chunk_count}  Files: {report.source_file_count}")

@@ -79,6 +79,12 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             reraise=True,
         )(self._request_embeddings)
 
+    def set_batch_size(self, batch_size: int) -> None:
+        """Update batch size at runtime (e.g., from DynamicBatchSizer)."""
+        if batch_size > 0:
+            self._batch_size = batch_size
+            logger.info("Updated embedding batch_size to %d for %s", batch_size, self.model_name)
+
     def _make_client_kwargs(self) -> dict:
         return {
             "headers": {

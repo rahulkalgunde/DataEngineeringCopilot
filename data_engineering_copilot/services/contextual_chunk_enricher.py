@@ -169,7 +169,7 @@ class ContextualChunkEnricher:
         self,
         summarizer: ContextSummarizer | None = None,
         enabled: bool = False,
-        batch_size: int = 20,
+        batch_size: int = 32,
         telemetry=None,
     ) -> None:
         self._summarizer = summarizer

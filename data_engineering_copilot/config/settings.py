@@ -625,7 +625,7 @@ class AppSettings(BaseSettings):
 
     embedding_batch_size: int = 64
     embed_concurrency: int = 1
-    enrichment_batch_size: int = 20
+    enrichment_batch_size: int = 32
 
     # LLM Provider selection: "ollama" | "openrouter"
     # Embedding provider selection: "ollama" | "openrouter"
@@ -921,6 +921,45 @@ class AppSettings(BaseSettings):
         default_factory=lambda: ["nvidia", "openrouter", "huggingface", "local-hf"]
     )
 
+    # Per-provider embedding batch sizes calibrated for MINIMUM API calls.
+    # These are DEFAULTS — actual batch size is computed at runtime by
+    # DynamicBatchSizer based on model context window and corpus token distribution.
+    # See: docs/research/2026-08-26_embedding_batch_calibration.md
+    embedding_batch_sizes: dict[str, int] = Field(
+        default_factory=lambda: {
+            "nvidia": 1024,  # Tested 64-1024, all OK — use max
+            "openrouter": 256,  # Tested 32-256, all OK — use max
+            "gemini": 64,  # Moderate capacity
+            "huggingface": 32,  # Conservative (402 without paid tier)
+        }
+    )
+
+    # Model context windows (tokens) — used by DynamicBatchSizer to compute
+    # optimal batch size at runtime. Values from provider docs.
+    embedding_model_context_windows: dict[str, int] = Field(
+        default_factory=lambda: {
+            "nvidia/nemotron-3-embed-1b": 131072,  # 131K context
+            "nvidia/nemotron-3-embed-1b:free": 16384,  # 16K (OpenRouter free tier)
+            "nvidia/Nemotron-3-Embed-1B-BF16": 131072,  # 131K context
+            "text-embedding-004": 8192,  # Gemini
+        }
+    )
+
+    # Hard cap on texts per request per provider (safety limit).
+    # DynamicBatchSizer will never exceed this regardless of context calc.
+    embedding_provider_batch_limits: dict[str, int] = Field(
+        default_factory=lambda: {
+            "nvidia": 1024,
+            "openrouter": 256,
+            "gemini": 128,
+            "huggingface": 64,
+        }
+    )
+
+    # Safety margin for context utilization (0.8 = use 80% of context window).
+    # Prevents OOM/errors from tokenization variance and hidden overhead.
+    embedding_safety_margin: float = 0.8
+
     # Provider cooldown / routing
     provider_cooldown_seconds: int = 60
     health_success_rate_weight: float = 0.6
@@ -949,6 +988,11 @@ class AppSettings(BaseSettings):
     # skipped (fail fast) instead of stalling the request on a broken local
     # model. A single success resets the counter.
     ollama_degraded_max_consecutive_failures: int = 2
+
+    # Max seconds to wait for an external embedding provider to cool down
+    # before degrading to the local fallback. Used by the cooldown-aware
+    # embedding router to prefer external providers over local.
+    max_cooldown_wait_s: int = 60
 
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = "openrouter"
@@ -1465,11 +1509,9 @@ class AppSettings(BaseSettings):
             return self.nvidia_embedding_model
         if provider == "gemini":
             return self.gemini_embedding_model
-        if provider == "local-hf":
-            return self.local_hf_embedding_model
         if provider == "huggingface":
             return self.huggingface_embedding_model
-        return self.local_hf_embedding_model
+        return self.huggingface_embedding_model
 
     def get_embedding_dimension(self) -> int:
         """Return the embedding dimension for the active model.

@@ -120,7 +120,7 @@ async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, t
                 model.model, app_settings.default_embedding_dimension
             )
             client = LocalSentenceTransformerEmbeddings(
-                model_name=model.model, embedding_dimension=dimension, batch_size=4
+                model_name=model.model, embedding_dimension=dimension, batch_size=32
             )
             start = time.monotonic()
             vecs = await client.embed_texts(["hello world"])
@@ -158,7 +158,12 @@ async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, t
                     dimension=dimension,
                 )
             client = OpenAICompatibleEmbeddings(
-                api_key=api_key, model_name=model.model, base_url=base_url, embedding_dimension=dimension, batch_size=4
+                api_key=api_key,
+                model_name=model.model,
+                base_url=base_url,
+                embedding_dimension=dimension,
+                batch_size=32,
+                include_provider_param=False,
             )
         elif model.provider == "openrouter":
             api_key = app_settings.openrouter_api_key.get_secret_value()
@@ -179,7 +184,7 @@ async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, t
                 model_name=model.model,
                 base_url=base_url,
                 embedding_dimension=dimension,
-                batch_size=4,
+                batch_size=32,
                 include_provider_param=True,
             )
         elif model.provider == "huggingface":
@@ -197,7 +202,7 @@ async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, t
                     dimension=dimension,
                 )
             client = HuggingFaceServerlessEmbeddings(
-                api_key=api_key, model_name=model.model, base_url=base_url, embedding_dimension=dimension, batch_size=4
+                api_key=api_key, model_name=model.model, base_url=base_url, embedding_dimension=dimension, batch_size=32
             )
         else:
             return ProbeEntry(

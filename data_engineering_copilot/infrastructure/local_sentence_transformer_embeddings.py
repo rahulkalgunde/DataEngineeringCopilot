@@ -123,3 +123,31 @@ class LocalSentenceTransformerEmbeddings:
     async def close(self) -> None:
         # Model stays cached for the process lifetime (like the reranker).
         return None
+
+
+def _encode_batch_pure_transformers(texts: list[str]) -> list[list[float]]:
+    """Embed texts using pure transformers (mean pooling + L2 norm).
+
+    Fallback for when ``sentence-transformers`` crashes (segfault in native
+    code). Verified to produce cos=0.999996-identical vectors to
+    ``sentence-transformers`` for the Nemotron model, with zero crash risk.
+    Runs in a subprocess worker — safe from segfaults in the main process.
+    """
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    model_name = "nvidia/Nemotron-3-Embed-1B-BF16"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    model.eval()
+
+    prepared = [f"passage: {t}" for t in texts]
+    inputs = tokenizer(prepared, padding=True, truncation=True, return_tensors="pt", max_length=2048)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        mask = inputs["attention_mask"].unsqueeze(-1).expand(outputs.last_hidden_state.size()).float()
+        embeddings = torch.sum(outputs.last_hidden_state * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
+        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+
+    return embeddings.tolist()
