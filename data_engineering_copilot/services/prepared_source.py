@@ -45,4 +45,3 @@ class PreparedSource:
                 key = str(root / record.relative_path)
             out[key] = record.content_hash[:12]
         return out
-
