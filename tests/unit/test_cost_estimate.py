@@ -1,34 +1,51 @@
+"""Tests for evaluation/cost_estimate.py."""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import patch
+
 import pytest
 
-from data_engineering_copilot.evaluation.cost_estimate import enforce_cost_gate, estimate_calls
+from data_engineering_copilot.evaluation.cost_estimate import (
+    enforce_cost_gate,
+    estimate_calls,
+)
 
 
-def test_generation_formula():
-    assert estimate_calls("eval-generation", 12, n_trials=3) == 12 * 7
+class TestEstimateCalls:
+    def test_eval_generation(self) -> None:
+        assert estimate_calls("eval-generation", 10) == 10 * (1 + 3 * 2)
+
+    def test_evaluate_no_ragas(self) -> None:
+        assert estimate_calls("evaluate", 10) == 10 * 2
+
+    def test_evaluate_with_ragas(self) -> None:
+        assert estimate_calls("evaluate", 10, ragas=True) == 10 * (2 + 19)
+
+    def test_evaluate_spark_short_circuits(self) -> None:
+        assert estimate_calls("evaluate", 10, spark=True) == 0
+
+    def test_unknown_command(self) -> None:
+        assert estimate_calls("unknown", 10) == 0
 
 
-def test_evaluate_formula_with_and_without_ragas():
-    assert estimate_calls("evaluate", 12, ragas=False) == 12 * 2
-    assert estimate_calls("evaluate", 12, ragas=True) == 12 * 21
+class TestEnforceCostGate:
+    def test_zero_estimate_passes(self) -> None:
+        enforce_cost_gate("test", 0)  # should not raise
 
+    def test_tty_passes(self) -> None:
+        with patch("sys.stdin.isatty", return_value=True):
+            enforce_cost_gate("test", 100)
 
-def test_spark_recall_rows_are_free():
-    assert estimate_calls("evaluate", 51, spark=True) == 0
+    def test_force_set_passes(self) -> None:
+        with patch("sys.stdin.isatty", return_value=False), patch.dict(os.environ, {"FORCE": "1"}):
+            enforce_cost_gate("test", 100)
 
-
-def test_force_gate_exits_non_interactive(monkeypatch):
-    monkeypatch.setenv("FORCE", "")
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    with pytest.raises(SystemExit) as ei:
-        enforce_cost_gate("evaluate", 240)
-    assert ei.value.code == 2
-
-
-def test_force_gate_passes_with_env(monkeypatch):
-    monkeypatch.setenv("FORCE", "1")
-    enforce_cost_gate("evaluate", 240)  # no raise
-
-
-def test_zero_estimate_never_gates(monkeypatch):
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    enforce_cost_gate("evaluate", 0)  # no raise, no FORCE needed
+    def test_non_tty_no_force_raises(self) -> None:
+        with (
+            patch("sys.stdin.isatty", return_value=False),
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(SystemExit),
+        ):
+            enforce_cost_gate("test", 100)

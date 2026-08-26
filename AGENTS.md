@@ -69,6 +69,20 @@ Ratchet: a defect class recurring twice MUST get a gate in the fixing commit.
 - **Fail-open vs fail-closed is contractual**: auxiliary verifiers (groundedness, scope, CRAG grader, sibling rejoin, reranker init) fail open with logged warnings; only evidence-based refusals are hard (empty retrieval, low confidence, explicit scope `does_not_cover`). State the posture in module docstrings.
 - Package layout and per-module tour: `README.md`. RAG techniques tour: `docs/RAG_SYSTEM_LEARNER_GUIDE.md`.
 
+## API Contract Testing (before writing tests, pin down the API)
+**Key principle:** Before writing tests against any class, write a contract test that pins down its constructor signature, method names, property vs method, and behavioral invariants. This is cheap (22 tests, 3s to run) and prevents expensive debugging cycles. See `tests/unit/test_api_contracts.py`.
+
+Findings from prior sessions that cost ~2.5 hours of debugging:
+- **Dataclass constructors have specific field names** — `RetrievedChunk` takes `distance` + `confidence`, NOT `score`. `CachedAnswer` takes `sources` (tuple), NOT `citations` (list). Always verify with `inspect.signature` or `dataclasses.fields` before writing tests.
+- **Method names must be verified** — `RelevanceGrader.grade_chunks` (not `grades_relevance`), `QueryCache.aget`/`aset_exact` (not `get_or_compute`). Check `hasattr` before using.
+- **Property vs method** — `QueryCache.stats` is a property, not a method. Calling `stats()` raises `TypeError`. Use `inspect.getattr_static` to check.
+- **Async vs sync** — `QueryCache.aget` is async, `get_exact` is sync. Verify with `inspect.iscoroutinefunction`.
+- **MagicMock without `spec=`** makes `hasattr` always return True. Always pass `spec=[...]` when mocking interfaces.
+- **Frozen Pydantic models** (`AppSettings`) cannot be patched. Use `make_settings()` with explicit kwargs instead.
+- **Cacheability requirements** — `QueryCache.is_cacheable` requires non-empty `sources` AND minimum confidence. Empty sources silently prevent caching.
+- **Error constructors** — `ProviderError(category, provider, model)` takes positional args, NOT keyword args. `LLMClientError` uses `ProviderErrorCategory` enum, not raw strings.
+- **Numeric contracts** — `ndcg_at_k` with binary relevance returns 1.0 when ALL expected items are present, regardless of position.
+
 ## Key make targets
 | Target | Description |
 |--------|-------------|

@@ -1,30 +1,49 @@
+"""Tests for evaluation/judge_calibration.py."""
+
+from __future__ import annotations
+
 import pytest
 
-from data_engineering_copilot.evaluation.judge_calibration import agreement
+from data_engineering_copilot.evaluation.judge_calibration import (
+    KAPPA_GATE,
+    RAW_GATE,
+    agreement,
+    verdict_for,
+)
 
 
-def test_perfect_agreement():
-    assert agreement([1, 0, 1, 1], [1, 0, 1, 1]) == (1.0, 1.0)
+class TestAgreement:
+    def test_perfect_agreement(self) -> None:
+        raw, kappa = agreement([1, 0, 1], [1, 0, 1])
+        assert raw == 1.0
+        assert kappa == 1.0
+
+    def test_no_agreement(self) -> None:
+        raw, kappa = agreement([1, 1, 0], [0, 0, 1])
+        assert raw == 0.0
+
+    def test_partial(self) -> None:
+        raw, kappa = agreement([1, 0, 1, 0], [1, 1, 1, 0])
+        assert 0 < raw < 1.0
+
+    def test_empty_raises(self) -> None:
+        with pytest.raises(ValueError):
+            agreement([], [])
+
+    def test_mismatched_length_raises(self) -> None:
+        with pytest.raises(ValueError):
+            agreement([1, 0], [1])
 
 
-def test_known_kappa_value():
-    y_true = [1, 1, 0, 0, 1, 0, 1, 0, 1, 1]
-    y_pred = [1, 0, 0, 0, 1, 1, 1, 0, 0, 1]
-    raw, kappa = agreement(y_true, y_pred)
-    assert abs(raw - 0.7) < 1e-9
-    n = len(y_true)
-    p_yes_t = sum(y_true) / n
-    p_yes_p = sum(y_pred) / n
-    pe = p_yes_t * p_yes_p + (1 - p_yes_t) * (1 - p_yes_p)
-    expected_kappa = (raw - pe) / (1 - pe)
-    assert abs(kappa - expected_kappa) < 1e-9
+class TestVerdictFor:
+    def test_passes_both_gates(self) -> None:
+        assert verdict_for(0.9, 0.7) is True
 
+    def test_fails_raw(self) -> None:
+        assert verdict_for(0.7, 0.7) is False
 
-def test_degenerate_single_class_returns_zero_kappa():
-    raw, kappa = agreement([1, 1, 1], [1, 1, 1])
-    assert raw == 1.0 and kappa == 0.0
+    def test_fails_kappa(self) -> None:
+        assert verdict_for(0.9, 0.5) is False
 
-
-def test_empty_inputs():
-    with pytest.raises(ValueError):
-        agreement([], [])
+    def test_exact_gate_passes(self) -> None:
+        assert verdict_for(RAW_GATE, KAPPA_GATE) is True

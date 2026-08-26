@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from data_engineering_copilot.services.drift_detector import (
@@ -116,11 +117,12 @@ class TestDriftDetectorBaseline:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "history.jsonl"
             detector = DriftDetector(storage_path=path, window_days=30)
-            # Record 3 snapshots with known values
+            now = datetime.now(UTC)
             for i, val in enumerate([0.8, 0.9, 1.0]):
+                ts = (now - timedelta(days=2 - i)).isoformat()
                 detector.record(
                     EvalSnapshot(
-                        timestamp=f"2026-07-{27 + i}T00:00:00Z",
+                        timestamp=ts,
                         metrics={"faithfulness": val},
                     )
                 )
@@ -134,8 +136,9 @@ class TestDriftDetectorCompare:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "history.jsonl"
             detector = DriftDetector(storage_path=path, window_days=30)
-            detector.record(EvalSnapshot(timestamp="2026-07-28T00:00:00Z", metrics={"confidence": 0.9}))
-            current = EvalSnapshot(timestamp="2026-07-29T00:00:00Z", metrics={"confidence": 0.88})
+            now = datetime.now(UTC)
+            detector.record(EvalSnapshot(timestamp=(now - timedelta(days=1)).isoformat(), metrics={"confidence": 0.9}))
+            current = EvalSnapshot(timestamp=now.isoformat(), metrics={"confidence": 0.88})
             report = detector.compare(current)
             assert not report.drifted
 
@@ -147,8 +150,9 @@ class TestDriftDetectorCompare:
                 window_days=30,
                 thresholds={"confidence": 0.1},
             )
-            detector.record(EvalSnapshot(timestamp="2026-07-28T00:00:00Z", metrics={"confidence": 0.9}))
-            current = EvalSnapshot(timestamp="2026-07-29T00:00:00Z", metrics={"confidence": 0.7})
+            now = datetime.now(UTC)
+            detector.record(EvalSnapshot(timestamp=(now - timedelta(days=1)).isoformat(), metrics={"confidence": 0.9}))
+            current = EvalSnapshot(timestamp=now.isoformat(), metrics={"confidence": 0.7})
             report = detector.compare(current)
             assert report.drifted
             assert "confidence" in report.drifted_metrics
