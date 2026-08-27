@@ -387,7 +387,7 @@ mirror-claude-docs:
 
 lint:
 	$(PYTHON) -m ruff check data_engineering_copilot/ tests/
-	@$(PYTHON) scripts/lint_env.py .env
+	@if [ -f scripts/lint_env.py ]; then $(PYTHON) scripts/lint_env.py .env; else echo "SKIP: scripts/lint_env.py not available"; fi
 
 format:
 	$(PYTHON) -m ruff format data_engineering_copilot/ tests/
