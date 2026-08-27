@@ -1,4 +1,4 @@
-"""Tests for cli_catalog.py."""
+"""Tests for cli_catalog.py pure functions."""
 
 from __future__ import annotations
 
@@ -71,3 +71,23 @@ class TestCatalogProbeTargetsEdgeCases:
         assert len(result) == 2
         assert result[0].provider == "nvidia"
         assert result[1].provider == "groq"
+
+
+class TestBuildRecommendedEdgeCases:
+    def test_with_multiple_probes(self) -> None:
+        probes = [
+            _make_probe("groq", "model1", "OK"),
+            _make_probe("nvidia", "model2", "OK"),
+            _make_probe("openrouter", "model3", "FAIL"),
+        ]
+        result = _build_recommended(probes)
+        assert "global" in result
+        assert "answer" in result
+
+    def test_with_skip_status(self) -> None:
+        probes = [
+            _make_probe("groq", "model1", "SKIP"),
+            _make_probe("nvidia", "model2", "OK"),
+        ]
+        result = _build_recommended(probes)
+        assert "global" in result

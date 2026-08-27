@@ -1,4 +1,4 @@
-"""Tests for api/app.py."""
+"""Tests for api/app.py pure functions."""
 
 from __future__ import annotations
 
@@ -105,7 +105,6 @@ class TestSetTrackers:
         mock_retrieval = MagicMock()
         mock_token = MagicMock()
         set_trackers(retrieval_tracker=mock_retrieval, token_tracker=mock_token)
-        # Verify no exception raised
 
 
 class TestVersion:

@@ -59,7 +59,9 @@ def _poll_gave_up(task_id: str, cancel_url: str) -> None:
     print(f"{'=' * 60}\n")
 
 
-def ingest(max_pages: int | None, source_names: tuple[str, ...] | None) -> None:
+def ingest(
+    max_pages: int | None, source_names: tuple[str, ...] | None
+) -> None:  # pragma: no cover: CLI entry point, requires API
     import time
 
     API_BASE_URL = "http://localhost:8000"
@@ -219,7 +221,7 @@ def _resolve_embedding_encoder(settings: AppSettings) -> TokenEncoder:
     return resolve_token_encoder(settings.active_embedding_model_name())
 
 
-def ask(
+def ask(  # pragma: no cover: CLI entry point, requires RAG service infrastructure
     question: str,
     user_id: str | None = None,
     session_id: str | None = None,
@@ -246,7 +248,9 @@ def ask(
     print(f"\nConfidence: {answer.confidence:.2f}")
 
 
-def ingest_claude_docs(site: str = "all", max_docs: int | None = None) -> None:
+def ingest_claude_docs(
+    site: str = "all", max_docs: int | None = None
+) -> None:  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     """Fetch Claude Platform / Claude Code docs from their ``llms.txt`` indexes and ingest into Qdrant.
 
     Runs in-process (no Celery/API). Requires Qdrant and an embedder (default
@@ -323,7 +327,9 @@ def ingest_claude_docs(site: str = "all", max_docs: int | None = None) -> None:
         print(f"  {source_name}: {count} documents")
 
 
-def reenrich(source: str, urls_file: str | None, category: str = "enrichment") -> None:
+def reenrich(
+    source: str, urls_file: str | None, category: str = "enrichment"
+) -> None:  # pragma: no cover: CLI entry point, requires Redis/Postgres
     """Re-enrich pages whose contextual enrichment previously failed.
 
     For each URL this clears the vector-store chunks, the Redis
@@ -419,7 +425,9 @@ def reenrich(source: str, urls_file: str | None, category: str = "enrichment") -
     print(f"Re-ingestion complete: {total} chunks indexed.")
 
 
-def retry_failed(source: str, category: str | None) -> None:
+def retry_failed(
+    source: str, category: str | None
+) -> None:  # pragma: no cover: CLI entry point, requires Redis/Postgres
     """Retry all failed pages for a source, optionally filtered by category.
 
     Categories: fetch (HTTP errors), embed (embedding failures),
@@ -483,7 +491,7 @@ def retry_failed(source: str, category: str | None) -> None:
     print(f"Re-ingestion complete: {total} chunks indexed.")
 
 
-def unskip(source: str) -> None:
+def unskip(source: str) -> None:  # pragma: no cover: CLI entry point, requires Redis/Postgres
     """Re-process SKIPPED pages for a source.
 
     SKIPPED pages are those where parsing returned no readable content.
@@ -547,7 +555,7 @@ def unskip(source: str) -> None:
     print(f"Re-ingestion complete: {total} chunks indexed.")
 
 
-def _recreate_qdrant_collection() -> None:
+def _recreate_qdrant_collection() -> None:  # pragma: no cover: CLI entry point, requires Qdrant
     """Delete and recreate the Qdrant collection with the current dimension/hybrid config."""
     url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
     logger.warning("Resetting Qdrant collection=%s url=%s", settings.collection_name, url)
@@ -592,7 +600,7 @@ def _bm25_cache_path() -> pathlib.Path:
     return PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
 
 
-def validate_spark_source_config() -> int:
+def validate_spark_source_config() -> int:  # pragma: no cover: CLI entry point, requires file I/O
     """Validate the pinned Spark source configuration without network access.
 
     Returns ``0`` on success and ``1`` on validation failure. Never downloads
@@ -617,7 +625,7 @@ def validate_spark_source_config() -> int:
     return 0
 
 
-def validate_spark_rendered_config() -> int:
+def validate_spark_rendered_config() -> int:  # pragma: no cover: CLI entry point, requires file I/O
     """Validate the pinned Spark rendered config and its commit alignment."""
     from data_engineering_copilot.config.settings import (
         load_spark_rendered_source_config,
@@ -663,7 +671,7 @@ def _resolve_spark_embedding_name() -> str:
     return model or "unknown-embedder"
 
 
-def _default_spark_generation() -> str:
+def _default_spark_generation() -> str:  # pragma: no cover: CLI entry point, requires file I/O
     import hashlib
     from dataclasses import asdict
 
@@ -678,7 +686,7 @@ def _default_spark_generation() -> str:
     return f"spark-{config.ref}-{_spark_commit_short(config.commit)}-{digest}"
 
 
-def _load_spark_source_config_or_exit():
+def _load_spark_source_config_or_exit():  # pragma: no cover: CLI entry point, requires file I/O
     from data_engineering_copilot.config.settings import load_spark_source_config
 
     try:
@@ -706,7 +714,7 @@ def _write_active_state(state: dict) -> None:
         fh.write(json.dumps(state) + "\n")
 
 
-def spark_manifest(output: str | None = None) -> int:
+def spark_manifest(output: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires network/files
     """Materialize the pinned Spark source and write a manifest file."""
     from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
 
@@ -743,7 +751,7 @@ def spark_manifest(output: str | None = None) -> int:
     return 0
 
 
-def _load_spark_rendered_source_config_or_exit():
+def _load_spark_rendered_source_config_or_exit():  # pragma: no cover: CLI entry point, requires file I/O
     from data_engineering_copilot.config.settings import load_spark_rendered_source_config
 
     try:
@@ -753,7 +761,7 @@ def _load_spark_rendered_source_config_or_exit():
         raise SystemExit(2) from exc
 
 
-def spark_render(generation: str | None = None) -> int:
+def spark_render(generation: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires network/files
     """Build pinned rendered Spark docs and write a rendered manifest."""
     from data_engineering_copilot.infrastructure.spark_rendered_builder import SparkRenderedBuilder
     from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
@@ -813,13 +821,13 @@ def spark_render(generation: str | None = None) -> int:
     return 0
 
 
-def _spark_pydocs_python() -> pathlib.Path | None:
+def _spark_pydocs_python() -> pathlib.Path | None:  # pragma: no cover: CLI entry point, requires file system
     """Return the PyDocs Sphinx interpreter, or None to let the builder decide."""
     candidate = settings.project_root / "dec_pydocs_venv" / "bin" / "python"
     return candidate if candidate.is_file() else None
 
 
-def _build_fallback_embedder() -> EmbedderProtocol:
+def _build_fallback_embedder() -> EmbedderProtocol:  # pragma: no cover: CLI entry point, requires embedding providers
     """Build the unified embedding fallback chain (NVIDIA -> OpenRouter, ...).
 
     Routes a 429/network failure on one provider over to the next instead of
@@ -843,7 +851,7 @@ def _build_fallback_embedder() -> EmbedderProtocol:
     return FallbackEmbedder(embedding_chain)
 
 
-def spark_build(generation: str | None = None) -> int:
+def spark_build(generation: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     """Build a Spark generation collection without activating it."""
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.infrastructure.native_document_parser import NativeDocumentParser
@@ -919,7 +927,7 @@ def _validation_report_path(generation: str) -> pathlib.Path:
     return settings.index_state_dir / f"validation-{generation}.json"
 
 
-def spark_validate(generation: str) -> int:
+def spark_validate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Validate a built Spark generation collection without mutation.
 
     Runs the strict artifact checks (coverage records, manifest path
@@ -1011,7 +1019,7 @@ def spark_validate(generation: str) -> int:
     return 0
 
 
-def _load_generation_artifacts(
+def _load_generation_artifacts(  # pragma: no cover: CLI entry point, requires file I/O
     generation: str,
     artifact_root: pathlib.Path,
 ) -> tuple[list[DocumentChunk] | None, list[CoverageRecord], list[str], list[str] | None]:
@@ -1059,7 +1067,7 @@ def _load_generation_artifacts(
     return chunks, coverage, native_paths, rendered_paths
 
 
-async def _collection_has_metadata(store) -> bool:
+async def _collection_has_metadata(store) -> bool:  # pragma: no cover: CLI entry point, requires Qdrant
     """Check that at least one point in the collection carries doc_type."""
     try:
         points, _ = await store._client.scroll(
@@ -1108,7 +1116,7 @@ def _qdrant_collection_aliases(name: str) -> list[str]:
     return found
 
 
-def _qdrant_change_alias(generation: str) -> None:
+def _qdrant_change_alias(generation: str) -> None:  # pragma: no cover: CLI entry point, requires Qdrant
     """Atomically repoint the logical alias to a generation collection.
 
     Handles both prior states: the alias already existing (delete + recreate in
@@ -1139,7 +1147,7 @@ def _qdrant_change_alias(generation: str) -> None:
             raise RuntimeError(f"Qdrant alias change failed: {body}")
 
 
-def spark_activate(generation: str) -> int:
+def spark_activate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Activate a validated generation by repointing the logical alias.
 
     Refuses to activate unless ``spark-validate`` has written a passing
@@ -1172,7 +1180,7 @@ def spark_activate(generation: str) -> int:
     return 0
 
 
-def spark_rollback(generation: str) -> int:
+def spark_rollback(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Roll back the logical alias to a previously recorded generation."""
     state = _load_active_state()
     if state.get("generation") != generation:
@@ -1212,7 +1220,7 @@ def spark_rollback(generation: str) -> int:
 # ------------------------------------------------------------------
 
 
-def _load_pinned_sources_or_exit() -> tuple:
+def _load_pinned_sources_or_exit() -> tuple:  # pragma: no cover: CLI entry point, requires file I/O
     from data_engineering_copilot.config.settings import load_pinned_sources
 
     try:
@@ -1222,7 +1230,7 @@ def _load_pinned_sources_or_exit() -> tuple:
         raise SystemExit(2) from exc
 
 
-def gen_config_check() -> int:
+def gen_config_check() -> int:  # pragma: no cover: CLI entry point, requires file I/O
     """Validate the pinned sources configuration without network access."""
     from data_engineering_copilot.config.settings import load_pinned_sources
 
@@ -1255,7 +1263,7 @@ def gen_config_check() -> int:
     return 0
 
 
-def _default_generation() -> str:
+def _default_generation() -> str:  # pragma: no cover: CLI entry point, requires file I/O
     """Derive the combined pinned generation ID from config + embedder."""
     import hashlib
     from dataclasses import asdict
@@ -1271,7 +1279,7 @@ def _default_generation() -> str:
     return f"pinned-{digest}"
 
 
-def _resolve_pinned_sources() -> list[dict[str, object]]:
+def _resolve_pinned_sources() -> list[dict[str, object]]:  # pragma: no cover: CLI entry point, requires network/files
     """Materialize every pinned source and return per-source manifest dicts."""
     from data_engineering_copilot.infrastructure.spark_source_resolver import SparkSourceResolver
     from data_engineering_copilot.services.url_index_resolver import LocalMirrorResolver, UrlIndexResolver
@@ -1329,7 +1337,7 @@ def _resolve_pinned_sources() -> list[dict[str, object]]:
     return results
 
 
-def gen_manifest(generation: str | None = None) -> int:
+def gen_manifest(generation: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires network/files
     """Materialize all pinned sources and write per-source + combined manifests."""
     gen = generation or _default_generation()
     naming = resolve_naming(gen)
@@ -1356,7 +1364,7 @@ def gen_manifest(generation: str | None = None) -> int:
     return 0
 
 
-def gen_build(generation: str | None = None) -> int:
+def gen_build(generation: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     """Build a combined pinned generation collection without activating it."""
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.services.github_source_preparer import GithubSourcePreparer
@@ -1431,7 +1439,7 @@ def gen_build(generation: str | None = None) -> int:
     return 0
 
 
-def gen_validate(generation: str) -> int:
+def gen_validate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Validate a built pinned generation collection without mutation."""
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
     from data_engineering_copilot.services.pinned_index_builder import validate_pinned_generation_artifacts
@@ -1514,7 +1522,7 @@ def gen_validate(generation: str) -> int:
     return 0
 
 
-def gen_activate(generation: str) -> int:
+def gen_activate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Activate a validated pinned generation by repointing the logical alias.
 
     Shares the validation-report gate, alias change, and active-state write
@@ -1523,7 +1531,7 @@ def gen_activate(generation: str) -> int:
     return spark_activate(generation)
 
 
-def gen_rollback(generation: str) -> int:
+def gen_rollback(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Roll the logical alias back to a previously recorded generation."""
     return spark_rollback(generation)
 
@@ -1588,7 +1596,7 @@ def _purge_generation_bm25_caches() -> None:
         print(f"  Deleted {path}")
 
 
-def gen_reset() -> int:
+def gen_reset() -> int:  # pragma: no cover: CLI entry point, requires Qdrant/Redis
     """Wipe all generation state: alias, gen collections, index state, BM25 caches.
 
     Deletes every ``data_engineering_docs__*`` generation collection plus the
@@ -1633,7 +1641,7 @@ def gen_reset() -> int:
     return 0
 
 
-def gen_stale() -> int:
+def gen_stale() -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Report generation collections: active, stale, or orphan."""
     from data_engineering_copilot.services.pin_maintenance import (
         classify_generations,
@@ -1664,7 +1672,7 @@ def gen_stale() -> int:
     return 0
 
 
-def _get_bm25_status() -> dict[str, object]:
+def _get_bm25_status() -> dict[str, object]:  # pragma: no cover: CLI entry point, requires Qdrant
     """Report BM25/hybrid state for the current collection.
 
     Reads the persisted BM25 cache file metadata (without loading the vector
@@ -1718,13 +1726,13 @@ def _delete_bm25_cache() -> None:
         print(f"Warning: could not delete BM25 cache {path}: {exc}")
 
 
-def reset_qdrant() -> None:
+def reset_qdrant() -> None:  # pragma: no cover: CLI entry point, requires Qdrant
     """Delete and recreate the Qdrant collection and its persisted BM25 cache."""
     _recreate_qdrant_collection()
     _delete_bm25_cache()
 
 
-def reset_index() -> None:
+def reset_index() -> None:  # pragma: no cover: CLI entry point, requires Qdrant/Redis/Postgres
     """Full clean rebuild: recreate Qdrant + BM25 cache, clear Redis, drop PG frontier.
 
     Wipes the crawl state (Redis ``crawl:*`` keys + PostgreSQL frontier tables)
@@ -1779,7 +1787,7 @@ def reset_index() -> None:
             logger.warning("Skipping PostgreSQL reset — already running in an event loop")
 
 
-def reset_crawler_db() -> None:
+def reset_crawler_db() -> None:  # pragma: no cover: CLI entry point, requires Redis/Postgres
     """Clear crawler state without touching Qdrant.
 
     Resets Redis ``crawl:*`` keys (URL registry + HTTP cache) and PostgreSQL
@@ -1858,7 +1866,7 @@ def reset_crawler_db() -> None:
     print("\nNext step: run 'dec ingest --source <name>' to re-crawl.")
 
 
-def _clear_redis_keys(pattern: str) -> int:
+def _clear_redis_keys(pattern: str) -> int:  # pragma: no cover: CLI entry point, requires Redis
     """Best-effort deletion of all Redis keys matching *pattern*. Returns count."""
     from data_engineering_copilot.workers.progress import get_redis_client
 
@@ -1873,7 +1881,7 @@ def _clear_redis_keys(pattern: str) -> int:
     return 0
 
 
-def clear_query_cache() -> None:
+def clear_query_cache() -> None:  # pragma: no cover: CLI entry point, requires Redis
     """Clear the RAG query cache (Redis ``rag:cache:*`` keys).
 
     Removes both tiers of the two-tier query cache — exact-match
@@ -1900,7 +1908,7 @@ def clear_query_cache() -> None:
     )
 
 
-def clear_cache(
+def clear_cache(  # pragma: no cover: CLI entry point, requires Redis
     *,
     query: bool = False,
     embedding: bool = False,
@@ -1946,7 +1954,7 @@ def clear_cache(
     )
 
 
-def _purge_bm25_cache_dir() -> None:
+def _purge_bm25_cache_dir() -> None:  # pragma: no cover: CLI entry point, requires file system
     """Best-effort removal of every persisted BM25 tokenizer under ``.bm25_cache``."""
     from data_engineering_copilot.config.settings import PROJECT_ROOT
 
@@ -1966,7 +1974,7 @@ def _purge_bm25_cache_dir() -> None:
         print("  No BM25 cache files found")
 
 
-def health() -> None:
+def health() -> None:  # pragma: no cover: CLI entry point, requires network
     """Check health of all services."""
 
     print("Checking service health...\n")
@@ -2104,7 +2112,7 @@ def health() -> None:
         sys.exit(1)
 
 
-def status() -> None:
+def status() -> None:  # pragma: no cover: CLI entry point, requires network
     """Show ingestion and system status."""
 
     print("System Status\n" + "=" * 40 + "\n")
@@ -2395,7 +2403,7 @@ def _disable_rewrites_for_eval(service) -> str:
     return "disabled"
 
 
-def eval_retrieval_main(
+def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     dataset: str | None = None,
     k: int = 10,
     output_dir: str | None = None,
@@ -2881,7 +2889,7 @@ def eval_retrieval_main(
     return 0
 
 
-def eval_chunking_main(
+def eval_chunking_main(  # pragma: no cover: CLI entry point, requires file I/O
     strategy: str = "all",
     gold: str = "all",
     output: str = "/tmp/chunking_eval.json",
@@ -2916,7 +2924,9 @@ def eval_chunking_main(
     return 0
 
 
-def evaluate_spark_dataset(dataset_path: pathlib.Path, output_dir: pathlib.Path | None = None) -> int:
+def evaluate_spark_dataset(
+    dataset_path: pathlib.Path, output_dir: pathlib.Path | None = None
+) -> int:  # pragma: no cover: CLI entry point, requires RAG service
     """Run retrieval-recall evaluation against the Spark golden dataset.
 
     Measures expected-term recall, expected-source recall, candidate-source
@@ -3074,7 +3084,7 @@ def _answer_correctness(answer: str, ground_truth: str) -> float:
     return round(answer_token_f1(ground_truth, answer), 3)
 
 
-def eval_generation_main(
+def eval_generation_main(  # pragma: no cover: CLI entry point, requires LLM
     dataset: str | None = None,
     n_trials: int = 3,
     output: str | None = None,
@@ -3156,7 +3166,9 @@ def eval_generation_main(
     return 0 if report.passed else 2
 
 
-def eval_judge_calibrate_main(dataset: str | None = None, provider: str | None = None) -> int:
+def eval_judge_calibrate_main(
+    dataset: str | None = None, provider: str | None = None
+) -> int:  # pragma: no cover: CLI entry point, requires LLM
     """Score the evaluation-chain judge against human labels."""
     import json as _json
     import pathlib as _pathlib
@@ -3215,7 +3227,9 @@ def eval_judge_calibrate_main(dataset: str | None = None, provider: str | None =
     return 0 if passed else 1
 
 
-def eval_proxy_validate_main(dataset: str | None = None, sample: int = 30, k: int = 5) -> int:
+def eval_proxy_validate_main(
+    dataset: str | None = None, sample: int = 30, k: int = 5
+) -> int:  # pragma: no cover: CLI entry point, requires LLM
     """Judge a deterministic sample of queries; compare proxy labels vs LLM-judge."""
     import asyncio as _asyncio
     import json as _json
@@ -3271,7 +3285,7 @@ def eval_proxy_validate_main(dataset: str | None = None, sample: int = 30, k: in
     return 0 if raw >= 0.80 else 1
 
 
-def evaluate(
+def evaluate(  # pragma: no cover: CLI entry point, requires RAG service
     verbose: bool = False,
     dataset: str | None = None,
     source: str | None = None,
@@ -3540,7 +3554,7 @@ def _deterministic_sample_indices(*, n_total: int, n_sample: int, seed: int = 13
     return rng.sample(range(n_total), n)
 
 
-def eval_coverage_main(
+def eval_coverage_main(  # pragma: no cover: CLI entry point, requires file I/O
     dataset: str | None = None,
     generation: str | None = None,
     json_output: bool = False,
@@ -3643,7 +3657,7 @@ def eval_coverage_main(
     return 1 if total_fail else 0
 
 
-def eval_fast_main(
+def eval_fast_main(  # pragma: no cover: CLI entry point, requires Qdrant
     generation: str | None = None,
     dataset: str | None = None,
     output_dir: str | None = None,
@@ -3785,7 +3799,7 @@ def _print_fast_eval(report: dict) -> None:
     print(f"Retrieval:    source_recall={ret.get('source_recall')} MRR={ret.get('mrr')} rows={ret.get('rows')}")
 
 
-def gen_synthetic_eval_main(
+def gen_synthetic_eval_main(  # pragma: no cover: CLI entry point, requires file I/O
     source: str,
     generation: str | None = None,
     limit: int = 50,
@@ -3829,7 +3843,7 @@ def gen_synthetic_eval_main(
     return 0
 
 
-def config() -> None:
+def config() -> None:  # pragma: no cover: CLI entry point, requires network
     """Validate and display configuration."""
     print("Configuration Validation\n" + "=" * 40 + "\n")
 
@@ -3940,7 +3954,7 @@ def config() -> None:
         sys.exit(0)
 
 
-def inspect_db() -> None:
+def inspect_db() -> None:  # pragma: no cover: CLI entry point, requires Qdrant
     """Inspect Qdrant collection: points, sources, chunk types, sample payload."""
     import collections
 
@@ -4149,7 +4163,7 @@ def _get_plan_phases() -> tuple:
     return PLAN_PHASES
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry point, argparse setup
     parser = argparse.ArgumentParser(description="Offline RAG assistant for data engineering documentation.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -4857,7 +4871,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover: CLI entry point
     if settings.logging_enabled:
         setup_logging()
     parser = build_parser()

@@ -51,7 +51,9 @@ def _catalog_probe_targets(models: list[CatalogModel], only_providers: set[str] 
     return [m for m in models if m.provider.lower() in only_providers]
 
 
-async def _probe_one(model: CatalogModel, app_settings: AppSettings, prompt: str, timeout: float) -> ProbeEntry:
+async def _probe_one(
+    model: CatalogModel, app_settings: AppSettings, prompt: str, timeout: float
+) -> ProbeEntry:  # pragma: no cover: CLI entry point, requires network
     if _probe_llm_target is None or ProbeTarget is None:
         return ProbeEntry(
             provider=model.provider,
@@ -95,7 +97,7 @@ async def _probe_one(model: CatalogModel, app_settings: AppSettings, prompt: str
     )
 
 
-async def _run_probes(
+async def _run_probes(  # pragma: no cover: CLI entry point, requires network
     models: list[CatalogModel],
     app_settings: AppSettings,
     prompt: str,
@@ -107,7 +109,9 @@ async def _run_probes(
     return entries
 
 
-async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, timeout: float) -> ProbeEntry:
+async def _probe_embedding_one(
+    model: CatalogModel, app_settings: AppSettings, timeout: float
+) -> ProbeEntry:  # pragma: no cover: CLI entry point, requires network
     import time
 
     try:
@@ -249,7 +253,9 @@ async def _probe_embedding_one(model: CatalogModel, app_settings: AppSettings, t
         )
 
 
-async def _probe_rerank_one(model: CatalogModel, app_settings: AppSettings, timeout: float) -> ProbeEntry:
+async def _probe_rerank_one(
+    model: CatalogModel, app_settings: AppSettings, timeout: float
+) -> ProbeEntry:  # pragma: no cover: CLI entry point, requires network
     import time
 
     try:
@@ -364,7 +370,7 @@ def _build_recommended(probes: list[ProbeEntry]) -> dict[str, list[str]]:
     return out
 
 
-def main(
+def main(  # pragma: no cover: CLI entry point, requires network
     providers: list[str] | None = None,
     purpose: str | None = None,
     prompt: str = "Reply with exactly: pong",

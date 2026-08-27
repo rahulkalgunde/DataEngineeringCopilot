@@ -13,6 +13,8 @@ from data_engineering_copilot.evaluation.langfuse_datasets import (
     get_experiment_results,
     get_langfuse_client,
     list_review_items,
+    run_rag_experiment,
+    score_experiment_with_ragas,
     upload_evaluation_dataset,
     upload_evaluation_dataset_rows,
 )
@@ -186,3 +188,170 @@ class TestGetExperimentResults:
             result = get_experiment_results("exp1")
             assert result is not None
             assert result["experiment_id"] == "exp1"
+
+
+class TestScoreExperimentWithRagas:
+    def test_returns_none_on_empty_results(self) -> None:
+        result = score_experiment_with_ragas([])
+        assert result is None
+
+    def test_scores_with_ragas(self) -> None:
+        mock_item = MagicMock()
+        mock_item.item.input = {"query": "test query"}
+        mock_item.item.expected_output = {"answer": "test answer"}
+        mock_item.item.metadata = {"contexts": ["ctx1", "ctx2"]}
+        mock_item.output = "test output"
+        mock_item.trace_id = "trace123"
+
+        mock_report = MagicMock()
+        mock_report.context_recall = 0.8
+        mock_report.context_precision = 0.9
+        mock_report.faithfulness = 0.85
+        mock_report.answer_relevancy = 0.75
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate.return_value = mock_report
+
+        mock_client = MagicMock()
+
+        with (
+            patch(
+                "data_engineering_copilot.services.ragas_evaluation.RagasEvaluator",
+                return_value=mock_evaluator,
+            ),
+            patch(
+                "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+                return_value=mock_client,
+            ),
+        ):
+            result = score_experiment_with_ragas([mock_item])
+
+        assert result is not None
+        assert result.context_recall == 0.8
+        mock_evaluator.evaluate.assert_called_once()
+        mock_client.score.assert_called()
+
+    def test_handles_ragas_unavailable(self) -> None:
+        mock_item = MagicMock()
+        mock_item.item.input = {"query": "q"}
+        mock_item.item.expected_output = {"answer": "a"}
+        mock_item.item.metadata = {}
+        mock_item.output = "output"
+        mock_item.trace_id = "trace1"
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate.return_value = None
+
+        with (
+            patch(
+                "data_engineering_copilot.services.ragas_evaluation.RagasEvaluator",
+                return_value=mock_evaluator,
+            ),
+            patch(
+                "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+                return_value=MagicMock(),
+            ),
+        ):
+            result = score_experiment_with_ragas([mock_item])
+
+        assert result is None
+
+    def test_handles_string_input(self) -> None:
+        mock_item = MagicMock()
+        mock_item.item.input = "plain string query"
+        mock_item.item.expected_output = {"answer": "a"}
+        mock_item.item.metadata = {}
+        mock_item.output = "output"
+        mock_item.trace_id = "trace1"
+
+        mock_report = MagicMock()
+        mock_report.context_recall = 0.5
+        mock_report.context_precision = 0.5
+        mock_report.faithfulness = 0.5
+        mock_report.answer_relevancy = 0.5
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate.return_value = mock_report
+
+        with (
+            patch(
+                "data_engineering_copilot.services.ragas_evaluation.RagasEvaluator",
+                return_value=mock_evaluator,
+            ),
+            patch(
+                "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+                return_value=MagicMock(),
+            ),
+        ):
+            result = score_experiment_with_ragas([mock_item])
+
+        assert result is not None
+
+    def test_skips_items_without_trace_id(self) -> None:
+        mock_item = MagicMock()
+        mock_item.item.input = {"query": "q"}
+        mock_item.item.expected_output = {"answer": "a"}
+        mock_item.item.metadata = {}
+        mock_item.output = "output"
+        mock_item.trace_id = None
+
+        mock_report = MagicMock()
+        mock_report.context_recall = 0.5
+        mock_report.context_precision = 0.5
+        mock_report.faithfulness = 0.5
+        mock_report.answer_relevancy = 0.5
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate.return_value = mock_report
+
+        mock_client = MagicMock()
+
+        with (
+            patch(
+                "data_engineering_copilot.services.ragas_evaluation.RagasEvaluator",
+                return_value=mock_evaluator,
+            ),
+            patch(
+                "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+                return_value=mock_client,
+            ),
+        ):
+            result = score_experiment_with_ragas([mock_item])
+
+        assert result is not None
+        mock_client.score.assert_not_called()
+
+
+class TestRunRagExperiment:
+    def test_returns_none_when_no_client(self) -> None:
+        with patch(
+            "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+            return_value=None,
+        ):
+            result = run_rag_experiment("dataset", "experiment")
+            assert result is None
+
+    def test_returns_none_when_dataset_not_found(self) -> None:
+        mock_client = MagicMock()
+        mock_client.get_dataset.side_effect = Exception("not found")
+
+        with patch(
+            "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+            return_value=mock_client,
+        ):
+            result = run_rag_experiment("dataset", "experiment")
+            assert result is None
+
+    def test_returns_none_on_experiment_failure(self) -> None:
+        mock_dataset = MagicMock()
+        mock_dataset.run_experiment.side_effect = Exception("experiment failed")
+
+        mock_client = MagicMock()
+        mock_client.get_dataset.return_value = mock_dataset
+
+        with patch(
+            "data_engineering_copilot.evaluation.langfuse_datasets.get_langfuse_client",
+            return_value=mock_client,
+        ):
+            result = run_rag_experiment("dataset", "experiment")
+            assert result is None

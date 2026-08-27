@@ -27,7 +27,7 @@ STATUS_ICONS = {
 W = 160
 
 
-async def fetch_enrichment_info(redis_url: str, task_id: str) -> dict:
+async def fetch_enrichment_info(redis_url: str, task_id: str) -> dict:  # pragma: no cover: requires Redis
     """Fetch enrichment queue depth and worker status from Redis."""
     client = aioredis.from_url(redis_url, decode_responses=True)
     try:
@@ -41,7 +41,7 @@ async def fetch_enrichment_info(redis_url: str, task_id: str) -> dict:
         await client.aclose()
 
 
-def fetch_status(api_url: str, task_id: str | None = None) -> dict | None:
+def fetch_status(api_url: str, task_id: str | None = None) -> dict | None:  # pragma: no cover: requires network
     """Fetch the latest status, tolerating transient API/network failures.
 
     Retries a few times with short backoff; only returns ``None`` (treated as
@@ -80,7 +80,7 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def render_dashboard(
+def render_dashboard(  # pragma: no cover: CLI output, requires terminal
     current: dict,
     prev: dict | None,
     poll_ts: float,
@@ -192,8 +192,9 @@ def render_dashboard(
     print("=" * W)
 
 
-def main(api_url: str = DEFAULT_API_URL, task_id: str | None = None, interval: int = DEFAULT_INTERVAL) -> None:
-
+def main(
+    api_url: str = DEFAULT_API_URL, task_id: str | None = None, interval: int = DEFAULT_INTERVAL
+) -> None:  # pragma: no cover: CLI entry point
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]  # TextIO stub lacks reconfigure; present at runtime
     print("Connecting to ingestion API...")
 

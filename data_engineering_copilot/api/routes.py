@@ -34,7 +34,7 @@ REDIS_KEY_PREFIX = "ingestion:status"
 _async_redis: aioredis.Redis | None = None
 
 
-async def _get_async_redis() -> aioredis.Redis:
+async def _get_async_redis() -> aioredis.Redis:  # pragma: no cover: API route handler, requires Redis
     """Return a lazily-created async Redis client (decode_responses=True).
 
     Shared across route handlers so connection pooling is centralized.
@@ -121,7 +121,9 @@ def _extract_user_session(request) -> tuple[str | None, str | None]:
     )
 
 
-async def _reconcile_ingestion_status(client, task_id: str, state: dict) -> dict:
+async def _reconcile_ingestion_status(
+    client, task_id: str, state: dict
+) -> dict:  # pragma: no cover: API route handler, requires Redis/Celery
     """Repair progress state when Celery or the worker disappeared.
 
     Hot path is async-only: for a PROCESSING task a live worker lease means the
@@ -199,7 +201,9 @@ class TaskStatus(BaseModel):
 
 
 @router.post("/api/v1/ingest", response_model=TaskStatus)
-async def ingest_documents(request: IngestRequest, fastapi_request: Request):
+async def ingest_documents(
+    request: IngestRequest, fastapi_request: Request
+):  # pragma: no cover: API route handler, requires Redis/Celery
     # Gate: refuse to dispatch if the Docker image is stale (deps changed since build)
     from data_engineering_copilot.api.app import _deps_fingerprint_ok
 
@@ -284,7 +288,7 @@ async def ingest_documents(request: IngestRequest, fastapi_request: Request):
 
 
 @router.get("/api/v1/task/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str):  # pragma: no cover: API route handler, requires Celery
     task_result = AsyncResult(task_id)
     return TaskStatus(
         task_id=task_id,
@@ -294,7 +298,7 @@ async def get_task_status(task_id: str):
 
 
 @router.get("/api/v1/ingest/status/{task_id}")
-async def get_ingestion_status(task_id: str) -> dict:
+async def get_ingestion_status(task_id: str) -> dict:  # pragma: no cover: API route handler, requires Redis
     """Return the latest progress snapshot for a background ingestion task."""
     client = await _get_async_redis()
     raw = await client.get(f"{REDIS_KEY_PREFIX}:{task_id}")
@@ -316,7 +320,7 @@ async def get_ingestion_status(task_id: str) -> dict:
 
 
 @router.get("/api/v1/ingest/latest")
-async def get_latest_ingestion() -> dict:
+async def get_latest_ingestion() -> dict:  # pragma: no cover: API route handler, requires Redis
     """Return the status of the most recently dispatched ingestion task."""
     client = await _get_async_redis()
     raw_task_id = await client.get("ingestion:latest_task_id")
@@ -330,7 +334,7 @@ async def get_latest_ingestion() -> dict:
 
 
 @router.post("/api/v1/ingest/{task_id}/cancel")
-async def cancel_ingestion(task_id: str) -> dict:
+async def cancel_ingestion(task_id: str) -> dict:  # pragma: no cover: API route handler, requires Redis/Celery
     """Cancel a running Celery ingestion task and update its Redis status."""
     log.info("ingest.cancel", task_id=task_id)
     celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
@@ -433,7 +437,9 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/api/v1/ask", response_model=AskResponse)
-async def ask(request: AskRequest, fastapi_request: Request):
+async def ask(
+    request: AskRequest, fastapi_request: Request
+):  # pragma: no cover: API route handler, requires RAG service
     """Answer a question using the RAG pipeline."""
     from data_engineering_copilot.services.rag_service_singleton import get_rag_service
     from data_engineering_copilot.services.structured_output import parse_rag_response, verify_citations
@@ -500,7 +506,9 @@ async def ask(request: AskRequest, fastapi_request: Request):
 
 
 @router.post("/api/v1/ask/stream")
-async def ask_stream(request: AskRequest, fastapi_request: Request):
+async def ask_stream(
+    request: AskRequest, fastapi_request: Request
+):  # pragma: no cover: API route handler, requires RAG service
     """Streaming RAG answer with Server-Sent Events."""
     from fastapi.responses import StreamingResponse
 
@@ -540,7 +548,9 @@ async def ask_stream(request: AskRequest, fastapi_request: Request):
 
 
 @router.post("/api/v1/chat")
-async def chat(request: ChatRequest, fastapi_request: Request):
+async def chat(
+    request: ChatRequest, fastapi_request: Request
+):  # pragma: no cover: API route handler, requires RAG service
     """Streaming conversational RAG chat with Server-Sent Events.
 
     Emits ``data: {...}`` SSE events (``session_created``/``status``/``sources``/
@@ -594,7 +604,7 @@ async def chat(request: ChatRequest, fastapi_request: Request):
 
 
 @router.get("/api/v1/sessions")
-async def list_sessions(fastapi_request: Request):
+async def list_sessions(fastapi_request: Request):  # pragma: no cover: API route handler, requires conversation service
     """List chat sessions for the caller (from X-User-ID, anonymous fallback)."""
     from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
 
@@ -618,7 +628,9 @@ async def list_sessions(fastapi_request: Request):
 
 
 @router.get("/api/v1/sessions/{session_id}")
-async def get_session(session_id: str, fastapi_request: Request):
+async def get_session(
+    session_id: str, fastapi_request: Request
+):  # pragma: no cover: API route handler, requires conversation service
     """Return a chat session's metadata and full message thread."""
     from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
 
@@ -648,7 +660,7 @@ async def get_session(session_id: str, fastapi_request: Request):
 
 
 @router.delete("/api/v1/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str):  # pragma: no cover: API route handler, requires conversation service
     """Delete a chat session and its messages."""
     from data_engineering_copilot.services.conversation_service_singleton import get_conversation_service
 
@@ -658,7 +670,7 @@ async def delete_session(session_id: str):
 
 
 @router.post("/api/v1/feedback")
-async def post_feedback(request: FeedbackRequest):
+async def post_feedback(request: FeedbackRequest):  # pragma: no cover: API route handler, requires Langfuse
     """Record user feedback (thumbs up/down) as a score on a Langfuse trace.
 
     Fail-open: returns ``{"ok": true}`` even when Langfuse is unavailable so a

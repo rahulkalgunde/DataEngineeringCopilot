@@ -1,4 +1,4 @@
-"""Tests for cli_llm_probe.py."""
+"""Tests for cli_llm_probe.py pure functions."""
 
 from __future__ import annotations
 

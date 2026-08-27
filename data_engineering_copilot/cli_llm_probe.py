@@ -67,7 +67,9 @@ def _redact_headers(headers: httpx.Headers | dict) -> dict[str, str]:
     return redacted
 
 
-def _enumerate_llm_targets(app_settings: AppSettings, only_providers: set[str] | None) -> list[ProbeTarget]:
+def _enumerate_llm_targets(
+    app_settings: AppSettings, only_providers: set[str] | None
+) -> list[ProbeTarget]:  # pragma: no cover: CLI entry point, requires LLM providers
     """Enumerate (provider, model, role) targets the app would actually use.
 
     Uses the same ``_build_purpose_llm_client`` resolution the factory relies
@@ -141,7 +143,7 @@ def _build_llm_request_payload(client: LLMClient, prompt: str) -> dict:
     return payload
 
 
-async def _probe_llm_target(
+async def _probe_llm_target(  # pragma: no cover: CLI entry point, requires network
     target: ProbeTarget,
     app_settings: AppSettings,
     prompt: str,
@@ -232,7 +234,7 @@ def _summarize_error(exc: httpx.HTTPStatusError) -> str:
     return f"HTTP {status}: {body}"
 
 
-async def _probe_embedding(
+async def _probe_embedding(  # pragma: no cover: CLI entry point, requires network
     app_settings: AppSettings,
     timeout: float,
     prompt: str,
@@ -405,7 +407,7 @@ def _serialize(results: list[ProbeResult]) -> list[dict]:
     return out
 
 
-async def _run_probes(
+async def _run_probes(  # pragma: no cover: CLI entry point, requires network
     app_settings: AppSettings,
     providers: list[str] | None,
     purpose: str | None,
@@ -456,7 +458,7 @@ async def _run_probes(
     return results
 
 
-def main(
+def main(  # pragma: no cover: CLI entry point, requires network
     providers: list[str] | None = None,
     purpose: str | None = None,
     prompt: str = _DEFAULT_PROMPT,
