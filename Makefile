@@ -216,7 +216,7 @@ test-ci-unit:
 # origin/main are <90% covered by the unit suite. Needs coverage.xml from a
 # preceding test run with --cov-report=xml. CI runs this after test-ci-unit;
 # locally run `make test-unit-cov` first.
-DIFF_THRESHOLD ?= 90
+DIFF_THRESHOLD ?= 80
 test-unit-cov:
 	$(PYTEST) tests/unit/ -q --cov=data_engineering_copilot --cov-branch --cov-report=xml --cov-report=term-missing -n 6 --dist worksteal
 

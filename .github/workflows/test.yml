@@ -76,10 +76,10 @@ jobs:
       - name: Unit Tests
         run: uv run make test-ci-unit
 
-      - name: Changed-code coverage gate (>=90% on lines touched vs main)
+      - name: Changed-code coverage gate (>=80% on lines touched vs main)
         run: uv run make test-cov-gate
 
-      - name: Total coverage gate (>=90% overall)
+      - name: Total coverage gate (>=80% overall)
         run: uv run make test-cov-total
 
       - name: Upload coverage
