@@ -3,9 +3,17 @@ where a substring revert silently flipped EVALUATION/ENRICHMENT pins)."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
-from scripts.lint_env import lint
+# Ensure scripts directory is on path (needed for CI)
+_project_root = Path(__file__).parent.parent.parent
+if str(_project_root / "scripts") not in sys.path:
+    sys.path.insert(0, str(_project_root / "scripts"))
+
+from scripts.lint_env import lint  # noqa: E402
 
 
 def test_clean_file_passes():
