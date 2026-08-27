@@ -583,10 +583,16 @@ class AppSettings(BaseSettings):
 
     # URLs accessed from localhost
     qdrant_url: str = "http://localhost:6333"
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_local_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias="OLLAMA_LOCAL_BASE_URL",
+    )
     # Separate Ollama instances for embedding vs LLM to prevent resource contention.
     # Default to the same value; set to different ports for dedicated instances.
-    llm_ollama_base_url: str = ""
+    llm_ollama_local_base_url: str = Field(
+        default="",
+        validation_alias="LLM_OLLAMA_LOCAL_BASE_URL",
+    )
 
     # Ollama Cloud (LLM only). Same Ollama protocol as local, but hosted at
     # ollama.com. Requires OLLAMA_API_KEY. Separate provider so local Ollama
@@ -656,7 +662,10 @@ class AppSettings(BaseSettings):
     llm_provider: str = "ollama"
     llm_model: str = "llama3.2:3b"
     embedding_provider: str = "ollama"
-    ollama_model: str = "llama3.2:3b"
+    ollama_model: str = Field(
+        default="llama3.2:3b",
+        validation_alias="OLLAMA_LOCAL_MODEL",
+    )
 
     # Max output tokens for LLM calls, sent as ``max_tokens`` (or
     # ``max_completion_tokens`` where the provider requires it). Omitting it is
@@ -897,19 +906,18 @@ class AppSettings(BaseSettings):
     huggingface_rpd_limit: int = 900
 
     # LLM fallback chain: ordered list of providers to try on failure
+    # Synced 2026-08-27 to live probe `recommended_fallback_order.global`
+    # (free_forever OK survivors: groq 535ms, cerebras 562ms, nvidia 755ms).
+    # Never add paid/anthropic models; `free_tier_models.json` is the allowlist.
     llm_fallback_order: list[str] = Field(
         default_factory=lambda: [
-            "cloudflare",
             "groq",
-            "nvidia",
-            "gemini",
             "cerebras",
-            "sambanova",
-            "mistral",
-            "zai",
-            "llm7",
+            "nvidia",
+            "cloudflare",
+            "openrouter",
+            "gemini",
             "agnes",
-            "anyapi",
             "ollama_cloud",
             "ollama",
         ]
@@ -1159,7 +1167,10 @@ class AppSettings(BaseSettings):
     anyapi_evaluation_llm_model: str = ""
     anyapi_code_llm_model: str = ""
 
-    ollama_code_llm_model: str = "qwen2.5-coder:7b"
+    ollama_local_code_llm_model: str = Field(
+        default="qwen2.5-coder:7b",
+        validation_alias="OLLAMA_LOCAL_CODE_LLM_MODEL",
+    )
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"

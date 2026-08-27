@@ -325,7 +325,7 @@ def _build_purpose_llm_client(
         return LLMClient(**merged)
 
     if eff_provider == "ollama":
-        llm_base = app_settings.llm_ollama_base_url or app_settings.ollama_base_url
+        llm_base = app_settings.llm_ollama_local_base_url or app_settings.ollama_local_base_url
         # Respect the per-purpose token budget (parity with other providers);
         # ollama_num_predict only applies to the purpose-less/global path
         # (legacy contract pinned by test_ollama_sends_max_tokens_not_ignored_options).
@@ -2129,7 +2129,7 @@ def build_conversation_service(app_settings: AppSettings = settings) -> Conversa
     local_llm_client = None
     if app_settings.chat_rewrite_local or app_settings.chat_scope_local or app_settings.chat_answer_local:
         local_llm_client = LLMClient(
-            base_url=f"{app_settings.ollama_base_url}/v1",
+            base_url=f"{app_settings.ollama_local_base_url}/v1",
             model=app_settings.ollama_model,
             api_key="",
             timeout_seconds=app_settings.ollama_timeout_seconds,

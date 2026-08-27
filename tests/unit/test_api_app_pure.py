@@ -213,7 +213,7 @@ class TestReady:
             patch("data_engineering_copilot.api.app.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.ollama_base_url = "http://localhost:11434"
+            mock_settings.ollama_local_base_url = "http://localhost:11434"
             mock_settings.redis_url = "redis://localhost:6379"
 
             from data_engineering_copilot.api.app import ready
@@ -235,7 +235,7 @@ class TestReady:
             patch("data_engineering_copilot.api.app.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.ollama_base_url = "http://localhost:11434"
+            mock_settings.ollama_local_base_url = "http://localhost:11434"
             mock_settings.redis_url = "redis://localhost:6379"
 
             from data_engineering_copilot.api.app import ready
@@ -254,7 +254,7 @@ class TestReady:
             patch("data_engineering_copilot.api.app.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.ollama_base_url = "http://localhost:11434"
+            mock_settings.ollama_local_base_url = "http://localhost:11434"
             mock_settings.redis_url = "redis://localhost:6379"
 
             from data_engineering_copilot.api.app import ready

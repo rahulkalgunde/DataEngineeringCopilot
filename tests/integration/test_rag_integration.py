@@ -30,7 +30,7 @@ def _settings(ollama_url):
     from tests.conftest import make_settings
 
     return make_settings(
-        ollama_base_url=ollama_url,
+        ollama_local_base_url=ollama_url,
         local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         code_llm_provider="ollama",
         code_llm_model="llama3.2:3b",
@@ -48,7 +48,7 @@ def _ollama(_settings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     return LLMClient(
-        base_url=f"{_settings.ollama_base_url}/v1",
+        base_url=f"{_settings.ollama_local_base_url}/v1",
         model=_settings.ollama_model,
         timeout_seconds=_settings.ollama_timeout_seconds,
         extra_body={
@@ -238,7 +238,7 @@ class TestRAGWireMocked:
         from tests.conftest import make_settings
         from tests.doubles.llm import StaticLLM
 
-        settings = make_settings(ollama_base_url=ollama_url)
+        settings = make_settings(ollama_local_base_url=ollama_url)
 
         embedder = LocalSentenceTransformerEmbeddings(
             model_name=settings.local_hf_embedding_model,
@@ -292,7 +292,7 @@ class TestRAGWireMocked:
 
         settings = make_settings()
         with respx.mock(assert_all_mocked=False) as respx_mock:
-            respx_mock.post(f"{settings.ollama_base_url}/v1/chat/completions").mock(
+            respx_mock.post(f"{settings.ollama_local_base_url}/v1/chat/completions").mock(
                 return_value=Response(
                     200,
                     json={
@@ -304,7 +304,7 @@ class TestRAGWireMocked:
             )
 
             client = LLMClient(
-                base_url=f"{settings.ollama_base_url}/v1",
+                base_url=f"{settings.ollama_local_base_url}/v1",
                 model=settings.ollama_model,
                 timeout_seconds=5,
                 extra_body={

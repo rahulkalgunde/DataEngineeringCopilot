@@ -203,7 +203,7 @@ async def ready():  # pragma: no cover: API endpoint, requires infrastructure
     results["qdrant"] = await _check_tcp(qdrant_host, qdrant_port)
 
     # Ollama
-    ollama_parsed = urlparse(settings.ollama_base_url)
+    ollama_parsed = urlparse(settings.ollama_local_base_url)
     ollama_host = ollama_parsed.hostname or "localhost"
     ollama_port = ollama_parsed.port or 11434
     results["ollama"] = await _check_tcp(ollama_host, ollama_port)

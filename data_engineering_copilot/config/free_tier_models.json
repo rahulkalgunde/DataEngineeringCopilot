@@ -1,7 +1,7 @@
 {
-  "version": "1.2",
-  "description": "Curated free_forever models per provider for RAG fallback \u2014 pruned 2026-08-23 after live probe. Now covers LLM + embedding + rerank fallback lists (each maps to settings embedding_fallback_order / rerank_fallback_order).",
-  "updated": "2026-08-23",
+  "version": "1.3",
+  "description": "Curated free_forever models per provider for RAG fallback \u2014 pruned 2026-08-27 after live probe (removed permanent 404/400 free models). Covers LLM + embedding + rerank fallback lists (each maps to settings embedding_fallback_order / rerank_fallback_order).",
+  "updated": "2026-08-27",
   "models": [
     {
       "provider": "ollama",
@@ -31,17 +31,7 @@
       "max_tokens_field": "max_completion_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "router picks any :free model \u2014 OK 1924ms 2026-08-23"
-    },
-    {
-      "provider": "openrouter",
-      "model": "nvidia/nemotron-3-nano-30b-a3b:free",
-      "tier": "free_forever",
-      "context_window": 128000,
-      "max_tokens_field": "max_completion_tokens",
-      "supports_structured_output": true,
-      "rag_suitable": true,
-      "notes": "OK 1400ms 2026-08-23 \u2014 fastest openrouter"
+      "notes": "router picks any :free model \u2014 OK 1646ms 2026-08-27"
     },
     {
       "provider": "zai",
@@ -51,7 +41,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "ZAI free-forever \u2014 OK 4207ms 2026-08-23 (glm-4.5-flash timed out)"
+      "notes": "ZAI free-forever \u2014 timeout 2026-08-27 (retryable, keep)"
     },
     {
       "provider": "groq",
@@ -61,7 +51,7 @@
       "max_tokens_field": "max_completion_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "OK 760ms 2026-08-23"
+      "notes": "OK 535ms 2026-08-27"
     },
     {
       "provider": "cerebras",
@@ -71,7 +61,7 @@
       "max_tokens_field": "max_completion_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "OK 707ms 2026-08-23 \u2014 env CEREBRAS_MODEL=gpt-oss-120b"
+      "notes": "OK 562ms 2026-08-27 \u2014 env CEREBRAS_MODEL=gpt-oss-120b"
     },
     {
       "provider": "gemini",
@@ -81,7 +71,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "OK 1942ms via gemma-4-31b-it (gemini-2.5-flash deprecated 404)"
+      "notes": "OK 2170ms via gemma-4-31b-it (gemini-2.5-flash deprecated 404) 2026-08-27"
     },
     {
       "provider": "nvidia",
@@ -91,17 +81,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": true,
       "rag_suitable": true,
-      "notes": "OK 734ms \u2014 NVIDIA NIM free Developer tier"
-    },
-    {
-      "provider": "anyapi",
-      "model": "nvidia/nemotron-3-nano-30b-a3b:free",
-      "tier": "free_forever",
-      "context_window": 128000,
-      "max_tokens_field": "max_tokens",
-      "supports_structured_output": true,
-      "rag_suitable": true,
-      "notes": "OK 1355ms \u2014 :free suffix required"
+      "notes": "OK 755ms 2026-08-27 \u2014 NVIDIA NIM free Developer tier"
     },
     {
       "provider": "llm7",
@@ -111,7 +91,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": false,
       "rag_suitable": false,
-      "notes": "OK 948ms \u2014 aggregator, excluded from answer/code (no structured output)"
+      "notes": "OK 1940ms 2026-08-27 \u2014 aggregator, excluded from answer/code (no structured output)"
     },
     {
       "provider": "agnes",
@@ -121,17 +101,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": false,
       "rag_suitable": true,
-      "notes": "OK 2111ms \u2014 long context, no structured output"
-    },
-    {
-      "provider": "opencodezen",
-      "model": "deepseek-v4-flash-free",
-      "tier": "free_forever",
-      "context_window": 64000,
-      "max_tokens_field": "max_completion_tokens",
-      "supports_structured_output": false,
-      "rag_suitable": true,
-      "notes": "FAIL 400 upstream unavailable 2026-08-23 \u2014 keep but deprioritized"
+      "notes": "OK 4901ms 2026-08-27 \u2014 long context, no structured output"
     },
     {
       "provider": "cloudflare",
@@ -141,7 +111,7 @@
       "max_tokens_field": "max_tokens",
       "supports_structured_output": false,
       "rag_suitable": true,
-      "notes": "Cloudflare Workers AI \u2014 env CLOUDFLARE_MODEL, not probed yet (needs account_id)"
+      "notes": "Cloudflare Workers AI \u2014 OK 897ms 2026-08-27"
     }
   ],
   "embedding_models": [

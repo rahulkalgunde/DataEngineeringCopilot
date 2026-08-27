@@ -366,7 +366,7 @@ def make_settings(**overrides) -> "AppSettings":
         "llm_model": "llama3.2:3b",
         "embedding_provider": "local-hf",
         "local_hf_embedding_model": "nvidia/Nemotron-3-Embed-1B-BF16",
-        "ollama_base_url": "http://localhost:11434",
+        "ollama_local_base_url": "http://localhost:11434",
         "ollama_model": "llama3.2:3b",
         "answer_llm_provider": "",
         "rewrite_llm_provider": "",
@@ -558,7 +558,7 @@ def ollama_client(integration_settings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     return LLMClient(
-        base_url=f"{integration_settings.ollama_base_url}/v1",
+        base_url=f"{integration_settings.ollama_local_base_url}/v1",
         model=integration_settings.ollama_model,
         timeout_seconds=integration_settings.ollama_timeout_seconds,
         max_tokens=integration_settings.ollama_num_predict,
@@ -572,7 +572,6 @@ def ollama_client(integration_settings):
 
 @pytest.fixture
 def html_parser():
-
     from data_engineering_copilot.infrastructure.html_to_markdown import MarkdownParser
 
     return MarkdownParser()

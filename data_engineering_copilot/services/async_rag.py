@@ -348,7 +348,7 @@ _DE_DOMAIN_TERMS = re.compile(
 _FOREIGN_DOMAIN_MARKERS = re.compile(r"\b(anthropic|claude|prompt cache|mcp connector)\b", re.IGNORECASE)
 
 
-def _domain_mismatch(chunks) -> bool:
+def _domain_mismatch(chunks, query: str | None = None) -> bool:
     """Return True when the top retrieved chunks are dominated by a foreign
     domain (e.g. Anthropic/Claude docs) despite a data-engineering query context.
 
@@ -357,8 +357,14 @@ def _domain_mismatch(chunks) -> bool:
     domains does not falsely trigger the refusal. Used as a cheap fail-safe:
     if the corpus was cross-tainted (mixed-domain index), refuse rather than
     answer from irrelevant docs.
+
+    Query-aware: if the query itself does not contain data-engineering terms
+    (e.g. "spark", "etl"), the foreign top-k is expected — the user is asking
+    about the foreign domain (e.g. Claude docs), not a DE topic.
     """
     if not chunks:
+        return False
+    if query and not _DE_DOMAIN_TERMS.search(query):
         return False
     top = chunks[: min(len(chunks), 8)]
     foreign_score = sum(1 for c in top if _FOREIGN_DOMAIN_MARKERS.search(c.chunk.source_name or ""))
@@ -2227,7 +2233,7 @@ class AsyncRagService:
         # P3: domain-coherence fail-safe. If the surviving context is dominated
         # by a foreign domain (e.g. Claude docs) for a data-engineering query,
         # refuse cleanly instead of generating an off-topic answer/example.
-        if _domain_mismatch(retrieved_chunks):
+        if _domain_mismatch(retrieved_chunks, safe_question):
             logger.warning("chat_domain_mismatch refusing topic_not_covered question=%r", safe_question[:80])
             if trace:
                 trace.update(output="Domain mismatch: refusing")
@@ -2281,7 +2287,7 @@ class AsyncRagService:
         # Claude docs) for a data-engineering query. Evaluated post-rerank so a
         # wide fused candidate pool (which legitimately mixes domains) does not
         # falsely trigger the refusal.
-        if _domain_mismatch(retrieved_chunks):
+        if _domain_mismatch(retrieved_chunks, safe_question):
             logger.warning("chat_domain_mismatch refusing topic_not_covered question=%r", safe_question[:80])
             if trace:
                 trace.update(output="Domain mismatch: refusing")
@@ -2521,19 +2527,97 @@ class AsyncRagService:
             logger.warning("Follow-up suggestion LLM call failed", exc_info=True)
             return []
 
+        # Handle LLMs that return a JSON envelope (e.g. {"answer":"q1\nq2\nq3",...})
+        # instead of plain lines — unwrap the answer field first.
+        parsed_raw = raw
+        stripped = raw.strip()
+        if stripped.startswith("{"):
+            unwrapped = None
+            try:
+                envelope = parse_structured_rag_response(stripped)
+                # Only use envelope.answer if it was actually extracted (not just raw fallback)
+                if envelope.answer and envelope.answer.strip() != stripped.strip():
+                    unwrapped = envelope.answer
+                else:
+                    # Try direct JSON
+                    try:
+                        obj = json.loads(stripped)
+                        if isinstance(obj, dict) and isinstance(obj.get("answer"), str):
+                            unwrapped = obj["answer"]
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if unwrapped is None:
+                # Try json_repair for malformed JSON (e.g. unescaped newlines)
+                try:
+                    import json_repair
+
+                    repaired = json_repair.loads(stripped)
+                    if isinstance(repaired, dict) and isinstance(repaired.get("answer"), str):
+                        unwrapped = repaired["answer"]
+                    elif isinstance(repaired, str):
+                        unwrapped = repaired
+                except Exception:
+                    pass
+            if unwrapped is None and stripped.startswith("{"):
+                # Last resort: regex extract answer field even from pretty-printed/truncated JSON
+                try:
+                    m = re.search(r'"answer"\s*:\s*"((?:\\"|[^"])*)"', stripped, re.DOTALL)
+                    if m:
+                        # Unescape JSON string
+                        try:
+                            unwrapped = json.loads(f'"{m.group(1)}"')
+                        except Exception:
+                            unwrapped = m.group(1).replace('\\"', '"').replace("\\n", "\n")
+                except Exception:
+                    pass
+            if unwrapped is not None:
+                parsed_raw = unwrapped
+            else:
+                # If raw was JSON but we couldn't unwrap, fallback to rule (avoid fragments)
+                if stripped.startswith("{"):
+                    return []
+
         suggestions: list[str] = []
         seen: set[str] = set()
-        for line in raw.splitlines():
+        for line in parsed_raw.splitlines():
             line = line.strip().lstrip("-*0123456789.) ")
             line = line.strip().strip('"').strip()
             if not line or is_degenerate_query(line) or line.lower() in seen:
                 continue
+            # Filter JSON fragments that slipped through (e.g. '"answer":', '"citations":')
+            if (
+                line.startswith("{")
+                or line.startswith("}")
+                or "answer" in line.lower()
+                or "citations" in line.lower()
+                or "missing_info" in line.lower()
+            ) and (line.count('"') >= 2 or line.count(":") >= 1):
+                continue
             if len(line) > 200:
+                continue
+            # Must look like a question — require "?" (prompt says "one per line, no numbering")
+            if "?" not in line:
                 continue
             seen.add(line.lower())
             suggestions.append(line)
             if len(suggestions) >= max_suggestions:
                 break
+        # If LLM returned JSON but we still have fragments, fallback to rule
+        # Check for JSON debris regardless of raw prefix (LLM may have returned pretty-printed JSON)
+        has_debris = any(
+            '"' in s and ":" in s and ("answer" in s.lower() or "citations" in s.lower() or "missing_info" in s.lower())
+            for s in suggestions
+        )
+        if has_debris:
+            return []
+        if (
+            stripped.startswith("{")
+            and len(suggestions) < max_suggestions
+            and any('"' in s and ":" in s for s in suggestions)
+        ):
+            return []
         return suggestions
 
     def _build_retrieval_only_answer(
@@ -2957,8 +3041,8 @@ class AsyncRagService:
             result = scroll(parent_hash, source_name=source_name)
             if inspect.isawaitable(result):
                 awaited = await cast(Awaitable[object], result)
-                return list(awaited) if isinstance(awaited, (list, tuple)) else []
-            return list(result) if isinstance(result, (list, tuple)) else []
+                return list(awaited) if isinstance(awaited, list | tuple) else []
+            return list(result) if isinstance(result, list | tuple) else []
 
         for parent_hash in selected_hashes:
             group = parents[parent_hash]

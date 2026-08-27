@@ -37,7 +37,7 @@ The catalog solves three problems:
 ## Architecture
 
 ```
-config/free_tier_models.json          curated, committed (14 models 2026-08-23)
+config/free_tier_models.json          curated, committed (11 models 2026-08-27)
         │ load_free_tier_models()
         ▼
 services/provider_catalog.py          CatalogModel, ProbeEntry, filter/rank, stale check

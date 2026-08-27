@@ -346,7 +346,7 @@ def integration_settings(ollama_url):
     from tests.conftest import make_settings
 
     return make_settings(
-        ollama_base_url=ollama_url,
+        ollama_local_base_url=ollama_url,
         local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
         code_llm_model="llama3.2:3b",
         embedding_batch_size=32,
@@ -366,7 +366,7 @@ def ollama_client(integration_settings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     return LLMClient(
-        base_url=f"{integration_settings.ollama_base_url}/v1",
+        base_url=f"{integration_settings.ollama_local_base_url}/v1",
         model=integration_settings.ollama_model,
         timeout_seconds=integration_settings.ollama_timeout_seconds,
         max_tokens=integration_settings.ollama_num_predict,

@@ -218,7 +218,7 @@ def e2e_settings(
         redis_url=e2e_redis_url,
         collection_name=collection,
         crawl_db_url=e2e_pg_dsn,
-        ollama_base_url=e2e_ollama_url,
+        ollama_local_base_url=e2e_ollama_url,
         llm_provider="ollama",
         embedding_provider="local-hf",
         code_llm_provider="ollama",
@@ -293,7 +293,7 @@ async def e2e_llm(e2e_settings: AppSettings):
     from data_engineering_copilot.infrastructure.llm_client import LLMClient
 
     client = LLMClient(
-        base_url=f"{e2e_settings.ollama_base_url}/v1",
+        base_url=f"{e2e_settings.ollama_local_base_url}/v1",
         model=e2e_settings.ollama_model,
         timeout_seconds=e2e_settings.ollama_timeout_seconds,
         max_tokens=e2e_settings.ollama_num_predict,

@@ -526,7 +526,7 @@ def qdrant_up() -> bool:
 
 
 def ollama_up() -> bool:
-    return _probe(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
+    return _probe(f"{settings.ollama_local_base_url.rstrip('/')}/api/tags")
 
 
 def _typewriter(text: str, chunk_chars: int = 28, delay: float = 0.008) -> Generator[str, None, None]:

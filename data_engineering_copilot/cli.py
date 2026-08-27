@@ -2089,7 +2089,7 @@ def health() -> None:  # pragma: no cover: CLI entry point, requires network
         print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
         # Check Ollama health
         try:
-            req = urllib.request.Request(f"{settings.ollama_base_url}/api/tags", method="GET")
+            req = urllib.request.Request(f"{settings.ollama_local_base_url}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=3) as resp:
                 if resp.status == 200:
                     print("  ✅ Ollama service healthy")

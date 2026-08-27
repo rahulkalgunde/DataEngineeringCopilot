@@ -208,7 +208,6 @@ def test_nvidia_nim_rpd_limit_accepts_legacy_alias(tmp_path) -> None:
 
 
 def test_embedding_provider_nvidia_missing_api_key_raises() -> None:
-
     with pytest.raises(ValueError, match="NVIDIA_API_KEY is required"):
         make_settings(
             embedding_provider="nvidia",
@@ -249,7 +248,7 @@ def test_env_local_overrides_env(tmp_path) -> None:
             "llm_model": "llama3.2:3b",
             "embedding_provider": "ollama",
             "local_hf_embedding_model": "nvidia/Nemotron-3-Embed-1B-BF16",
-            "ollama_base_url": "http://localhost:11434",
+            "ollama_local_base_url": "http://localhost:11434",
         }
         settings = AppSettings(**kwargs)
     finally:

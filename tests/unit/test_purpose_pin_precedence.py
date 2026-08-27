@@ -47,16 +47,16 @@ class TestPurposePinBeatsCatalog:
         s = make_settings(
             catalog_auto_order=True,
             provider_catalog_path=_catalog(tmp_path, {"evaluation": ["cerebras", "groq"]}),
-            evaluation_llm_provider="opencodezen",
-            opencodezen_model="x-preview-f-free",
-            opencodezen_api_key="oc-test",
+            evaluation_llm_provider="groq",
+            groq_model="openai/gpt-oss-20b",
+            groq_api_key="oc-test",
             cerebras_api_key="cb-test",
             _test_allow_non_ollama=True,
         )
         chain = build_llm_fallback_chain(purpose="evaluation", app_settings=s)
         names = _provider_names(chain)
-        assert names[0] == "opencodezen"
-        assert chain._config.providers[0].client.model == "x-preview-f-free"  # type: ignore[attr-defined]
+        assert names[0] == "groq"
+        assert chain._config.providers[0].client.model == "openai/gpt-oss-20b"  # type: ignore[attr-defined]
 
     def test_no_pin_still_uses_catalog_order(self, tmp_path):
         from tests.conftest import make_settings
@@ -86,12 +86,12 @@ def test_every_purpose_pin_wins_over_catalog(purpose, tmp_path):
         catalog_auto_order=True,
         provider_catalog_path=_catalog(tmp_path, {purpose: ["cerebras"]}),
         **{
-            f"{purpose}_llm_provider": "opencodezen",
-            "opencodezen_model": "x-preview-f-free",
-            "opencodezen_api_key": "oc-test",
+            f"{purpose}_llm_provider": "groq",
+            "groq_model": "openai/gpt-oss-20b",
+            "groq_api_key": "oc-test",
             "cerebras_api_key": "cb-test",
             "_test_allow_non_ollama": True,
         },
     )
     chain = build_llm_fallback_chain(purpose=purpose, app_settings=s)
-    assert _provider_names(chain)[0] == "opencodezen"
+    assert _provider_names(chain)[0] == "groq"

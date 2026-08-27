@@ -177,7 +177,7 @@ def _check_qdrant_reachable(timeout: float = 2.0) -> tuple[bool, str]:
 def _check_ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
     """Check if Ollama is reachable. Returns (ok, message)."""
     try:
-        url = f"{settings.ollama_base_url}/api/tags"
+        url = f"{settings.ollama_local_base_url}/api/tags"
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
@@ -195,7 +195,7 @@ def _check_ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
             return False, f"Ollama returned HTTP {resp.status}"
     except urllib.error.URLError:
         return False, (
-            f"Ollama is not reachable at {settings.ollama_base_url}.\n\n"
+            f"Ollama is not reachable at {settings.ollama_local_base_url}.\n\n"
             "**Start it with:**\n```\nollama serve\n```\n\n"
             f"Then pull the required model:\n```\nollama pull {settings.ollama_model}\n```\n\n"
             f"(Embeddings run in-process via local-hf: {settings.local_hf_embedding_model})"
@@ -1841,7 +1841,7 @@ def render_health_tab() -> None:
     col_o1, col_o2, col_o3 = st.columns(3)
     col_o1.metric("Model", settings.ollama_model)
     col_o2.metric("Embedding Model", settings.active_embedding_model_name())
-    col_o3.metric("Base URL", settings.ollama_base_url)
+    col_o3.metric("Base URL", settings.ollama_local_base_url)
 
     col_o4, col_o5 = st.columns(2)
     col_o4.metric("Timeout", f"{settings.ollama_timeout_seconds}s")
