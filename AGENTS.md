@@ -14,6 +14,260 @@ Python 3.12+. RAG over data-engineering docs: Qdrant + Ollama + FastAPI + Celery
 
 The full suite between milestones only burns time; Tier 2 exists to catch cross-module surprises (import wiring, shared fixtures). CI (`.github/workflows/test.yml`) is **hermetic only**: lint → unit → eval-data/schema gates. It does NOT run pyright (local-only gate) and does NOT run integration/e2e/smoke/retrieval-gate — anything needing Docker/Ollama/testcontainers stays local (`make test-integration`, `make test-e2e`, `make test-real`, `dec gen-*`, `eval-retrieval-gate`).
 
+### Key Rules (from opencode.json)
+- **RULE 1**: Commands >90–120s MUST run in background with `setsid <cmd> & disown`, output to log file, poll for status — never block foreground
+- **RULE 11**: Check CI health (`gh run list`) at first session daily; fix red runs before other work
+- **RULE 13**: Two-tier cadence — Tier 1 after every edit, Tier 2 only at milestones
+- **RULE 23**: ASK before long commands (>60s or loading local models); NEVER kill without asking
+- **RULE 24**: API Contract Testing — write contract test before any class tests (pins constructor, methods, properties, invariants)
+
+## Tooling & Setup
+
+### Local Development Setup
+First-time setup (builds image, starts stack, pulls Ollama models):
+```bash
+make dev
+```
+
+Day-to-day operations:
+- `make up` — Start everything (uses last built image)
+- `make down` — Stop everything
+- `make status` — Containers and health status
+- `make logs` — Stream logs
+- `make rebuild` — Rebuild after dependency changes
+
+### CLI Commands (`dec_venv/bin/dec`)
+Core (in-process):
+- `dec ask "query"` — RAG query
+- `dec health` / `dec config` / `dec inspect-db` / `dec status` — Service health
+
+Ingestion:
+- `dec ingest --max-pages 40` — Celery ingestion (needs worker)
+- `dec ingest-claude-docs` — In-process ingestion
+
+Eval harnesses (in-process):
+- `dec eval-fast` — Zero-LLM retrieval integrity check
+- `dec eval-retrieval` — Retrieval benchmark
+- `dec eval-generation` — LLM quality tests
+- `dec eval-rerank` — Reranker smoke test
+- `dec eval-chunking` — Chunk quality tests
+
+Generation lifecycle:
+- `dec gen-manifest → gen-build → gen-validate → gen-activate` — Atomic index generation
+- `dec reset-index` — Clear all indexes
+- `dec clear-cache --query` — Clear specific caches
+
+### Package Management
+- NEVER use `pip` or `python -m venv` - use `uv` exclusively
+- Create venv: `uv venv dec_venv`
+- Install dev: `uv pip install -e ".[dev]"`
+
+### Testing Commands
+- `make test-unit` — Unit tests (parallel, xdist)
+- `make test-unit-serial` — Unit tests serial (debug xdist)
+- `make test-integration` — Integration tests
+- `make test-e2e` — End-to-end tests
+- `make test-real` — Hard gate with live infra (`REQUIRE_INFRA=1`)
+
+## Testing Strategy
+
+### Unit Testing (hermetic)
+- Use `make_settings()` factory for hermetic settings
+- Tests are auto-skipped when services are down
+- Use `unique_collection_name()` for isolation
+- Rate limiter isolation via `_isolate_rate_limiter()` fixture
+
+### Integration Testing
+Requires live services:
+- `make test-integration` needs Qdrant + Ollama
+- `make test-real` needs full Docker stack
+- Use `require_qdrant()`/`require_ollama()` for guards
+
+### Evaluation Gates
+- **Retrieval regression gate**: `make eval-retrieval-gate` (compares to baseline)
+- **Generation fidelity gate**: Configurable thresholds in `settings.py`
+- **Dataset schema gate**: `test-eval-data` (hermetic)
+
+### Test Structure
+- Markers: `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.rag`, `@pytest.mark.ingestion`, `@pytest.mark.e2e`
+- xdist default: `-n 6` (never `-n auto`)
+- Cache doubles: `tests/unit/test_doubles_fidelity.py` enforces fidelity contracts
+- API contracts: `tests/unit/test_api_contracts.py` (pin down exact interfaces)
+
+## RAG System Operations
+
+### Query Path
+1. Two-tier cache (exact + semantic)
+2. Query rewriting (intent, decomposition, HyDE)
+3. Multi-query hybrid retrieval (dense + BM25 via Qdrant RRF)
+4. Reranking (cross-encoder / LLM)
+5. CRAG relevance gate
+6. Context assembly (dedup, sibling merge, MMR)
+7. Guardrails (groundedness, scope, PII redaction)
+
+### Index Generation
+1. `dec gen-manifest` — Create generation manifest
+2. `dec gen-build` — Build index (population)
+3. `dec gen-validate` — Validate against corpus
+4. `dec gen-activate` — Atomic alias switch
+
+### Retrieval Benchmarking
+```bash
+make eval-retrieval-gate  # Compare against baseline_inscope.json
+```
+- Threshold: R@10 >= baseline - 0.02 (absolute floor 0.25)
+- Per-intent gate: R@10 >= max(0, baseline_intent - 0.05)
+- Run after every RAG pipeline change
+
+## Cache Discipline
+
+### Cache Strategy
+- Two-tier query cache (exact + semantic)
+- Embedding cache (`embedding_cache_enabled`)
+- Crawl cache (`crawl_cache_enabled`)
+- Clear with: `dec clear-cache --query --embedding --crawl --bm25 --all`
+
+### Cacheability Rules
+- `QueryCache.is_cacheable` requires non-empty `sources` + minimum confidence
+- Empty sources silently prevent caching
+- Semantic cache uses `semantic_cache_threshold: 0.95`
+
+## Retrieval Flags (Dark until Gated)
+
+### Identifier-Aware Hybrid Search
+- `identifier_sparse_rrf_enabled` (default False) — Technical queries use weighted RRF
+- Benchmark gate: identifier recall >= +0.05
+
+### Namespace-Aware BM25
+- `namespace_bm25_enabled` (default False) — Namespace-aware tokenization
+- Benchmark gate: identifier recall >= +0.05, generic recall <= -0.01
+
+### Late Chunking (MRL)
+- `late_chunking_enabled` (default False) — Matryoshka retrieval
+- Benchmark gate: Recall@10 within -0.01 baseline + p95 latency improvement >= 20%
+
+## Configuration Management
+
+### Settings Loading Order
+1. `.env` — defaults (committed)
+2. `.env.secrets` — sensitive keys (gitignored)
+3. `.env.local` — personal overrides (gitignored)
+
+### Provider API Keys
+- API-key-gated providers validated in `settings.py validate_all()`
+- Only `skip_provider_check=True` for .env imports (tests use `make_settings()`)
+- Free-tier budget monitoring via rate limiters
+
+### Provider Fallback Chains
+- LLM: `groq → cerebras → nvidia → cloudflare → openrouter → gemini → agnes → ollama_cloud → ollama`
+- Embedding: `nvidia → openrouter → huggingface → local-hf`
+
+## Session Management
+
+### Plan & Context Files
+- Implementation plans: `plans/YYYY-MM-DD_HH-MM_plan.md`
+- Session context: `sessions/YYYY-MM-DD_HH-MM_session.md`
+- Resume: load latest of both files
+
+### Pre-Flight Checklist
+1. Check CI health (`/check-ci` or `gh run list`)
+2. Verify environment: `dec_venv/bin/python -c "import data_engineering_copilot"`
+3. Run Tier-1 gate after every edit (~5–10s)
+4. Run Tier-2 gate at milestone completion (~1–2 min)
+
+### Session Cleanup
+- Register heavy jobs: `make runcheck` (writes to `/tmp/opencode/ACTIVE_RUNS.md`)
+- Background jobs: `setsid <cmd> & disown` (RULE 1)
+- Heavy CPU jobs: serialize via `make rebuild` before xdist suite
+
+### Skill Usage (Required)
+**ALWAYS load relevant skills BEFORE responding or taking action** — including clarifying questions. Use the `skill` tool to load:
+- `brainstorming` — before any creative work / new features
+- `systematic-debugging` / `investigate-first` — before fixing bugs
+- `testing` — before writing tests
+- `codebase-design` — when designing module interfaces
+- `safe-refactor` / `surgical-patch` — when refactoring
+- `verification-before-completion` — before claiming work is done
+
+If any skill might apply (1% chance), you MUST invoke it. Check available skills with the skill tool.
+
+## Architecture & Design Patterns
+
+### Dependency Injection
+- DI via `factory.py`: `build_rag_service()`, `build_llm_fallback_chain()`, etc.
+- Never hand-instantiate services directly
+
+### Three-Valued Returns
+- `extract_sentences` returns `None` (unsupported) vs `[]` (empty) vs list
+- Check with `is None` explicitly
+
+### ProviderFallbackChain
+- All LLM/embedding/rerank calls route through `ProviderFallbackChain`
+- Per-purpose LLM chains (answer, rewrite, groundedness, intent, enrichment, evaluation, code)
+- Provider selection: health-scored, Redis-backed, cached 15s
+
+### Error Categorization
+- `_default_categorizer` inspects `LLMClientError.response_body` for model-not-supported patterns
+- 401 → `INVALID_REQUEST` not `AUTH_ERROR`
+- Ollama is always `degraded_fallback` (last resort, max 2 consecutive failures)
+
+## Common Pitfalls
+
+### Test-Related
+- **Frozen Pydantic models**: `AppSettings` cannot be patched → use `make_settings()`
+- **MagicMock without spec**: makes `hasattr` always return True → always pass `spec=[...]`
+- **Ambient env vars**: raise `RuntimeError` instead of silently overriding → never export provider keys
+- **Rate limiter**: module-global in-memory store shared across tests → use `_isolate_rate_limiter()`
+
+### Configuration-Related
+- **`.env` overrides**: `.env` beats `.env.local` beats class defaults in pydantic-settings
+- **Embedding dimensions**: unknown models fail toward `default_embedding_dimension: 2048`
+- **Retrieval flags**: flip only after benchmark gate passes
+
+### Performance-Related
+- **Ollama local**: CPU-bound, use `processing_concurrency: 4` (ROLLBACK to 3 if overloaded)
+- **xdist**: never use `-n auto`, use `-n 6` (or `-n 0` for debugging)
+- **Rate limiting**: shared `SlidingWindowRateLimiter` coordinates RPM/RPD
+
+## Debugging Tools
+
+### Service Health Checks
+```bash
+# Check service availability
+make health  # CLI health check
+make status  # Container status + health
+```
+
+### Log Locations
+- `logs/app.log` — CLI, Streamlit, ingestion, retrieval, vector store
+- `logs/ingestion_refresh.log` — UI refresh events
+
+### CI Health
+At first session of day: check `gh run list`, investigate failures before other work.
+
+## Best Practices
+
+### Code Quality
+- Surgical edits for >100 line files
+- Tier-1 gate after every edit (ruff, format, pyright, one targeted test)
+- Tier-2 gate before commit (full suite)
+- Contract tests before writing tests against any class
+
+### Retrieval Pipeline Changes
+- Run `make eval-fast` after every RAG pipeline change
+- Run `make eval-retrieval-gate` before any retrieval flag flip
+- Compare against baseline: `tests/evaluation/benchmarks/baseline_inscope.json`
+
+### Long-Running Tasks
+- Background with output to log file and poll
+- Register in `/tmp/opencode/ACTIVE_RUNS.md`
+- Use `setsid <cmd> & disown` not plain `nohup ... &`
+
+### Provider Onboarding
+- Update `tests/conftest.py`: add provider API key to `make_settings()` defaults AND to `_AMBIENT_PROVIDER_VARS`
+- Verify runtime fallback order when adding providers
+- Never add paid/anthropic models to `llm_fallback_order`
+
 ## Environment
 - Always `dec_venv/bin/python` / `dec_venv/bin/dec` — never bare `python`. Install: `uv pip install -e ".[dev]"` (`make install`).
 - **Embeddings**: `local-hf` = in-process HF sentence-transformers (`nvidia/Nemotron-3-Embed-1B-BF16`, 2048-dim) — Ollama is NOT an embedding provider; it serves LLMs only. `eval-fast` hardwires local-hf.
