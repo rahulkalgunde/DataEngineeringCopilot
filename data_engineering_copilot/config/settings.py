@@ -1002,6 +1002,19 @@ class AppSettings(BaseSettings):
     # embedding router to prefer external providers over local.
     max_cooldown_wait_s: int = 60
 
+    # Offline bulk embedding waits (gen-build / pinned / spark). Online
+    # queries keep fail-fast (try_acquire). When any of the offline pool
+    # is free we call immediately; we sleep only when *none* is callable.
+    # Cumulative wait-time (not execution time) capped at 1h, then
+    # checkpoint & graceful pause for resume.
+    offline_embedding_wait_enabled: bool = True
+    offline_embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia", "openrouter", "huggingface"])
+    offline_embedding_max_wait_s: int = 3600  # cumulative wait-time only
+    offline_embedding_backoff_base_s: float = 10.0
+    offline_embedding_backoff_cap_s: float = 60.0
+    offline_embedding_jitter: float = 0.2
+    offline_embedding_rpd_wait: bool = True
+
     # Per-purpose LLM overrides (empty = use global llm_provider / llm_model)
     answer_llm_provider: str = "openrouter"
     answer_llm_model: str = "openrouter/free"
@@ -1338,11 +1351,18 @@ class AppSettings(BaseSettings):
     # weighted RRF (sparse 1.25 / dense 1.0) instead of equal weights. Off by
     # default (``equal_rrf``) until the benchmark gate (identifier recall
     # >= +0.05 with all global recall/MRR thresholds satisfied) passes.
+    # STATUS: KEPT DARK (gate not passed). A/B testing with correct NVIDIA
+    # embeddings showed this flag HURTS (Δ=-0.066 vs -0.048 without). The
+    # weighted RRF (1.25/1.0) degrades overall recall despite helping some
+    # technical intents. Re-enable only if per-intent gate passes.
     identifier_sparse_rrf_enabled: bool = False
     # Namespace-aware BM25 tokenizer (``namespace-v1``). Off by default until
     # the technical-query benchmark gate (identifier recall >= +0.05, generic
     # recall <= -0.01, MRR <= -0.02) passes. Enabling it invalidates every
     # legacy BM25 cache: a new generation must be built and activated.
+    # STATUS: Class default False (dark-ship protocol). .env sets
+    # NAMESPACE_BM25_ENABLED=true and the ns-aware-001 index was built
+    # with namespace-v1 tokenizer (verified in BM25 cache).
     namespace_bm25_enabled: bool = False
     # Retrieval regression gates — honest inscope baseline (220 rows,
     # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global

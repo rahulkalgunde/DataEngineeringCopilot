@@ -967,7 +967,10 @@ def _build_embedding_chain_config(
     limiters = provider_rate_limiters or {}
 
     # Determine fallback order from purpose-specific, catalog, or global
-    if purpose == "enrichment" and app_settings.enrichment_embedding_provider:
+    offline_purposes = {"offline_batch", "pinned", "spark"}
+    if purpose in offline_purposes and app_settings.offline_embedding_wait_enabled:
+        ordered = [p.lower() for p in app_settings.offline_embedding_fallback_order]
+    elif purpose == "enrichment" and app_settings.enrichment_embedding_provider:
         ordered = [app_settings.enrichment_embedding_provider.lower()]
     elif purpose == "evaluation" and app_settings.evaluation_embedding_provider:
         ordered = [app_settings.evaluation_embedding_provider.lower()]
@@ -1085,12 +1088,85 @@ def _build_embedding_chain_config(
     main_providers = [p for p in providers_config if p.name.lower() != "ollama"]
     degraded = next((p for p in providers_config if p.name.lower() == "ollama"), None)
 
+    # Offline bulk path: when wait is enabled, do NOT attach local-hf
+    # degraded fallback — the offline controller will wait/collectively gate
+    # rather than silently degrading to slow CPU.
+    _is_offline = purpose in {"offline_batch", "pinned", "spark"} and app_settings.offline_embedding_wait_enabled
+    if _is_offline:
+        # Strip any accidental local-hf from main (should not be in offline order anyway)
+        main_providers = [p for p in main_providers if p.name.lower() != "local-hf"]
+        if degraded and degraded.name.lower() == "local-hf":
+            degraded = None
+
+    # When a purpose-specific provider is pinned (e.g. evaluation_embedding_provider),
+    # the chain may have only 1 main provider with no degraded fallback. In that case,
+    # attach local-hf as a degraded fallback so rate-limited queries don't fail
+    # outright — they fall back to local-hf with correct input_type (query vs passage)
+    # thanks to the FallbackEmbedder/CooldownAwareEmbeddingRouter fix.
+    # The local-hf embedder (nvidia/Nemotron-3-Embed-1B-BF16) produces semantically
+    # close vectors even if quantization differs (BF16 API vs FP16 local).
+    # Suppressed for offline wait mode above.
+    _purpose_specific_provider = (purpose == "evaluation" and app_settings.evaluation_embedding_provider) or (
+        purpose == "enrichment" and app_settings.enrichment_embedding_provider
+    )
+    if (
+        not degraded
+        and not _is_offline
+        and _purpose_specific_provider
+        and not any(p.name.lower() == "local-hf" for p in main_providers)
+    ):
+        local_config = _build_local_hf_provider(app_settings, limiters, health_registry)
+        if local_config is not None:
+            degraded = local_config
+            logger.info(
+                "added_local_hf_as_degraded_fallback",
+                purpose=purpose,
+                primary_provider=main_providers[0].name if main_providers else "none",
+            )
+
     return FallbackChainConfig(
         providers=main_providers,
         degraded_fallback=degraded,
         max_degraded_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
         error_categorizer=_categorize_embedding_error,
     )
+
+
+def _build_local_hf_provider(
+    app_settings,
+    limiters: dict,
+    health_registry,
+):
+    """Build a local-hf ProviderConfig as a degraded fallback."""
+    local_hf_provider = next(
+        (p for p in app_settings.embedding_fallback_order if p.lower() == "local-hf"),
+        None,
+    )
+    if local_hf_provider is None:
+        return None
+    try:
+        client = LocalSentenceTransformerEmbeddings(
+            model_name=app_settings.local_hf_embedding_model,
+            embedding_dimension=app_settings.embedding_model_dimensions.get(
+                app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
+            ),
+            batch_size=app_settings.embedding_batch_sizes.get("local-hf", app_settings.embedding_batch_size),
+        )
+        health_registry.register_provider(
+            local_hf_provider.lower(),
+            [getattr(client, "model_name", getattr(client, "model", "unknown"))],
+        )
+        return ProviderConfig(
+            name=local_hf_provider.lower(),
+            client=client,
+            rate_limiter=limiters.get(local_hf_provider.lower()),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Skipping local-hf degraded fallback in embedding chain",
+            error=str(exc),
+        )
+        return None
 
 
 def build_embedding_fallback_chain(
@@ -1141,7 +1217,27 @@ def build_embedding_fallback_chain(
         )
         return client  # type: ignore[return-value]
 
-    chain = ProviderFallbackChain(config, health)
+    chain: Any = ProviderFallbackChain(config, health)  # type: ignore[assignment]
+
+    offline_purposes_wrapped = {"offline_batch", "pinned", "spark"}
+    if purpose in offline_purposes_wrapped and app_settings.offline_embedding_wait_enabled:
+        from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingWaitController
+
+        chain = OfflineEmbeddingWaitController(chain=chain, health=health, app_settings=app_settings)
+        logger.info(
+            "embedding_fallback_chain_built",
+            purpose=purpose,
+            chain=str(
+                [
+                    (p.name, getattr(p.client, "model_name", getattr(p.client, "model", "unknown")))
+                    for p in config.providers
+                ]
+            ),
+            degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
+            cooldown_aware=False,
+            offline_wait=True,
+        )
+        return chain
 
     if config.degraded_fallback is not None:
         chain = CooldownAwareEmbeddingRouter(
@@ -1157,7 +1253,7 @@ def build_embedding_fallback_chain(
             [(p.name, getattr(p.client, "model_name", getattr(p.client, "model", "unknown"))) for p in config.providers]
         ),
         degraded_fallback=config.degraded_fallback.name if config.degraded_fallback else None,
-        cooldown_aware=True,
+        cooldown_aware=config.degraded_fallback is not None,
     )
     return chain
 
@@ -1440,10 +1536,19 @@ def build_chunker(app_settings: AppSettings = settings):
                 provider_rate_limiters=_build_provider_rate_limiters(app_settings),
                 health_registry=_build_provider_health_registry(app_settings),
             )
+            _chunker_embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+            if app_settings.embedding_cache_enabled:
+                from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+                _chunker_embedder = CachedEmbedder(
+                    _chunker_embedder,
+                    redis_client=get_shared_redis_client(app_settings.redis_url),
+                    embedding_dimension=app_settings.get_embedding_dimension(),
+                )
             return SemanticChunker(
                 chunk_size_words=app_settings.chunk_size_words,
                 overlap_words=app_settings.chunk_overlap_words,
-                embedding_model=FallbackEmbedder(embedding_chain),
+                embedding_model=_chunker_embedder,
                 min_semantic_similarity=app_settings.min_semantic_similarity,
                 min_chunk_words=int(app_settings.chunk_size_words * 0.1),
                 max_chunk_words=app_settings.max_chunk_words or int(app_settings.chunk_size_words * 1.5),
@@ -1693,12 +1798,21 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
         provider_rate_limiters=provider_rate_limiters,
         health_registry=health_registry,
     )
+    ingestion_embedder: EmbedderProtocol = FallbackEmbedder(ingestion_chain)
+    if app_settings.embedding_cache_enabled:
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+        ingestion_embedder = CachedEmbedder(
+            ingestion_embedder,
+            redis_client=get_shared_redis_client(app_settings.redis_url),
+            embedding_dimension=app_settings.get_embedding_dimension(),
+        )
     return AsyncIngestionService(
         settings=app_settings,
         crawler=build_async_crawler(app_settings),
         parser=parser,
         chunker=build_chunker(app_settings),
-        embeddings=FallbackEmbedder(ingestion_chain),
+        embeddings=ingestion_embedder,
         vector_store=AsyncQdrantVectorStore(
             url=app_settings.qdrant_url,
             collection_name=app_settings.collection_name,
@@ -1722,6 +1836,7 @@ def build_rag_service(
     app_settings: AppSettings = settings,
     token_tracker: TokenTracker | None = None,
     retrieval_tracker: RetrievalTracker | None = None,
+    embedding_purpose: str = "global",
 ) -> AsyncRagService:
     from data_engineering_copilot.infrastructure.graph_store import GraphStore
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
@@ -1874,7 +1989,7 @@ def build_rag_service(
     from data_engineering_copilot.infrastructure.fallback_embedder import FallbackEmbedder as _FallbackEmbedder
 
     _rag_chain = build_embedding_fallback_chain(
-        purpose="global",
+        purpose=embedding_purpose,
         app_settings=app_settings,
         provider_rate_limiters=provider_rate_limiters,
         health_registry=health_registry,
@@ -2067,6 +2182,14 @@ def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = 
             health_registry=_lab_health,
         )
         embedder = _FallbackEmbedderLab(_lab_chain)
+        if app_settings.embedding_cache_enabled:
+            from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+            embedder = CachedEmbedder(
+                embedder,
+                redis_client=get_shared_redis_client(app_settings.redis_url),
+                embedding_dimension=app_settings.get_embedding_dimension(),
+            )
     except Exception as exc:  # noqa: BLE001 - lab degrades to no embedding step
         logger.warning("pipeline_lab_embedder_unavailable", error=repr(exc))
         embedder = None

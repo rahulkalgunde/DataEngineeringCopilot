@@ -297,6 +297,15 @@ def ingest_claude_docs(
         health_registry=health_registry,
     )
     embedder: EmbedderProtocol = FallbackEmbedder(embedding_chain)
+    if settings.embedding_cache_enabled:
+        from data_engineering_copilot.factory import get_shared_redis_client
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+        embedder = CachedEmbedder(
+            embedder,
+            redis_client=get_shared_redis_client(settings.redis_url),
+            embedding_dimension=settings.get_embedding_dimension(),
+        )
     store = AsyncQdrantVectorStore(
         url=settings.qdrant_url,
         collection_name=settings.collection_name,
@@ -827,11 +836,16 @@ def _spark_pydocs_python() -> pathlib.Path | None:  # pragma: no cover: CLI entr
     return candidate if candidate.is_file() else None
 
 
-def _build_fallback_embedder() -> EmbedderProtocol:  # pragma: no cover: CLI entry point, requires embedding providers
+def _build_fallback_embedder(
+    purpose: str = "offline_batch",
+) -> EmbedderProtocol:  # pragma: no cover: CLI entry point, requires embedding providers
     """Build the unified embedding fallback chain (NVIDIA -> OpenRouter, ...).
 
     Routes a 429/network failure on one provider over to the next instead of
     aborting the whole build. Used by both ``spark_build`` and ``gen_build``.
+    When *purpose* is an offline batch (default), wraps with
+    ``OfflineEmbeddingWaitController`` for collective exponential wait (1h cap
+    then checkpoint pause) and restricts to nvidia|openrouter|huggingface.
     """
     from data_engineering_copilot.factory import (
         _build_provider_health_registry,
@@ -843,12 +857,33 @@ def _build_fallback_embedder() -> EmbedderProtocol:  # pragma: no cover: CLI ent
     provider_rate_limiters = _build_provider_rate_limiters(settings)
     health_registry = _build_provider_health_registry(settings)
     embedding_chain = build_embedding_fallback_chain(
-        purpose="global",
+        purpose=purpose,
         app_settings=settings,
         provider_rate_limiters=provider_rate_limiters,
         health_registry=health_registry,
     )
-    return FallbackEmbedder(embedding_chain)
+    # Offline controller already returns EmbedderProtocol when purpose is
+    # offline_batch/pinned/spark, so double-wrapping is harmless.
+    if hasattr(embedding_chain, "embed_texts") and hasattr(embedding_chain, "embed_query"):
+        # Already an EmbedderProtocol (Offline controller or single client) — return as-is or wrap
+        # FallbackEmbedder is still needed when chain is a ProviderFallbackChain wrapped in controller?
+        # The offline controller *is* an EmbedderProtocol, so avoid double wrap.
+        if embedding_chain.__class__.__name__ in ("OfflineEmbeddingWaitController",):
+            embedder: EmbedderProtocol = embedding_chain  # type: ignore[assignment]
+        else:
+            embedder = FallbackEmbedder(embedding_chain)  # type: ignore[arg-type]
+    else:
+        embedder = FallbackEmbedder(embedding_chain)  # type: ignore[arg-type]
+    if settings.embedding_cache_enabled:
+        from data_engineering_copilot.factory import get_shared_redis_client
+        from data_engineering_copilot.infrastructure.embedding_cache import CachedEmbedder
+
+        embedder = CachedEmbedder(
+            embedder,
+            redis_client=get_shared_redis_client(settings.redis_url),
+            embedding_dimension=settings.get_embedding_dimension(),
+        )
+    return embedder
 
 
 def spark_build(generation: str | None = None) -> int:  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
@@ -914,6 +949,22 @@ def spark_build(generation: str | None = None) -> int:  # pragma: no cover: CLI 
     try:
         report = asyncio.run(builder.build())
     except Exception as exc:
+        from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+        cause = exc if isinstance(exc, OfflineEmbeddingPaused) else getattr(exc, "__cause__", None)
+        is_paused = isinstance(exc, OfflineEmbeddingPaused) or isinstance(cause, OfflineEmbeddingPaused)
+        if is_paused:
+            paused = exc if isinstance(exc, OfflineEmbeddingPaused) else cause  # type: ignore[assignment]
+            waited = getattr(paused, "waited_s", 0)
+            max_wait = getattr(paused, "max_wait_s", 0)
+            ckpt = artifact_root / "embedding_checkpoint.json"
+            ckpt_batch = 0
+            if ckpt.exists():
+                with contextlib.suppress(Exception):
+                    ckpt_batch = json.loads(ckpt.read_text()).get("last_batch", 0)
+            print(f"⏸ Spark build paused after {waited:.0f}s wait (budget {max_wait:.0f}s) at batch {ckpt_batch}.")
+            print(f"   Checkpoint saved → re-run `dec spark-build --generation {gen}` to resume embedding.")
+            return 0
         print(f"❌ Spark build failed: {exc}")
         return 5
     print(f"✅ Spark build complete: generation={report.generation}")
@@ -1088,10 +1139,10 @@ def re_fullmatch_identifier(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9_.:-]+", value))
 
 
-def _confirm_required(action: str) -> bool:
+def _confirm_required(action: str, force: bool = False) -> bool:
     import os
 
-    if os.environ.get("FORCE") == "1":
+    if force or os.environ.get("FORCE") == "1":
         return True
     try:
         answer = input(f"{action} [y/N] ")
@@ -1147,7 +1198,7 @@ def _qdrant_change_alias(generation: str) -> None:  # pragma: no cover: CLI entr
             raise RuntimeError(f"Qdrant alias change failed: {body}")
 
 
-def spark_activate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
+def spark_activate(generation: str, force: bool = False) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Activate a validated generation by repointing the logical alias.
 
     Refuses to activate unless ``spark-validate`` has written a passing
@@ -1167,7 +1218,7 @@ def spark_activate(generation: str) -> int:  # pragma: no cover: CLI entry point
         print(f"❌ Validation report for {generation} did not pass; re-run `dec spark-validate`")
         return 3
 
-    if not _confirm_required(f"Activate generation {generation}? This changes the live index"):
+    if not _confirm_required(f"Activate generation {generation}? This changes the live index", force=force):
         print("Aborted.")
         return 0
     try:
@@ -1180,7 +1231,7 @@ def spark_activate(generation: str) -> int:  # pragma: no cover: CLI entry point
     return 0
 
 
-def spark_rollback(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
+def spark_rollback(generation: str, force: bool = False) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Roll back the logical alias to a previously recorded generation."""
     state = _load_active_state()
     if state.get("generation") != generation:
@@ -1202,7 +1253,7 @@ def spark_rollback(generation: str) -> int:  # pragma: no cover: CLI entry point
     if previous is None:
         print("❌ No previous generation recorded for rollback")
         return 4
-    if not _confirm_required(f"Roll back to generation {previous['generation']}?"):
+    if not _confirm_required(f"Roll back to generation {previous['generation']}?", force=force):
         print("Aborted.")
         return 0
     try:
@@ -1425,12 +1476,39 @@ def gen_build(generation: str | None = None) -> int:  # pragma: no cover: CLI en
     try:
         report = asyncio.run(builder.build(packages))
     except Exception as exc:
+        import json as _json
+
+        # Offline pause is a graceful exit after 1h wait budget — not a failure.
+        from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+        cause = exc if isinstance(exc, OfflineEmbeddingPaused) else getattr(exc, "__cause__", None)
+        is_paused = isinstance(exc, OfflineEmbeddingPaused) or isinstance(cause, OfflineEmbeddingPaused)
         ckpt = artifact_root / "embedding_checkpoint.json"
+        ckpt_batch = 0
         if ckpt.exists():
-            print(f"❌ Pinned build failed: {exc}")
+            with contextlib.suppress(Exception):
+                ckpt_batch = _json.loads(ckpt.read_text()).get("last_batch", 0)
+        if is_paused:
+            paused = exc if isinstance(exc, OfflineEmbeddingPaused) else cause  # type: ignore[assignment]
+            waited = getattr(paused, "waited_s", 0)
+            max_wait = getattr(paused, "max_wait_s", 0)
+            print(f"⏸ Pinned build paused after {waited:.0f}s wait (budget {max_wait:.0f}s) at batch {ckpt_batch}.")
+            print(f"   Checkpoint saved → re-run `dec gen-build --generation {gen}` to resume embedding.")
+            logger.warning("pinned_build_paused wait=%.1f max=%.1f batch=%d", waited, max_wait, ckpt_batch)
+            return 0
+        logger.error(
+            "pinned_build_failed_detail: type=%s repr=%s str=%s checkpoint_batch=%d",
+            type(exc).__name__,
+            repr(exc),
+            str(exc)[:500] if str(exc) else repr(exc)[:500],
+            ckpt_batch,
+            exc_info=True,
+        )
+        if ckpt.exists():
+            print(f"❌ Pinned build failed: {type(exc).__name__}: {str(exc)[:200] or repr(exc)[:200]}")
             print(f"   Checkpoint saved → re-run `dec gen-build --generation {gen}` to resume embedding.")
         else:
-            print(f"❌ Pinned build failed: {exc}")
+            print(f"❌ Pinned build failed: {type(exc).__name__}: {str(exc)[:200] or repr(exc)[:200]}")
         return 5
     print(f"✅ Pinned build complete: generation={report.generation}")
     print(f"  Chunks: {report.chunk_count}  Files: {report.source_file_count}")
@@ -1522,18 +1600,18 @@ def gen_validate(generation: str) -> int:  # pragma: no cover: CLI entry point, 
     return 0
 
 
-def gen_activate(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
+def gen_activate(generation: str, force: bool = False) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Activate a validated pinned generation by repointing the logical alias.
 
     Shares the validation-report gate, alias change, and active-state write
     with ``spark_activate``.
     """
-    return spark_activate(generation)
+    return spark_activate(generation, force=force)
 
 
-def gen_rollback(generation: str) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
+def gen_rollback(generation: str, force: bool = False) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Roll the logical alias back to a previously recorded generation."""
-    return spark_rollback(generation)
+    return spark_rollback(generation, force=force)
 
 
 def _list_qdrant_collections() -> list[str]:
@@ -2175,6 +2253,15 @@ def status() -> None:  # pragma: no cover: CLI entry point, requires network
         print("  BM25: not fitted (run `dec ingest` to fit)")
     else:
         print("  BM25: not fitted (run `dec ingest` to fit)")
+    # Warn when namespace BM25 is enabled but hybrid search is not active.
+    if settings.namespace_bm25_enabled and not bm25_status.get("hybrid_active"):
+        print("  ⚠️  namespace_bm25_enabled=True but hybrid search is inactive")
+        if not bm25_status.get("cache_fitted"):
+            print(
+                "       No fitted BM25 cache found — run `dec gen-manifest → gen-build → gen-validate → gen-activate`"
+            )
+        elif not bm25_status.get("sparse_configured"):
+            print("       Sparse vectors not configured on the collection — rebuild the index")
 
     # Check active Celery tasks
     print("\nCelery Workers:")
@@ -2469,7 +2556,7 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
         return 2
 
     print(f"Loaded {len(queries)} retrieval evaluation queries (dataset: {dataset_path.name})\n")
-    service = build_rag_service()
+    service = build_rag_service(embedding_purpose="evaluation")
     rewrite_mode = _disable_rewrites_for_eval(service)
     print(f"Eval rewrite mode: {rewrite_mode} (zero-LLM retrieval eval)")
 
@@ -4328,6 +4415,7 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
     for _cmd in ("gen-validate", "gen-activate", "gen-rollback"):
         _parser = subparsers.add_parser(_cmd, help=f"Manage pinned generation: {_cmd}.")
         _parser.add_argument("--generation", type=str, required=True, help="Generation identifier.")
+        _parser.add_argument("--force", action="store_true", default=False, help="Skip confirmation prompt.")
     spark_manifest_parser = subparsers.add_parser(
         "spark-manifest",
         help="Materialize the pinned Spark source and write a file manifest.",
@@ -4942,9 +5030,9 @@ def main() -> None:  # pragma: no cover: CLI entry point
         elif args.command == "gen-validate":
             sys.exit(gen_validate(generation=args.generation))
         elif args.command == "gen-activate":
-            sys.exit(gen_activate(generation=args.generation))
+            sys.exit(gen_activate(generation=args.generation, force=args.force))
         elif args.command == "gen-rollback":
-            sys.exit(gen_rollback(generation=args.generation))
+            sys.exit(gen_rollback(generation=args.generation, force=args.force))
         elif args.command == "ui":
             logger.info("CLI ui command displayed Streamlit launch command")
             print("Run: python -m streamlit run data_engineering_copilot/ui/streamlit_app.py")

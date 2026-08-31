@@ -150,13 +150,13 @@ class TestCrashRecovery:
     async def test_retries_on_failure(self, builder: PinnedIndexBuilder) -> None:
         from data_engineering_copilot.domain.exceptions import EmbeddingCrashError
 
-        # Fail twice, then succeed
+        # Fail once, then succeed
         call_count = 0
 
         async def side_effect(texts):
             nonlocal call_count
             call_count += 1
-            if call_count <= 2:
+            if call_count <= 1:
                 raise EmbeddingCrashError("crash")
             return [[1.0] * 2048] * len(texts)
 
@@ -166,7 +166,7 @@ class TestCrashRecovery:
             vectors = await builder._embed_batch_with_crash_recovery(["test"], 0, 10)
 
         assert len(vectors) == 1
-        assert call_count == 3
+        assert call_count == 2
 
     @pytest.mark.asyncio
     async def test_falls_back_to_pure_transformers(self, builder: PinnedIndexBuilder) -> None:

@@ -262,6 +262,14 @@ class SparkIndexBuilder:
 
         vectors = await self._embed_all(normalized)
 
+        # _embed_all already did incremental upserts when resuming or checkpointing;
+        # the final state is already in Qdrant, but re-upsert is idempotent and
+        # ensures the full corpus is present when no pause occurred. Skip duplicate
+        # full upsert when incremental already persisted all vectors.
+        # Heuristic: if checkpoint was cleared after successful incremental path,
+        # the collection already equals normalized. Keep outer upsert idempotent but
+        # avoid double work when vectors length equals normalized and collection
+        # already has those points — still safe to re-upsert idempotently; keep as is for correctness.
         await self._store.upsert_frozen_chunks(normalized, vectors)
         validation = await self._store.validate_index_generation(len(normalized))
         bm25_vocab = 0
@@ -737,6 +745,40 @@ class SparkIndexBuilder:
         text = registry.read_text(encoding="utf-8", errors="replace")
         return replace(self._chunker, function_registry_text=text)
 
+    def _checkpoint_path(self) -> Path | None:
+        if self._chunks_path is None:
+            return None
+        return self._chunks_path.parent / "embedding_checkpoint.json"
+
+    def _load_checkpoint(self) -> dict:
+        path = self._checkpoint_path()
+        if path is None or not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_checkpoint(self, data: dict) -> None:
+        import os
+
+        path = self._checkpoint_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(path)
+
+    def _clear_checkpoint(self) -> None:
+        path = self._checkpoint_path()
+        if path is None or not path.exists():
+            return
+        path.unlink()
+
     async def _embed_all(self, chunks: list[DocumentChunk]) -> list[list[float]]:
         vectors: list[list[float]] = []
         embed_span = None
@@ -747,11 +789,82 @@ class SparkIndexBuilder:
                 model=getattr(self._embedder, "model_name", getattr(self._embedder, "model", None)),
                 input={"chunk_count": len(chunks)},
             )
+        checkpoint = self._load_checkpoint()
+        ckpt_batch = checkpoint.get("last_batch", 0)
+        if ckpt_batch:
+            _structlog.info("spark_embedding_resuming", resume_batch=ckpt_batch)
+        total_batches = (len(chunks) + self._embedding_batch_size - 1) // self._embedding_batch_size
+        start_batch = ckpt_batch if isinstance(ckpt_batch, int) and ckpt_batch > 0 else 0
+        expected_batch_size = checkpoint.get("batch_size")
+        if (
+            expected_batch_size is not None
+            and isinstance(expected_batch_size, int)
+            and expected_batch_size != self._embedding_batch_size
+        ):
+            # Batch size changed across resume — recompute slicing consistently.
+            # Keep original batch size for resume to preserve slicing.
+            self._embedding_batch_size = expected_batch_size
+            total_batches = (len(chunks) + self._embedding_batch_size - 1) // self._embedding_batch_size
+            start_batch = ckpt_batch
+            _structlog.info("spark_embedding_batch_size_from_checkpoint", batch_size=expected_batch_size)
+        # Vectors for already-done batches are already in Qdrant (incremental
+        # upserts below); we resume embedding from start_batch but track
+        # Qdrant upsert offset separately.
+        already_upserted_batches = start_batch
+        already_upserted_chunks = already_upserted_batches * self._embedding_batch_size
+        checkpoint_interval = 32
+        upserted_vecs = 0
+        batch_idx = start_batch
         try:
-            for i in range(0, len(chunks), self._embedding_batch_size):
-                batch = [c.text for c in chunks[i : i + self._embedding_batch_size]]
-                batch_vectors = await _embed_batch_with_retry(self._embedder, batch)
+            for batch_idx in range(start_batch, total_batches):
+                start = batch_idx * self._embedding_batch_size
+                batch = [c.text for c in chunks[start : start + self._embedding_batch_size]]
+                try:
+                    batch_vectors = await _embed_batch_with_retry(self._embedder, batch)
+                except Exception as exc:
+                    from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+                    if isinstance(exc, OfflineEmbeddingPaused) or isinstance(exc.__cause__, OfflineEmbeddingPaused):
+                        paused = exc if isinstance(exc, OfflineEmbeddingPaused) else exc.__cause__  # type: ignore[assignment]
+                        # Flush already-embedded-but-not-upserted vectors incrementally
+                        if upserted_vecs < len(vectors):
+                            new_chunks = chunks[already_upserted_chunks:start]
+                            new_vectors = vectors[upserted_vecs:]
+                            if new_chunks and new_vectors:
+                                await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
+                        self._save_checkpoint({"last_batch": batch_idx, "batch_size": self._embedding_batch_size})
+                        _structlog.warning(
+                            "spark_embedding_paused_budget_exhausted",
+                            batch=batch_idx,
+                            total_batches=total_batches,
+                            waited=getattr(paused, "waited_s", 0),
+                            max_wait=getattr(paused, "max_wait_s", 0),
+                        )
+                    raise
                 vectors.extend(batch_vectors)
+                _structlog.info("spark_embedding_progress", batch=batch_idx, total_batches=total_batches)
+                if (batch_idx + 1) % checkpoint_interval == 0:
+                    # Incremental upsert every N batches — checkpoint implies Qdrant state
+                    new_end = (batch_idx + 1) * self._embedding_batch_size
+                    new_chunks = chunks[already_upserted_chunks:new_end]
+                    new_vectors = vectors[upserted_vecs:]
+                    if new_chunks and new_vectors:
+                        await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
+                    upserted_vecs = len(vectors)
+                    already_upserted_chunks = new_end
+                    self._save_checkpoint({"last_batch": batch_idx + 1, "batch_size": self._embedding_batch_size})
+            # Final flush for tail
+            if upserted_vecs < len(vectors):
+                new_chunks = chunks[already_upserted_chunks:]
+                new_vectors = vectors[upserted_vecs:]
+                if new_chunks and new_vectors:
+                    await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
+            # Full success — but _embed_all in spark path previously did the upsert
+            # itself via _store.upsert_frozen_chunks in _build_from_manifest_inner.
+            # Here we already upserted incrementally; avoid double upsert by
+            # marking that caller should not re-upsert if needed. For now clear
+            # checkpoint and let caller proceed (caller will upsert again idempotently).
+            self._clear_checkpoint()
             if embed_span is not None:
                 embed_span.update(usage_details={"total": len(chunks)})
                 embed_span.end()

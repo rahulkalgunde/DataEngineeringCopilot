@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -46,12 +47,14 @@ _structlog = structlog.get_logger(__name__)
 
 
 if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
+
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
 
-CHECKPOINT_BATCH_SIZE = 512
-EMBEDDING_MAX_RETRIES = 3
-EMBEDDING_COOLDOWN_BASE_S = 10
+CHECKPOINT_BATCH_SIZE = 32
+EMBEDDING_MAX_RETRIES = 2
+EMBEDDING_COOLDOWN_BASE_S = 5
 
 
 class PinnedIndexBuilder:
@@ -76,7 +79,7 @@ class PinnedIndexBuilder:
         store: AsyncQdrantVectorStore,
         embedder: EmbedderProtocol,
         generation: str,
-        embedding_batch_size: int = 128,
+        embedding_batch_size: int = 256,
         max_embed_tokens: int = MAX_SAFE_TOKENS,
         max_embed_chars: int = DEFAULT_MAX_CHARS,
         output_dir: Path | None = None,
@@ -98,6 +101,7 @@ class PinnedIndexBuilder:
         self._max_embed_chars = max_embed_chars
         self._output_dir = Path(output_dir) if output_dir is not None else None
         self._settings = settings or AppSettings()
+        self._transformer_pool: ProcessPoolExecutor | None = None
 
     async def build(self, packages: Sequence[PreparedSource]) -> IndexBuildReport:
         """Combine, normalize, embed, and persist the prepared sources."""
@@ -183,28 +187,39 @@ class PinnedIndexBuilder:
         from data_engineering_copilot.infrastructure.dynamic_batch_sizer import DynamicBatchSizer
 
         # Compute optimal batch size at runtime based on actual corpus
-        sample_texts = [c.text for c in chunks[:100]]  # sample first 100 chunks
-        sizer = DynamicBatchSizer(self._settings)
-        # Detect provider from embedder (fallback chain wraps multiple)
-        provider = getattr(self._embedder, "name", "nvidia")
-        model_name = getattr(self._embedder, "model_name", None)
-        dynamic_batch = sizer.compute_batch_size(provider, sample_texts, model_name)
-        self._embedding_batch_size = dynamic_batch
-
-        # Propagate to inner embedder if it supports runtime batch updates
-        inner = getattr(self._embedder, "inner", self._embedder)
-        set_batch = getattr(inner, "set_batch_size", None)
-        if callable(set_batch):
-            set_batch(dynamic_batch)
-
+        # When resuming, keep the batch size that was checkpointed so slicing
+        # stays deterministic across restarts.
         checkpoint = self._load_checkpoint()
         last_batch = checkpoint.get("last_batch", 0)
+        ckpt_batch_size = checkpoint.get("batch_size")
+        if ckpt_batch_size is not None and isinstance(ckpt_batch_size, int) and ckpt_batch_size > 0:
+            self._embedding_batch_size = ckpt_batch_size
+            _structlog.info("embedding_batch_size_from_checkpoint", batch_size=ckpt_batch_size)
+        else:
+            sample_texts = [c.text for c in chunks[:100]]  # sample first 100 chunks
+            sizer = DynamicBatchSizer(self._settings)
+            # Detect provider from embedder (fallback chain wraps multiple)
+            provider = getattr(self._embedder, "name", "nvidia")
+            model_name = getattr(self._embedder, "model_name", None)
+            dynamic_batch = sizer.compute_batch_size(provider, sample_texts, model_name)
+            self._embedding_batch_size = dynamic_batch
+
+            # Propagate to inner embedder if it supports runtime batch updates
+            inner = getattr(self._embedder, "inner", self._embedder)
+            set_batch = getattr(inner, "set_batch_size", None)
+            if callable(set_batch):
+                set_batch(dynamic_batch)
         total_batches = (len(chunks) + self._embedding_batch_size - 1) // self._embedding_batch_size
 
         if last_batch > 0:
             _structlog.info("embedding_resuming", resume_batch=last_batch, total_batches=total_batches)
 
         vectors: list[list[float]] = []
+        # Track what's already been upserted — on resume, chunks before last_batch
+        # are already in Qdrant, so we must NOT re-send them with a fresh vectors list
+        # (which would cause a length mismatch: chunks[:processed_count] vs only new vectors).
+        already_upserted_chunks = last_batch * self._embedding_batch_size
+        upserted_since_resume = 0  # how many vectors in `vectors` have been upserted
         batch_idx = 0
         for batch_idx in range(last_batch, total_batches):
             batch_start = batch_idx * self._embedding_batch_size
@@ -212,16 +227,65 @@ class PinnedIndexBuilder:
             batch = chunks[batch_start:batch_end]
             batch_texts = [c.text for c in batch]
 
-            batch_vectors = await self._embed_batch_with_crash_recovery(batch_texts, batch_idx, total_batches)
+            try:
+                batch_vectors = await self._embed_batch_with_crash_recovery(batch_texts, batch_idx, total_batches)
+            except Exception as exc:
+                # Offline wait budget exhausted → checkpoint & pause gracefully
+                from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+                if isinstance(exc, OfflineEmbeddingPaused) or isinstance(exc.__cause__, OfflineEmbeddingPaused):
+                    paused = exc if isinstance(exc, OfflineEmbeddingPaused) else exc.__cause__  # type: ignore[assignment]
+                    # Flush any embedded-but-not-yet-upserted vectors
+                    if upserted_since_resume < len(vectors):
+                        new_chunks = chunks[already_upserted_chunks:batch_start]
+                        new_vectors = vectors[upserted_since_resume:]
+                        if new_chunks and new_vectors:
+                            _structlog.info(
+                                "embedding_paused_upsert",
+                                new_chunks=len(new_chunks),
+                                new_vectors=len(new_vectors),
+                            )
+                            await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
+                    self._save_checkpoint({"last_batch": batch_idx, "batch_size": self._embedding_batch_size})
+                    _structlog.warning(
+                        "embedding_paused_budget_exhausted",
+                        batch=batch_idx,
+                        total_batches=total_batches,
+                        waited=getattr(paused, "waited_s", 0),
+                        max_wait=getattr(paused, "max_wait_s", 0),
+                    )
+                raise
             vectors.extend(batch_vectors)
 
-            if (batch_idx + 1) % CHECKPOINT_BATCH_SIZE == 0:
-                await self._store.upsert_frozen_chunks(chunks[:batch_end], vectors)
-                self._save_checkpoint({"last_batch": batch_idx + 1})
+            pct = (batch_idx + 1) / total_batches * 100
+            _structlog.info("embedding_progress", batch=batch_idx, total_batches=total_batches, pct=f"{pct:.1f}%")
 
-        # Final upsert for remaining chunks
-        if vectors:
-            await self._store.upsert_frozen_chunks(chunks[: (batch_idx + 1) * self._embedding_batch_size], vectors)
+            if (batch_idx + 1) % CHECKPOINT_BATCH_SIZE == 0:
+                # Only upsert NEW chunks+vectors since last checkpoint/resume
+                upsert_end = (batch_idx + 1) * self._embedding_batch_size
+                new_chunks = chunks[already_upserted_chunks:upsert_end]
+                new_vectors = vectors[upserted_since_resume:]
+                _structlog.info(
+                    "embedding_checkpoint_upsert",
+                    new_chunks=len(new_chunks),
+                    new_vectors=len(new_vectors),
+                )
+                await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
+                upserted_since_resume = len(vectors)
+                already_upserted_chunks = upsert_end
+                self._save_checkpoint({"last_batch": batch_idx + 1, "batch_size": self._embedding_batch_size})
+
+        # Final upsert for remaining chunks not yet upserted
+        if upserted_since_resume < len(vectors):
+            new_end = len(chunks)
+            new_chunks = chunks[already_upserted_chunks:new_end]
+            new_vectors = vectors[upserted_since_resume:]
+            _structlog.info(
+                "embedding_final_upsert",
+                new_chunks=len(new_chunks),
+                new_vectors=len(new_vectors),
+            )
+            await self._store.upsert_frozen_chunks(new_chunks, new_vectors)
         self._clear_checkpoint()
         return vectors
 
@@ -273,16 +337,49 @@ class PinnedIndexBuilder:
 
         Verified to produce cos=0.999996-identical vectors to sentence-transformers
         for the Nemotron model, with zero crash risk.
+        Uses a persistent ProcessPoolExecutor to avoid reloading the model on every batch.
         """
-        import concurrent.futures
-
         from data_engineering_copilot.infrastructure.local_sentence_transformer_embeddings import (
-            _encode_batch_pure_transformers,
+            _encode_batch_pure_transformers_cached,
         )
 
         loop = asyncio.get_event_loop()
-        with concurrent.futures.ProcessPoolExecutor(max_workers=1) as pool:
-            return await loop.run_in_executor(pool, _encode_batch_pure_transformers, texts)
+        if self._transformer_pool is None:
+            import concurrent.futures
+
+            self._transformer_pool = concurrent.futures.ProcessPoolExecutor(max_workers=1)
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(self._transformer_pool, _encode_batch_pure_transformers_cached, texts),
+                timeout=300,  # 5 min max per batch — escalate if exceeded
+            )
+        except TimeoutError as exc:
+            _structlog.error(
+                "local_hf_batch_failed",
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+                texts_count=len(texts),
+            )
+            # Reset pool so next call gets a fresh worker
+            if self._transformer_pool:
+                self._transformer_pool.shutdown(wait=False, cancel_futures=True)
+            self._transformer_pool = None
+            raise
+        except Exception as exc:
+            import concurrent.futures
+
+            if isinstance(exc, concurrent.futures.process.BrokenProcessPool):
+                _structlog.error(
+                    "local_hf_pool_broken",
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:200],
+                    texts_count=len(texts),
+                )
+                # Reset pool so next call gets a fresh worker
+                if self._transformer_pool:
+                    self._transformer_pool.shutdown(wait=False, cancel_futures=True)
+                self._transformer_pool = None
+            raise
 
     def _load_checkpoint(self) -> dict:
         if self._output_dir is None:
@@ -301,8 +398,11 @@ class PinnedIndexBuilder:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         path = self._output_dir / "embedding_checkpoint.json"
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.rename(path)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())  # ensure data is on disk before atomic rename
+        tmp.replace(path)
 
     def _clear_checkpoint(self) -> None:
         if self._output_dir is None:

@@ -125,6 +125,40 @@ class LocalSentenceTransformerEmbeddings:
         return None
 
 
+_transformer_cache: dict[str, tuple[Any, Any]] = {}
+
+
+def _encode_batch_pure_transformers_cached(texts: list[str]) -> list[list[float]]:
+    """Cached version of :func:`_encode_batch_pure_transformers`.
+
+    Reuses the model and tokenizer across calls within a persistent
+    ``ProcessPoolExecutor`` worker, avoiding the ~30s model-reloading
+    overhead that made batch-by-batch fallback unusably slow.
+    """
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    model_name = "nvidia/Nemotron-3-Embed-1B-BF16"
+    if model_name not in _transformer_cache:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name)
+        model.eval()
+        _transformer_cache[model_name] = (model, tokenizer)
+
+    model, tokenizer = _transformer_cache[model_name]
+
+    prepared = [f"passage: {t}" for t in texts]
+    inputs = tokenizer(prepared, padding=True, truncation=True, return_tensors="pt", max_length=2048)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        mask = inputs["attention_mask"].unsqueeze(-1).expand(outputs.last_hidden_state.size()).float()
+        embeddings = torch.sum(outputs.last_hidden_state * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
+        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+
+    return embeddings.tolist()
+
+
 def _encode_batch_pure_transformers(texts: list[str]) -> list[list[float]]:
     """Embed texts using pure transformers (mean pooling + L2 norm).
 
@@ -132,6 +166,10 @@ def _encode_batch_pure_transformers(texts: list[str]) -> list[list[float]]:
     code). Verified to produce cos=0.999996-identical vectors to
     ``sentence-transformers`` for the Nemotron model, with zero crash risk.
     Runs in a subprocess worker — safe from segfaults in the main process.
+
+    .. deprecated::
+        Use :func:`_encode_batch_pure_transformers_cached` instead to avoid
+        reloading the model on every call.
     """
     import torch
     from transformers import AutoModel, AutoTokenizer
