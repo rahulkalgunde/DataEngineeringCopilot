@@ -313,6 +313,34 @@ class PinnedIndexBuilder:
                 await asyncio.sleep(cooldown)
             except Exception as exc:
                 last_exc = exc
+                # When offline wait is active, rate-limit / 503 errors are
+                # handled by the OfflineEmbeddingWaitController's collective
+                # 10→60s backoff (wait-time only). Don't waste 5s/10s here and
+                # don't escalate to pure transformers — let the controller drive.
+                if self._settings.offline_embedding_wait_enabled:
+                    from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+                    from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+                    if isinstance(exc, OfflineEmbeddingPaused) or isinstance(
+                        getattr(exc, "__cause__", None), OfflineEmbeddingPaused
+                    ):
+                        raise
+                    cat2 = None
+                    if isinstance(exc, ProviderError):
+                        cat2 = exc.category
+                    else:
+                        cause2 = getattr(exc, "__cause__", None)
+                        if isinstance(cause2, ProviderError):
+                            cat2 = cause2.category
+                    msg2 = str(exc).lower() + str(getattr(exc, "__cause__", "")).lower()
+                    is_rate = cat2 in (
+                        ProviderErrorCategory.RATE_LIMITED,
+                        ProviderErrorCategory.TEMPORARY_UNAVAILABLE,
+                        ProviderErrorCategory.QUOTA_EXCEEDED,
+                        ProviderErrorCategory.RETRYABLE,
+                    ) or any(k in msg2 for k in ("503", "429", "rate_limited", "temporary_unavailable"))
+                    if is_rate:
+                        raise
                 cooldown = EMBEDDING_COOLDOWN_BASE_S * (attempt + 1)
                 _structlog.warning(
                     "embedding_batch_failed",
@@ -323,6 +351,42 @@ class PinnedIndexBuilder:
                     error=str(exc)[:160],
                 )
                 await asyncio.sleep(cooldown)
+
+        # Offline bulk path: when the pool is rate-limited (nvidia/openrouter 503
+        # or 429), the OfflineEmbeddingWaitController handles the collective
+        # 10→60s backoff with 1h wait-time budget. Escalating to the local
+        # pure-transformers ProcessPool (1.14GB model) would OOM on this host
+        # (8GB ollama + 2GB qdrant) and masks the rate-limit as a crash.
+        # The user explicitly disabled local-hf, so never fall back for those.
+        from data_engineering_copilot.domain.exceptions import ProviderError, ProviderErrorCategory
+        from data_engineering_copilot.infrastructure.offline_embedding_wait import OfflineEmbeddingPaused
+
+        if isinstance(last_exc, OfflineEmbeddingPaused) or isinstance(
+            getattr(last_exc, "__cause__", None), OfflineEmbeddingPaused
+        ):
+            raise last_exc  # type: ignore[misc]
+        # Unwrap ProviderError from fallback chain (LLMClientError cause)
+        cat = None
+        if isinstance(last_exc, ProviderError):
+            cat = last_exc.category
+        else:
+            cause = getattr(last_exc, "__cause__", None)
+            if isinstance(cause, ProviderError):
+                cat = cause.category
+            # Fallback chain wraps as "All providers in fallback chain failed" string
+            msg = str(last_exc).lower() if last_exc else ""
+            if "temporary_unavailable" in msg or "rate_limited" in msg or "503" in msg or "429" in msg:
+                raise last_exc  # type: ignore[misc]
+        if cat in (
+            ProviderErrorCategory.RATE_LIMITED,
+            ProviderErrorCategory.TEMPORARY_UNAVAILABLE,
+            ProviderErrorCategory.QUOTA_EXCEEDED,
+            ProviderErrorCategory.RETRYABLE,
+        ):
+            raise last_exc  # type: ignore[misc]
+        # Also never use local fallback when offline wait is enabled (user asked no local-hf)
+        if self._settings.offline_embedding_wait_enabled:
+            raise last_exc  # type: ignore[misc]
 
         _structlog.warning(
             "embedding_escalating_to_pure_transformers",

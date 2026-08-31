@@ -194,7 +194,8 @@ class AsyncQdrantVectorStore:
                     self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
             else:
                 self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
-        self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False)
+        # 300s timeout for upserts with ?wait=true — 60s times out on 3072×2048 upserts under heavy load
+        self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False, timeout=300)
         self._last_query_sparse = None
         self._embedding_dimension_override = embedding_dimension
         self._bm25_desync_warned = False
