@@ -1094,9 +1094,13 @@ def _build_embedding_chain_config(
     _is_offline = purpose in {"offline_batch", "pinned", "spark"} and app_settings.offline_embedding_wait_enabled
     if _is_offline:
         # Strip any accidental local-hf from main (should not be in offline order anyway)
-        main_providers = [p for p in main_providers if p.name.lower() != "local-hf"]
-        if degraded and degraded.name.lower() == "local-hf":
-            degraded = None
+        # but keep it when the user explicitly asked for local-hf-only tail
+        # (remaining 27 batches after 704).
+        offline_order = [p.lower() for p in app_settings.offline_embedding_fallback_order]
+        if offline_order != ["local-hf"]:
+            main_providers = [p for p in main_providers if p.name.lower() != "local-hf"]
+            if degraded and degraded.name.lower() == "local-hf":
+                degraded = None
 
     # When a purpose-specific provider is pinned (e.g. evaluation_embedding_provider),
     # the chain may have only 1 main provider with no degraded fallback. In that case,
