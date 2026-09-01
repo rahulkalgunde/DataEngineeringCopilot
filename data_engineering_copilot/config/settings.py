@@ -661,7 +661,7 @@ class AppSettings(BaseSettings):
     default_embedding_dimension: int = 2048
     llm_provider: str = "ollama"
     llm_model: str = "llama3.2:3b"
-    embedding_provider: str = "nvidia"
+    embedding_provider: str = "ollama"
     ollama_model: str = Field(
         default="llama3.2:3b",
         validation_alias="OLLAMA_LOCAL_MODEL",
@@ -1200,11 +1200,13 @@ class AppSettings(BaseSettings):
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 30
-    max_context_chars: int = 16000
+    max_context_chars: int = 24000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.
-    max_chunks_per_source: int = 2
+    # Raised to 3 to cover multi-corpus queries (e.g. spark+airflow+claude) without
+    # starving any corpus when max_context_chars is shared across intents.
+    max_chunks_per_source: int = 3
     # Context assembly optimization
     assembly_mmr_enabled: bool = False
     assembly_mmr_lambda: float = 0.5
@@ -1629,6 +1631,15 @@ class AppSettings(BaseSettings):
         }
         if not configured_providers:
             errors.append("At least one LLM or embedding provider must be configured")
+
+        if self.namespace_bm25_enabled and not self.hybrid_search_enabled:
+            errors.append(
+                "namespace_bm25_enabled=True requires hybrid_search_enabled=True — otherwise BM25 sparse vectors are never built"
+            )
+        if self.identifier_sparse_rrf_enabled and not self.hybrid_search_enabled:
+            errors.append(
+                "identifier_sparse_rrf_enabled=True requires hybrid_search_enabled=True — identifier-aware RRF needs sparse vectors"
+            )
 
         # Mixed-dimension fallback chains corrupt the index mid-build: every
         # leg must resolve to the SAME geometry as the active provider.

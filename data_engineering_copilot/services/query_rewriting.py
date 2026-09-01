@@ -423,8 +423,32 @@ class QueryRewriter:
         # factual: single step
         return (query,)
 
+    def _correct_known_typos(self, text: str) -> str:
+        """Deterministic typo correction for high-value corpus terms.
+
+        Dense embeddings tolerate one-char typos (cluade→claude 0.886) but BM25
+        sparse vectors do not (token not in vocab → zero). A tiny curated map
+        covers the observed hallucination: ``cluade`` (edit distance 2 from
+        ``claude``) was embedded near ``cluster`` (0.66) and, under multi-intent
+        RRF, the Spark ``cluster`` docs outranked Claude Code definition chunks,
+        causing the LLM to hallucinate "Cluster Code" from Spark cluster context.
+        """
+        # Order matters: longer patterns first, case-insensitive, preserve case
+        corrections = {
+            "cluade": "claude",
+            "calude": "claude",
+            "clawde": "claude",
+            "cloude code": "claude code",
+            "cluster code": "claude code",  # common mis-hearing when typo + spark cluster docs present
+        }
+        out = text
+        for typo, fix in corrections.items():
+            out = re.sub(re.escape(typo), fix, out, flags=re.IGNORECASE)
+        return out
+
     def rewrite(self, query: str) -> RewrittenQuery:
         """Full rewrite pipeline: classify → decompose → optional HyDE."""
+        query = self._correct_known_typos(query)
         if not self._enabled:
             return RewrittenQuery(
                 original_query=query,
@@ -473,6 +497,7 @@ class QueryRewriter:
 
         Falls back to rule-based rewrite if LLM is unavailable or errors.
         """
+        query = self._correct_known_typos(query)
         if not self._enabled or self._llm_client is None:
             return self.rewrite(query)
 

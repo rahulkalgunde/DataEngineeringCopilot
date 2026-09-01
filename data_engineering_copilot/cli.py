@@ -31,7 +31,7 @@ def _check_deps_before_dispatch(api_url: str = "http://localhost:8000") -> None:
     """Pre-flight check: verify the API's Docker image is not stale before dispatching."""
     try:
         req = urllib.request.Request(f"{api_url}/api/v1/version")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             if data.get("deps_fingerprint_ok") is False:
                 msg = data.get("deps_stale_message", "Docker image is stale.")
@@ -157,7 +157,7 @@ def ingest(
         print("\nCancelling ingestion task...")
         try:
             cancel_req = urllib.request.Request(cancel_url, method="POST")
-            urllib.request.urlopen(cancel_req, timeout=5)
+            urllib.request.urlopen(cancel_req, timeout=10)
             print("Task cancelled.")
         except Exception:
             print(f"Could not cancel task. Cancel manually: curl -X POST {cancel_url}")
@@ -417,7 +417,7 @@ def reenrich(
                 logger.warning("reenrich.delete_chunks_failed url=%s error=%s", url, exc)
         print(f"Deleted existing chunks for {deleted}/{len(url_set)} URLs")
 
-        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=5)
         for url in url_set:
             registry.hdel(f"crawl:url_registry:{source}", url)
         print(f"Cleared URL-registry entries for {len(url_set)} URLs")
@@ -481,7 +481,7 @@ def retry_failed(
         # Clear URL registry
         import redis as sync_redis
 
-        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=5)
         for url in url_set:
             registry.hdel(f"crawl:url_registry:{source}", url)
         print(f"Cleared URL-registry entries for {len(url_set)} URLs")
@@ -545,7 +545,7 @@ def unskip(source: str) -> None:  # pragma: no cover: CLI entry point, requires 
         # Clear URL registry
         import redis as sync_redis
 
-        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+        registry = sync_redis.Redis.from_url(settings.redis_url, socket_timeout=5)
         for url in url_set:
             registry.hdel(f"crawl:url_registry:{source}", url)
         print(f"Cleared URL-registry entries for {len(url_set)} URLs")
@@ -603,10 +603,15 @@ def _recreate_qdrant_collection() -> None:  # pragma: no cover: CLI entry point,
 
 
 def _bm25_cache_path() -> pathlib.Path:
-    """Return the default persisted BM25 tokenizer path for the current collection."""
-    from data_engineering_copilot.config.settings import PROJECT_ROOT
+    """Return the persisted BM25 tokenizer path for the current collection.
 
-    return PROJECT_ROOT / ".bm25_cache" / f"{settings.collection_name}.json"
+    Delegates to ``async_qdrant_store._resolve_bm25_cache_path`` so alias vs
+    generation resolution is single-sourced (generation cache
+    ``data_engineering_docs__<gen>.json`` after ``gen-activate``).
+    """
+    from data_engineering_copilot.infrastructure.async_qdrant_store import _resolve_bm25_cache_path
+
+    return _resolve_bm25_cache_path(settings.collection_name)
 
 
 def validate_spark_source_config() -> int:  # pragma: no cover: CLI entry point, requires file I/O
@@ -1765,16 +1770,7 @@ def _get_bm25_status() -> dict[str, object]:  # pragma: no cover: CLI entry poin
         "hybrid_active": False,
     }
     try:
-        # Resolve BM25 cache via same logic as AsyncQdrantVectorStore._resolve_bm25_cache_path
-        # so alias activation (data_engineering_docs -> pinned-xxx) reports hybrid active.
-        from data_engineering_copilot.config.settings import resolve_active_generation
-
         bm25_path = _bm25_cache_path()
-        active_gen = resolve_active_generation()
-        if active_gen and not bm25_path.exists():
-            gen_cache = bm25_path.parent / f"{settings.collection_name}__{active_gen}.json"
-            if gen_cache.exists():
-                bm25_path = gen_cache
         status_info["cache_path"] = str(bm25_path)
         status_info["cache_exists"] = bm25_path.exists()
         if status_info["cache_exists"]:
@@ -1786,7 +1782,7 @@ def _get_bm25_status() -> dict[str, object]:  # pragma: no cover: CLI entry poin
                 status_info["cache_fitted"] = False
 
         req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         result = data.get("result", {}) if isinstance(data, dict) else {}
         params = result.get("config", {}).get("params", {}) if isinstance(result, dict) else {}
@@ -2236,7 +2232,7 @@ def status() -> None:  # pragma: no cover: CLI entry point, requires network
             import asyncpg
 
             async def _check_pg():
-                conn = await asyncpg.connect(db_url, timeout=5)
+                conn = await asyncpg.connect(db_url, timeout=10)
                 try:
                     frontier_count = await conn.fetchval("SELECT COUNT(*) FROM crawl_frontier")
                     edge_count = await conn.fetchval("SELECT COUNT(*) FROM sitemap_edges")
@@ -3918,7 +3914,7 @@ def config() -> None:  # pragma: no cover: CLI entry point, requires network
         try:
             import redis
 
-            client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
+            client = redis.Redis.from_url(settings.redis_url, socket_timeout=5)
             if client.ping():
                 print("  ✅ Redis URL: reachable")
             client.close()
@@ -4003,7 +3999,7 @@ def inspect_db() -> None:  # pragma: no cover: CLI entry point, requires Qdrant
     # ── Collection overview ──────────────────────────────────────────────
     try:
         req = urllib.request.Request(f"{qdrant_url}/collections/{collection_name}", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             result = data.get("result", {})
     except urllib.error.HTTPError as e:
@@ -4179,7 +4175,7 @@ def cancel(task_id: str) -> None:
     cancel_url = f"{API_BASE_URL}/api/v1/ingest/{task_id}/cancel"
     req = urllib.request.Request(cancel_url, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             print(f"Task {task_id} cancelled: {data.get('status', 'unknown')}")
     except urllib.error.HTTPError as exc:

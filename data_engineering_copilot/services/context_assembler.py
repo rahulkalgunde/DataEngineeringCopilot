@@ -300,14 +300,16 @@ class ContextAssembler:
     ) -> tuple[list[RetrievedChunk], list[dict[str, object]]]:
         """Select chunks under budget with a per-source coverage guarantee.
 
-        Two passes over the rank-ordered chunks:
+        Three passes over the rank-ordered chunks:
 
-        1. Coverage pass — the highest-ranked chunk of every distinct source
-           URL is placed first (evidence-set selection), guaranteeing maximal
-           cross-source coverage before any source can be deepened.
-        2. Depth pass — remaining chunks are added by rank, capped at
-           ``max_chunks_per_source`` chunks per URL, until the total budget is
-           exhausted.
+        1. Coverage per source_name — the highest-ranked chunk of every
+            distinct ``source_name`` (corpus, e.g. Spark vs Airflow) is placed
+            first, guaranteeing cross-corpus coverage for multi-intent queries.
+        2. Coverage per URL — one slot per distinct URL not yet covered.
+        3. Depth — remaining chunks by rank, capped at
+            ``max_chunks_per_source`` chunks per URL, until the total budget is
+            exhausted. ``max_chunks_per_source`` is per URL (kept for backward
+            compat; budgeting per source_name is via Pass 1).
 
         Returns:
             Tuple of ``(selected_chunks, dropped_records)``.
@@ -334,9 +336,24 @@ class ContextAssembler:
             current_length = new_length
             return True
 
-        # Pass 1: coverage — one slot per distinct source URL.
+        # Pass 1: coverage — one slot per distinct source_name (corpus),
+        # then one slot per distinct URL. Guarantees multi-corpus queries
+        # (e.g. "spark + airflow + claude") get at least one chunk per
+        # corpus before per-URL depth fills the budget.
+        covered_names: set[str] = set()
         covered_urls: set[str] = set()
         for rank, chunk in enumerate(chunks):
+            name = chunk.chunk.source_name
+            if name in covered_names:
+                continue
+            if try_place(chunk, rank, "dropped_due_total_context_budget"):
+                covered_names.add(name)
+                covered_urls.add(chunk.chunk.url)
+
+        # Pass 1b: coverage — one slot per distinct source URL not yet covered.
+        for rank, chunk in enumerate(chunks):
+            if chunk.chunk.chunk_id in selected_ids:
+                continue
             url = chunk.chunk.url
             if url in covered_urls:
                 continue
