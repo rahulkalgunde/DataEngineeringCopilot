@@ -661,7 +661,7 @@ class AppSettings(BaseSettings):
     default_embedding_dimension: int = 2048
     llm_provider: str = "ollama"
     llm_model: str = "llama3.2:3b"
-    embedding_provider: str = "ollama"
+    embedding_provider: str = "nvidia"
     ollama_model: str = Field(
         default="llama3.2:3b",
         validation_alias="OLLAMA_LOCAL_MODEL",

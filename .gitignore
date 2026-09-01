@@ -58,5 +58,6 @@ dec_pydocs_venv/
 graphify-out/
 .agents/
 docs/research/
+research/
 profiling-output/
 .profiling/

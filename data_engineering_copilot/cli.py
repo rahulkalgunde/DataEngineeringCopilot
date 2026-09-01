@@ -1765,7 +1765,16 @@ def _get_bm25_status() -> dict[str, object]:  # pragma: no cover: CLI entry poin
         "hybrid_active": False,
     }
     try:
+        # Resolve BM25 cache via same logic as AsyncQdrantVectorStore._resolve_bm25_cache_path
+        # so alias activation (data_engineering_docs -> pinned-xxx) reports hybrid active.
+        from data_engineering_copilot.config.settings import resolve_active_generation
+
         bm25_path = _bm25_cache_path()
+        active_gen = resolve_active_generation()
+        if active_gen and not bm25_path.exists():
+            gen_cache = bm25_path.parent / f"{settings.collection_name}__{active_gen}.json"
+            if gen_cache.exists():
+                bm25_path = gen_cache
         status_info["cache_path"] = str(bm25_path)
         status_info["cache_exists"] = bm25_path.exists()
         if status_info["cache_exists"]:
@@ -2053,136 +2062,82 @@ def _purge_bm25_cache_dir() -> None:  # pragma: no cover: CLI entry point, requi
 
 
 def health() -> None:  # pragma: no cover: CLI entry point, requires network
-    """Check health of all services."""
+    """Check health of all services (fast gate, exit 0/1 for automation)."""
+
+    from data_engineering_copilot.infrastructure.health_checks import build_health_report
 
     print("Checking service health...\n")
-    all_healthy = True
+    report = build_health_report(settings)
 
-    # Check Docker image freshness
     print("Docker Image:")
-    try:
-        req = urllib.request.Request("http://localhost:8000/api/v1/version")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            deps_ok = data.get("deps_fingerprint_ok")
-            if deps_ok is True:
-                print("  ✅ Dependencies: fresh")
-            elif deps_ok is False:
-                print("  ❌ Dependencies: STALE — run `make docker-dev`")
-                all_healthy = False
-            else:
-                print("  ℹ️  Dependencies: unknown (not running in Docker)")
-    except Exception:
-        print("  ❌ API not reachable at localhost:8000")
+    if report.docker.deps_fingerprint_ok is True:
+        print("  ✅ Dependencies: fresh")
+        if report.docker.git_sha:
+            print(f"  Git SHA: {report.docker.git_sha[:8]}")
+    elif report.docker.deps_fingerprint_ok is False:
+        print(f"  ❌ Dependencies: {report.docker.detail}")
+    else:
+        print(f"  ℹ️  Dependencies: {report.docker.detail}")
+        if report.docker.git_sha:
+            print(f"  Git SHA: {report.docker.git_sha[:8]}")
 
-    # Check Qdrant
     print("\nQdrant:")
-    try:
-        req = urllib.request.Request(f"{settings.qdrant_url}/", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                print("  ✅ Healthy (200 OK)")
-            else:
-                print(f"  ❌ Unhealthy (status {resp.status})")
-                all_healthy = False
-    except Exception as e:
-        print(f"  ❌ Unreachable: {e}")
-        all_healthy = False
+    if report.qdrant.ok:
+        print(f"  ✅ Healthy ({report.qdrant.detail})")
+    else:
+        print(f"  ❌ {report.qdrant.detail}")
 
-    # Check Redis
     print("\nRedis:")
-    try:
-        import redis
-
-        redis_client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
-        if redis_client.ping():
-            print("  ✅ Healthy (PONG)")
-        else:
-            print("  ❌ Unhealthy (no PONG)")
-            all_healthy = False
-        redis_client.close()
-    except Exception as e:
-        print(f"  ❌ Unreachable: {e}")
-        all_healthy = False
-
-    # Check embedding provider
-    print("\nEmbedding Provider:")
-    provider = settings.embedding_provider
-    if provider == "openrouter":
-        print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_embedding_model})")
-    elif provider == "nvidia":
-        print(f"  ℹ️  Configured: NVIDIA ({settings.nvidia_embedding_model})")
-    elif provider == "gemini":
-        print(f"  ℹ️  Configured: Gemini ({settings.gemini_embedding_model})")
+    if report.redis.ok:
+        suffix = f" (keys: {report.redis.key_count})" if report.redis.key_count is not None else ""
+        print(f"  ✅ Healthy ({report.redis.detail}){suffix}")
     else:
-        print(f"  ⚠️  Unknown provider: {provider}")
-        all_healthy = False
+        print(f"  ❌ {report.redis.detail}")
 
-    # Check LLM provider
-    print("\nLLM Provider:")
-    llm_provider = settings.llm_provider
-    if llm_provider == "openrouter":
-        print(f"  ℹ️  Configured: OpenRouter ({settings.openrouter_model})")
+    print("\nEmbedding Chain:")
+    if not report.embedding_chain:
+        print("  ⚠️  No embedding providers configured")
+    else:
+        for entry in report.embedding_chain:
+            marker = "→" if entry.provider.lower() == settings.embedding_provider.lower() else " "
+            if entry.is_local:
+                print(f"  {marker} {entry.provider} ({entry.model}) [local]")
+            elif entry.has_key:
+                print(f"  {marker} {entry.provider} ({entry.model}) ✅ key")
+            else:
+                print(f"  {marker} {entry.provider} ({entry.model}) ⚠️ no key")
+        offline = getattr(settings, "offline_embedding_fallback_order", [])
+        if offline and [e.provider for e in report.embedding_chain] != offline:
+            print(f"  offline: {' → '.join(offline)}")
+
+    print("\nLLM Chain:")
+    if not report.llm_chain:
+        print("  ⚠️  No LLM providers configured")
+    else:
+        for entry in report.llm_chain:
+            marker = "→" if entry.provider.lower() == settings.llm_provider.lower() else " "
+            if entry.is_local:
+                status = "✅ local"
+                # Extra Ollama liveness when primary is ollama
+                if entry.provider == "ollama":
+                    try:
+                        req = urllib.request.Request(f"{settings.ollama_local_base_url}/api/tags", method="GET")
+                        with urllib.request.urlopen(req, timeout=3) as resp:
+                            status = (
+                                "✅ local (reachable)" if resp.status == 200 else f"❌ local (status {resp.status})"
+                            )
+                    except Exception as exc:
+                        status = f"❌ local ({exc})"
+                print(f"  {marker} {entry.provider} ({entry.model}) {status}")
+            elif entry.has_key:
+                print(f"  {marker} {entry.provider} ({entry.model}) ✅ key")
+            else:
+                print(f"  {marker} {entry.provider} ({entry.model}) ⚠️ no key")
         if settings.code_llm_provider:
-            print(f"  ℹ️  Code Model: {settings.code_llm_provider} ({settings.code_llm_model})")
-    elif llm_provider == "nvidia":
-        print(f"  ℹ️  Configured: NVIDIA ({settings.nvidia_model})")
-    elif llm_provider == "groq":
-        print(f"  ℹ️  Configured: Groq ({settings.groq_model})")
-    elif llm_provider == "cerebras":
-        print(f"  ℹ️  Configured: Cerebras ({settings.cerebras_model})")
-    elif llm_provider == "gemini":
-        print(f"  ℹ️  Configured: Gemini ({settings.gemini_model})")
-    elif llm_provider == "cloudflare":
-        print(f"  ℹ️  Configured: Cloudflare ({settings.cloudflare_model})")
-    elif llm_provider == "opencodezen":
-        print(f"  ℹ️  Configured: OpenCode Zen ({settings.opencodezen_model})")
-    elif llm_provider == "opencodego":
-        print(f"  ℹ️  Configured: OpenCode Go ({settings.opencodego_model})")
-    elif llm_provider == "sambanova":
-        print(f"  ℹ️  Configured: SambaNova ({settings.sambanova_model})")
-    elif llm_provider == "mistral":
-        print(f"  ℹ️  Configured: Mistral ({settings.mistral_model})")
-    elif llm_provider == "deepseek":
-        print(f"  ℹ️  Configured: DeepSeek ({settings.deepseek_model})")
-    elif llm_provider == "zai":
-        print(f"  ℹ️  Configured: Z.AI ({settings.zai_model})")
-    elif llm_provider == "siliconflow":
-        print(f"  ℹ️  Configured: SiliconFlow ({settings.siliconflow_model})")
-    elif llm_provider == "together":
-        print(f"  ℹ️  Configured: Together AI ({settings.together_model})")
-    elif llm_provider == "fireworks":
-        print(f"  ℹ️  Configured: Fireworks AI ({settings.fireworks_model})")
-    elif llm_provider == "llm7":
-        print(f"  ℹ️  Configured: LLM7.io ({settings.llm7_model})")
-    elif llm_provider == "agnes":
-        print(f"  ℹ️  Configured: Agnes AI ({settings.agnes_model})")
-    elif llm_provider == "ollama_cloud":
-        print(f"  ℹ️  Configured: Ollama Cloud ({settings.ollama_cloud_model})")
-    elif llm_provider == "helyx":
-        print(f"  ℹ️  Configured: Helyx AI ({settings.helyx_model})")
-    elif llm_provider == "anyapi":
-        print(f"  ℹ️  Configured: AnyAPI.ai ({settings.anyapi_model})")
-    elif llm_provider == "ollama":
-        print(f"  ℹ️  Configured: Ollama ({settings.ollama_model})")
-        # Check Ollama health
-        try:
-            req = urllib.request.Request(f"{settings.ollama_local_base_url}/api/tags", method="GET")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                if resp.status == 200:
-                    print("  ✅ Ollama service healthy")
-                else:
-                    print(f"  ❌ Ollama unhealthy (status {resp.status})")
-                    all_healthy = False
-        except Exception as e:
-            print(f"  ❌ Ollama unreachable: {e}")
-            all_healthy = False
-    else:
-        print(f"  ⚠️  Unknown provider: {llm_provider}")
-        all_healthy = False
+            print(f"  code: {settings.code_llm_provider} ({settings.code_llm_model})")
 
     print("\n" + "=" * 40)
-    if all_healthy:
+    if report.all_healthy:
         print("✅ All services healthy")
         sys.exit(0)
     else:
@@ -2191,52 +2146,38 @@ def health() -> None:  # pragma: no cover: CLI entry point, requires network
 
 
 def status() -> None:  # pragma: no cover: CLI entry point, requires network
-    """Show ingestion and system status."""
+    """Show ingestion and system status (verbose inventory)."""
+
+    from data_engineering_copilot.infrastructure.health_checks import build_status_report
 
     print("System Status\n" + "=" * 40 + "\n")
 
-    # Check Docker image freshness
-    print("Docker Image:")
-    try:
-        req = urllib.request.Request("http://localhost:8000/api/v1/version")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            deps_ok = data.get("deps_fingerprint_ok")
-            if deps_ok is True:
-                print("  ✅ Dependencies: fresh")
-            elif deps_ok is False:
-                print("  ❌ Dependencies: STALE — run `make docker-dev`")
-                print(f"     {data.get('deps_stale_message', '')}")
-            else:
-                print("  ℹ️  Dependencies: unknown (not running in Docker)")
-            git_sha = data.get("git_sha", "unknown")
-            print(f"  Git SHA: {git_sha[:8] if git_sha else 'unknown'}")
-    except Exception:
-        print("  ❌ API not reachable at localhost:8000")
+    report = build_status_report(settings)
 
-    # Check Qdrant collection status
+    print("Docker Image:")
+    if report.docker.deps_fingerprint_ok is True:
+        print("  ✅ Dependencies: fresh")
+    elif report.docker.deps_fingerprint_ok is False:
+        print(f"  ❌ Dependencies: {report.docker.detail}")
+    else:
+        print(f"  ℹ️  Dependencies: {report.docker.detail}")
+    if report.docker.git_sha:
+        print(f"  Git SHA: {report.docker.git_sha[:8]}")
+
     print("\nQdrant Collection:")
-    try:
-        req = urllib.request.Request(f"{settings.qdrant_url}/collections/{settings.collection_name}", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            if "result" in data:
-                result = data["result"]
-                print(f"  Collection: {settings.collection_name}")
-                print(f"  Status: {result.get('status', 'unknown')}")
-                if "vectors_count" in result:
-                    print(f"  Vectors: {result.get('vectors_count', 0)}")
-                if "segments_count" in result:
-                    print(f"  Segments: {result.get('segments_count', 0)}")
-            else:
-                print("  ❌ Collection not found")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print("  ❌ Collection does not exist (run `dec ingest` to create)")
-        else:
-            print(f"  ❌ Error: {e}")
-    except Exception as e:
-        print(f"  ❌ Error: {e}")
+    if report.qdrant.ok:
+        target = report.qdrant_alias_target or settings.collection_name
+        points = report.qdrant_points
+        print(f"  Collection: {target}")
+        print(f"  Status: {report.qdrant.detail}")
+        if points is not None:
+            print(f"  Points: {points}")
+    elif "not found" in report.qdrant.detail.lower() or "404" in report.qdrant.detail:
+        print("  ❌ Collection does not exist (run `dec gen-build` to create)")
+        if report.qdrant.detail:
+            print(f"     {report.qdrant.detail}")
+    else:
+        print(f"  ❌ Error: {report.qdrant.detail}")
 
     # BM25 tokenizer status
     bm25_status = _get_bm25_status()
@@ -2272,7 +2213,7 @@ def status() -> None:  # pragma: no cover: CLI entry point, requires network
             ["celery", "-A", "data_engineering_copilot.workers.tasks", "inspect", "active"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=10,
         )
         if "OK" in result.stdout:
             if "- empty -" in result.stdout:
@@ -2324,18 +2265,24 @@ def status() -> None:  # pragma: no cover: CLI entry point, requires network
         except Exception as e:
             print(f"  ❌ Error: {e}")
 
-    # Check Redis cache
+    # Check Redis cache (reuses probe from health_checks for consistency)
     print("\nRedis Cache:")
-    try:
-        import redis
+    if report.redis.ok:
+        suffix = f" (keys: {report.redis.key_count})" if report.redis.key_count is not None else ""
+        print(f"  ✅ Connected{suffix}")
+        print(f"     {report.redis.detail}")
+    else:
+        print(f"  ❌ Error: {report.redis.detail}")
 
-        redis_client = redis.Redis.from_url(settings.redis_url, socket_timeout=3)
-        if redis_client.ping():
-            info = redis_client.info()
-            print(f"  ✅ Connected (keys: {info.get('db0', {}).get('keys', 0) if 'db0' in info else 'N/A'})")
-        redis_client.close()
-    except Exception as e:
-        print(f"  ❌ Error: {e}")
+    print("\nProviders:")
+    print("  Embedding chain:")
+    for entry in report.embedding_chain:
+        icon = "✅ key" if entry.has_key else ("ℹ️ local" if entry.is_local else "⚠️ no key")
+        print(f"    - {entry.provider} ({entry.model}) {icon}")
+    print("  LLM chain:")
+    for entry in report.llm_chain:
+        icon = "✅ key" if entry.has_key else ("ℹ️ local" if entry.is_local else "⚠️ no key")
+        print(f"    - {entry.provider} ({entry.model}) {icon}")
 
 
 def _percentile(values: list[float], p: float) -> float | None:
