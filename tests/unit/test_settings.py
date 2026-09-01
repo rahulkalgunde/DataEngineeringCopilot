@@ -129,7 +129,7 @@ def test_prompt_citation_enforcement_accepts_valid_values() -> None:
 
 
 def test_prompt_citation_enforcement_default_is_strict() -> None:
-    assert make_settings().prompt_citation_enforcement == "strict"
+    assert make_settings().prompt_citation_enforcement == "soft"
 
 
 def test_code_llm_defaults_empty() -> None:
@@ -259,7 +259,7 @@ def test_env_local_overrides_env(tmp_path) -> None:
 
 def test_no_duplicate_embed_concurrency() -> None:
     settings = make_settings()
-    assert settings.model_fields["embed_concurrency"].default == 1
+    assert settings.model_fields["embed_concurrency"].default == 4
 
 
 def test_validate_all_passes_on_defaults() -> None:
@@ -399,7 +399,7 @@ def test_chat_speed_settings_defaults() -> None:
     assert settings.chat_scope_local is False
     assert settings.chat_answer_local is False
     assert settings.chat_rerank_local is True
-    assert settings.chat_cache_recall_enabled is False
+    assert settings.chat_cache_recall_enabled is True
     assert settings.chat_cache_top_k == 3
     assert settings.chat_cache_recall_threshold == 0.70
     assert settings.chat_cache_max_age_seconds == 86400

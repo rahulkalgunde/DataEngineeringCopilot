@@ -122,7 +122,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
           cpus: "2.0"
     environment:
       CLICKHOUSE_DB: langfuse
@@ -132,6 +132,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
+      - ./clickhouse_config/override.xml:/etc/clickhouse-server/config.d/override.xml:ro
     ports:
       - "8123:8123"
       - "9000:9000"

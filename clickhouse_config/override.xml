@@ -1,0 +1,14 @@
+<clickhouse>
+    <!-- Fix: reduce log verbosity from trace -> warning to cut 2GB+ text_log churn -->
+    <logger>
+        <level>warning</level>
+        <console>0</console>
+    </logger>
+    <text_log>
+        <level>warning</level>
+    </text_log>
+    <!-- Sampling profiler default is enabled; to fully disable trace_log sampling,
+         set via users.xml profiles. For now lowering text_log level already cuts
+         the larger text_log (1.90 GiB). trace_log (2.68 GiB) will be truncated
+         manually and its growth limited by less verbose logging. -->
+</clickhouse>

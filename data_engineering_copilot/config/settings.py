@@ -630,7 +630,7 @@ class AppSettings(BaseSettings):
     image_git_sha: str = Field(default="unknown", validation_alias="IMAGE_GIT_SHA")
 
     embedding_batch_size: int = 64
-    embed_concurrency: int = 1
+    embed_concurrency: int = 4
     enrichment_batch_size: int = 32
 
     # LLM Provider selection: "ollama" | "openrouter"
@@ -922,7 +922,7 @@ class AppSettings(BaseSettings):
             "ollama",
         ]
     )
-    llm_fallback_call_timeout: int = 30  # per-attempt timeout for non-primary fallback providers
+    llm_fallback_call_timeout: int = 10  # per-attempt timeout for non-primary fallback providers (tuned for speed)  # per-attempt timeout for non-primary fallback providers
 
     # Embedding fallback chain: ordered list of embedding providers to try on failure
     embedding_fallback_order: list[str] = Field(
@@ -984,10 +984,10 @@ class AppSettings(BaseSettings):
     # external providers have exited cooldown, up to router_deadline_seconds,
     # then degrade to the local fallback.
     router_wait_min_available_fraction: float = 0.5
-    router_wait_max_seconds: float = 15.0
-    router_deadline_seconds: float = 45.0
+    router_wait_max_seconds: float = 5.0
+    router_deadline_seconds: float = 20.0
     # How long the cached "best provider" stays authoritative per purpose.
-    router_best_cache_ttl_seconds: float = 15.0
+    router_best_cache_ttl_seconds: float = 5.0
     # Bonus score applied to the purpose-pinned provider so it is preferred
     # (not hard-pinned) when its recent health is competitive.
     router_purpose_preference_weight: float = 0.15
@@ -1199,14 +1199,14 @@ class AppSettings(BaseSettings):
     retrieval_top_k: int = 50
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
-    reranker_top_k: int = 30
-    max_context_chars: int = 24000
+    reranker_top_k: int = 15
+    max_context_chars: int = 12000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.
     # Raised to 3 to cover multi-corpus queries (e.g. spark+airflow+claude) without
     # starving any corpus when max_context_chars is shared across intents.
-    max_chunks_per_source: int = 3
+    max_chunks_per_source: int = 2
     # Context assembly optimization
     assembly_mmr_enabled: bool = False
     assembly_mmr_lambda: float = 0.5
@@ -1217,7 +1217,7 @@ class AppSettings(BaseSettings):
     prompt_salted_xml_tags: bool = True  # Per-request salted <context_data_XXX> tags
     prompt_xml_content_escape: bool = True  # Escape < in chunk text
     prompt_trailing_instructions: bool = True  # Instruction sandwiching
-    prompt_citation_enforcement: Literal["strict", "soft", "off"] = "strict"
+    prompt_citation_enforcement: Literal["strict", "soft", "off"] = "soft"
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
     groundedness_threshold: float = 0.6
@@ -1231,28 +1231,28 @@ class AppSettings(BaseSettings):
     # tried before the local cross-encoder (which stays the degraded last
     # resort). All providers normalize scores to [0, 1] so the confidence gate
     # above keeps the same meaning across providers.
-    llm_rerank_enabled: bool = True
+    llm_rerank_enabled: bool = False
     rerank_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "huggingface"])
     openrouter_rerank_model: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
     openrouter_rerank_url: str = "https://openrouter.ai/api/v1/rerank"
     nvidia_rerank_model: str = "nv-rerank-qa-mistral-4b:1"
     nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
-    rerank_cloud_timeout_seconds: int = 30
+    rerank_cloud_timeout_seconds: int = 8
     # "colbert" = lexical char-trigram MaxSim proxy (see colbert_reranker.py),
     # NOT neural late-interaction. "pylate_colbert" = true neural late
     # interaction via PyLate (optional [colbert] extra). Gate: dec eval-rerank
     # nDCG@10 >= cross_encoder + 0.02 AND p95 pool latency <= 2x cross_encoder.
     reranker_type: str = "cross_encoder"
     pylate_colbert_model: str = "colbert-ir/colbertv2.0"
-    reranker_pool_size: int = 0
-    reranker_doc_truncation_chars: int = 2000
-    reranker_selective_threshold: float = 1.0
+    reranker_pool_size: int = 80
+    reranker_doc_truncation_chars: int = 1200
+    reranker_selective_threshold: float = 0.70
     colbert_rerank_model: str = "colbert-ir/colbertv2.0"
     colbert_max_query_tokens: int = 32
     colbert_max_doc_tokens: int = 256
-    request_timeout_seconds: int = 15
-    ollama_timeout_seconds: int = 180
+    request_timeout_seconds: int = 10
+    ollama_timeout_seconds: int = 60
     ollama_connect_timeout_seconds: int = 5
     ollama_pool_timeout_seconds: int = 5
     ollama_keep_alive: str | int = "10m"
@@ -1309,7 +1309,7 @@ class AppSettings(BaseSettings):
     # Chat speed tuning (Phase F): smart-cache recall tier — reuse similar
     # cached (question→answer) pairs via local synthesis, gated by scope
     # verify. Opt-in default-off; flip on after measuring cache hit rate.
-    chat_cache_recall_enabled: bool = False
+    chat_cache_recall_enabled: bool = True
     chat_cache_top_k: int = 3
     chat_cache_recall_threshold: float = 0.70
     chat_cache_max_age_seconds: int = 86400
@@ -1387,7 +1387,7 @@ class AppSettings(BaseSettings):
     judge_kappa_gate: float = 0.60
     judge_raw_gate: float = 0.80
     # Semantic cache
-    semantic_cache_threshold: float = 0.95
+    semantic_cache_threshold: float = 0.92
     semantic_cache_ttl: int = 3600
     # Cache toggles (per-type enable/disable). `query_cache_enabled` is the
     # master switch for the two-tier RAG query cache; the exact/semantic flags

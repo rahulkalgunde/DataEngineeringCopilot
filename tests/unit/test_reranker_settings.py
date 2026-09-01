@@ -28,15 +28,15 @@ class TestAppSettingsRerankerDefaults:
 
     def test_reranker_pool_size_default(self) -> None:
         s = make_settings()
-        assert s.reranker_pool_size == 0
+        assert s.reranker_pool_size == 80
 
     def test_reranker_doc_truncation_chars_default(self) -> None:
         s = make_settings()
-        assert s.reranker_doc_truncation_chars == 2000
+        assert s.reranker_doc_truncation_chars == 1200
 
     def test_reranker_selective_threshold_default(self) -> None:
         s = make_settings()
-        assert s.reranker_selective_threshold == 1.0
+        assert s.reranker_selective_threshold == 0.70
 
     def test_colbert_rerank_model_default(self) -> None:
         s = make_settings()
