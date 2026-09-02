@@ -34,6 +34,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from data_engineering_copilot.logger import safe_pct
+
 logger = logging.getLogger(__name__)
 
 # ragas starts a background analytics flush thread on import; that thread can
@@ -287,7 +289,7 @@ class RagasEvaluator:
             try:
                 scores = result[key]
             except KeyError:
-                logger.warning("RAGAS metric %r did not run — scoring 0.0", key)
+                logger.warning("RAGAS metric %s did not run — scoring 0.0", safe_pct(str(key)))
                 return 0.0
             return _aggregate_ragas_scores(scores, key)
 
