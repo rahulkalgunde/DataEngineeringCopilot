@@ -1605,6 +1605,59 @@ def gen_validate(generation: str) -> int:  # pragma: no cover: CLI entry point, 
     return 0
 
 
+def gen_bm25_rebuild(
+    generation: str, from_path: str | None = None
+) -> int:  # pragma: no cover: CLI entry point, requires file I/O
+    """Rebuild a persisted BM25 tokenizer from a generation's corpus (0 embeddings).
+
+    Pure local rebuild: reads ``chunks.jsonl`` streaming, fits a
+    ``BM25Tokenizer`` (namespace mode follows ``settings``), and atomically
+    persists via tmp+rename. No Qdrant or embedding calls.
+    """
+    import time
+    from pathlib import Path
+
+    from data_engineering_copilot.config.settings import PROJECT_ROOT
+    from data_engineering_copilot.infrastructure.async_qdrant_store import rebuild_bm25_cache_from_corpus
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    if not generation or not re_fullmatch_identifier(generation):
+        print("❌ Invalid generation identifier")
+        return 2
+    if from_path:
+        chunks = Path(from_path)
+    else:
+        # Prefer settings.pinned_corpus_dir (test-isolated), fall back to PROJECT_ROOT layout
+        try:
+            from data_engineering_copilot.config.naming import resolve_naming
+
+            naming = resolve_naming(generation)
+            candidate = settings.pinned_corpus_dir / naming.artifact_dir_name / "chunks.jsonl"
+            if candidate.exists():
+                chunks = candidate
+            else:
+                chunks = PROJECT_ROOT / f"data/pinned_corpus/data_engineering_docs__{generation}/chunks.jsonl"
+        except Exception:
+            chunks = PROJECT_ROOT / f"data/pinned_corpus/data_engineering_docs__{generation}/chunks.jsonl"
+    if not chunks.exists():
+        print(f"❌ chunks.jsonl not found at {chunks}")
+        return 3
+    t0 = time.time()
+    try:
+        out = rebuild_bm25_cache_from_corpus(generation, chunks, namespace=settings.namespace_bm25_enabled)
+    except Exception as exc:
+        print(f"❌ BM25 rebuild failed: {exc}")
+        return 5
+    try:
+        tok = BM25Tokenizer.load(out)
+        vocab = tok.vocab_size
+    except Exception:
+        vocab = "?"
+    elapsed = time.time() - t0
+    print(f"✅ BM25 cache rebuilt: {out} vocab={vocab} in {elapsed:.1f}s (0 embeddings)")
+    return 0
+
+
 def gen_activate(generation: str, force: bool = False) -> int:  # pragma: no cover: CLI entry point, requires Qdrant
     """Activate a validated pinned generation by repointing the logical alias.
 
@@ -4359,6 +4412,18 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
         _parser = subparsers.add_parser(_cmd, help=f"Manage pinned generation: {_cmd}.")
         _parser.add_argument("--generation", type=str, required=True, help="Generation identifier.")
         _parser.add_argument("--force", action="store_true", default=False, help="Skip confirmation prompt.")
+    gen_bm25_parser = subparsers.add_parser(
+        "gen-bm25-rebuild",
+        help="Rebuild BM25 cache locally from chunks.jsonl (0 embeddings, 15s).",
+    )
+    gen_bm25_parser.add_argument("--generation", type=str, required=True, help="Generation identifier.")
+    gen_bm25_parser.add_argument(
+        "--from",
+        dest="from_path",
+        type=str,
+        default=None,
+        help="Override chunks.jsonl path.",
+    )
     spark_manifest_parser = subparsers.add_parser(
         "spark-manifest",
         help="Materialize the pinned Spark source and write a file manifest.",
@@ -4972,6 +5037,8 @@ def main() -> None:  # pragma: no cover: CLI entry point
             sys.exit(gen_build(generation=args.generation))
         elif args.command == "gen-validate":
             sys.exit(gen_validate(generation=args.generation))
+        elif args.command == "gen-bm25-rebuild":
+            sys.exit(gen_bm25_rebuild(generation=args.generation, from_path=getattr(args, "from_path", None)))
         elif args.command == "gen-activate":
             sys.exit(gen_activate(generation=args.generation, force=args.force))
         elif args.command == "gen-rollback":

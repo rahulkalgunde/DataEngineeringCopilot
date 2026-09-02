@@ -1364,7 +1364,9 @@ class AppSettings(BaseSettings):
     # legacy BM25 cache: a new generation must be built and activated.
     # STATUS: Class default False (dark-ship protocol). .env sets
     # NAMESPACE_BM25_ENABLED=true and the ns-aware-001 index was built
-    # with namespace-v1 tokenizer (verified in BM25 cache).
+    # with namespace-v1 tokenizer (verified in BM25 cache). A missing cache
+    # can be rebuilt locally (0 embeddings, ~15s) via
+    # ``dec gen-bm25-rebuild --generation <id>`` without a full ``gen-build``.
     namespace_bm25_enabled: bool = False
     # Retrieval regression gates — honest inscope baseline (220 rows,
     # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global

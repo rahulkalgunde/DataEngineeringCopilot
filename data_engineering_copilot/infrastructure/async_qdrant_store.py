@@ -95,6 +95,48 @@ def _resolve_bm25_cache_path(collection_name: str) -> Path:
     return base / f"{collection_name}.json"
 
 
+def rebuild_bm25_cache_from_corpus(
+    generation: str,
+    chunks_path: Path,
+    namespace: bool | None = None,
+) -> Path:
+    """Rebuild a persisted BM25 tokenizer from a ``chunks.jsonl`` corpus.
+
+    Pure local rebuild: no embeddings, no Qdrant. Reads ``chunks.jsonl``
+    streaming, fits a ``BM25Tokenizer`` (namespace mode follows ``settings``
+    when ``namespace`` is None), and atomically persists via tmp+rename.
+    Returns the persisted cache path.
+    """
+    import json
+
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    ns = namespace if namespace is not None else settings.namespace_bm25_enabled
+    coll = (
+        f"data_engineering_docs__{generation}" if not generation.startswith("data_engineering_docs__") else generation
+    )
+    if coll == "data_engineering_docs":
+        persist_path = _resolve_bm25_cache_path(coll)
+    else:
+        persist_path = PROJECT_ROOT / ".bm25_cache" / f"{coll}.json"
+    texts: list[str] = []
+    with open(chunks_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            txt = obj.get("text", "")
+            if isinstance(txt, str):
+                texts.append(txt)
+    tok = BM25Tokenizer(namespace=ns)
+    tok.fit(texts)
+    tmp = persist_path.with_suffix(".tmp")
+    tok.save(tmp)
+    tmp.replace(persist_path)
+    return persist_path
+
+
 def _mrl_small_vector(vector: list[float], small_dim: int) -> list[float]:
     """Matryoshka prefix slice + L2 renormalization.
 
