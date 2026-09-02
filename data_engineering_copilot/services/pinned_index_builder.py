@@ -586,11 +586,13 @@ class PinnedIndexBuilder:
         - ``generated_at``: ISO timestamp
         - ``generator``: fixed string "pinned-index-builder"
         - ``generation``: the generation ID
-        - ``source``: metadata about the source (slug, name, type, commit, manifest_hash)
+        - ``source``: metadata about the source (slug, name, type, commit, manifest_hash, chunk_count)
         - ``sources``: mapping of source file path (relative to cwd) → sha12 hash
 
-        This schema is backward-compatible with ``check_derived_staleness.py``
-        which reads the top-level ``sources`` dict and re-hashes each file.
+        Delegates to :mod:`data_engineering_copilot.services.source_manifest`
+        for the actual writing. The schema is backward-compatible with
+        ``check_derived_staleness.py`` which reads the top-level ``sources``
+        dict and re-hashes each file.
         """
         if self._output_dir is None:
             return
@@ -598,28 +600,18 @@ class PinnedIndexBuilder:
             load_pinned_sources,
             settings,
         )
+        from data_engineering_copilot.services.source_manifest import (
+            write_all_source_provenances,
+        )
 
-        config_map = {src.slug: src for src in load_pinned_sources(settings.pinned_sources_path)}
-        for package in packages:
-            config = config_map.get(package.slug)
-            source_type = config.type if config else "unknown"
-            prov = {
-                "generated_at": datetime.now(UTC).isoformat(),
-                "generator": "pinned-index-builder",
-                "generation": self._generation,
-                "source": {
-                    "slug": package.slug,
-                    "name": package.source_name,
-                    "type": source_type,
-                    "commit": package.commit,
-                    "manifest_hash": package.manifest_hash,
-                },
-                "sources": package.provenance_sources(),
-            }
-            (self._output_dir / f"provenance-{package.slug}.json").write_text(
-                json.dumps(prov, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+        config_map = {src.slug: src.type for src in load_pinned_sources(settings.pinned_sources_path)}
+        write_all_source_provenances(
+            packages=list(packages),
+            generation=self._generation,
+            output_dir=self._output_dir,
+            source_type_map=config_map,
+            generator="pinned-index-builder",
+        )
 
 
 def _reject_duplicate_ids(chunks: list[DocumentChunk]) -> None:
