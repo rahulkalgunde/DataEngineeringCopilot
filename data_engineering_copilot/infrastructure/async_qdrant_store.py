@@ -567,7 +567,12 @@ class AsyncQdrantVectorStore:
             # honour it so the fused pool exposed by Qdrant and consumed by the
             # reranker are identical.
             if use_hybrid:
-                effective_fused_limit = fused_limit if fused_limit is not None else max(top_k * 4, 40)
+                if fused_limit is not None:
+                    effective_fused_limit = fused_limit
+                elif settings.retrieval_prefetch_limit is not None:
+                    effective_fused_limit = settings.retrieval_prefetch_limit
+                else:
+                    effective_fused_limit = max(top_k * 4, 40)
             else:
                 effective_fused_limit = top_k
             query_kwargs: dict = dict(

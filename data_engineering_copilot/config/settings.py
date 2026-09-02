@@ -888,6 +888,19 @@ class AppSettings(BaseSettings):
     anyapi_rpm_limit: int = 20
     anyapi_rpd_limit: int = 500
 
+    # B.AI (https://api.b.ai/v1) — unified LLM gateway, OpenAI-compatible.
+    # Promo-free models (glm-5.3-flash, qwen3.8-flash, hy3, deepseek-v4-flash)
+    # are 0 Credits during promotion; see docs/b_ai_free_tier.md.
+    # Accepts both BAI_API_KEY (canonical) and B_API_KEY (legacy local) env vars.
+    bai_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("BAI_API_KEY", "B_API_KEY"),
+    )
+    bai_model: str = "glm-5.3-flash"
+    bai_base_url: str = "https://api.b.ai/v1"
+    bai_rpm_limit: int = 10
+    bai_rpd_limit: int = 500
+
     # Hugging Face Inference Providers (LLM + Embeddings).
     # Serverless embeddings use the native ``feature-extraction`` route (the
     # OpenAI-compatible ``/v1`` surface is chat-completions only). Free-tier
@@ -917,6 +930,7 @@ class AppSettings(BaseSettings):
             "cloudflare",
             "openrouter",
             "gemini",
+            "bai",
             "agnes",
             "ollama_cloud",
             "ollama",
@@ -1179,6 +1193,13 @@ class AppSettings(BaseSettings):
     anyapi_enrichment_llm_model: str = ""
     anyapi_evaluation_llm_model: str = ""
     anyapi_code_llm_model: str = ""
+    bai_answer_llm_model: str = ""
+    bai_rewrite_llm_model: str = ""
+    bai_groundedness_llm_model: str = ""
+    bai_intent_llm_model: str = ""
+    bai_enrichment_llm_model: str = ""
+    bai_evaluation_llm_model: str = ""
+    bai_code_llm_model: str = ""
 
     ollama_local_code_llm_model: str = Field(
         default="qwen2.5-coder:7b",
@@ -1347,7 +1368,10 @@ class AppSettings(BaseSettings):
     mrl_small_dim: int = 256
     mrl_oversample_factor: int = 4
     hybrid_search_enabled: bool = True
-    hybrid_rrf_k: int = 60
+    # RRF k: 2..5 for ~1 rel/query (our n=220 avg 1.1 relevant), 60 for many — tuned per ADR-006 (train best k=20 prefetch 100, held ΔnDCG +0.034 CI [0.004,0.064] ship)
+    hybrid_rrf_k: int = 20
+    # Optional override for fused prefetch limit per-leg; None => max(k*4,40) else honor value (try 100 per ADR-006 — shipped 100)
+    retrieval_prefetch_limit: int | None = 100
     # Identifier-aware hybrid profiles: when enabled, technical queries
     # (dotted identifiers, paths, versions, code/SQL) fuse hybrid retrieval with
     # weighted RRF (sparse 1.25 / dense 1.0) instead of equal weights. Off by
@@ -1523,6 +1547,7 @@ class AppSettings(BaseSettings):
             "ollama_cloud": ("ollama_cloud_api_key", "OLLAMA_API_KEY"),
             "helyx": ("helyx_api_key", "HELYX_API_KEY"),
             "anyapi": ("anyapi_api_key", "ANYAPI_API_KEY"),
+            "bai": ("bai_api_key", "BAI_API_KEY or B_API_KEY"),
             "huggingface": ("huggingface_api_key", "HUGGINGFACE_API_KEY or HF_TOKEN"),
         }
         for provider, (field_name, env_var) in provider_api_key_map.items():
