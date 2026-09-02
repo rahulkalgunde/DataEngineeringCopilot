@@ -22,5 +22,17 @@
     "url_prefixes": [
       "https://docs.databricks.com/aws/en/"
     ]
+  },
+  {
+    "name": "Delta Lake Documentation",
+    "start_urls": [
+      "https://docs.delta.io/4.4.0/"
+    ],
+    "allowed_domains": [
+      "docs.delta.io"
+    ],
+    "url_prefixes": [
+      "https://docs.delta.io/4.4.0/"
+    ]
   }
 ]
