@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Any, Literal, Self, cast
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -974,6 +974,38 @@ class AsyncQdrantVectorStore:
             self._bm25._corpus_size,
         )
 
+    async def _upsert_with_retry(self, collection_name: str, points: Any, max_retries: int = 3) -> None:
+        """Upsert with exponential backoff for transient Qdrant failures.
+
+        Qdrant can briefly report ``status: yellow`` or return connection errors
+        during heavy upsert/optimization phases. This retries with backoff
+        instead of killing the entire build on a single transient blip.
+        """
+        import asyncio as _asyncio
+
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                if self._client is None:
+                    raise VectorStoreError("Qdrant client not initialized")
+                await self._client.upsert(collection_name=collection_name, points=points)
+                return
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Qdrant upsert retry %d/%d on %s: %s",
+                    attempt + 1,
+                    max_retries,
+                    collection_name,
+                    repr(exc) if not str(exc) else str(exc)[:200],
+                )
+                # Exponential backoff: 30s, 60s, 120s — Qdrant needs time to
+                # finish indexing before accepting more upserts during heavy load
+                await _asyncio.sleep(30 * (2**attempt))
+        logger.error("Qdrant upsert failed after %d retries", max_retries)
+        if last_exc:
+            raise last_exc
+
     async def upsert_frozen_chunks(
         self,
         chunks: Sequence[DocumentChunk],
@@ -1015,7 +1047,7 @@ class AsyncQdrantVectorStore:
             if self._mrl_enabled:
                 vectors_dict["dense_small"] = [_mrl_small_vector(list(e), self._mrl_small_dim) for e in sub_embeddings]
             payloads = [self._chunk_to_payload(chunk) for chunk in sub_chunks]
-            await self._client.upsert(
+            await self._upsert_with_retry(
                 collection_name=self._collection_name,
                 points=models.Batch(ids=[str(i) for i in ids], vectors=vectors_dict, payloads=payloads),  # type: ignore[arg-type]
             )
