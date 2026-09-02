@@ -32,6 +32,7 @@ scripts/*
 !scripts/tune_rrf_weights.py
 !scripts/eval_pipeline_ablation.py
 !scripts/tune_tier2_speed.py
+!scripts/run_chunking_eval.py
 resources_*.csv
 *.csv
 *.parquet
