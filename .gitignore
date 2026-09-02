@@ -29,6 +29,7 @@ scripts/*
 !scripts/eval_retrieval_gate.py
 !scripts/tune_rrf_k.py
 !scripts/tune_rrf_weights.py
+!scripts/eval_pipeline_ablation.py
 resources_*.csv
 *.csv
 *.parquet

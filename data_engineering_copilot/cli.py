@@ -2739,6 +2739,255 @@ def _eval_ablation_main(  # pragma: no cover: CLI entry point, requires Qdrant
     return 0
 
 
+def _eval_pipeline_ablation_main(  # pragma: no cover: CLI entry point, requires Qdrant
+    dataset: str | None = None,
+    k: int = 10,
+    split: str = "held",
+    stage: str | None = None,
+    batch_size: int | None = None,
+    output_dir: str | None = None,
+) -> int:
+    """Pipeline downstream ablation: guardrails / sibling / dedup (ADR-011).
+
+    Grid with vs without per stage on held 110 (seed 42), Δ recall/nDCG + 95% CI
+    bootstrap 1000. Uses AsyncRagService.answer(retrieval_only=True) so sibling
+    rejoin, guardrails, and dedup stages are exercised.
+    """
+    import asyncio
+    import json
+    import pathlib
+    import statistics
+
+    from data_engineering_copilot.config.settings import settings as _settings
+    from data_engineering_copilot.evaluation.retrieval import (
+        PIPELINE_ABLATION_STAGES,
+        bootstrap_delta_ci,
+        pipeline_stage_decision,
+        split_queries,
+    )
+    from data_engineering_copilot.evaluation.retrieval_metrics import ndcg_at_k, recall_at_k
+    from data_engineering_copilot.factory import build_rag_service
+
+    # Determine stages
+    stages: tuple[str, ...]
+    if stage is None or stage == "all":
+        stages = PIPELINE_ABLATION_STAGES  # type: ignore[assignment]
+    elif stage in PIPELINE_ABLATION_STAGES:
+        stages = (stage,)  # type: ignore[assignment]
+    else:
+        print(f"❌ Unknown pipeline ablation stage: {stage!r}")
+        return 2
+
+    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_inscope.jsonl")
+    if not dataset_path.exists():
+        dataset_path = pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
+        if not dataset_path.exists():
+            print(f"❌ Evaluation dataset not found at {dataset_path}")
+            return 2
+    queries: list[dict] = []
+    with open(dataset_path) as f:
+        for line in f:
+            if line.strip():
+                try:
+                    queries.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    print(f"❌ Invalid JSONL row in {dataset_path}: {exc}")
+                    return 2
+    if not queries:
+        print("❌ No queries loaded from dataset")
+        return 2
+    train, held = split_queries(queries, seed=42)
+    if split == "train":
+        selected = train
+        split_label = "train (110)"
+    elif split == "held":
+        selected = held
+        split_label = "held (110)"
+    else:
+        selected = queries
+        split_label = f"all ({len(queries)})"
+    print(
+        f"Pipeline ablation dataset: {dataset_path.name} total={len(queries)} train={len(train)} held={len(held)} selected={len(selected)} [{split_label}] seed=42"
+    )
+    print(f"k={k} stages={list(stages)} batch_size={batch_size}")
+
+    # Helper to build service with toggle
+    def _svc_for(stage_name: str, enabled: bool):
+        overrides: dict[str, object] = {}
+        if stage_name == "guardrails":
+            overrides["input_guardrails_enabled"] = enabled
+        elif stage_name == "sibling":
+            overrides["assembly_enable_sibling_merge"] = enabled
+        elif stage_name == "dedup":
+            overrides["assembly_content_hash_dedup"] = enabled
+            overrides["context_compression_enabled"] = enabled
+        base = _settings
+        new_settings = base.model_copy(update=overrides)
+        svc = build_rag_service(app_settings=new_settings)
+        _disable_rewrites_for_eval(svc)
+        if stage_name == "sibling" and not enabled:
+            # max_blocks 3→0 : patch to no-op rejoin
+            async def _noop_rejoin(chunks, max_sibling_blocks: int = 0):  # type: ignore[no-untyped-def]
+                return chunks
+
+            svc._rejoin_sibling_chunks = _noop_rejoin  # type: ignore[method-assign,assignment]
+        if stage_name == "dedup" and not enabled:
+            # Ensure assembler dedup path is off even if compressor None path
+            # No extra patch needed; config already disables content_hash_dedup.
+            pass
+        if stage_name == "guardrails" and not enabled:
+            # Fail-open: drop guardrails entirely
+            svc.input_guardrails = None  # type: ignore[assignment]
+        return svc
+
+    async def _eval_stage(stage_name: str, enabled: bool) -> dict:
+        svc = _svc_for(stage_name, enabled)
+
+        per_recall: list[float] = []
+        per_ndcg: list[float] = []
+
+        # Batch or sequential
+        if batch_size is not None and batch_size > 0:
+            for start in range(0, len(selected), batch_size):
+                batch = selected[start : start + batch_size]
+                indices = list(range(start + 1, start + len(batch) + 1))
+
+                async def _single(item: dict, idx: int) -> tuple[float, float]:
+                    q = item.get("question") or ""
+                    expected = [u for u in (item.get("expected_urls") or []) if u]
+                    if not q:
+                        return 0.0, 0.0
+                    try:
+                        ans = await svc.answer(
+                            q, provenance=None, bypass_cache=True, retrieval_only=True, expected_urls=expected
+                        )
+                        urls = [c.url for c in ans.sources]
+                        return recall_at_k(urls, expected, k), ndcg_at_k(urls, expected, k)
+                    except Exception:
+                        return 0.0, 0.0
+
+                batch_rows = await asyncio.gather(*[_single(it, ii) for it, ii in zip(batch, indices, strict=False)])
+                for r, n in batch_rows:
+                    per_recall.append(r)
+                    per_ndcg.append(n)
+                if start + batch_size < len(selected):
+                    await asyncio.sleep(0.05)
+        else:
+            for item in selected:
+                q = item.get("question") or ""
+                expected = [u for u in (item.get("expected_urls") or []) if u]
+                if not q:
+                    per_recall.append(0.0)
+                    per_ndcg.append(0.0)
+                    continue
+                try:
+                    ans = await svc.answer(
+                        q, provenance=None, bypass_cache=True, retrieval_only=True, expected_urls=expected
+                    )
+                    urls = [c.url for c in ans.sources]
+                    per_recall.append(recall_at_k(urls, expected, k))
+                    per_ndcg.append(ndcg_at_k(urls, expected, k))
+                except Exception:
+                    per_recall.append(0.0)
+                    per_ndcg.append(0.0)
+        return {
+            "recall": statistics.fmean(per_recall) if per_recall else 0.0,
+            "ndcg": statistics.fmean(per_ndcg) if per_ndcg else 0.0,
+            "per_recall": per_recall,
+            "per_ndcg": per_ndcg,
+        }
+
+    async def _run_all() -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for st in stages:
+            print(f"\n— Stage {st}: with (enabled) vs without (disabled) —")
+            with_res = await _eval_stage(st, True)
+            without_res = await _eval_stage(st, False)
+            # delta = with - without
+            delta_r, ci_r = bootstrap_delta_ci(with_res["per_recall"], without_res["per_recall"], n_boot=1000, seed=13)
+            delta_n, ci_n = bootstrap_delta_ci(with_res["per_ndcg"], without_res["per_ndcg"], n_boot=1000, seed=13)
+            dec_r = pipeline_stage_decision(delta_r, ci_r)
+            dec_n = pipeline_stage_decision(delta_n, ci_n)
+            # primary decision on recall per plan, but report both
+            ship = bool(dec_r["ship"] or dec_n["ship"])
+            # per spec: ship = ci excludes 0 and delta>0 else keep off (use recall)
+            primary_dec = dec_r
+            print(
+                f"  {st:10s} with recall={with_res['recall']:.4f} ndcg={with_res['ndcg']:.4f} "
+                f"vs without recall={without_res['recall']:.4f} ndcg={without_res['ndcg']:.4f} "
+                f"Δ recall={delta_r:+.4f} CI [{ci_r[0]:+.4f},{ci_r[1]:+.4f}] excludes_0={primary_dec['excludes_zero']} "
+                f"Δ ndcg={delta_n:+.4f} CI [{ci_n[0]:+.4f},{ci_n[1]:+.4f}] -> {primary_dec['decision']}"
+            )
+            out[st] = {
+                "with": {"recall": with_res["recall"], "ndcg": with_res["ndcg"]},
+                "without": {"recall": without_res["recall"], "ndcg": without_res["ndcg"]},
+                "delta_recall": delta_r,
+                "ci_recall": [ci_r[0], ci_r[1]],
+                "delta_ndcg": delta_n,
+                "ci_ndcg": [ci_n[0], ci_n[1]],
+                "excludes_zero_recall": primary_dec["excludes_zero"],
+                "ship": ship,
+                "decision": primary_dec["decision"],
+                # compact for consumers expecting single delta/ci
+                "delta": delta_r,
+                "ci": [ci_r[0], ci_r[1]],
+                "with_recall": with_res["recall"],
+                "without_recall": without_res["recall"],
+                "with_ndcg": with_res["ndcg"],
+                "without_ndcg": without_res["ndcg"],
+            }
+        return out
+
+    results = asyncio.run(_run_all())
+
+    # summary table
+    print("\n" + "=" * 72)
+    print(f"Pipeline ablation summary k={k} split={split} n={len(selected)}")
+    for st in stages:
+        r = results[st]
+        print(
+            f"  {st:10s} with {r['with']['recall']:.3f}/{r['with']['ndcg']:.3f} "
+            f"without {r['without']['recall']:.3f}/{r['without']['ndcg']:.3f} "
+            f"Δ recall {r['delta_recall']:+.4f} [{r['ci_recall'][0]:+.4f},{r['ci_recall'][1]:+.4f}] "
+            f"decision={r['decision']}"
+        )
+
+    # also emit flattened for compat with plan's data/pipeline_ablation.json shape
+    flat: dict[str, object] = {}
+    for st in stages:
+        flat[st] = {
+            "with": results[st]["with"]["recall"],
+            "without": results[st]["without"]["recall"],
+            "delta": results[st]["delta_recall"],
+            "ci": results[st]["ci_recall"],
+            "ndcg_with": results[st]["with"]["ndcg"],
+            "ndcg_without": results[st]["without"]["ndcg"],
+            "delta_ndcg": results[st]["delta_ndcg"],
+            "ci_ndcg": results[st]["ci_ndcg"],
+            "decision": results[st]["decision"],
+            "ship": results[st]["ship"],
+        }
+    payload_flat = {"k": k, "split": split, "n_selected": len(selected), **flat}
+
+    import pathlib as _pathlib
+
+    out_path: _pathlib.Path | None
+    if output_dir:
+        out_path = _pathlib.Path(output_dir) / "pipeline_ablation.json"
+    else:
+        out_path = _pathlib.Path("data/pipeline_ablation.json")
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload_flat, indent=2), encoding="utf-8")
+        print(f"\nJSON written to {out_path}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Could not write {out_path}: {exc}")
+
+    print("\nJSON:")
+    print(json.dumps(payload_flat, indent=2))
+    return 0
+
+
 def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     dataset: str | None = None,
     k: int = 10,
@@ -2748,6 +2997,7 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
     batch_size: int | None = None,
     ablation: bool = False,
     split: str = "all",
+    pipeline_ablation: str | None = None,
 ) -> int:
     """Source-agnostic retrieval-only evaluation (Recall@K / MRR / Precision@K per intent).
 
@@ -2758,6 +3008,10 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
     below the baseline minus a small tolerance (CI regression gate). A missing or
     unparseable baseline is treated as a warning, not a failure.
     """
+    if pipeline_ablation is not None:
+        return _eval_pipeline_ablation_main(
+            dataset=dataset, k=k, split=split, stage=pipeline_ablation, batch_size=batch_size, output_dir=output_dir
+        )
     if ablation:
         return _eval_ablation_main(dataset=dataset, k=k, batch_size=batch_size, split=split, output_dir=output_dir)
 
@@ -4949,6 +5203,12 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
         default="all",
         help="Holdout split for --ablation: train (110) / held (110) / all (220) — deterministic seed=42 (default: all).",
     )
+    eval_retrieval_parser.add_argument(
+        "--pipeline-ablation",
+        choices=["guardrails", "sibling", "dedup", "all"],
+        default=None,
+        help="Pipeline downstream ablation (guardrails/sibling/dedup/all) with holdout + bootstrap CI (ADR-011).",
+    )
 
     eval_chunking_parser = subparsers.add_parser(
         "eval-chunking",
@@ -5468,6 +5728,7 @@ def main() -> None:  # pragma: no cover: CLI entry point
                     batch_size=getattr(args, "batch_size", None),
                     ablation=getattr(args, "ablation", False),
                     split=getattr(args, "split", "all"),
+                    pipeline_ablation=getattr(args, "pipeline_ablation", None),
                 )
             )
         elif args.command == "eval-chunking":

@@ -69,6 +69,33 @@ def per_query_best(recalls_dense: Sequence[float], recalls_sparse: Sequence[floa
 # Search mode loop descriptor for cli ablation (keeps cli import-light).
 ABLATION_MODES = ("dense", "sparse", "hybrid_rrf_k60", "hybrid_rrf_k5", "dbsf")
 
+# Pipeline downstream ablation (Task 2 / ADR-011): guardrails / sibling / dedup.
+# Each stage is toggled with vs without; sibling is max_sibling_blocks 3→0,
+# guardrails is input_guardrails_enabled False, dedup is
+# assembly_content_hash_dedup False (+ context_compression_enabled False).
+PIPELINE_ABLATION_STAGES = ("guardrails", "sibling", "dedup")
+PIPELINE_ABLATION_CHOICES = (*PIPELINE_ABLATION_STAGES, "all")
+
+
+def pipeline_stage_decision(delta: float, ci: tuple[float, float]) -> dict[str, object]:
+    """Decision rule for a single pipeline stage.
+
+    Ship (keep on) only when CI excludes 0 and delta>0 — i.e. the stage
+    demonstrably helps. Otherwise keep off (stage dilutes or is neutral).
+    Mirrors plan: ship = ci excludes 0 and delta>0 else keep off.
+    """
+    ci_low, ci_high = ci
+    excludes_zero = bool(ci_low > 0 or ci_high < 0)
+    ship = bool(excludes_zero and delta > 0)
+    return {
+        "delta": delta,
+        "ci": [ci_low, ci_high],
+        "excludes_zero": excludes_zero,
+        "ship": ship,
+        "decision": "ship" if ship else "keep_off",
+    }
+
+
 # Reranker as 2nd stage (Task 6): evaluate CrossEncoder on fused top 50 -> top 10
 # vs fused top 10. Model cross-encoder/ms-marco-MiniLM-L-6-v2 locally, gated by
 # availability; skip if not installed (fail-open). p95 budget <250ms for k=10.
