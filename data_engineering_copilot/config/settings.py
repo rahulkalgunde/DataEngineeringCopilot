@@ -1252,7 +1252,8 @@ class AppSettings(BaseSettings):
     # tried before the local cross-encoder (which stays the degraded last
     # resort). All providers normalize scores to [0, 1] so the confidence gate
     # above keeps the same meaning across providers.
-    llm_rerank_enabled: bool = False
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
+    llm_rerank_enabled: bool = False  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     rerank_fallback_order: list[str] = Field(default_factory=lambda: ["openrouter", "nvidia", "huggingface"])
     openrouter_rerank_model: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
     openrouter_rerank_url: str = "https://openrouter.ai/api/v1/rerank"
@@ -1367,10 +1368,15 @@ class AppSettings(BaseSettings):
     mrl_multistage_enabled: bool = False
     mrl_small_dim: int = 256
     mrl_oversample_factor: int = 4
+    # RETRIEVAL TUNING — FROZEN until store recall@10 ≥0.35 on held 110 — ADR-010
+    # Shipped base stays: hybrid k=20 L100 (74236d9). Dark flags below stay False/rrf
+    # until held recall gate passes — docs == code.
     hybrid_search_enabled: bool = True
     # RRF k: 2..5 for ~1 rel/query (our n=220 avg 1.1 relevant), 60 for many — tuned per ADR-006 (train best k=20 prefetch 100, held ΔnDCG +0.034 CI [0.004,0.064] ship)
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     hybrid_rrf_k: int = 20
     # Optional override for fused prefetch limit per-leg; None => max(k*4,40) else honor value (try 100 per ADR-006 — shipped 100)
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     retrieval_prefetch_limit: int | None = 100
     # BM25 length normalization b (0.0=off, 1.0=full length norm). Default 0.75 is BM25 literature standard;
     # tuned per ADR-007 via gen-bm25-rebuild (~15s per b) — query-side approximation without re-upsert noted there.
@@ -1388,7 +1394,8 @@ class AppSettings(BaseSettings):
     # embeddings showed this flag HURTS (Δ=-0.066 vs -0.048 without). The
     # weighted RRF (1.25/1.0) degrades overall recall despite helping some
     # technical intents. Re-enable only if per-intent gate passes.
-    identifier_sparse_rrf_enabled: bool = False
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
+    identifier_sparse_rrf_enabled: bool = False  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     # Namespace-aware BM25 tokenizer (``namespace-v1``). Off by default until
     # the technical-query benchmark gate (identifier recall >= +0.05, generic
     # recall <= -0.01, MRR <= -0.02) passes. Enabling it invalidates every
@@ -1398,11 +1405,13 @@ class AppSettings(BaseSettings):
     # with namespace-v1 tokenizer (verified in BM25 cache). A missing cache
     # can be rebuilt locally (0 embeddings, ~15s) via
     # ``dec gen-bm25-rebuild --generation <id>`` without a full ``gen-build``.
-    namespace_bm25_enabled: bool = False
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
+    namespace_bm25_enabled: bool = False  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     # Fusion for hybrid retrieval: "rrf" (RRF k + optional weights) vs "dbsf"
     # (distribution-based score fusion). Tuned per ADR-008 on held 110 — ship
     # only if held Δ DBSF-RRF CI>0 and reranker gate passes; otherwise keep "rrf".
-    retrieval_fusion: Literal["rrf", "dbsf"] = "rrf"
+    # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
+    retrieval_fusion: Literal["rrf", "dbsf"] = "rrf"  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     # Retrieval regression gates — honest inscope baseline (220 rows,
     # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global
     # gate: R@10 >= baseline - 0.02 (absolute floor 0.24 for 220-row, i.e.
@@ -1454,8 +1463,8 @@ class AppSettings(BaseSettings):
     # INSUFFICIENT_CONTEXT. Reuses the groundedness-purpose LLM client.
     scope_check_enabled: bool = True
     intent_classification_llm_enabled: bool = False  # Enable LLM fallback for intent classification
-    # Context management
-    context_compression_enabled: bool = False
+    # Context management — Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
+    context_compression_enabled: bool = False  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     max_context_tokens: int = 4096
     # Post-processing toggles
     contextual_enrichment_enabled: bool = True

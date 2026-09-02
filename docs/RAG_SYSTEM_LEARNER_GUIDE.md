@@ -753,9 +753,13 @@ Before any Qdrant call, `select_search_mode()` deterministically maps the query'
 
 The mode is computed once per request (`_compute_search_mode`, `async_rag.py:539-543`) and forwarded to `AsyncQdrantVectorStore.query(search_mode=...)` (`async_qdrant_store.py:439-443`), which forces the hybrid path on/off and picks weighted RRF weights: sparse bias = `(dense=1.0, sparse=1.25)` (`RRF_DENSE_WEIGHT`/`RRF_SPARSE_WEIGHT`, `query_signals.py:41-42`; applied `async_qdrant_store.py:522-527`) — technical queries hinge on exact token matches, so the sparse leg gets the boost.
 
-**Gated-off profiles (retrieval flags ship dark until their benchmark gate passes):**
-- `identifier_sparse_rrf_enabled=False` (`settings.py:1240`) — the per-query `identifier_sparse_rrf` profile (same 1.0/1.25 weights, selected by query signals rather than intent) exists end-to-end but stays OFF until the benchmark gate in the `settings.py` comment passes (identifier recall ≥ +0.05 with all global recall/MRR thresholds satisfied). Until then every variant uses equal RRF (`_rrf_profile_for`, `async_rag.py:446-454`).
-- `namespace_bm25_enabled=False` (`settings.py:1245`) — namespace-aware BM25 tokenizer; enabling it invalidates every legacy BM25 cache (new generation required).
+**Gated-off profiles (retrieval flags ship dark until their benchmark gate passes) — Frozen until store recall@10 ≥0.35 on held 110 — ADR-010:**
+- `identifier_sparse_rrf_enabled=False` (dark, frozen ADR-010) (`settings.py:1391`) — the per-query `identifier_sparse_rrf` profile (same 1.0/1.25 weights, selected by query signals rather than intent) exists end-to-end but stays OFF until store recall@10 ≥0.35 on held 110 (identifier recall ≥ +0.05 with all global recall/MRR thresholds satisfied). Until then every variant uses equal RRF (`_rrf_profile_for`, `async_rag.py:446-454`).
+- `namespace_bm25_enabled=False` (dark, frozen ADR-010) (`settings.py:1401`) — namespace-aware BM25 tokenizer (dark); enabling it invalidates every legacy BM25 cache (new generation required). Frozen until store recall@10 ≥0.35 — ADR-010.
+- `retrieval_fusion="rrf"` — `dbsf` alternative is dark, frozen ADR-010 (`settings.py:1405`): tuned per ADR-008 but gate failed CI, keep `rrf` until store ≥0.35.
+- `llm_rerank_enabled=False` (dark, frozen ADR-010) (`settings.py:1255`) — cloud LLM rerank chain dark until store recall@10 ≥0.35.
+- `context_compression_enabled=False` (dark, frozen ADR-010) (`settings.py:1458`) — Jaccard dedup + relevance compression dark until store recall@10 ≥0.35.
+- CRAG relevance gate is dark in retrieval-only benchmarks (skipped when `retrieval_only=True`) and dilutes store recall — keep dark until store ≥0.35 proves downstream value (see ADR-010).
 
 #### 4c Hybrid Search Path — default
 
@@ -831,7 +835,8 @@ Output: list[RetrievedChunk] — reranked, confidence rebuilt in [0, 1]
 | `reranker_type` | Implementation | Notes |
 |---|---|---|
 | `"cross_encoder"` (default) | `LLMReranker` facade (`services/llm_reranker.py`) wrapping a cloud rerank chain, local cross-encoder last | see below |
-| `"colbert"` | `ColBERTReranker` (`services/colbert_reranker.py:61-148`) | **NOT neural late-interaction.** A char-3gram MaxSim *proxy* (`_char_ngram_overlap`, lines 24-58): per query token, max char-trigram overlap against any doc token, averaged; min-max normalized. No model load — always available |
+| `"colbert"` | `ColBERTReranker` (`services/colbert_reranker.py:61-148`) — LexicalNgramReranker (char-3gram proxy, dark) | **NOT neural — see ADR-011** — char-3gram MaxSim proxy (`_char_ngram_overlap`, lines 24-58): per query token, max char-trigram overlap against any doc token, averaged; min-max normalized. No model load — always available |
+| `llm_rerank` | LLM chain (dark, `llm_rerank_enabled False` — frozen ADR-010) | gated until store recall@10 ≥0.35 on held 110 |
 
 **Cloud LLM rerank chain (default path):** when `llm_rerank_enabled=True` (`settings.py:1131`), reranking goes through a `ProviderFallbackChain[RerankRequest, RerankResult]` over `rerank_fallback_order = ["openrouter", "nvidia", "huggingface"]` (`settings.py:1132`; dedicated rerank endpoints/models at `settings.py:1133-1137`). The local `CrossEncoderReranker` (`BAAI/bge-reranker-v2-m3`, `reranker_model`, `settings.py:1100`) is the **degraded last resort**: it loads lazily off the event loop only when the chain fails down to it (`_ensure_reranker_ready`, `async_rag.py:2890-2910`). Provider scores are min-max normalized within the candidate pool so the downstream confidence gate keeps the same meaning across providers (`LLMReranker._apply`, `llm_reranker.py:98-131`); if every provider fails, chunks are returned unchanged trimmed to `top_k` (fail-open, `llm_reranker.py:90-94`).
 
@@ -845,7 +850,7 @@ Output: list[RetrievedChunk] — reranked, confidence rebuilt in [0, 1]
 
 **Diversity:** MMR is no longer applied inside the rerank stage; diversity moved to the ContextAssembler as an opt-in stage (see Step 11).
 
-### Step 8 Context Compression (`async_rag.py:1150-1152`, `services/context_compression.py:51-77`)
+### Step 8 Context Compression — dark, frozen ADR-010 (`context_compression_enabled False`) (`async_rag.py:1150-1152`, `services/context_compression.py:51-77`)
 
 ```
 Input:  chunks (list[RetrievedChunk]), query (str)
@@ -861,9 +866,9 @@ Output: list[RetrievedChunk] — deduplicated + relevance scored
    - `score = cosine × 0.6 + overlap × 0.4`
 3. Return top `max_chunks` by score.
 
-**Note:** `context_compression_enabled` defaults to `False` (`settings.py:1278`). When enabled, the `ContextAssembler`'s internal Jaccard dedup is skipped to avoid double work (`async_rag.py:1181`, `deduplicate=self.context_compressor is None`).
+**Note:** `context_compression_enabled` defaults to `False` (dark, frozen until store recall@10 ≥0.35 — ADR-010) (`settings.py:1458`). When enabled, the `ContextAssembler`'s internal Jaccard dedup is skipped to avoid double work (`async_rag.py:1181`, `deduplicate=self.context_compressor is None`).
 
-### Step 9 CRAG Corrective Gate (`services/relevance_grader.py:14-50`, `async_rag.py:492-518`, applied at `async_rag.py:1153-1154`)
+### Step 9 CRAG Corrective Gate — dark until store ≥0.35 (frozen ADR-010) (`services/relevance_grader.py:14-50`, `async_rag.py:492-518`, applied at `async_rag.py:1153-1154`)
 
 Corrective-RAG retrieval check between reranking/compression and generation. Skipped entirely in `retrieval_only` mode (benchmarks measure base retrieval).
 
@@ -1336,7 +1341,7 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 | `reranker_model` | `BAAI/bge-reranker-v2-m3` | — | `settings.py:1100` |
 | `reranker_top_k` | 30 | 1-100 | `settings.py:1101` |
 | `reranker_type` | `cross_encoder` | `cross_encoder` \| `colbert` | local reranker selection (`settings.py:1139`) |
-| `llm_rerank_enabled` | True | — | cloud rerank chain before local model (`settings.py:1131`) |
+| `llm_rerank_enabled` | False (dark, frozen ADR-010) | — | cloud rerank chain before local model (`settings.py:1255`) — frozen until store recall@10 ≥0.35 |
 | `rerank_fallback_order` | `["openrouter", "nvidia", "huggingface"]` | — | cloud rerank providers (`settings.py:1132`) |
 | `reranker_selective_threshold` | 1.0 (disabled) | 0.0-1.0 | skip rerank when top fused confidence ≥ threshold (`settings.py:1142`) |
 | `reranker_doc_truncation_chars` | 2000 | — | structural truncation for rerank scoring (`settings.py:1141`) |
@@ -1349,15 +1354,15 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 | `reranker_confidence_threshold` | 0.10 | 0.0-1.0 | cross-encoder gate (`settings.py:1126`) |
 | `hybrid_search_enabled` | True | — | `settings.py:1233` |
 | `hybrid_rrf_k` | 60 | 10-200 | `settings.py:1234` |
-| `identifier_sparse_rrf_enabled` | False | — | weighted identifier-sparse RRF — dark until benchmark gate (`settings.py:1240`) |
-| `namespace_bm25_enabled` | False | — | namespace-aware BM25 — dark until benchmark gate (`settings.py:1245`) |
+| `identifier_sparse_rrf_enabled` | False (dark, frozen ADR-010) | — | weighted identifier-sparse RRF — dark until store recall@10 ≥0.35 on held 110 (`settings.py:1391`) |
+| `namespace_bm25_enabled` | False (dark, frozen ADR-010) | — | namespace-aware BM25 — dark until store recall@10 ≥0.35 on held 110 (`settings.py:1401`) |
 | `semantic_cache_threshold` | 0.95 | 0.5-1.0 | `settings.py:1247` |
 | `semantic_cache_ttl` | 3600 | seconds | `settings.py:1248` |
 | `query_rewrite_enabled` | True | — | `settings.py:1264` |
 | `hyde_policy_enabled` | True | — | deterministic HyDE gating (`settings.py:1270`) |
 | `groundedness_enabled` | True | — | `settings.py:1271` |
 | `intent_classification_llm_enabled` | False | — | LLM fallback for intent (`settings.py:1276`) |
-| `context_compression_enabled` | False | — | `settings.py:1278` |
+| `context_compression_enabled` | False (dark, frozen ADR-010) | — | `settings.py:1458` — frozen until store recall@10 ≥0.35 |
 | `input_guardrails_enabled` | True | — | Indirect prompt injection guard (`settings.py:1289`) |
 | `rbac_enabled` | False | — | Document-level access control (`settings.py:1291`) |
 
@@ -1455,7 +1460,7 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 Evaluation is a **cost-tiered ladder**: zero-LLM integrity layers run constantly (CI, after every pipeline change), frozen-input component harnesses isolate one stage at a time, and LLM-judged layers run at milestones. Two principles govern it:
 
 - **Numeric thresholds live next to the code that enforces them** — each harness module declares its own gates.
-- **Retrieval flags ship dark until their benchmark passes** (`identifier_sparse_rrf_enabled`, `namespace_bm25_enabled` default `False` with acceptance criteria in their `settings.py` comments). Never flip a retrieval flag on without running its eval harness against baseline.
+- **Retrieval flags ship dark until their benchmark passes** (`identifier_sparse_rrf_enabled`, `namespace_bm25_enabled`, `retrieval_fusion dbsf`, `llm_rerank_enabled`, `context_compression_enabled`, CRAG — all dark, frozen ADR-010 until store recall@10 ≥0.35 on held 110) default `False`/`rrf` with acceptance criteria in their `settings.py` comments. Never flip a retrieval flag on without running its eval harness against baseline.
 
 ### 6.1 Layer 0 — Zero-LLM Integrity: `dec eval-fast`
 
@@ -1776,6 +1781,6 @@ Complements `prompt_injection.py` (query-side injection detection on user input)
 
 ---
 
-> **Document version:** 2026-08-21  
-> **Codebase ref:** commit `7fbd636`  
+> **Document version:** 2026-08-21
+> **Codebase ref:** commit `7fbd636`
 > **Generated from:** deep architectural audit of the DataEngineeringCopilot codebase
