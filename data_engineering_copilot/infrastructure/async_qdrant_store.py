@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Self, cast
+from typing import Literal, Self, cast
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -486,6 +486,7 @@ class AsyncQdrantVectorStore:
         rrf_profile: str = RRF_EQUAL_PROFILE,
         search_mode: SearchMode | None = None,
         rrf_weights: tuple[float, float] | None = None,
+        fusion: Literal["rrf", "dbsf"] | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -632,21 +633,33 @@ class AsyncQdrantVectorStore:
                             filter=query_filter,
                         ),
                     ]
-                    # Determine RRF weights based on explicit override or search_mode
-                    if rrf_weights is not None:
-                        weights = list(rrf_weights)
-                    elif search_mode == SearchMode.HYBRID_SPARSE_BIAS:
-                        weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
-                    elif search_mode == SearchMode.HYBRID_DENSE_BIAS:
-                        weights = [RRF_SPARSE_WEIGHT, RRF_DENSE_WEIGHT]  # dense gets boost
-                    elif rrf_profile == RRF_IDENTIFIER_SPARSE_PROFILE:
-                        weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
+                    # Fusion: DBSF vs RRF (Task 6). DBSF has no k/weights; same prefetch.
+                    effective_fusion: Literal["rrf", "dbsf"] = (
+                        fusion if fusion is not None else settings.retrieval_fusion  # type: ignore[assignment]
+                    )
+                    if effective_fusion == "dbsf":
+                        # DBSF normalizes per-modality scores then sums — keep
+                        # prefetch limits identical to RRF for apples-to-apples.
+                        rrf_confidence_scale = 1.0
+                        query_kwargs["query"] = models.FusionQuery(fusion=models.Fusion.DBSF)
                     else:
-                        weights = None  # Equal profile: no explicit weights
-                    if weights is not None:
-                        query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k, weights=weights))
-                    else:
-                        query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
+                        # Determine RRF weights based on explicit override or search_mode
+                        if rrf_weights is not None:
+                            weights = list(rrf_weights)
+                        elif search_mode == SearchMode.HYBRID_SPARSE_BIAS:
+                            weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
+                        elif search_mode == SearchMode.HYBRID_DENSE_BIAS:
+                            weights = [RRF_SPARSE_WEIGHT, RRF_DENSE_WEIGHT]  # dense gets boost
+                        elif rrf_profile == RRF_IDENTIFIER_SPARSE_PROFILE:
+                            weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
+                        else:
+                            weights = None  # Equal profile: no explicit weights
+                        if weights is not None:
+                            query_kwargs["query"] = models.RrfQuery(
+                                rrf=models.Rrf(k=self._hybrid_rrf_k, weights=weights)
+                            )
+                        else:
+                            query_kwargs["query"] = models.RrfQuery(rrf=models.Rrf(k=self._hybrid_rrf_k))
                 else:
                     query_kwargs["query"] = query_embedding
                     if self._hybrid_search:

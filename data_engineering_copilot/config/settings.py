@@ -1399,6 +1399,10 @@ class AppSettings(BaseSettings):
     # can be rebuilt locally (0 embeddings, ~15s) via
     # ``dec gen-bm25-rebuild --generation <id>`` without a full ``gen-build``.
     namespace_bm25_enabled: bool = False
+    # Fusion for hybrid retrieval: "rrf" (RRF k + optional weights) vs "dbsf"
+    # (distribution-based score fusion). Tuned per ADR-008 on held 110 — ship
+    # only if held Δ DBSF-RRF CI>0 and reranker gate passes; otherwise keep "rrf".
+    retrieval_fusion: Literal["rrf", "dbsf"] = "rrf"
     # Retrieval regression gates — honest inscope baseline (220 rows,
     # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global
     # gate: R@10 >= baseline - 0.02 (absolute floor 0.24 for 220-row, i.e.
