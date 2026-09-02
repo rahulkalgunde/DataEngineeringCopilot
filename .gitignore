@@ -9,6 +9,7 @@ data/**
 !data/provider_catalog.example.json
 !data/tune_rrf_k.json
 !data/tune_rrf_weights.json
+!data/tune_tier2_speed.json
 logs/
 qdrant_db/
 dec_venv/
@@ -30,6 +31,7 @@ scripts/*
 !scripts/tune_rrf_k.py
 !scripts/tune_rrf_weights.py
 !scripts/eval_pipeline_ablation.py
+!scripts/tune_tier2_speed.py
 resources_*.csv
 *.csv
 *.parquet

@@ -1,0 +1,43 @@
+{
+  "best_top_k": 50,
+  "mrl": false,
+  "held_recall": 0.11818181818181818,
+  "held_p95": 879.2405932500515,
+  "delta_recall_ci": [
+    0.0,
+    0.0
+  ],
+  "delta_recall_mean": 0.0,
+  "decision": "keep 50",
+  "k": 10,
+  "n_train": 110,
+  "n_held": 110,
+  "baseline_train_recall": 0.17727272727272728,
+  "baseline_train_p95": 908.8722861510178,
+  "baseline_held_recall": 0.11818181818181818,
+  "baseline_held_p95": 879.2405932500515,
+  "winner_train_recall": 0.17727272727272728,
+  "winner_train_p95": 908.8722861510178,
+  "grid": {
+    "top50_mrloff": {
+      "train_recall": 0.17727272727272728,
+      "train_p95": 908.8722861510178,
+      "train_p50": 478.37098900072306
+    },
+    "top25_mrloff": {
+      "train_recall": 0.17727272727272728,
+      "train_p95": 887.3505321503217,
+      "train_p50": 462.54820700050914
+    },
+    "top50_mrlon": {
+      "train_recall": 0.0,
+      "train_p95": 13.275153850099741,
+      "train_p50": 10.360629999922821
+    },
+    "top25_mrlon": {
+      "train_recall": 0.0,
+      "train_p95": 13.682605400754255,
+      "train_p50": 10.088312999869231
+    }
+  }
+}
