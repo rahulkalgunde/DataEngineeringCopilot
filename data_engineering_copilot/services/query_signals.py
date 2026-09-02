@@ -106,7 +106,12 @@ def select_rrf_profile(signals: QuerySignals) -> str:
     return RRF_EQUAL_PROFILE
 
 
-def select_search_mode(intent: str, signals: QuerySignals) -> SearchMode:
+def select_search_mode(
+    intent: str,
+    signals: QuerySignals | str | None = None,
+    *,
+    query: str | None = None,
+) -> SearchMode:
     """Select the search mechanism based on intent and query signals.
 
     Routing logic:
@@ -115,8 +120,28 @@ def select_search_mode(intent: str, signals: QuerySignals) -> SearchMode:
     - factual, how_to, synthesis -> DENSE_ONLY (semantic similarity)
     - comparative -> HYBRID_EQUAL (both modes matter)
     - configuration -> HYBRID_DENSE_BIAS (conceptual + exact terms)
+
+    ADR-012: ``api_lookup`` must *always* return :attr:`SearchMode.BM25_ONLY`
+    even when the rewrite drifts (e.g. ``dense_rank()`` → ``"dense ranking"``).
+    Intent is the hard gate; signals are only a fallback for unknown intents.
+    Callers MUST pass the **original** question (not the rewritten
+    ``effective_query``) so drift cannot dilute the routing. ``query`` may be
+    passed as a ``str`` (classified internally) or ``signals`` may be a
+    :class:`QuerySignals` — both forms are accepted for backward compatibility.
     """
-    # Intent-based primary routing
+    # Resolve signals/query flexibly (TDD: tests call with ``query=`` kwarg,
+    # production code calls with ``QuerySignals`` positional).
+    effective_signals: QuerySignals | None = None
+    if query is not None:
+        effective_signals = classify_query_signals(query)
+    elif isinstance(signals, str):
+        effective_signals = classify_query_signals(signals)
+    elif isinstance(signals, QuerySignals):
+        effective_signals = signals
+    else:
+        effective_signals = None
+
+    # Intent-based primary routing — hard gate, ignores signals/query drift
     if intent in ("api_lookup", "code_example"):
         return SearchMode.BM25_ONLY
     if intent == "debugging":
@@ -128,9 +153,10 @@ def select_search_mode(intent: str, signals: QuerySignals) -> SearchMode:
     if intent == "configuration":
         return SearchMode.HYBRID_DENSE_BIAS
 
-    # Fallback: signal-based routing
-    if signals.identifier_heavy or signals.code_like:
-        return SearchMode.HYBRID_SPARSE_BIAS
-    if signals.path_heavy or signals.version_qualified:
-        return SearchMode.HYBRID_DENSE_BIAS
+    # Fallback: signal-based routing (only when intent is unknown)
+    if effective_signals is not None:
+        if effective_signals.identifier_heavy or effective_signals.code_like:
+            return SearchMode.HYBRID_SPARSE_BIAS
+        if effective_signals.path_heavy or effective_signals.version_qualified:
+            return SearchMode.HYBRID_DENSE_BIAS
     return SearchMode.HYBRID_EQUAL

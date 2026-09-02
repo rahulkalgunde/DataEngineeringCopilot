@@ -560,9 +560,17 @@ class AsyncRagService:
             logger.warning("feedback_log_failed", exc)
 
     def _compute_search_mode(self, rewritten, question: str) -> SearchMode | None:
-        """Select the intent-aware search mode for the retrieval variants."""
+        """Select the intent-aware search mode for the retrieval variants.
+
+        ADR-012: uses the *original* ``question`` for routing, not the
+        rewritten ``effective_query``. Rewrite drift (e.g. ``dense_rank()``
+        → ``"dense ranking"``) must not dilute ``api_lookup → BM25_ONLY``.
+        ``select_search_mode`` hard-gates ``api_lookup``/``code_example`` to
+        :attr:`SearchMode.BM25_ONLY` regardless of signals.
+        """
         if rewritten is None:
             return None
+        # Original question — not rewritten.effective_query (ADR-012).
         return select_search_mode(rewritten.intent, classify_query_signals(question))
 
     async def _augment_context(self, effective_query: str, question: str, retrieval_only: bool) -> str:
@@ -1691,7 +1699,8 @@ class AsyncRagService:
             query_embedding=query_emb,
             top_k=top_k,
             query_text=effective_query,
-            search_mode=select_search_mode(intent, classify_query_signals(effective_query)),
+            # ADR-012: routing on original question (safe_question), not drifted effective_query
+            search_mode=select_search_mode(intent, classify_query_signals(safe_question)),
             source_filter=source_filter,
             fused_limit=_rerank_pool_size(
                 self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size

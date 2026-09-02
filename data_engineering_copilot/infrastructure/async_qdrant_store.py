@@ -513,6 +513,12 @@ class AsyncQdrantVectorStore:
             ``max(top_k * 4, 40)``. Callers that rerank (the RAG service) pass
             ``max(retrieval_top_k * 8, reranker_top_k * 5)`` so expected
             evidence can survive at ranks below the reranker limit.
+            ADR-012 / Prefetch semantics: ``fused_limit`` is the **per-leg**
+            ``Prefetch(limit=...)`` value (``retrieval_prefetch_limit=100`` by
+            default, not ``top_k*2``). Hybrid mode issues two prefetches
+            (dense + sparse) each with this limit → up to ``2*fused_limit``
+            candidates before RRF/Qdrant fusion, then ``limit=fused_limit``
+            fused results.
         rrf_profile:
             Hybrid RRF profile. ``equal_rrf`` (default) fuses dense and sparse
             prefetches with equal weights; ``identifier_sparse_rrf`` boosts the
@@ -600,11 +606,15 @@ class AsyncQdrantVectorStore:
                     # the truly relevant chunk well below the dense head.  A
                     # cross-encoder reranker (when enabled) then does the precise
                     # selection from this larger pool.
+                    # ADR-012: Prefetch ``limit`` is **per-leg**, not total.
+                    # ``fused_limit = retrieval_prefetch_limit (100)`` means
+                    # 100 dense + 100 sparse → RRF fusion of up to 200 → final
+                    # ``limit``. Do not use ``top_k*2``.
                     prefetch_limit = effective_fused_limit
                     dense_prefetch = models.Prefetch(
                         query=query_embedding,
                         using="dense",
-                        limit=prefetch_limit,
+                        limit=prefetch_limit,  # per-leg: 100 dense
                         filter=query_filter,
                     )
                     if self._mrl_enabled:
@@ -629,7 +639,7 @@ class AsyncQdrantVectorStore:
                         models.Prefetch(
                             query=sparse,
                             using="sparse",
-                            limit=prefetch_limit,
+                            limit=prefetch_limit,  # per-leg: 100 sparse → 200 before RRF
                             filter=query_filter,
                         ),
                     ]
