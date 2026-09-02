@@ -33,6 +33,7 @@ scripts/*
 !scripts/eval_pipeline_ablation.py
 !scripts/tune_tier2_speed.py
 !scripts/run_chunking_eval.py
+!scripts/promote_baseline.py
 resources_*.csv
 *.csv
 *.parquet
