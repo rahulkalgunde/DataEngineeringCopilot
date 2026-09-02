@@ -23,7 +23,8 @@ build/
 .env.secrets
 plans/
 sessions/
-scripts/
+scripts/*
+!scripts/eval_retrieval_gate.py
 resources_*.csv
 *.csv
 *.parquet

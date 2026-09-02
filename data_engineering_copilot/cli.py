@@ -2500,6 +2500,245 @@ def _disable_rewrites_for_eval(service) -> str:
     return "disabled"
 
 
+def _eval_ablation_main(  # pragma: no cover: CLI entry point, requires Qdrant
+    dataset: str | None = None,
+    k: int = 10,
+    batch_size: int | None = None,
+    split: str = "all",
+    output_dir: str | None = None,
+) -> int:
+    """Ablation harness: dense / sparse / hybrid with holdout + bootstrap CI.
+
+    Loads the recall dataset, deterministically splits 110/110 (seed=42),
+    runs each search_mode via ``AsyncQdrantVectorStore.query(search_mode=...)``
+    reusing the embedding cache, and prints a nDCG@k/recall@k/MRR table plus
+    bootstrap 95% CI for hybrid - best_single (1000 resamples).
+    """
+    import asyncio
+    import json
+    import pathlib
+
+    from data_engineering_copilot.evaluation.retrieval import bootstrap_delta_ci, split_queries
+    from data_engineering_copilot.evaluation.retrieval_metrics import ndcg_at_k
+    from data_engineering_copilot.factory import build_rag_service
+    from data_engineering_copilot.services.query_signals import SearchMode
+
+    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_inscope.jsonl")
+    if not dataset_path.exists():
+        # fall back to recall_all if inscope missing
+        dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
+        if not dataset_path.exists():
+            print(f"❌ Evaluation dataset not found at {dataset_path}")
+            return 2
+
+    queries: list[dict] = []
+    with open(dataset_path) as f:
+        for line in f:
+            if line.strip():
+                try:
+                    queries.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    print(f"❌ Invalid JSONL row in {dataset_path}: {exc}")
+                    return 2
+    if not queries:
+        print("❌ No queries loaded from dataset")
+        return 2
+
+    train, held = split_queries(queries, seed=42)
+    if split == "train":
+        selected = train
+        split_label = "train (110)"
+    elif split == "held":
+        selected = held
+        split_label = "held (110)"
+    else:
+        selected = queries
+        split_label = f"all ({len(queries)})"
+
+    print(
+        f"Ablation dataset: {dataset_path.name} total={len(queries)} train={len(train)} held={len(held)} selected={len(selected)} [{split_label}] seed=42"
+    )
+    print(f"k={k} batch_size={batch_size} modes=dense/sparse/hybrid_rrf_k60/hybrid_rrf_k5/dbsf")
+
+    service = build_rag_service(embedding_purpose="evaluation")
+    _disable_rewrites_for_eval(service)
+
+    mode_defs: dict[str, tuple[SearchMode, int | None]] = {
+        "dense": (SearchMode.DENSE_ONLY, None),
+        "sparse": (SearchMode.BM25_ONLY, None),
+        "hybrid_rrf_k60": (SearchMode.HYBRID_EQUAL, 60),
+        "hybrid_rrf_k5": (SearchMode.HYBRID_EQUAL, 5),
+        "dbsf": (SearchMode.HYBRID_EQUAL, 60),
+    }
+
+    # Preserve original rrf_k to restore
+    orig_k = getattr(service.vector_store, "_hybrid_rrf_k", 60)
+
+    async def _run_mode(mode_name: str, search_mode: SearchMode, rrf_k: int | None) -> dict:
+        # Set RRF k for this mode if hybrid
+        if rrf_k is not None and hasattr(service.vector_store, "_hybrid_rrf_k"):
+            service.vector_store._hybrid_rrf_k = rrf_k  # type: ignore[attr-defined]
+        # else keep orig
+
+        async def _single(item: dict, idx: int) -> dict:
+            q = item.get("question") or ""
+            intent = item.get("intent", "unknown")
+            expected = [u for u in (item.get("expected_urls") or []) if u]
+            qid = str(item.get("id", f"q{idx}"))
+            if not q:
+                return {"id": qid, "recall": 0.0, "mrr": 0.0, "ndcg": 0.0, "precision": 0.0, "_skip": True}
+            try:
+                emb = await service.embedder.embed_query(q)
+                retrieved = await service.vector_store.query(
+                    emb,
+                    top_k=k,
+                    query_text=q,
+                    search_mode=search_mode,
+                    fused_limit=max(k * 4, 40),
+                )
+                urls = [r.chunk.url for r in retrieved]
+                row = _eval_retrieval_row(q, intent, expected, urls, k)
+                row["ndcg"] = ndcg_at_k(urls, expected, k)
+                row["id"] = qid
+                row["latency_ms"] = 0.0
+                return row
+            except Exception as exc:  # noqa: BLE001
+                # Sparse without BM25 cache etc → treat as 0 recall
+                return {"id": qid, "recall": 0.0, "mrr": 0.0, "ndcg": 0.0, "precision": 0.0, "error": str(exc)}
+
+        rows: list[dict] = []
+        if batch_size is not None and batch_size > 0:
+            for start in range(0, len(selected), batch_size):
+                batch = selected[start : start + batch_size]
+                indices = list(range(start + 1, start + len(batch) + 1))
+                # asyncio.gather per batch
+                batch_tasks = [_single(item, idx) for item, idx in zip(batch, indices, strict=False)]
+                batch_rows = await asyncio.gather(*batch_tasks)
+                rows.extend([r for r in batch_rows if not r.get("_skip")])
+                if start + batch_size < len(selected):
+                    await asyncio.sleep(0.05)
+        else:
+            for idx, item in enumerate(selected, 1):
+                r = await _single(item, idx)
+                if not r.get("_skip"):
+                    rows.append(r)
+
+        # aggregate
+        def _avg(key: str) -> float:
+            vals = [r.get(key, 0.0) for r in rows if key in r]
+            return sum(float(v) for v in vals) / len(vals) if vals else 0.0
+
+        overall = {
+            "n": len(rows),
+            "recall@k": _avg("recall"),
+            "mrr@k": _avg("mrr"),
+            "precision@k": _avg("precision"),
+            "ndcg@k": _avg("ndcg"),
+            "k": k,
+            "mode": mode_name,
+            "rrf_k": rrf_k,
+        }
+        per_query_recalls = [float(r.get("recall", 0.0)) for r in rows]
+        return {"overall": overall, "per_query": rows, "recalls": per_query_recalls}
+
+    async def _run_all() -> dict[str, dict]:
+        results: dict[str, dict] = {}
+        for name, (sm, rk) in mode_defs.items():
+            # dbsf placeholder: same as hybrid for now (Task 6 will add FusionQuery)
+            results[name] = await _run_mode(name, sm, rk)
+            # brief pause between modes to avoid Qdrant thundering herd
+            await asyncio.sleep(0.1)
+        # restore original k
+        if hasattr(service.vector_store, "_hybrid_rrf_k"):
+            service.vector_store._hybrid_rrf_k = orig_k  # type: ignore[attr-defined]
+        return results
+
+    results = asyncio.run(_run_all())
+
+    # Bootstrap CI: hybrid_rrf_k60 vs best_single (overall best of dense/sparse)
+    dense_recalls = results.get("dense", {}).get("recalls", [])
+    sparse_recalls = results.get("sparse", {}).get("recalls", [])
+    hybrid_recalls = results.get("hybrid_rrf_k60", {}).get("recalls", [])
+    if dense_recalls and sparse_recalls and hybrid_recalls:
+        import statistics as _stats
+
+        dense_mean = _stats.fmean(dense_recalls) if dense_recalls else 0.0
+        sparse_mean = _stats.fmean(sparse_recalls) if sparse_recalls else 0.0
+        if dense_mean >= sparse_mean:
+            best = dense_recalls
+            best_name = "dense"
+        else:
+            best = sparse_recalls
+            best_name = "sparse"
+        mean_delta, (ci_lo, ci_hi) = bootstrap_delta_ci(hybrid_recalls, best, n_boot=1000, seed=42)
+        delta_includes_zero = ci_lo <= 0 <= ci_hi
+    else:
+        best_name = "dense"
+        mean_delta, ci_lo, ci_hi = 0.0, 0.0, 0.0
+        delta_includes_zero = True
+
+    # Table
+    print("\n" + "=" * 72)
+    print(f"Ablation — nDCG@{k} / Recall@{k} / MRR@{k}  split={split}  n={len(selected)}")
+    print(f"{'mode':<18} {'recall':>7} {'ndcg':>7} {'mrr':>7} {'prec':>7} {'n':>5}")
+    print("-" * 72)
+    for name in ["dense", "sparse", "hybrid_rrf_k60", "hybrid_rrf_k5", "dbsf"]:
+        ov = results.get(name, {}).get("overall", {})
+        print(
+            f"{name:<18} {ov.get('recall@k', 0):7.3f} {ov.get('ndcg@k', 0):7.3f} {ov.get('mrr@k', 0):7.3f} {ov.get('precision@k', 0):7.3f} {ov.get('n', 0):5d}"
+        )
+    print("-" * 72)
+    print(
+        f"hybrid - best_single ({best_name}): Δ recall {mean_delta:+.4f}  95% CI [{ci_lo:+.4f}, {ci_hi:+.4f}]  includes_0={delta_includes_zero}"
+    )
+    if delta_includes_zero:
+        print("Decision: inconclusive — CI includes 0 (hybrid not proven > best single)")
+    else:
+        if mean_delta > 0:
+            print("Decision: hybrid wins — CI excludes 0 and Δ>0")
+        else:
+            print("Decision: dense wins — CI excludes 0 and Δ<0")
+
+    # JSON payload
+    payload: dict[str, object] = {
+        name: {
+            "recall@k": results[name]["overall"]["recall@k"],
+            "ndcg@k": results[name]["overall"]["ndcg@k"],
+            "mrr@k": results[name]["overall"]["mrr@k"],
+            "precision@k": results[name]["overall"]["precision@k"],
+            "n": results[name]["overall"]["n"],
+        }
+        for name in mode_defs
+    }
+    payload["delta_hybrid_best"] = mean_delta
+    payload["delta_ci_95"] = [ci_lo, ci_hi]
+    payload["delta_includes_zero"] = delta_includes_zero
+    payload["k"] = k
+    payload["split"] = split
+    payload["n_selected"] = len(selected)
+
+    # Emit JSON to stdout (machine-readable) and to file
+    import pathlib as _pathlib
+
+    out_path: _pathlib.Path | None = None
+    if output_dir:
+        out_path = _pathlib.Path(output_dir) / "eval_ablation.json"
+    else:
+        # default per plan: data/eval_ablation.json
+        out_path = _pathlib.Path("data/eval_ablation.json")
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"\nJSON written to {out_path}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Could not write {out_path}: {exc}")
+
+    # Also print JSON blob for --ablation consumers
+    print("\nJSON:")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/Ollama
     dataset: str | None = None,
     k: int = 10,
@@ -2507,6 +2746,8 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
     compare_baseline: str | None = None,
     pool_file: str | None = None,
     batch_size: int | None = None,
+    ablation: bool = False,
+    split: str = "all",
 ) -> int:
     """Source-agnostic retrieval-only evaluation (Recall@K / MRR / Precision@K per intent).
 
@@ -2517,6 +2758,9 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
     below the baseline minus a small tolerance (CI regression gate). A missing or
     unparseable baseline is treated as a warning, not a failure.
     """
+    if ablation:
+        return _eval_ablation_main(dataset=dataset, k=k, batch_size=batch_size, split=split, output_dir=output_dir)
+
     import asyncio
     import time as _time
 
@@ -4693,6 +4937,18 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
         default=None,
         help="Batch size for batched retrieval (e.g. 55 for 220-row inscope). None = legacy sequential (single batch).",
     )
+    eval_retrieval_parser.add_argument(
+        "--ablation",
+        action="store_true",
+        default=False,
+        help="Run dense/sparse/hybrid ablation with holdout split and bootstrap CI (Task 3).",
+    )
+    eval_retrieval_parser.add_argument(
+        "--split",
+        choices=["train", "held", "all"],
+        default="all",
+        help="Holdout split for --ablation: train (110) / held (110) / all (220) — deterministic seed=42 (default: all).",
+    )
 
     eval_chunking_parser = subparsers.add_parser(
         "eval-chunking",
@@ -5210,6 +5466,8 @@ def main() -> None:  # pragma: no cover: CLI entry point
                     compare_baseline=getattr(args, "compare_baseline", None),
                     pool_file=getattr(args, "pool_file", None),
                     batch_size=getattr(args, "batch_size", None),
+                    ablation=getattr(args, "ablation", False),
+                    split=getattr(args, "split", "all"),
                 )
             )
         elif args.command == "eval-chunking":
