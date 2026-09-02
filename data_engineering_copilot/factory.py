@@ -2028,11 +2028,15 @@ def build_rag_service(
         )
     reranker = None
     if app_settings.reranker_enabled:
-        if app_settings.reranker_type == "colbert":
-            # "colbert" is a lexical char-trigram MaxSim proxy (see
-            # colbert_reranker.py), not neural late-interaction.
+        if app_settings.reranker_type in ("colbert", "lexical_ngram"):
+            # lexical_ngram (alias colbert) is a Char-3gram MaxSim lexical proxy
+            # — NOT neural ColBERT late-interaction (ADR-013).
             from data_engineering_copilot.services.colbert_reranker import LexicalNgramReranker
 
+            if app_settings.reranker_type == "colbert":
+                logger.warning("reranker_lexical_ngram_proxy_not_neural colbert alias deprecated -> lexical_ngram")
+            else:
+                logger.info("reranker_lexical_ngram_proxy_not_neural")
             reranker = LexicalNgramReranker(
                 model_name=app_settings.colbert_rerank_model,
                 max_query_tokens=app_settings.colbert_max_query_tokens,

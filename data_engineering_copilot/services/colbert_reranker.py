@@ -1,11 +1,12 @@
-"""Lexical char-trigram MaxSim reranker.
+"""Char-3gram MaxSim lexical proxy — NOT neural ColBERT.
 
-A deterministic proxy for late-interaction scoring: per-query-token best
-char-3gram overlap against each document token, averaged and min-max
-normalized. NOT neural late-interaction — no token embeddings, no PLAID-class
-optimizations. Kept behind ``reranker_type="colbert"`` for backward
-compatibility; for true late interaction see the deferred experiment in
-docs/research/rag_best_practices_comparison_2026-08-21.md.
+Lexical char-trigram MaxSim reranker: a deterministic proxy for
+late-interaction scoring — per-query-token best char-3gram overlap against
+each document token, averaged and min-max normalized. NOT neural ColBERT
+late-interaction — no token embeddings, no PLAID-class optimizations.
+Canonical ``reranker_type="lexical_ngram"``; ``"colbert"`` is a deprecated
+alias (back-compat, ADR-013). For true late interaction see the deferred
+experiment in docs/research/rag_best_practices_comparison_2026-08-21.md.
 """
 
 from __future__ import annotations

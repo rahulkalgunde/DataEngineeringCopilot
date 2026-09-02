@@ -835,7 +835,8 @@ Output: list[RetrievedChunk] — reranked, confidence rebuilt in [0, 1]
 | `reranker_type` | Implementation | Notes |
 |---|---|---|
 | `"cross_encoder"` (default) | `LLMReranker` facade (`services/llm_reranker.py`) wrapping a cloud rerank chain, local cross-encoder last | see below |
-| `"colbert"` | `ColBERTReranker` (`services/colbert_reranker.py:61-148`) — LexicalNgramReranker (char-3gram proxy, dark) | **NOT neural — see ADR-011** — char-3gram MaxSim proxy (`_char_ngram_overlap`, lines 24-58): per query token, max char-trigram overlap against any doc token, averaged; min-max normalized. No model load — always available |
+| `"lexical_ngram"` | `LexicalNgramReranker` (`services/colbert_reranker.py:64-152`) — Char-3gram MaxSim lexical proxy — NOT neural ColBERT (ADR-013) | canonical name; char-3gram MaxSim proxy (`_char_ngram_overlap`, lines 27-61): per query token, max char-trigram overlap against any doc token, averaged; min-max normalized. No model load — always available |
+| `"colbert"` (deprecated alias) | same `LexicalNgramReranker` | alias for `lexical_ngram`, emits `DeprecationWarning` — NOT neural (ADR-013) |
 | `llm_rerank` | LLM chain (dark, `llm_rerank_enabled False` — frozen ADR-010) | gated until store recall@10 ≥0.35 on held 110 |
 
 **Cloud LLM rerank chain (default path):** when `llm_rerank_enabled=True` (`settings.py:1131`), reranking goes through a `ProviderFallbackChain[RerankRequest, RerankResult]` over `rerank_fallback_order = ["openrouter", "nvidia", "huggingface"]` (`settings.py:1132`; dedicated rerank endpoints/models at `settings.py:1133-1137`). The local `CrossEncoderReranker` (`BAAI/bge-reranker-v2-m3`, `reranker_model`, `settings.py:1100`) is the **degraded last resort**: it loads lazily off the event loop only when the chain fails down to it (`_ensure_reranker_ready`, `async_rag.py:2890-2910`). Provider scores are min-max normalized within the candidate pool so the downstream confidence gate keeps the same meaning across providers (`LLMReranker._apply`, `llm_reranker.py:98-131`); if every provider fails, chunks are returned unchanged trimmed to `top_k` (fail-open, `llm_reranker.py:90-94`).
@@ -1340,7 +1341,7 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 | `reranker_enabled` | True | — | `settings.py:1099` |
 | `reranker_model` | `BAAI/bge-reranker-v2-m3` | — | `settings.py:1100` |
 | `reranker_top_k` | 30 | 1-100 | `settings.py:1101` |
-| `reranker_type` | `cross_encoder` | `cross_encoder` \| `colbert` | local reranker selection (`settings.py:1139`) |
+| `reranker_type` | `cross_encoder` | `cross_encoder` \| `lexical_ngram` \| `colbert` (deprecated alias) \| `pylate_colbert` | Char-3gram MaxSim lexical proxy — NOT neural ColBERT; `colbert` alias emits `DeprecationWarning` (ADR-013) — local reranker selection (`settings.py:1268`) |
 | `llm_rerank_enabled` | False (dark, frozen ADR-010) | — | cloud rerank chain before local model (`settings.py:1255`) — frozen until store recall@10 ≥0.35 |
 | `rerank_fallback_order` | `["openrouter", "nvidia", "huggingface"]` | — | cloud rerank providers (`settings.py:1132`) |
 | `reranker_selective_threshold` | 1.0 (disabled) | 0.0-1.0 | skip rerank when top fused confidence ≥ threshold (`settings.py:1142`) |

@@ -234,7 +234,8 @@ class RerankResult:
 
 class RerankerType(StrEnum):
     CROSS_ENCODER = "cross_encoder"
-    COLBERT = "colbert"
+    COLBERT = "colbert"  # deprecated alias — use LEXICAL_NGRAM (ADR-013)
+    LEXICAL_NGRAM = "lexical_ngram"  # Char-3gram MaxSim lexical proxy — NOT neural ColBERT
 
 
 @dataclass(frozen=True)

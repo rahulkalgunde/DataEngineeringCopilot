@@ -1261,10 +1261,12 @@ class AppSettings(BaseSettings):
     nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_cloud_timeout_seconds: int = 8
-    # "colbert" = lexical char-trigram MaxSim proxy (see colbert_reranker.py),
-    # NOT neural late-interaction. "pylate_colbert" = true neural late
-    # interaction via PyLate (optional [colbert] extra). Gate: dec eval-rerank
-    # nDCG@10 >= cross_encoder + 0.02 AND p95 pool latency <= 2x cross_encoder.
+    # Canonical: "lexical_ngram" = Char-3gram MaxSim lexical proxy (see
+    # colbert_reranker.py) — NOT neural ColBERT. "colbert" is a deprecated
+    # alias for "lexical_ngram" (back-compat, emits DeprecationWarning).
+    # "pylate_colbert" = true neural late interaction via PyLate (optional
+    # [colbert] extra). Gate: dec eval-rerank nDCG@10 >= cross_encoder + 0.02
+    # AND p95 pool latency <= 2x cross_encoder. ADR-013.
     reranker_type: str = "cross_encoder"
     pylate_colbert_model: str = "colbert-ir/colbertv2.0"
     reranker_pool_size: int = 80
@@ -1523,6 +1525,19 @@ class AppSettings(BaseSettings):
                 self,
                 "cloudflare_base_url",
                 f"https://api.cloudflare.com/client/v4/accounts/{self.cloudflare_account_id}/ai/v1",
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_colbert_alias(self) -> AppSettings:
+        if self.reranker_type == "colbert":
+            import warnings
+
+            warnings.warn(
+                "reranker_type='colbert' is deprecated, use 'lexical_ngram' "
+                "(Char-3gram MaxSim lexical proxy — NOT neural ColBERT) — ADR-013",
+                DeprecationWarning,
+                stacklevel=2,
             )
         return self
 
