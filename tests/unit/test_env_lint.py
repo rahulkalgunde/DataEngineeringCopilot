@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-# Ensure scripts directory is on path (needed for CI)
+# Ensure project root is on path so `scripts` package is importable (needed for CI)
 _project_root = Path(__file__).parent.parent.parent
-if str(_project_root / "scripts") not in sys.path:
-    sys.path.insert(0, str(_project_root / "scripts"))
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 from scripts.lint_env import lint  # noqa: E402
 
