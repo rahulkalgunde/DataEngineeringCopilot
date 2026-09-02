@@ -211,6 +211,11 @@ def _build_provider_rate_limiters(app_settings: AppSettings = settings) -> dict[
                 rpm_limit=app_settings.anyapi_rpm_limit,
                 rpd_limit=app_settings.anyapi_rpd_limit,
             )
+        elif p == "bai":
+            rate_limiters[p] = SlidingWindowRateLimiter(
+                rpm_limit=app_settings.bai_rpm_limit,
+                rpd_limit=app_settings.bai_rpd_limit,
+            )
         elif p == "huggingface":
             rate_limiters[p] = SlidingWindowRateLimiter(
                 rpm_limit=app_settings.huggingface_rpm_limit,
@@ -621,8 +626,22 @@ def _build_purpose_llm_client(
             rate_limiter=rate_limiter,
         )
 
+    if eff_provider == "bai":
+        api_key = app_settings.bai_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("BAI_API_KEY is required when provider='bai'")
+        return _make(
+            base_url=app_settings.bai_base_url,
+            model=eff_model,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds or app_settings.ollama_timeout_seconds,
+            max_tokens=purpose_max_tokens,
+            max_tokens_field="max_tokens",
+            rate_limiter=rate_limiter,
+        )
+
     raise ValueError(
-        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego', 'sambanova', 'mistral', 'deepseek', 'zai', 'siliconflow', 'together', 'fireworks', 'llm7', 'agnes', 'ollama_cloud', 'helyx', 'anyapi'."
+        f"Unsupported LLM provider: {eff_provider!r}. Supported: 'ollama', 'openrouter', 'nvidia', 'groq', 'cerebras', 'gemini', 'cloudflare', 'opencodezen', 'opencodego', 'sambanova', 'mistral', 'deepseek', 'zai', 'siliconflow', 'together', 'fireworks', 'llm7', 'agnes', 'ollama_cloud', 'helyx', 'anyapi', 'bai'."
     )
 
 

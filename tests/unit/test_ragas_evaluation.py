@@ -367,6 +367,7 @@ class TestRagasEvaluator:
             ollama_cloud_api_key="placeholder",
             helyx_api_key="placeholder",
             anyapi_api_key="placeholder",
+            bai_api_key="placeholder",
         )
         llm_wrapper, _ = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(llm_wrapper, AdaptiveRagasLLM)

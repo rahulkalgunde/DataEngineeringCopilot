@@ -1017,3 +1017,33 @@ def test_ollama_purpose_budget_respected_over_num_predict():
     s = _make_settings(llm_provider="ollama")
     client = _build_purpose_llm_client(provider="ollama", model="", purpose="evaluation", app_settings=s)
     assert client._max_tokens == 1536  # purpose_max_tokens["evaluation"], not 512
+
+
+class TestBaiProvider:
+    def test_bai_uses_base_url_model_and_max_tokens_field(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+        from data_engineering_copilot.infrastructure.llm_client import LLMClient
+
+        s = _make_settings(
+            llm_provider="bai",
+            bai_api_key="sk-bai-test",
+            _test_allow_non_ollama=True,
+        )
+        client = _build_purpose_llm_client(provider="bai", model="", purpose="answer", app_settings=s)
+        assert isinstance(client, LLMClient)
+        assert client.model == "glm-5.3-flash"
+        assert client.base_url == "https://api.b.ai/v1"
+        assert client._max_tokens_field == "max_tokens"
+        assert client._max_tokens == 4096
+
+    def test_bai_missing_api_key_raises(self):
+        from data_engineering_copilot.factory import _build_purpose_llm_client
+
+        s = _make_settings(
+            llm_provider="bai",
+            llm_fallback_order=["bai"],
+            bai_api_key="placeholder",
+        )
+        object.__setattr__(s, "bai_api_key", SecretStr(""))
+        with pytest.raises(ValueError, match="BAI_API_KEY is required"):
+            _build_purpose_llm_client(provider="bai", model="test", app_settings=s)

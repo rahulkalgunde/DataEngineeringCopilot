@@ -238,7 +238,7 @@ def test_load_real_free_tier_file():
     p = PROJECT_ROOT / "data_engineering_copilot" / "config" / "free_tier_models.json"
     models = load_free_tier_models(p)
     assert len(models) >= 10
-    assert all(m.tier == "free_forever" for m in models)
+    assert all(m.tier in ("free_forever", "promotion_free") for m in models)
     # all providers deduped per model
     keys = [(m.provider, m.model) for m in models]
     assert len(keys) == len(set(keys))

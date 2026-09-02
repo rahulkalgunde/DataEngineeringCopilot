@@ -196,10 +196,10 @@ async def test_hybrid_query_returns_deep_fused_pool(mock_async_qdrant):
     await store.query([0.1] * 2048, top_k=5)
 
     call_kwargs = mock_async_qdrant.query_points.call_args.kwargs
-    assert call_kwargs["limit"] == 40
-    # Each prefetch pulls the same deep pool
+    assert call_kwargs["limit"] == 100
+    # Each prefetch pulls the same deep pool (tuned per ADR-006: 100 > 40)
     for prefetch in call_kwargs["prefetch"]:
-        assert prefetch.limit == 40
+        assert prefetch.limit == 100
 
 
 async def test_hybrid_query_honors_fused_limit(mock_async_qdrant):

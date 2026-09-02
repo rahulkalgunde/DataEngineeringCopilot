@@ -298,6 +298,8 @@ def pytest_configure(config):
         "OLLAMA_API_KEY",
         "HELYX_API_KEY",
         "ANYAPI_API_KEY",
+        "BAI_API_KEY",
+        "B_API_KEY",
         "HUGGINGFACE_API_KEY",
         "HF_TOKEN",
         "LANGFUSE_PUBLIC_KEY",
@@ -396,6 +398,7 @@ def make_settings(**overrides) -> "AppSettings":
         "ollama_cloud_api_key": "",
         "helyx_api_key": "",
         "anyapi_api_key": "",
+        "bai_api_key": "",
         "huggingface_api_key": "",
         "api_key": "",
     }

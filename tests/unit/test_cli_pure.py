@@ -65,6 +65,9 @@ class TestBm25CachePath:
         with (
             patch("data_engineering_copilot.cli.settings", mock_settings),
             patch("data_engineering_copilot.config.settings.PROJECT_ROOT", pathlib.Path("/tmp/project")),
+            patch(
+                "data_engineering_copilot.infrastructure.async_qdrant_store.PROJECT_ROOT", pathlib.Path("/tmp/project")
+            ),
         ):
             result = _bm25_cache_path()
             assert result == pathlib.Path("/tmp/project/.bm25_cache/test_collection.json")

@@ -81,8 +81,8 @@ def _load_models_list(data: dict, key: str, path: Path) -> list[CatalogModel]:
             raise ValueError(f"duplicate provider/model at {key}[{idx}]: {provider}/{model}")
         seen.add(cur_key)
         tier = str(raw.get("tier", "free_forever")).strip()
-        if tier != "free_forever":
-            raise ValueError(f"{key}[{idx}] tier must be 'free_forever', got {tier!r}")
+        if tier not in ("free_forever", "promotion_free"):
+            raise ValueError(f"{key}[{idx}] tier must be 'free_forever' or 'promotion_free', got {tier!r}")
         out.append(
             CatalogModel(
                 provider=provider,

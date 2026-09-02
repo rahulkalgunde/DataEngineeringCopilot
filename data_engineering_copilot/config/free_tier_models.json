@@ -1,7 +1,7 @@
 {
-  "version": "1.3",
-  "description": "Curated free_forever models per provider for RAG fallback \u2014 pruned 2026-08-27 after live probe (removed permanent 404/400 free models). Covers LLM + embedding + rerank fallback lists (each maps to settings embedding_fallback_order / rerank_fallback_order).",
-  "updated": "2026-08-27",
+  "version": "1.4",
+  "description": "Curated free_forever + promotion-free models per provider for RAG fallback \u2014 pruned 2026-08-27 after live probe. bai entries are promotion-free (0 Credits during promo, docs/b_ai_free_tier.md). Covers LLM + embedding + rerank fallback lists (each maps to settings embedding_fallback_order / rerank_fallback_order).",
+  "updated": "2026-09-01",
   "models": [
     {
       "provider": "ollama",
@@ -112,6 +112,46 @@
       "supports_structured_output": false,
       "rag_suitable": true,
       "notes": "Cloudflare Workers AI \u2014 OK 897ms 2026-08-27"
+    },
+    {
+      "provider": "bai",
+      "model": "glm-5.3-flash",
+      "tier": "promotion_free",
+      "context_window": 128000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "B.AI gateway — promo 0 Credits (API free now, Chat on launch) — OK 2026-09-01 — docs/b_ai_free_tier.md"
+    },
+    {
+      "provider": "bai",
+      "model": "qwen3.8-flash",
+      "tier": "promotion_free",
+      "context_window": 131072,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "B.AI gateway — promo 0 Credits (API free now) — OK 2026-09-01"
+    },
+    {
+      "provider": "bai",
+      "model": "hy3",
+      "tier": "promotion_free",
+      "context_window": 32768,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "B.AI gateway — promo 0 Credits from 2026-08-21 — OK 2026-09-01 (Tencent Hunyuan)"
+    },
+    {
+      "provider": "bai",
+      "model": "deepseek-v4-flash",
+      "tier": "promotion_free",
+      "context_window": 128000,
+      "max_tokens_field": "max_tokens",
+      "supports_structured_output": true,
+      "rag_suitable": true,
+      "notes": "B.AI gateway — promo 0 Credits from 2026-08-17 — OK 2026-09-01 — idle/busy pricing outside promo"
     }
   ],
   "embedding_models": [
