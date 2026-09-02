@@ -1232,6 +1232,20 @@ def spark_activate(generation: str, force: bool = False) -> int:  # pragma: no c
         print(f"❌ Activation failed: {exc}")
         return 5
     _write_active_state({"generation": generation, "collection": _spark_generation_collection(generation)})
+    # Alias-atomic BM25 cache copy: ensure dense-only fallback cannot happen after
+    # activation when the generation was built with a fitted cache but the alias
+    # cache is still missing. Use tmp+replace for atomicity.
+    try:
+        from data_engineering_copilot.config.settings import PROJECT_ROOT
+
+        alias_cache = PROJECT_ROOT / ".bm25_cache" / "data_engineering_docs.json"
+        gen_cache = PROJECT_ROOT / f".bm25_cache/data_engineering_docs__{generation}.json"
+        if gen_cache.exists() and not alias_cache.exists():
+            tmp = alias_cache.with_suffix(".tmp")
+            tmp.write_bytes(gen_cache.read_bytes())
+            tmp.replace(alias_cache)
+    except Exception as exc:
+        logger.warning("Failed to copy BM25 alias cache on activate: %s", exc)
     print(f"✅ Activated generation {generation} -> {settings.active_collection_alias}")
     return 0
 

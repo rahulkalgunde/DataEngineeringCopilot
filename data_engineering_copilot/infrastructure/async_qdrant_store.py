@@ -236,6 +236,18 @@ class AsyncQdrantVectorStore:
                     self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
             else:
                 self._bm25 = BM25Tokenizer(namespace=bm25_namespace)
+            # Startup visibility: hybrid enabled but cache missing while an active
+            # generation exists would silently fall back to dense-only.
+            if (
+                self._bm25 is None or not getattr(self._bm25, "_frozen", False)
+            ) and not self._bm25_persist_path.exists():
+                active_generation = resolve_active_generation()
+                if active_generation:
+                    logger.warning(
+                        "Hybrid enabled but BM25 cache missing at %s — Qdrant sparse points exist but queries will be dense-only; run gen-bm25-rebuild --generation %s",
+                        self._bm25_persist_path,
+                        active_generation,
+                    )
         # 300s timeout for upserts with ?wait=true — 60s times out on 3072×2048 upserts under heavy load
         self._client = AsyncQdrantClient(url=self._url, prefer_grpc=False, timeout=300)
         self._last_query_sparse = None
@@ -877,7 +889,16 @@ class AsyncQdrantVectorStore:
         self._require_no_bm25_version_mismatch()
         self._bm25.fit(texts)
         try:
-            self._bm25.save(self._bm25_persist_path)
+            import os
+
+            tmp = self._bm25_persist_path.with_suffix(".tmp")
+            self._bm25.save(tmp)
+            try:
+                with open(tmp, "rb") as fh:
+                    os.fsync(fh.fileno())
+            except Exception:
+                pass
+            tmp.replace(self._bm25_persist_path)
             logger.info("Persisted BM25 tokenizer to %s", self._bm25_persist_path)
             self._bm25_loaded_from_disk = True
         except Exception:
@@ -905,7 +926,16 @@ class AsyncQdrantVectorStore:
         # Fresh tokenizer for every new generation; never reuse an active one.
         self._bm25 = BM25Tokenizer(namespace=self._bm25_namespace)
         self._bm25.fit(texts_list)
-        self._bm25.save(self._bm25_persist_path)
+        import os
+
+        tmp = self._bm25_persist_path.with_suffix(".tmp")
+        self._bm25.save(tmp)
+        try:
+            with open(tmp, "rb") as fh:
+                os.fsync(fh.fileno())
+        except Exception:
+            pass
+        tmp.replace(self._bm25_persist_path)
         self._bm25_loaded_from_disk = True
         logger.info(
             "BM25 corpus fitted: vocab=%d corpus_size=%d",
