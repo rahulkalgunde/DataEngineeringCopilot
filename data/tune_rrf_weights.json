@@ -1,0 +1,84 @@
+{
+  "best_k": 20,
+  "best_prefetch": 100,
+  "best_weights": [
+    1,
+    1.25
+  ],
+  "best_weights_tag": "(1, 1.25)",
+  "train_ndcg": 0.15753291932561075,
+  "train_recall": 0.2681818181818182,
+  "held_ndcg": 0.1983040953100542,
+  "held_recall": 0.29545454545454547,
+  "dense_train_ndcg": 0.13171592818770814,
+  "dense_held_ndcg": 0.15676390320164926,
+  "dense_train_recall": 0.2545454545454545,
+  "dense_held_recall": 0.2772727272727273,
+  "held_delta_ndcg_vs_dense": 0.041540192108404934,
+  "held_ci_ndcg_vs_dense": [
+    0.010058695890420289,
+    0.07605202109275078
+  ],
+  "held_delta_recall_vs_dense": 0.01818181818181818,
+  "held_ci_recall_vs_dense": [
+    -0.01818181818181818,
+    0.05454545454545454
+  ],
+  "held_delta_ndcg_vs_equal": 0.004305454086655992,
+  "held_ci_ndcg_vs_equal": [
+    -0.00671036811688259,
+    0.01748618986162262
+  ],
+  "held_ci_includes_zero_vs_equal": true,
+  "ci_includes_zero_vs_dense": false,
+  "ship_weights": false,
+  "best_b": 0.75,
+  "b_results": {
+    "0.75": {
+      "train_ndcg": 0.15753291932561075,
+      "held_ndcg": 0.1983040953100542
+    }
+  },
+  "ship_b": false,
+  "b_note": "query-side approximation without re-upsert; full gen-build required to bake b",
+  "grid_train": {
+    "1,1": {
+      "ndcg": 0.15417773526716946,
+      "recall": 0.2681818181818182
+    },
+    "1,1.25": {
+      "ndcg": 0.15753291932561075,
+      "recall": 0.2681818181818182
+    },
+    "1,0.8": {
+      "ndcg": 0.15620652237804125,
+      "recall": 0.2681818181818182
+    },
+    "2,1": {
+      "ndcg": 0.15145389050750482,
+      "recall": 0.2409090909090909
+    }
+  },
+  "grid_held": {
+    "1,1": {
+      "ndcg": 0.19399864122339816,
+      "recall": 0.29545454545454547
+    },
+    "1,1.25": {
+      "ndcg": 0.1983040953100542,
+      "recall": 0.29545454545454547
+    },
+    "1,0.8": {
+      "ndcg": 0.1935825107221173,
+      "recall": 0.29545454545454547
+    },
+    "2,1": {
+      "ndcg": 0.197620215954344,
+      "recall": 0.31363636363636366
+    }
+  },
+  "k": 10,
+  "n_train": 110,
+  "n_held": 110,
+  "decision": "keep (1,1) b=0.75"
+}

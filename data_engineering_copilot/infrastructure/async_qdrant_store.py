@@ -485,6 +485,7 @@ class AsyncQdrantVectorStore:
         fused_limit: int | None = None,
         rrf_profile: str = RRF_EQUAL_PROFILE,
         search_mode: SearchMode | None = None,
+        rrf_weights: tuple[float, float] | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve the most similar chunks for a query embedding asynchronously.
 
@@ -631,8 +632,10 @@ class AsyncQdrantVectorStore:
                             filter=query_filter,
                         ),
                     ]
-                    # Determine RRF weights based on search_mode
-                    if search_mode == SearchMode.HYBRID_SPARSE_BIAS:
+                    # Determine RRF weights based on explicit override or search_mode
+                    if rrf_weights is not None:
+                        weights = list(rrf_weights)
+                    elif search_mode == SearchMode.HYBRID_SPARSE_BIAS:
                         weights = [RRF_DENSE_WEIGHT, RRF_SPARSE_WEIGHT]
                     elif search_mode == SearchMode.HYBRID_DENSE_BIAS:
                         weights = [RRF_SPARSE_WEIGHT, RRF_DENSE_WEIGHT]  # dense gets boost

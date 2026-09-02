@@ -1372,6 +1372,13 @@ class AppSettings(BaseSettings):
     hybrid_rrf_k: int = 20
     # Optional override for fused prefetch limit per-leg; None => max(k*4,40) else honor value (try 100 per ADR-006 — shipped 100)
     retrieval_prefetch_limit: int | None = 100
+    # BM25 length normalization b (0.0=off, 1.0=full length norm). Default 0.75 is BM25 literature standard;
+    # tuned per ADR-007 via gen-bm25-rebuild (~15s per b) — query-side approximation without re-upsert noted there.
+    bm25_b: float = 0.75
+    # RRF rank-fusion weights (dense first, sparse second). Qdrant RRF weights are absolute: (1,2) != (2,4).
+    # Tuned per ADR-007 at best k=20 prefetch 100 — keep (1,1) unless held CI>0.
+    rrf_dense_weight: float = 1.0
+    rrf_sparse_weight: float = 1.0
     # Identifier-aware hybrid profiles: when enabled, technical queries
     # (dotted identifiers, paths, versions, code/SQL) fuse hybrid retrieval with
     # weighted RRF (sparse 1.25 / dense 1.0) instead of equal weights. Off by
@@ -1667,6 +1674,12 @@ class AppSettings(BaseSettings):
             errors.append(
                 "identifier_sparse_rrf_enabled=True requires hybrid_search_enabled=True — identifier-aware RRF needs sparse vectors"
             )
+        if not 0.0 <= self.bm25_b <= 1.0:
+            errors.append(f"bm25_b ({self.bm25_b}) must be within [0.0, 1.0]")
+        if self.rrf_dense_weight <= 0:
+            errors.append(f"rrf_dense_weight ({self.rrf_dense_weight}) must be > 0")
+        if self.rrf_sparse_weight <= 0:
+            errors.append(f"rrf_sparse_weight ({self.rrf_sparse_weight}) must be > 0")
 
         # Mixed-dimension fallback chains corrupt the index mid-build: every
         # leg must resolve to the SAME geometry as the active provider.

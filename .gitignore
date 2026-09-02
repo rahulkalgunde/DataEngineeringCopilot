@@ -8,6 +8,7 @@ __pycache__/
 data/**
 !data/provider_catalog.example.json
 !data/tune_rrf_k.json
+!data/tune_rrf_weights.json
 logs/
 qdrant_db/
 dec_venv/
@@ -27,6 +28,7 @@ sessions/
 scripts/*
 !scripts/eval_retrieval_gate.py
 !scripts/tune_rrf_k.py
+!scripts/tune_rrf_weights.py
 resources_*.csv
 *.csv
 *.parquet

@@ -18,6 +18,8 @@ from pathlib import Path
 from nltk.stem import PorterStemmer
 from qdrant_client.http.models import SparseVector
 
+from data_engineering_copilot.config.settings import settings
+
 _stemmer = PorterStemmer()
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9_\-]{2,}")
@@ -102,9 +104,12 @@ class BM25Tokenizer:
     TOKENIZER_VERSION = "namespace-v1"
     SUPPORTED_VERSIONS = frozenset({LEGACY_TOKENIZER_VERSION, TOKENIZER_VERSION})
 
-    def __init__(self, k1: float = 1.2, b: float = 0.75, namespace: bool = False):
+    def __init__(self, k1: float = 1.2, b: float | None = None, namespace: bool = False):
         self._k1 = k1
-        self._b = b
+        if b is not None:
+            self._b = b
+        else:
+            self._b = settings.bm25_b
         self._namespace = namespace
         self._version = self.TOKENIZER_VERSION if namespace else self.LEGACY_TOKENIZER_VERSION
         self._vocab: dict[str, int] = {}
