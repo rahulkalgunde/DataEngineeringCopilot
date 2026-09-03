@@ -1220,8 +1220,8 @@ class AppSettings(BaseSettings):
     retrieval_top_k: int = 50
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
-    reranker_top_k: int = 15
-    max_context_chars: int = 16000
+    reranker_top_k: int = 30
+    max_context_chars: int = 24000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.

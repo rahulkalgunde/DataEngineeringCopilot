@@ -31,7 +31,7 @@ CACHE_SCHEMA_VERSION = "v2"
 
 # Confidence below which an answer is considered too weak to cache (avoids
 # poisoning the cache with low-quality responses).
-MIN_CACHE_CONFIDENCE = 0.5
+MIN_CACHE_CONFIDENCE = 0.1
 
 
 def _normalize_query(query: str) -> str:
@@ -98,6 +98,7 @@ class QueryCache:
         ttl_seconds: int = 3600,
         redis_url: str | None = None,
         redis_client=None,
+        min_confidence: float = MIN_CACHE_CONFIDENCE,
     ) -> None:
         self._exact_enabled = exact_enabled
         self._semantic_enabled = semantic_enabled
@@ -113,6 +114,8 @@ class QueryCache:
             import redis.asyncio as aioredis
 
             self._redis = aioredis.from_url(redis_url, decode_responses=True)
+
+        self._min_confidence = min_confidence
 
         # Hit rate metrics
         self._hits = 0
@@ -182,7 +185,7 @@ class QueryCache:
     def set_exact(self, query: str, answer: CachedAnswer, scope: CacheScope | None = None) -> None:
         if not self._exact_enabled:
             return
-        if not self.is_cacheable(answer):
+        if not self.is_cacheable(answer, min_confidence=self._min_confidence):
             logger.info("Not caching exact answer (not cacheable): %r", (answer.text or "")[:60])
             return
         key = self._exact_key(query, scope)
@@ -236,7 +239,7 @@ class QueryCache:
     ) -> None:
         if not self._semantic_enabled or not query_embedding:
             return
-        if not self.is_cacheable(answer):
+        if not self.is_cacheable(answer, min_confidence=self._min_confidence):
             logger.info("Not caching semantic answer (not cacheable): %r", (answer.text or "")[:60])
             return
 
@@ -423,7 +426,7 @@ class QueryCache:
     async def aset_exact(self, query: str, answer: CachedAnswer, scope: CacheScope | None = None) -> None:
         self.set_exact(query, answer, scope)
         if self._redis is not None:
-            if not self.is_cacheable(answer):
+            if not self.is_cacheable(answer, min_confidence=self._min_confidence):
                 return
             try:
                 await self._redis.setex(
@@ -443,7 +446,7 @@ class QueryCache:
     ) -> None:
         self.set_semantic(query, query_embedding, answer, scope)
         if self._redis is not None:
-            if not self.is_cacheable(answer):
+            if not self.is_cacheable(answer, min_confidence=self._min_confidence):
                 return
             try:
                 idx = await self._redis.incr("rag:cache:semantic:counter")

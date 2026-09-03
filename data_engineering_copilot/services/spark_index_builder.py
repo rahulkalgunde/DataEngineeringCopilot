@@ -35,6 +35,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     count_tokens,
     split_text_losslessly,
 )
+from data_engineering_copilot.services.chunker import embedding_text_for_chunk
 from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_metadata import derive_spark_metadata
 from data_engineering_copilot.services.spark_rendered_chunker import SparkRenderedChunker
@@ -818,7 +819,7 @@ class SparkIndexBuilder:
         try:
             for batch_idx in range(start_batch, total_batches):
                 start = batch_idx * self._embedding_batch_size
-                batch = [c.text for c in chunks[start : start + self._embedding_batch_size]]
+                batch = [embedding_text_for_chunk(c) for c in chunks[start : start + self._embedding_batch_size]]
                 try:
                     batch_vectors = await _embed_batch_with_retry(self._embedder, batch)
                 except Exception as exc:

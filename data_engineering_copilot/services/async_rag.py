@@ -1599,7 +1599,7 @@ class AsyncRagService:
                     groundedness_score=result.groundedness_score,
                     cached_at=time.time(),
                 )
-                if self.cache.is_cacheable(envelope):
+                if self.cache.is_cacheable(envelope, min_confidence=self.config.confidence_threshold):
                     await self.cache.aset_exact(question, envelope, scope=cache_scope)
                     if query_emb_for_cache is not None:
                         await self.cache.aset_semantic(question, query_emb_for_cache, envelope, scope=cache_scope)

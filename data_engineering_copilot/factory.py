@@ -2137,6 +2137,7 @@ def build_rag_service(
             ttl_seconds=app_settings.semantic_cache_ttl,
             redis_url=app_settings.redis_url,
             redis_client=get_shared_redis_client(app_settings.redis_url),
+            min_confidence=app_settings.confidence_threshold,
         ),
         query_rewriter=query_rewriter,
         groundedness_verifier=groundedness,

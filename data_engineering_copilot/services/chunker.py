@@ -133,3 +133,25 @@ class DocumentChunker:
 
         namespace = uuid.uuid5(uuid.NAMESPACE_DNS, document.url)
         return str(uuid.uuid5(namespace, f"{document.source_name}:{index:04d}"))
+
+
+def embedding_text_for_chunk(chunk: DocumentChunk) -> str:
+    """Return the chunk text prefixed with structural breadcrumbs for embedding.
+
+    The returned string preserves the original ``chunk.text`` for display;
+    only the embedding input gains the parent heading context so the vector
+    representation captures the document hierarchy.
+    """
+    parts: list[str] = []
+    if chunk.source_name:
+        parts.append(chunk.source_name)
+    if chunk.title:
+        parts.append(chunk.title)
+    if chunk.section_header:
+        parts.append(chunk.section_header)
+    elif chunk.heading_path:
+        parts.extend(chunk.heading_path)
+    if parts:
+        breadcrumb = " > ".join(parts)
+        return f"[{breadcrumb}]\n{chunk.text}"
+    return chunk.text

@@ -36,6 +36,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     count_tokens,
     split_text_losslessly,
 )
+from data_engineering_copilot.services.chunker import embedding_text_for_chunk
 
 logger = logging.getLogger(__name__)
 _structlog = structlog.get_logger(__name__)
@@ -354,7 +355,7 @@ async def _chunk_embed_upsert(
             continue
         normalized = _normalize_chunks(chunks, encoder=encoder)
         for i in range(0, len(normalized), _EMBED_BATCH_SIZE):
-            batch = [c.text for c in normalized[i : i + _EMBED_BATCH_SIZE]]
+            batch = [embedding_text_for_chunk(c) for c in normalized[i : i + _EMBED_BATCH_SIZE]]
             batch_vectors = await _embed_batch_with_retry(embedder, batch)
             all_chunks.extend(normalized[i : i + _EMBED_BATCH_SIZE])
             all_vectors.extend(batch_vectors)

@@ -28,6 +28,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
+from data_engineering_copilot.services.chunker import embedding_text_for_chunk
 from data_engineering_copilot.services.chunker_router import ChunkerRoute, ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
@@ -365,7 +366,7 @@ class AsyncIngestionService:
         )
         embed_span = None
         try:
-            texts = [chunk.text for chunk in batch_chunks]
+            texts = [embedding_text_for_chunk(chunk) for chunk in batch_chunks]
             if self._telemetry is not None:
                 embed_span = self._telemetry.start_observation(
                     name="embedding",
