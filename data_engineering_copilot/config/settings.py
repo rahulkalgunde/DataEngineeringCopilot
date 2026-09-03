@@ -685,8 +685,8 @@ class AppSettings(BaseSettings):
         "global": 2048,
     }
 
-    generation_temperature: float = 0.15
-    code_generation_temperature: float = 0.20
+    generation_temperature: float = 0.05
+    code_generation_temperature: float = 0.1
     generation_seed: int | None = None
     generation_frequency_penalty: float = 0.0
     generation_presence_penalty: float = 0.0
@@ -1241,13 +1241,13 @@ class AppSettings(BaseSettings):
     prompt_citation_enforcement: Literal["strict", "soft", "off"] = "soft"
     max_expansion_queries: int = 2
     context_compression_ratio: float = 0.8
-    groundedness_threshold: float = 0.6
-    confidence_threshold: float = 0.18
+    groundedness_threshold: float = 0.8
+    confidence_threshold: float = 0.1
     # Cross-encoder sigmoid scores cluster lower than embedding/fused
     # confidence (relevant pairs commonly land ~0.10-0.15). When a reranker
     # ran for a query, the quality gate compares against this value; without a
     # reranker it falls back to ``confidence_threshold``.
-    reranker_confidence_threshold: float = 0.10
+    reranker_confidence_threshold: float = 0.05
     # LLM-based (cloud) reranking: when enabled, ``rerank_fallback_order`` is
     # tried before the local cross-encoder (which stays the degraded last
     # resort). All providers normalize scores to [0, 1] so the confidence gate
@@ -1269,9 +1269,9 @@ class AppSettings(BaseSettings):
     # AND p95 pool latency <= 2x cross_encoder. ADR-013.
     reranker_type: str = "cross_encoder"
     pylate_colbert_model: str = "colbert-ir/colbertv2.0"
-    reranker_pool_size: int = 80
+    reranker_pool_size: int = 60
     reranker_doc_truncation_chars: int = 1200
-    reranker_selective_threshold: float = 0.70
+    reranker_selective_threshold: float = 0.60
     colbert_rerank_model: str = "colbert-ir/colbertv2.0"
     colbert_max_query_tokens: int = 32
     colbert_max_doc_tokens: int = 256
