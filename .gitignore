@@ -24,8 +24,7 @@ build/
 *.egg-info/
 .env
 .env.secrets
-plans/*
-!plans/*.md
+plans/
 sessions/
 scripts/*
 !scripts/eval_retrieval_gate.py
@@ -35,8 +34,6 @@ scripts/*
 !scripts/tune_tier2_speed.py
 !scripts/run_chunking_eval.py
 !scripts/promote_baseline.py
-!scripts/eval_soft_gate.py
-!scripts/drift_gate_hook.py
 resources_*.csv
 *.csv
 *.parquet
