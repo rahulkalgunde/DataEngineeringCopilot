@@ -26,7 +26,7 @@ class _BrokenClient:
 
 def test_key_is_stable_sha256_prefixed():
     k = judge_cache_key("m", "p1", "q", "a", "c")
-    raw = hashlib.sha256(b"m\x00p1\x00q\x00a\x00c").hexdigest()
+    raw = hashlib.sha256(b"m\x00p1\x00q\x00a\x00c\x00").hexdigest()
     assert k == f"dec:evaljudge:{raw}"
 
 

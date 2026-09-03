@@ -113,7 +113,7 @@ class DriftDetector:
                 "snapshot": asdict(report.snapshot),
                 "comparisons": [asdict(c) for c in report.comparisons],
             }
-            hook = PROJECT_ROOT / "scripts" / "drift_gate_hook.py"
+            hook = PROJECT_ROOT / "data_engineering_copilot" / "evaluation" / "gates" / "drift_hook.py"
             if hook.exists():
                 import subprocess
 

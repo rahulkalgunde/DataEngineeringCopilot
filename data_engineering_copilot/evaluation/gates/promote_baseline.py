@@ -1,13 +1,12 @@
-#!/usr/bin/env python3
 """Atomic promotion of retrieval eval to baseline_inscope with provenance sidecar.
 
 Copies ``retrieval_eval.json`` → ``baseline_inscope.json`` via tmp→rename
 and writes ``baseline_inscope.provenance.json`` with git_commit,
 generation pinned-d3dbad402105, k, top_k, mrl, timestamp.
 
-Usage:
-  dec_venv/bin/python scripts/promote_baseline.py --source /tmp/new_baseline3/retrieval_eval.json
-  dec_venv/bin/python scripts/promote_baseline.py --check-gate  # exits 1 if gate fails
+This module can be invoked as:
+    python -m data_engineering_copilot.evaluation.gates.promote_baseline --source /tmp/new_baseline3/retrieval_eval.json
+    python -m data_engineering_copilot.evaluation.gates.promote_baseline --check-gate
 """
 
 from __future__ import annotations
@@ -18,9 +17,10 @@ import json
 import pathlib
 import subprocess
 import sys
+from pathlib import Path
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = pathlib.Path("/tmp/new_baseline3/retrieval_eval.json")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_SOURCE = Path("/tmp/new_baseline3/retrieval_eval.json")
 DEFAULT_DEST = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_inscope.json"
 DEFAULT_PROVENANCE = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_inscope.provenance.json"
 DEFAULT_BASELINE = DEFAULT_DEST
@@ -29,6 +29,7 @@ RELATIVE_TOLERANCE = 0.015  # 1.5% relative drop allowed
 
 
 def _git_commit(short: bool = True) -> str:
+    """Return the current git commit SHA, optionally shortened."""
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -46,14 +47,15 @@ def _git_commit(short: bool = True) -> str:
 
 
 def _load_metrics(source: pathlib.Path) -> dict:
+    """Load eval metrics from a JSON file."""
     data = json.loads(source.read_text(encoding="utf-8"))
     overall = data.get("overall") or {}
-    # also capture per_intent api_lookup for audit
     per_intent = data.get("per_intent") or {}
     return {"overall": overall, "per_intent": per_intent, "raw": data}
 
 
 def _recall_at_k(metrics: dict) -> float | None:
+    """Extract recall@k value from loaded metrics."""
     overall = metrics.get("overall") or {}
     if "recall@k" in overall:
         return float(overall["recall@k"])
@@ -121,6 +123,7 @@ def promote(
     provenance_path: pathlib.Path = DEFAULT_PROVENANCE,
     generation: str = GENERATION,
 ) -> int:
+    """Promote a retrieval eval JSON to the canonical baseline path with provenance."""
     if not source.exists():
         print(f"❌ source not found: {source}", file=sys.stderr)
         return 2
@@ -128,7 +131,6 @@ def promote(
         from data_engineering_copilot.config.settings import settings
 
         k = 10
-        # settings is frozen; read attributes
         top_k = int(getattr(settings, "retrieval_top_k", 50))
         mrl = bool(getattr(settings, "mrl_multistage_enabled", False))
     except Exception:
@@ -136,17 +138,14 @@ def promote(
 
     data = json.loads(source.read_text(encoding="utf-8"))
     overall = data.get("overall") or {}
-    # validation: ensure overwrite candidate has expected shape
     if "recall@k" not in overall and "recall@k" not in data:
         print(f"⚠️ source missing overall.recall@k: {source}", file=sys.stderr)
 
-    # atomic tmp→dest
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     tmp.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     tmp.replace(dest)
     print(f"✅ promoted {source} → {dest}")
 
-    # provenance sidecar
     metrics = overall if overall else data
     commit = _git_commit(short=True)
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -164,7 +163,6 @@ def promote(
         "metrics": metrics,
         "source": str(source),
     }
-    # atomic write for provenance as well
     prov_tmp = provenance_path.with_suffix(provenance_path.suffix + ".tmp")
     prov_tmp.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
     prov_tmp.replace(provenance_path)
@@ -173,6 +171,7 @@ def promote(
 
 
 def main() -> int:
+    """CLI entrypoint for baseline promotion."""
     ap = argparse.ArgumentParser(description="Promote retrieval eval to baseline with provenance")
     ap.add_argument("--source", default=str(DEFAULT_SOURCE), help="path to retrieval_eval.json")
     ap.add_argument("--dest", default=str(DEFAULT_DEST), help="destination baseline_inscope.json")

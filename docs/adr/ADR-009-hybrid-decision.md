@@ -21,7 +21,7 @@ Inputs: `tests/evaluation/golden/recall_inscope.jsonl` 220q, `local-hf nvidia/Ne
 | T6 DBSF (ADR-008) | DBSF L100 | — | 0.1821 vs RRF 0.1905 | -0.0084 | [-0.0281,+0.0113] | keep rrf CI includes 0, negative |
 | T6 reranker 50→10 ms-marco-MiniLM-L-6-v2 | pooled 50 | — | 0.1968 vs 0.1905 | +0.0063 | [-0.0120,+0.0245] | keep no rerank CI includes 0, p95 212ms <250ms OK but no gain |
 
-Baseline gate: `baseline_inscope.json R@10 0.273 n=220`, tuned hybrid held `R@10 0.2955` vs dense `0.277` — global gate `R@10 ≥ 0.25 (baseline-0.02) and per-intent ≥ baseline-0.05` passes on `make eval-retrieval-gate` (see `scripts/eval_retrieval_gate.py`).
+Baseline gate: `baseline_inscope.json R@10 0.273 n=220`, tuned hybrid held `R@10 0.2955` vs dense `0.277` — global gate `R@10 ≥ 0.25 (baseline-0.02) and per-intent ≥ baseline-0.05` passes on `make eval-retrieval-gate` (see `data_engineering_copilot/evaluation/gates/retrieval_gate.py`).
 
 ## Decision
 

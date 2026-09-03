@@ -1,20 +1,14 @@
-#!/usr/bin/env python3
 """Pipeline downstream ablation: guardrails / sibling / dedup (ADR-011).
 
 Grid 110/110 held vs train with vs without per stage, Δ recall/nDCG + 95% CI
-bootstrap 1000 (same as scripts/tune_rrf_k.py). Toggles via monkeypatched
-settings before building AsyncRagService:
+bootstrap 1000. Toggles via monkeypatched settings before building AsyncRagService:
 
 - sibling: assembly_enable_sibling_merge True vs False + patch _rejoin_sibling_chunks max_blocks 3→0
-- guardrails: input_guardrails_enabled True vs False (InputGuardrails(enabled=False)/None)
+- guardrails: input_guardrails_enabled True vs False
 - dedup: assembly_content_hash_dedup + context_compression_enabled True vs False
 
-Reuses embedding cache via CachedEmbedder (batch-size 55). Emits
-data/pipeline_ablation.json with
-{"guardrails": {"with":..., "without":..., "delta":..., "ci":[lo,hi]}, ...}
-+ decision ship = ci excludes 0 and delta>0 else keep off.
-
-Run: dec_venv/bin/python scripts/eval_pipeline_ablation.py --k 10 --split held
+This module can be invoked as:
+    python -m data_engineering_copilot.evaluation.gates.pipeline_ablation --k 10 --split held
 """
 
 from __future__ import annotations
@@ -26,11 +20,11 @@ import statistics
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_queries(path: Path) -> list[dict]:
+    """Load queries from a JSONL file."""
     qs: list[dict] = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -85,6 +79,7 @@ async def _eval_service(
     k: int,
     batch_size: int | None,
 ) -> dict[str, object]:
+    """Evaluate a service on a set of queries, returning recall and nDCG metrics."""
     from data_engineering_copilot.evaluation.retrieval_metrics import ndcg_at_k, recall_at_k
 
     per_recall: list[float] = []
@@ -142,6 +137,7 @@ async def _eval_service(
 
 
 def main() -> int:
+    """CLI entrypoint for pipeline ablation evaluation."""
     ap = argparse.ArgumentParser(description="Pipeline ablation guardrails/sibling/dedup with holdout CI (ADR-011)")
     ap.add_argument("--dataset", default="tests/evaluation/golden/recall_inscope.jsonl")
     ap.add_argument("--k", type=int, default=10, help="top_k for recall/nDCG")
@@ -196,7 +192,6 @@ def main() -> int:
             print(f"\n— Stage {st}: with vs without —")
             svc_with = _build_service_for_stage(st, True)
             svc_without = _build_service_for_stage(st, False)
-            # Embed cache is per-service but CachedEmbedder reuses Redis; first pass populates.
             with_res = await _eval_service(svc_with, selected, args.k, args.batch_size)
             without_res = await _eval_service(svc_without, selected, args.k, args.batch_size)
 
@@ -227,7 +222,6 @@ def main() -> int:
                 "ship": ship,
                 "decision": dec_r["decision"],
                 "excludes_zero": dec_r["excludes_zero"],
-                # verbose
                 "with_recall": with_res["recall"],
                 "without_recall": without_res["recall"],
             }

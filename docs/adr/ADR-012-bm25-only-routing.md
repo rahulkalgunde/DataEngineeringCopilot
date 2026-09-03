@@ -66,7 +66,7 @@ def _compute_search_mode(self, rewritten, question: str) -> SearchMode | None:
   - `test_rewrite_drift_still_bm25_only` — `query="dense_rank() over window"` (drifted surface) → `BM25_ONLY`
   - `test_api_lookup_with_signals_still_bm25_only` — `QuerySignals` path also `BM25_ONLY`
   - `test_code_example_routes_bm25_only` and `test_non_api_intents_not_forced_bm25` guard regression
-- Integration expectation: on held `api_lookup` subset (14q) `BM25_ONLY recall@10 ≥ hybrid recall@10` (baseline `0.0`; any gain counts, target `≥0.05` on 14q, e.g. `0.07 vs 0.03`). Validate via `dec_venv/bin/python scripts/eval_pipeline_ablation.py --subset api_lookup --k 10` or `dec eval-retrieval --split held` per-intent table — same as Task 3 Step 4.
+- Integration expectation: on held `api_lookup` subset (14q) `BM25_ONLY recall@10 ≥ hybrid recall@10` (baseline `0.0`; any gain counts, target `≥0.05` on 14q, e.g. `0.07 vs 0.03`). Validate via `dec_venv/bin/python data_engineering_copilot/evaluation/gates/pipeline_ablation.py --subset api_lookup --k 10` or `dec eval-retrieval --split held` per-intent table — same as Task 3 Step 4.
 
 ## Alternatives Considered
 

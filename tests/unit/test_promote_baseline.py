@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_promote_baseline_exists() -> None:
-    assert Path("scripts/promote_baseline.py").exists()
+    assert Path("data_engineering_copilot/evaluation/gates/promote_baseline.py").exists()
 
 
 def test_baseline_has_provenance() -> None:

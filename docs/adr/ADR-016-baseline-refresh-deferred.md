@@ -8,7 +8,7 @@ Deferred — keep `tests/evaluation/benchmarks/baseline_inscope.json` at `R@10 0
 
 `baseline_inscope.json` (`220q`, `R@10 0.273`, `api_lookup 0.0 n=14`) was frozen per Global Constraint until Task 3 re-capture proved `Δ CI excludes 0` on full-path `220q`. Task 3 of `plans/2026-09-02_next_pending_1-4_plan.md` required re-capturing post `16116d7 api_lookup→BM25_ONLY` fix (`AsyncRagService._compute_search_mode` now routes on original question, `select_search_mode` hard-gates `api_lookup`/`code_example → BM25_ONLY`) via detached `dec eval-retrieval --dataset recall_inscope.jsonl --k 10 --batch-size 55 --output-dir /tmp/new_baseline3` (`local-hf 2048d`, `3852+` embeddings cached, `batch 55`).
 
-Previous capture `/tmp/new_baseline/retrieval_eval.json` (pre-fix) already showed `api_lookup 0.07` on a stale generation; fresh capture `/tmp/new_baseline3/retrieval_eval.json` (`pinned-d3dbad402105`, `k=10`, `top_k=50`, `mrl off`, `n=220`, `EXIT:0`) must be gated before atomic promotion via `scripts/promote_baseline.py` (`tmp→baseline` + `.provenance.json` sidecar with `git_commit`, `generation`, `k`, `top_k`, `mrl`, `timestamp`).
+Previous capture `/tmp/new_baseline/retrieval_eval.json` (pre-fix) already showed `api_lookup 0.07` on a stale generation; fresh capture `/tmp/new_baseline3/retrieval_eval.json` (`pinned-d3dbad402105`, `k=10`, `top_k=50`, `mrl off`, `n=220`, `EXIT:0`) must be gated before atomic promotion via `data_engineering_copilot/evaluation/gates/promote_baseline.py` (`tmp→baseline` + `.provenance.json` sidecar with `git_commit`, `generation`, `k`, `top_k`, `mrl`, `timestamp`).
 
 ## Decision
 
@@ -76,14 +76,14 @@ Plan Global Constraint: captures go to `/tmp/new_baseline3/` only; `baseline_ins
 ## Consequences
 
 - `tests/evaluation/benchmarks/baseline_inscope.json` unchanged (`0.273`, `api_lookup 0.0`). No `.provenance.json` promotion sidecar for `/tmp/new_baseline3`; audit trail is `/tmp/new_baseline3/retrieval_eval.json` + `/tmp/eval_retrieval_new_baseline3.log` + this ADR.
-- `scripts/promote_baseline.py` shipped for future use: `tmp = Path("baseline_inscope.json.tmp"); tmp.write_text(Path("/tmp/new_baseline3/retrieval_eval.json").read_text()); tmp.replace(baseline); provenance.write_text(json.dumps({"generated_at": now, "generation":"pinned-d3dbad402105","commit": git_rev_parse,"metrics": metrics,"k":10,"top_k":50,"mrl":False}))` — atomic `tmp→baseline` + `.provenance.json` with `git_commit`, `generation`, `k`, `top_k`, `mrl`, `timestamp`.
+- `data_engineering_copilot/evaluation/gates/promote_baseline.py` shipped for future use: `tmp = Path("baseline_inscope.json.tmp"); tmp.write_text(Path("/tmp/new_baseline3/retrieval_eval.json").read_text()); tmp.replace(baseline); provenance.write_text(json.dumps({"generated_at": now, "generation":"pinned-d3dbad402105","commit": git_rev_parse,"metrics": metrics,"k":10,"top_k":50,"mrl":False}))` — atomic `tmp→baseline` + `.provenance.json` with `git_commit`, `generation`, `k`, `top_k`, `mrl`, `timestamp`.
 - Next baseline refresh must prove `Δ CI low > -0.02` on full-path `220q` and `per_intent >= baseline -0.05` (or justify intentional floor lift via new generation with `dense_small`/`late_chunking`).
 - Gate `make eval-retrieval-gate` remains red until then — expected, not infra failure.
 
 ## Verification
 
-- `dec_venv/bin/python scripts/promote_baseline.py --check-gate` → `source exists`
+- `dec_venv/bin/python data_engineering_copilot/evaluation/gates/promote_baseline.py --check-gate` → `source exists`
 - `python3 -m json.tool /tmp/new_baseline3/retrieval_eval.json | head -20` → `recall 0.1477 api_lookup 0.071`
 - `dec_venv/bin/dec eval-retrieval --dataset recall_inscope.jsonl --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10 --batch-size 55` → `Δ -0.1250 CI [-0.1818,-0.0682] ❌` (not run in CI to avoid double 440 embeddings; verified via `evaluation/stats.py:regression_verdict` on `per_query` vectors).
-- Tier1: `ruff check/format/pyright` on `scripts/promote_baseline.py` + `pytest tests/unit/test_promote_baseline.py -v -n 0` PASS
-- `scripts/promote_baseline.py` exists and is atomic; deferred path documented per `plans/2026-09-02_next_pending_1-4_plan.md:Task 3 Step 5`.
+- Tier1: `ruff check/format/pyright` on `data_engineering_copilot/evaluation/gates/promote_baseline.py` + `pytest tests/unit/test_promote_baseline.py -v -n 0` PASS
+- `data_engineering_copilot/evaluation/gates/promote_baseline.py` exists and is atomic; deferred path documented per `plans/2026-09-02_next_pending_1-4_plan.md:Task 3 Step 5`.

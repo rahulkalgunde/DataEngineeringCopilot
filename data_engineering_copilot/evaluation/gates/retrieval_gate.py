@@ -1,27 +1,31 @@
-#!/usr/bin/env python3
 """Thin wrapper for ablation / gate invocation.
 
 Supports ``--ablation`` to run the dense/sparse/hybrid ablation harness
 with holdout split (110/110 seed=42) and bootstrap CI, mirroring
 ``dec eval-retrieval --ablation``. Without ``--ablation`` it forwards to
 the standard retrieval gate logic.
+
+This module can be invoked as:
+    python -m data_engineering_copilot.evaluation.gates.retrieval_gate --ablation --k 10 --split held
+    python -m data_engineering_copilot.evaluation.gates.retrieval_gate --k 10 --dataset tests/evaluation/golden/recall_inscope.jsonl
 """
 
 from __future__ import annotations
 
 import argparse
-import pathlib
 import subprocess
 import sys
+from pathlib import Path
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _run_ablation(args: argparse.Namespace) -> int:
-    # Delegate to cli's ablation harness for single-source truth
+    """Delegate to CLI's ablation harness for single-source truth."""
     cmd = [
-        "dec_venv/bin/dec",
+        sys.executable,
+        "-m",
+        "data_engineering_copilot.cli",
         "eval-retrieval",
         "--ablation",
         "--k",
@@ -40,6 +44,7 @@ def _run_ablation(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """CLI entrypoint for retrieval gate / ablation harness."""
     parser = argparse.ArgumentParser(description="Retrieval gate / ablation harness")
     parser.add_argument("--dataset", default=None, help="Recall JSONL dataset")
     parser.add_argument("--k", type=int, default=10, help="cutoff k")
@@ -55,8 +60,14 @@ def main() -> int:
     if args.ablation:
         return _run_ablation(args)
 
-    # Non-ablation gate: forward to dec eval-retrieval --compare-baseline
-    cmd = ["dec_venv/bin/dec", "eval-retrieval", "--k", str(args.k)]
+    cmd = [
+        sys.executable,
+        "-m",
+        "data_engineering_copilot.cli",
+        "eval-retrieval",
+        "--k",
+        str(args.k),
+    ]
     if args.dataset:
         cmd.extend(["--dataset", args.dataset])
     if args.compare_baseline:

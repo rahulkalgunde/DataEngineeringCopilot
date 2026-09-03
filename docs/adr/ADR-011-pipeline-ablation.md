@@ -15,7 +15,7 @@ it demonstrably helps.
 ## Decision
 Ablate each stage on **held 110 only** (seed 42, 110/110 split) via
 `dec eval-retrieval --pipeline-ablation {guardrails,sibling,dedup,all}`
-and `scripts/eval_pipeline_ablation.py`. For each stage compare **with vs
+and `data_engineering_copilot/evaluation/gates/pipeline_ablation.py`. For each stage compare **with vs
 without**:
 
 - `guardrails`: `input_guardrails_enabled True` vs `False` (InputGuardrails
@@ -63,7 +63,7 @@ Holdout is the gate: train is not evaluated. Run on held only
 ## Verification
 - `dec eval-retrieval --pipeline-ablation all --k 10 --split held` emits table
   and `data/pipeline_ablation.json` with per-stage CI and decision.
-- `dec_venv/bin/python scripts/eval_pipeline_ablation.py --k 10 --split held`
+- `dec_venv/bin/python data_engineering_copilot/evaluation/gates/pipeline_ablation.py --k 10 --split held`
   grid 110/110, `Δ recall/nDCG` + 95% CI.
 - Unit gate: `tests/unit/test_eval_pipeline_ablation.py` asserts
   `--pipeline-ablation` in `--help` and choices, and
