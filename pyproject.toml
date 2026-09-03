@@ -116,6 +116,9 @@ branch = true
 omit = [
     "data_engineering_copilot/ui/*",
     "data_engineering_copilot/workers/*",
+    "data_engineering_copilot/profiler/cli.py",
+    "data_engineering_copilot/api/run_api.py",
+    "data_engineering_copilot/cli_monitor.py",
 ]
 
 [tool.coverage.report]

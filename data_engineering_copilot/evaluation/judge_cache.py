@@ -18,8 +18,10 @@ _PREFIX = "dec:evaljudge:"
 _WARNED = {"flag": False}
 
 
-def judge_cache_key(model_id: str, prompt_version: str, question: str, answer: str, context: str) -> str:
-    blob = "\x00".join((model_id, prompt_version, question, answer, context))
+def judge_cache_key(
+    model_id: str, prompt_version: str, question: str, answer: str, context: str, dataset_hash: str = ""
+) -> str:
+    blob = "\x00".join((model_id, prompt_version, question, answer, context, dataset_hash))
     return _PREFIX + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 

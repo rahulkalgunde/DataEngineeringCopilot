@@ -326,12 +326,13 @@ async def score_faithfulness(
     n_trials: int = 1,
     cache: JudgeCache | None = None,
     model_id: str = "",
+    dataset_hash: str = "",
 ) -> float:
     context = "\n\n".join(contexts)
     prompt = _FAITHFULNESS_PROMPT.format(question=question, context=context, answer=answer)
     scores = []
     for _ in range(max(1, n_trials)):
-        ck = judge_cache_key(model_id, "faithfulness-v1", question, answer, context) if cache else ""
+        ck = judge_cache_key(model_id, "faithfulness-v1", question, answer, context, dataset_hash) if cache else ""
         hit = await cache.get(ck) if cache else None
         if hit is not None:
             scores.append(float(hit["score"]))
@@ -350,11 +351,12 @@ async def score_relevance(
     n_trials: int = 1,
     cache: JudgeCache | None = None,
     model_id: str = "",
+    dataset_hash: str = "",
 ) -> float:
     prompt = _RELEVANCE_PROMPT.format(question=question, answer=answer)
     scores = []
     for _ in range(max(1, n_trials)):
-        ck = judge_cache_key(model_id, "relevance-v1", question, answer, "") if cache else ""
+        ck = judge_cache_key(model_id, "relevance-v1", question, answer, "", dataset_hash) if cache else ""
         hit = await cache.get(ck) if cache else None
         if hit is not None:
             scores.append(float(hit["score"]))
@@ -376,6 +378,7 @@ async def score_rubric(
     cache: JudgeCache | None = None,
     model_id: str = "",
     epsilon: float | None = None,
+    dataset_hash: str = "",
 ) -> float:
     """Rubric score with optional adaptive early-stop (epsilon on last two trials)."""
     context = "\n\n".join(contexts)
@@ -383,7 +386,11 @@ async def score_rubric(
     scores: list[float] = []
     cap = max(1, n_trials)
     while len(scores) < cap:
-        ck = judge_cache_key(model_id, "rubric-v1", question, f"{answer}\x00{ground_truth}", context) if cache else ""
+        ck = (
+            judge_cache_key(model_id, "rubric-v1", question, f"{answer}\x00{ground_truth}", context, dataset_hash)
+            if cache
+            else ""
+        )
         hit = await cache.get(ck) if cache else None
         if hit is not None:
             s = float(hit["score"])
@@ -469,6 +476,13 @@ async def evaluate_generation(
             logger.warning("judge cache disabled for this run: %s", exc)
             cache = None
     model_id = str(getattr(judge, "model_id", "") or "evaluation-chain")
+    dataset_hash = ""
+    try:
+        import hashlib
+
+        dataset_hash = hashlib.sha256(str(dataset_path).encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        dataset_hash = ""
     if judges:
         n_trials = 1  # majority mode: breadth across judges replaces depth per judge
 
@@ -476,9 +490,18 @@ async def evaluate_generation(
 
     async def _score_with(j, row, answer):
         faith = await score_faithfulness(
-            j, row.question, answer, row.contexts, n_trials=n_trials, cache=cache, model_id=model_id
+            j,
+            row.question,
+            answer,
+            row.contexts,
+            n_trials=n_trials,
+            cache=cache,
+            model_id=model_id,
+            dataset_hash=dataset_hash,
         )
-        rel = await score_relevance(j, row.question, answer, n_trials=n_trials, cache=cache, model_id=model_id)
+        rel = await score_relevance(
+            j, row.question, answer, n_trials=n_trials, cache=cache, model_id=model_id, dataset_hash=dataset_hash
+        )
         rub = await score_rubric(
             j,
             row.question,
@@ -489,6 +512,7 @@ async def evaluate_generation(
             cache=cache,
             model_id=model_id,
             epsilon=getattr(settings, "adaptive_trial_epsilon", None) if settings else None,
+            dataset_hash=dataset_hash,
         )
         return faith, rel, rub
 
@@ -555,7 +579,9 @@ async def evaluate_generation(
         agreements: list[float] = []
         for row in rows:
             answer = next(r["answer"] for r in results if r["id"] == row.id)
-            rubric_b = await score_rubric(judge_b, row.question, answer, row.ground_truth, row.contexts, n_trials=1)
+            rubric_b = await score_rubric(
+                judge_b, row.question, answer, row.ground_truth, row.contexts, n_trials=1, dataset_hash=dataset_hash
+            )
             rubric_a = next(r["rubric"] for r in results if r["id"] == row.id)
             agreements.append(1.0 if abs(rubric_a - rubric_b) <= 1.0 else 0.0)
         judge_agreement = statistics.fmean(agreements)
@@ -580,7 +606,7 @@ async def evaluate_generation(
             cur_rubric = next((r["rubric"] for r in results if r["id"] == row.id), 0.0)
             base_answer = compare_answers[row.id]
             base_rubric = await score_rubric(
-                judge, row.question, base_answer, row.ground_truth, row.contexts, n_trials=1
+                judge, row.question, base_answer, row.ground_truth, row.contexts, n_trials=1, dataset_hash=dataset_hash
             )
             verdict = pairwise_verdict(cur_rubric, base_rubric, base_rubric, cur_rubric)
             if verdict == "A":

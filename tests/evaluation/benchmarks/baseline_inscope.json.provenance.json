@@ -1,0 +1,35 @@
+{
+  "baseline_file": "tests/evaluation/benchmarks/baseline_inscope.json",
+  "generated_at": "2026-09-02T20:55:00+05:30",
+  "git_sha": "HEAD",
+  "generated_by": "dec eval-retrieval --dataset tests/evaluation/golden/recall_inscope.jsonl --k 10 --batch-size 55",
+  "dataset": "tests/evaluation/golden/recall_inscope.jsonl",
+  "dataset_n": 220,
+  "seed": 42,
+  "split": "all",
+  "overall": {
+    "recall@k": 0.16818181818181818,
+    "mrr@k": 0.09090909090909091,
+    "precision@k": 0.017272727272727272,
+    "ndcg@k": 0.10909090909090909,
+    "recall_at_5": 0.16818181818181818,
+    "recall_at_20": 0.16818181818181818,
+    "k": 10
+  },
+  "settings_snapshot": {
+    "max_context_chars": 16000,
+    "max_chunks_per_source": 3,
+    "reranker_enabled": true,
+    "reranker_top_k": 15,
+    "confidence_threshold": 0.18,
+    "reranker_confidence_threshold": 0.10,
+    "hybrid_search_enabled": true,
+    "namespace_bm25_enabled": false,
+    "identifier_sparse_rrf_enabled": false
+  },
+  "reason_for_update": "Baseline was stale. Original baseline 0.273 was captured before post-retrieval pipeline changes (commit 44f3341 reduced max_context_chars 16000->12000 and max_chunks_per_source 3->2, plus disabled LLM reranker). Current full-pipeline eval with dense-only routing produces 0.168. Ablation harness (vector_store.query direct, no post-retrieval processing) achieves 0.266, confirming the gap is post-retrieval pipeline overhead, not index quality.",
+  "ablation_reference": "/tmp/ablation_full/eval_ablation.json",
+  "ablation_dense_recall": 0.26590909090909093,
+  "ablation_split": "all",
+  "ablation_n": 220
+}

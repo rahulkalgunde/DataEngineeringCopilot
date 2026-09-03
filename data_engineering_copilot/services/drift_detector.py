@@ -9,10 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 logger = logging.getLogger(__name__)
 
 _DEFAULT_THRESHOLDS: dict[str, float] = {
@@ -91,11 +93,39 @@ class DriftDetector:
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
 
     def record(self, snapshot: EvalSnapshot) -> None:
-        """Append a snapshot to the history file."""
+        """Append a snapshot to the history file and trigger drift hook if needed."""
         self._ensure_dir()
         with open(self._storage_path, "a") as f:
             f.write(json.dumps(asdict(snapshot)) + "\n")
         logger.info("eval_snapshot_recorded metrics=%s", list(snapshot.metrics.keys()))
+        try:
+            report = self.compare(snapshot)
+            if report.drifted:
+                self._trigger_drift_hook(report)
+        except Exception as exc:
+            logger.warning("drift hook failed: %s", exc)
+
+    def _trigger_drift_hook(self, report: DriftReport) -> None:
+        try:
+            payload = {
+                "drifted": report.drifted,
+                "drifted_metrics": report.drifted_metrics,
+                "snapshot": asdict(report.snapshot),
+                "comparisons": [asdict(c) for c in report.comparisons],
+            }
+            hook = PROJECT_ROOT / "scripts" / "drift_gate_hook.py"
+            if hook.exists():
+                import subprocess
+
+                subprocess.run(
+                    [sys.executable, str(hook)],
+                    input=json.dumps(payload, default=str),
+                    text=True,
+                    start_new_session=True,
+                )
+                logger.info("drift_hook_triggered metrics=%s", report.drifted_metrics)
+        except Exception as exc:
+            logger.warning("drift hook unavailable: %s", exc)
 
     def load_history(self) -> list[EvalSnapshot]:
         """Load all snapshots from the history file."""

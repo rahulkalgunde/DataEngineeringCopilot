@@ -11,7 +11,9 @@ import pytest
 from data_engineering_copilot.cli import (
     _compute_spark_eval_metrics,
     _compute_spark_eval_result,
+    _compute_stage_recalls,
     _percentile,
+    gate_oos_refusal_rate,
 )
 from data_engineering_copilot.domain.models import Answer, DocumentChunk
 
@@ -462,3 +464,152 @@ def test_compute_result_detects_insufficient_context_json() -> None:
     item = {"id": "oos", "out_of_scope": True, "expected_terms": ["delta"]}
     result = _compute_spark_eval_result(item, "Delta time travel", answer, "", {})
     assert result["insufficient_context"] is True
+
+
+def test_compute_stage_recalls_basic() -> None:
+    """Stage recall/survival is computed from provenance snapshots."""
+    prov = {
+        "stage_snapshots": [
+            {
+                "stage": "dense_retrieval",
+                "chunk_ids": ["c1", "c2"],
+                "urls": ["https://docs/a.html", "https://docs/b.html"],
+                "count": 2,
+            },
+            {
+                "stage": "sibling_rejoin",
+                "chunk_ids": ["c1", "c2", "c3"],
+                "urls": ["https://docs/a.html", "https://docs/b.html", "https://docs/c.html"],
+                "count": 3,
+            },
+            {"stage": "rerank", "chunk_ids": ["c1"], "urls": ["https://docs/a.html"], "count": 1},
+        ]
+    }
+    expected = ["https://docs/a.html", "https://docs/b.html"]
+    stage_recalls = _compute_stage_recalls(prov, expected, k=2)
+    assert "dense_retrieval" in stage_recalls
+    assert "sibling_rejoin" in stage_recalls
+    assert "rerank" in stage_recalls
+    # dense: both expected URLs in top-2 -> recall=1.0
+    assert stage_recalls["dense_retrieval"]["recall_at_k"] == 1.0
+    # sibling: added c3, both expected still in top-2 -> recall=1.0
+    assert stage_recalls["sibling_rejoin"]["recall_at_k"] == 1.0
+    # rerank: only c1 remains -> recall=0.5
+    assert stage_recalls["rerank"]["recall_at_k"] == 0.5
+    # survival rates
+    assert stage_recalls["dense_retrieval"]["survival_rate"] == 1.0
+    assert stage_recalls["sibling_rejoin"]["survival_rate"] == 1.0
+    assert stage_recalls["rerank"]["survival_rate"] == pytest.approx(1.0 / 3)
+
+
+def test_compute_stage_recalls_empty() -> None:
+    """Empty snapshots yield empty stage metrics."""
+    assert _compute_stage_recalls({}, []) == {}
+    assert _compute_stage_recalls({"stage_snapshots": []}, ["u1"]) == {}
+
+
+def test_compute_spark_eval_result_includes_stage_recalls() -> None:
+    """Per-query result includes stage_recalls when provenance has snapshots."""
+    prov = {
+        "schema_version": "1",
+        "question": "q",
+        "effective_query": "q",
+        "cache_hit": False,
+        "query_variants": [],
+        "fused": [],
+        "rerank": {"enabled": False},
+        "final_context": [],
+        "dropped": [],
+        "expected_urls": ["https://docs/a.html"],
+        "candidate_pool_size": 1,
+        "stage_snapshots": [
+            {"stage": "dense_retrieval", "chunk_ids": ["c1"], "urls": ["https://docs/a.html"], "count": 1},
+            {"stage": "rerank", "chunk_ids": ["c1"], "urls": ["https://docs/a.html"], "count": 1},
+        ],
+        "stage_times": {"retrieval": 1.0},
+    }
+    answer = Answer(
+        text="answer",
+        sources=(_chunk("c1", "https://docs/a.html"),),
+        confidence=0.9,
+    )
+    item = {"id": "q1", "expected_urls": ["https://docs/a.html"]}
+    result = _compute_spark_eval_result(item, "q", answer, "context", prov)
+    assert "stage_recalls" in result
+    assert result["stage_recalls"]["dense_retrieval"]["recall_at_k"] == 1.0
+    assert result["stage_recalls"]["rerank"]["recall_at_k"] == 1.0
+
+
+def test_compute_metrics_aggregates_stage_recalls() -> None:
+    """Aggregated metrics include per-stage avg recall and survival."""
+    results = [
+        {
+            "id": "a",
+            "term_recall": 1.0,
+            "source_recall": 1.0,
+            "candidate_source_recall": 1.0,
+            "insufficient_context": False,
+            "dropped_expected_urls": [],
+            "forbidden_term_hits": [],
+            "cache_hit": False,
+            "retrieval_ms": 10.0,
+            "stage_recalls": {
+                "dense_retrieval": {"recall_at_k": 1.0, "survival_rate": 1.0},
+                "rerank": {"recall_at_k": 0.8, "survival_rate": 0.5},
+            },
+        },
+        {
+            "id": "b",
+            "term_recall": 0.0,
+            "source_recall": 0.0,
+            "candidate_source_recall": 0.0,
+            "insufficient_context": True,
+            "dropped_expected_urls": [],
+            "forbidden_term_hits": [],
+            "cache_hit": False,
+            "retrieval_ms": 30.0,
+            "stage_recalls": {
+                "dense_retrieval": {"recall_at_k": 0.0, "survival_rate": 1.0},
+                "rerank": {"recall_at_k": 0.0, "survival_rate": 0.0},
+            },
+        },
+    ]
+    metrics = _compute_spark_eval_metrics(results)
+    assert "stage_recalls" in metrics
+    assert metrics["stage_recalls"]["dense_retrieval"]["avg_recall_at_k"] == 0.5
+    assert metrics["stage_recalls"]["rerank"]["avg_recall_at_k"] == 0.4
+    assert metrics["stage_recalls"]["rerank"]["avg_survival_rate"] == 0.25
+
+
+def test_gate_oos_refusal_rate_passes() -> None:
+    results = [
+        {"id": "a", "out_of_scope": False, "insufficient_context": False},
+        {"id": "oos1", "out_of_scope": True, "insufficient_context": True},
+        {"id": "oos2", "out_of_scope": True, "insufficient_context": True},
+    ]
+    verdict = gate_oos_refusal_rate(results, threshold=0.95)
+    assert verdict["passed"] is True
+    assert verdict["rate"] == 1.0
+    assert verdict["oos_count"] == 2
+
+
+def test_gate_oos_refusal_rate_fails() -> None:
+    results = [
+        {"id": "a", "out_of_scope": False, "insufficient_context": False},
+        {"id": "oos1", "out_of_scope": True, "insufficient_context": True},
+        {"id": "oos2", "out_of_scope": True, "insufficient_context": False},
+    ]
+    verdict = gate_oos_refusal_rate(results, threshold=0.95)
+    assert verdict["passed"] is False
+    assert verdict["rate"] == 0.5
+    assert verdict["reason"] == "below_threshold"
+
+
+def test_gate_oos_refusal_rate_no_oos() -> None:
+    results = [
+        {"id": "a", "out_of_scope": False, "insufficient_context": False},
+    ]
+    verdict = gate_oos_refusal_rate(results, threshold=0.95)
+    assert verdict["passed"] is True
+    assert verdict["rate"] == 1.0
+    assert verdict["reason"] == "no_oos_rows"

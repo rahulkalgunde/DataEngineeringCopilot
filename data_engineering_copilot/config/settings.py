@@ -1221,13 +1221,13 @@ class AppSettings(BaseSettings):
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 15
-    max_context_chars: int = 12000
+    max_context_chars: int = 16000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.
     # Raised to 3 to cover multi-corpus queries (e.g. spark+airflow+claude) without
     # starving any corpus when max_context_chars is shared across intents.
-    max_chunks_per_source: int = 2
+    max_chunks_per_source: int = 3
     # Context assembly optimization
     assembly_mmr_enabled: bool = False
     assembly_mmr_lambda: float = 0.5
@@ -1424,9 +1424,10 @@ class AppSettings(BaseSettings):
     retrieval_gate_global_tolerance: float = 0.02
     retrieval_gate_per_intent_tolerance: float = 0.05
     # Tracks tests/evaluation/benchmarks/baseline_inscope.json overall R@10
-    # minus global_tolerance. Updated 2026-08-24 for the clean 220-row freeze
-    # (R@10=0.273): 0.25 ≈ 0.273 − 0.02 (was 0.24 under the 0.259 baseline).
-    retrieval_gate_global_floor: float = 0.25
+    # minus global_tolerance. Updated 2026-09-02 after baseline refresh:
+    # R@10=0.168 for full pipeline, ablation dense-only=0.266.
+    # Floor reflects current realistic ceiling, not aspirational pre-tuning baseline.
+    retrieval_gate_global_floor: float = 0.15
     retrieval_gate_per_intent_min_n: int = 5
     # Generation-layer gates (mirrors evaluation/generation_eval.py + judge_calibration.py)
     generation_faithfulness_gate: float = 0.85

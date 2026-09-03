@@ -567,9 +567,16 @@ class AsyncRagService:
         → ``"dense ranking"``) must not dilute ``api_lookup → BM25_ONLY``.
         ``select_search_mode`` hard-gates ``api_lookup``/``code_example`` to
         :attr:`SearchMode.BM25_ONLY` regardless of signals.
+
+        When the query rewriter is disabled (e.g. zero-LLM eval), ``rewritten``
+        is ``None``. In that case we must still return a concrete search mode;
+        returning ``None`` lets the vector store fall back to its default hybrid
+        setting, which fails if the BM25 tokenizer is not frozen. DENSE_ONLY
+        is the safest default because it is what the ablation harness uses and
+        what the index can always satisfy.
         """
         if rewritten is None:
-            return None
+            return SearchMode.DENSE_ONLY
         # Original question — not rewritten.effective_query (ADR-012).
         return select_search_mode(rewritten.intent, classify_query_signals(question))
 
@@ -800,6 +807,17 @@ class AsyncRagService:
         _prov_final: list[dict[str, object]] = []
         _prov_dropped: list[dict[str, object]] = []
         _prov_expected_urls = expected_urls or []
+        _stage_snapshots: list[dict[str, object]] = []
+
+        def _snapshot(stage_name: str, chunks: list[RetrievedChunk]) -> None:
+            _stage_snapshots.append(
+                {
+                    "stage": stage_name,
+                    "chunk_ids": [c.chunk.chunk_id for c in chunks],
+                    "urls": [c.chunk.url for c in chunks],
+                    "count": len(chunks),
+                }
+            )
 
         def _emit_provenance() -> None:
             if provenance is None:
@@ -817,6 +835,7 @@ class AsyncRagService:
                     "dropped": _prov_dropped,
                     "expected_urls": _prov_expected_urls,
                     "candidate_pool_size": _prov_pool,
+                    "stage_snapshots": list(_stage_snapshots),
                     "stage_times": dict(_stage_times),
                 }
             )
@@ -1018,11 +1037,13 @@ class AsyncRagService:
                 retrieved_chunks = sorted(all_retrieved, key=lambda c: c.confidence, reverse=True)
             _prov_pool = len(retrieved_chunks)
             _prov_fused = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(retrieved_chunks)]
+            _snapshot("dense_retrieval", retrieved_chunks)
 
             # Parent-doc re-assembly: restore sibling segments so cross-mode
             # questions see both the YARN and Kubernetes paragraphs of a split
             # parent instead of a single matched segment.
             retrieved_chunks = await self._rejoin_sibling_chunks(retrieved_chunks)
+            _snapshot("sibling_rejoin", retrieved_chunks)
 
             _emit_detail(
                 "embed",
@@ -1175,14 +1196,17 @@ class AsyncRagService:
             # complementary evidence needed to answer multi-part questions.
             if len(retrieved_chunks) > self.config.reranker_top_k:
                 retrieved_chunks = retrieved_chunks[: self.config.reranker_top_k]
+            _snapshot("rerank", retrieved_chunks)
 
             # Phase 2D: Context compression (dedup + relevance re-ranking) — runs after reranking
             # to avoid wasted work (compressed results were previously discarded by re-fetch)
             if self.context_compressor is not None:
                 retrieved_chunks = self.context_compressor.compress(retrieved_chunks, effective_query)
                 logger.info("context_compressed chunks=%d", len(retrieved_chunks))
+            _snapshot("context_compression", retrieved_chunks)
             if not retrieval_only:
                 retrieved_chunks = await self._relevance_guarded_chunks(effective_query, retrieved_chunks)
+            _snapshot("relevance_guard", retrieved_chunks)
             _record_stage("rerank")
 
             if rerank_span:
@@ -1201,6 +1225,7 @@ class AsyncRagService:
             )
             if rejected is not None:
                 return rejected
+            _snapshot("low_confidence_filter", retrieved_chunks)
 
             assembler = ContextAssembler(
                 max_context_chars=self.config.max_context_chars,
@@ -1245,6 +1270,7 @@ class AsyncRagService:
             _prov_dropped_ids = {record["chunk_id"] for record in dropped_records}
             _final_chunks = [c for c in retrieved_chunks if c.chunk.chunk_id not in _prov_dropped_ids]
             _prov_final = [_chunk_provenance_ref(c, rank) for rank, c in enumerate(_final_chunks)]
+            _snapshot("context_assembly", _final_chunks)
 
             if retrieval_only:
                 # Retrieval-only mode short-circuits before generation: the caller

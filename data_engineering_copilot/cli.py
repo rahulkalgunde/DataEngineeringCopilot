@@ -2360,6 +2360,29 @@ def _percentile(values: list[float], p: float) -> float | None:
     return values[lo] * (1.0 - weight) + values[hi] * weight
 
 
+def _compute_stage_recalls(prov_record: dict, expected_urls: list[str], k: int = 10) -> dict[str, dict[str, float]]:
+    """Compute per-stage recall@K and chunk survival rates from provenance snapshots."""
+    from data_engineering_copilot.evaluation.retrieval_metrics import recall_at_k
+
+    snapshots = prov_record.get("stage_snapshots") or []
+    expected = list(expected_urls)
+    stage_metrics: dict[str, dict[str, float]] = {}
+    prev_ids: set[str] = set()
+    for snap in snapshots:
+        stage = snap.get("stage", "")
+        urls = [u for u in (snap.get("urls") or []) if u]
+        ids = [c for c in (snap.get("chunk_ids") or []) if c]
+        recall = recall_at_k(urls, expected, k)
+        survival = 1.0 if not prev_ids else len(set(ids) & prev_ids) / len(prev_ids)
+        stage_metrics[stage] = {
+            "recall_at_k": recall,
+            "survival_rate": survival,
+            "chunk_count": snap.get("count", len(urls)),
+        }
+        prev_ids = set(ids)
+    return stage_metrics
+
+
 def _compute_spark_eval_result(
     item: dict,
     query: str,
@@ -2416,6 +2439,7 @@ def _compute_spark_eval_result(
         "term_recall": term_recall,
         "source_recall": source_recall,
         "candidate_source_recall": candidate_source_recall,
+        "stage_recalls": _compute_stage_recalls(prov_record, list(expected_urls)),
         "source_count": len(answer.sources),
         "context_chars": len(context),
         "forbidden_term_hits": forbidden_hits,
@@ -2448,7 +2472,7 @@ def _compute_spark_eval_metrics(results: list[dict]) -> dict:
         return sum(float(r.get(key) or 0.0) for r in rows) / len(rows) if rows else 0.0
 
     retrieval_ms = sorted(float(r["retrieval_ms"]) for r in results if r.get("retrieval_ms") is not None)
-    return {
+    metrics: dict[str, object] = {
         "query_count": n,
         "in_scope_query_count": m,
         "out_of_scope_query_count": n - m,
@@ -2466,6 +2490,44 @@ def _compute_spark_eval_metrics(results: list[dict]) -> dict:
         "queries_with_cache_hit": sum(1 for r in results if r.get("cache_hit")),
         "median_retrieval_ms": _percentile(retrieval_ms, 0.5),
         "p95_retrieval_ms": _percentile(retrieval_ms, 0.95),
+    }
+
+    # Aggregate per-stage recall/survival across in-scope rows.
+    stage_names = set()
+    for r in in_scope:
+        stage_names.update((r.get("stage_recalls") or {}).keys())
+    stage_agg: dict[str, dict[str, float]] = {}
+    for stage in sorted(stage_names):
+        recalls = [float((r.get("stage_recalls") or {}).get(stage, {}).get("recall_at_k", 0.0)) for r in in_scope]
+        survivals = [float((r.get("stage_recalls") or {}).get(stage, {}).get("survival_rate", 0.0)) for r in in_scope]
+        stage_agg[stage] = {
+            "avg_recall_at_k": sum(recalls) / len(recalls) if recalls else 0.0,
+            "avg_survival_rate": sum(survivals) / len(survivals) if survivals else 0.0,
+        }
+    if stage_agg:
+        metrics["stage_recalls"] = stage_agg
+
+    return metrics
+
+
+def gate_oos_refusal_rate(results: list[dict], threshold: float = 0.95) -> dict:
+    """Block when out-of-scope refusal rate falls below ``threshold``.
+
+    Returns a verdict dict with ``passed``, ``rate``, ``threshold``, and
+    ``oos_count`` so callers can render actionable CI output.
+    """
+    oos = [r for r in results if r.get("out_of_scope")]
+    oos_count = len(oos)
+    if oos_count == 0:
+        return {"passed": True, "rate": 1.0, "threshold": threshold, "oos_count": 0, "reason": "no_oos_rows"}
+    refused = sum(1 for r in oos if r.get("insufficient_context"))
+    rate = refused / oos_count
+    return {
+        "passed": rate >= threshold,
+        "rate": rate,
+        "threshold": threshold,
+        "oos_count": oos_count,
+        "reason": "ok" if rate >= threshold else "below_threshold",
     }
 
 
@@ -3601,12 +3663,39 @@ def evaluate_spark_dataset(
             provenance_records.append(prov_record)
             result = _compute_spark_eval_result(item, query, answer, context, prov_record)
             results.append(result)
+            stage_recalls = result.get("stage_recalls") or {}
+            loss_stage = ""
+            if stage_recalls:
+                ordered = [
+                    "dense_retrieval",
+                    "sibling_rejoin",
+                    "rerank",
+                    "context_compression",
+                    "relevance_guard",
+                    "low_confidence_filter",
+                    "context_assembly",
+                ]
+                prev = None
+                max_drop = 0.0
+                for s in ordered:
+                    if s not in stage_recalls:
+                        continue
+                    rec = stage_recalls[s].get("recall_at_k", 0.0)
+                    if prev is not None:
+                        drop = prev - rec
+                        if drop > max_drop:
+                            max_drop = drop
+                            loss_stage = s
+                    prev = rec
             print(
                 f"[{i}/{len(queries)}] {item.get('id', '')}: "
                 f"term_recall={result['term_recall']:.2f} "
                 f"source_recall={result['source_recall']:.2f} "
                 f"candidate_recall={result['candidate_source_recall']:.2f} "
-                f"(sources={len(sources)}" + ("" if needs_answer else ", retrieval-only)") + ")"
+                + (f"loss_stage={loss_stage} " if loss_stage else "")
+                + f"(sources={len(sources)}"
+                + ("" if needs_answer else ", retrieval-only)")
+                + ")"
             )
         return results
 
