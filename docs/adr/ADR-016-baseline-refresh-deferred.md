@@ -2,7 +2,9 @@
 
 ## Status
 
-Deferred — keep `tests/evaluation/benchmarks/baseline_inscope.json` at `R@10 0.273` — 2026-09-02
+**Superseded 2026-09-04** by the golden-dataset corruption repair (see "Supersession" below). The deferred baseline saga below was largely an artifact of a corrupted eval dataset; the gate now tracks the corrected `recall_all.json` (486 rows) at `baseline_recall_all.json` `R@10 0.258`.
+
+Original (pre-repair) status — Deferred — keep `tests/evaluation/benchmarks/baseline_inscope.json` at `R@10 0.273` — 2026-09-02
 
 ## Context
 
@@ -87,3 +89,73 @@ Plan Global Constraint: captures go to `/tmp/new_baseline3/` only; `baseline_ins
 - `dec_venv/bin/dec eval-retrieval --dataset recall_inscope.jsonl --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10 --batch-size 55` → `Δ -0.1250 CI [-0.1818,-0.0682] ❌` (not run in CI to avoid double 440 embeddings; verified via `evaluation/stats.py:regression_verdict` on `per_query` vectors).
 - Tier1: `ruff check/format/pyright` on `data_engineering_copilot/evaluation/gates/promote_baseline.py` + `pytest tests/unit/test_promote_baseline.py -v -n 0` PASS
 - `data_engineering_copilot/evaluation/gates/promote_baseline.py` exists and is atomic; deferred path documented per `plans/2026-09-02_next_pending_1-4_plan.md:Task 3 Step 5`.
+
+---
+
+## Supersession — golden dataset corruption repair (2026-09-04)
+
+### Why this ADR's "deferred" conclusion no longer holds
+
+The re-capture below measured the corrupted eval dataset. `recall_inscope.jsonl` was a hand-curated,
+undocumented 220-row subset of `recall_all` (~90% Claude, 0% Spark/Delta) that carried a `snake_case`
+template artifact: **80/100 `recall_claude_platform` + 83/100 `recall_claude_code` rows** had
+`schema`-variant questions (`claude_platform`/`claude_code` shims and mismatched, aspirational
+`expected_urls` from made-up template questions). 14 `constitutional AI` rows referenced no indexed
+page at all. The inflated `0.273` high-water baseline and the `-0.12` "regression" were largely
+measurement artifacts, not store-quality truth.
+
+### Repair
+
+- `scripts/repair_golden_recall_corruption.py`: grounded all 163 template-artifact rows to verified
+  indexed URLs (10 target URLs), stripped the `snake_case` shim, backfilled `expected_terms`, and
+  reclassified the 14 `constitutional AI` rows as **out-of-scope** (no indexed page).
+- `scripts/regenerate_recall_all.json`: merged the 5 corrected per-source files into
+  `tests/evaluation/golden/recall_all.jsonl` = **486 in-scope rows** (500 − 14 OOS), with
+  `recall_all.provenance.json` sidecar. Regenerated legacy `recall_inscope.jsonl` (220, artifact-free).
+- Added hermetic gate `tests/unit/test_golden_recall_semantic.py` (no template artifacts, strict
+  schema on golden rows, strict `expected_terms` on repaired files). `test_golden_schema_gate.py`
+  already covered golden-directory schema.
+
+### Gate switch + new baseline (supersedes the frozen 0.273 high-water)
+
+The gate dataset default switched `recall_inscope.jsonl` → `recall_all.jsonl` (486) across
+`cli.py` / `retrieval_gate.py` / `stage_recall_gate.py` / `pipeline_ablation.py` / `tune_rrf_*`.
+Baseline renamed `baseline_inscope.json` → `baseline_recall_all.json` (+ `.provenance.json`).
+
+Re-capture (corrected `recall_all`, `k=10`, `local-hf 2048d`, full-path, detached per RULE 1):
+
+```bash
+setsid bash -c 'dec_venv/bin/dec eval-retrieval --dataset tests/evaluation/golden/recall_all.jsonl --k 10 --batch-size 50 --output-dir /tmp/eval_recall_all > /tmp/eval_recall_all/eval.log 2>&1; echo EXIT:$? >> /tmp/eval_recall_all/eval.log' & disown
+```
+
+Result `/tmp/eval_recall_all/retrieval_eval.json` → promoted to `baseline_recall_all.json`:
+
+- `overall R@10 0.258` (`n=486`, `0 failed`, `MRR 0.117`, `P@10 0.026`, `nDCG 0.148`,
+  `recall@5 0.191`, `recall@20 0.289`, `p50 11212ms p95 46387ms`, `k=10`)
+- Per-intent: `api_lookup 0.135 (n=37)` (previously 0.0 on corrupt set), `how_to 0.312 (n=112)`,
+  `factual 0.318 (n=85)`, `troubleshooting 0.310 (n=29)`, `debugging 0.306 (n=49)`,
+  `configuration 0.281 (n=64)`, `synthesis 0.223 (n=47)`, `code_example 0.171 (n=35)`,
+  `comparative 0.000 (n=28)`.
+
+### Gate floor re-derived
+
+`retrieval_gate_global_floor` 0.15 → **0.24** (`baseline 0.258 − 0.02`, rounded). The
+`test_retrieval_gate_defaults_match_recall_all_baseline` test pins it to the baseline within ±0.01.
+
+### ADR-010 implication
+
+ADR-010 freezes the dark retrieval flags until **store-level** recall@10 ≥ 0.35 on the held split.
+The re-captured full-path `R@10 0.258` is pipeline-level (includes rewrite/rerank/assembly overhead).
+The `comparative` intent at 0.000 (`n=28`) and `code_example 0.171` are the weakest; `recall@20 0.289`
+shows headroom. The store-level (ablation) number — the metric ADR-010 actually gates on — was **not**
+re-captured this round and should be measured before flipping any dark flag. The cleaned dataset means
+any future lift is now measured against honest ground truth, so the 0.35 store target is reachable and
+verifiable rather than gated by corrupt rows.
+
+### Consequences
+
+- `make eval-retrieval-gate` now compares against `baseline_recall_all.json` (`0.258`); it is green
+  at the current store (floor 0.24).
+- Old `baseline_inscope.json` / corrupt captures remain in git history for audit; the active baseline
+  is the re-captured `baseline_recall_all.json`.
+- Store-level ablation re-capture (the ADR-010 metric) is a follow-up, not done in this change.

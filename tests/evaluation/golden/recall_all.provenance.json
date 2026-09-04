@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-09-04T10:43:51.100183+00:00",
+  "generator": "scripts/regenerate_recall_all.py",
+  "sources": {
+    "/home/rahul/workspace/DataEngineeringCopilot/tests/evaluation/golden/recall_spark.jsonl": "d86f1862ce4d",
+    "/home/rahul/workspace/DataEngineeringCopilot/tests/evaluation/golden/recall_airflow.jsonl": "efe8a40a15d0",
+    "/home/rahul/workspace/DataEngineeringCopilot/tests/evaluation/golden/recall_delta.jsonl": "b1c61cde7ef8",
+    "/home/rahul/workspace/DataEngineeringCopilot/tests/evaluation/golden/recall_claude_platform.jsonl": "9f3687c64210",
+    "/home/rahul/workspace/DataEngineeringCopilot/tests/evaluation/golden/recall_claude_code.jsonl": "eca962eb530b"
+  }
+}

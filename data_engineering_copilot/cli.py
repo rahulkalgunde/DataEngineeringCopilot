@@ -2585,7 +2585,7 @@ def _eval_ablation_main(  # pragma: no cover: CLI entry point, requires Qdrant
     from data_engineering_copilot.factory import build_rag_service
     from data_engineering_copilot.services.query_signals import SearchMode
 
-    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_inscope.jsonl")
+    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
     if not dataset_path.exists():
         # fall back to recall_all if inscope missing
         dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
@@ -2840,7 +2840,7 @@ def _eval_pipeline_ablation_main(  # pragma: no cover: CLI entry point, requires
         print(f"❌ Unknown pipeline ablation stage: {stage!r}")
         return 2
 
-    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_inscope.jsonl")
+    dataset_path = pathlib.Path(dataset) if dataset else pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
     if not dataset_path.exists():
         dataset_path = pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
         if not dataset_path.exists():
@@ -3460,7 +3460,8 @@ def eval_retrieval_main(  # pragma: no cover: CLI entry point, requires Qdrant/O
                 print(f"❌ Retrieval regression vs baseline (CI low {lo:+.4f} below −{global_tol:.2f} tolerance)")
                 return 1
             print("✅ No retrieval regression vs baseline (CI-aware verdict)")
-            # Absolute floor for 220-row inscope (baseline_inscope 0.259 -0.02 ≈0.24)
+            # Absolute floor, configurable in settings (retrieval_gate_global_floor);
+            # historically ≈ baseline_recall_all R@10 - global_tolerance.
             if overall["recall@k"] < global_floor:
                 print(f"❌ Retrieval below absolute floor {global_floor:.2f}: Recall@{k} {overall['recall@k']:.3f}")
                 return 1
@@ -3919,7 +3920,7 @@ def eval_proxy_validate_main(
     import json as _json
     import pathlib as _pathlib
 
-    path = _pathlib.Path(dataset or "tests/evaluation/golden/recall_inscope.jsonl")
+    path = _pathlib.Path(dataset or "tests/evaluation/golden/recall_all.jsonl")
     if not path.exists():
         alt = _pathlib.Path("tests/evaluation/golden/recall_all.jsonl")
         if not alt.exists():
@@ -5278,7 +5279,7 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
         "--batch-size",
         type=int,
         default=None,
-        help="Batch size for batched retrieval (e.g. 55 for 220-row inscope). None = legacy sequential (single batch).",
+        help="Batch size for batched retrieval (e.g. 60 for the 486-row recall_all). None = legacy sequential (single batch).",
     )
     eval_retrieval_parser.add_argument(
         "--ablation",
@@ -5347,7 +5348,7 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
     )
     proxyval_parser.add_argument(
         "--dataset",
-        default="tests/evaluation/golden/recall_inscope.jsonl",
+        default="tests/evaluation/golden/recall_all.jsonl",
     )
     proxyval_parser.add_argument("--sample", type=int, default=30)
     proxyval_parser.add_argument("--k", type=int, default=5)

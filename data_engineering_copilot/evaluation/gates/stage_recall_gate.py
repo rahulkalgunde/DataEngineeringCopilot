@@ -37,7 +37,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("tests/evaluation/golden/recall_inscope.jsonl"),
+        default=Path("tests/evaluation/golden/recall_all.jsonl"),
         help="JSONL eval dataset",
     )
     parser.add_argument(

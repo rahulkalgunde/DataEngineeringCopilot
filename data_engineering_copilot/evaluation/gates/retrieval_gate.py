@@ -7,7 +7,7 @@ the standard retrieval gate logic.
 
 This module can be invoked as:
     python -m data_engineering_copilot.evaluation.gates.retrieval_gate --ablation --k 10 --split held
-    python -m data_engineering_copilot.evaluation.gates.retrieval_gate --k 10 --dataset tests/evaluation/golden/recall_inscope.jsonl
+    python -m data_engineering_copilot.evaluation.gates.retrieval_gate --k 10 --dataset tests/evaluation/golden/recall_all.jsonl
 """
 
 from __future__ import annotations

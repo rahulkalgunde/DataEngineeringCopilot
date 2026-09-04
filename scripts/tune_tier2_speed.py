@@ -104,7 +104,7 @@ async def _eval_split(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Tune retrieval_top_k × mrl on train/holdout")
-    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_inscope.jsonl")
+    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_all.jsonl")
     ap.add_argument("--k", type=int, default=10, help="top_k for recall/ndcg")
     ap.add_argument("--batch-size", type=int, default=55, help="unused, kept for CLI parity")
     ap.add_argument("--split", default="all", help="unused; always evaluates train→held")

@@ -139,7 +139,7 @@ async def _eval_service(
 def main() -> int:
     """CLI entrypoint for pipeline ablation evaluation."""
     ap = argparse.ArgumentParser(description="Pipeline ablation guardrails/sibling/dedup with holdout CI (ADR-011)")
-    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_inscope.jsonl")
+    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_all.jsonl")
     ap.add_argument("--k", type=int, default=10, help="top_k for recall/nDCG")
     ap.add_argument("--split", choices=["train", "held", "all"], default="held", help="holdout split (default: held)")
     ap.add_argument("--batch-size", type=int, default=55, help="batch size (default: 55)")
