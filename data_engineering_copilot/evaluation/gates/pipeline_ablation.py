@@ -81,6 +81,12 @@ async def _eval_service(
 ) -> dict[str, object]:
     """Evaluate a service on a set of queries, returning recall and nDCG metrics."""
     from data_engineering_copilot.evaluation.retrieval_metrics import ndcg_at_k, recall_at_k
+    from data_engineering_copilot.evaluation.url_normalization import url_content_key
+
+    def _norm(expected: object | None) -> list[str]:
+        if not isinstance(expected, list | tuple):
+            return []
+        return [url_content_key(u) for u in expected if u]
 
     per_recall: list[float] = []
     per_ndcg: list[float] = []
@@ -91,14 +97,14 @@ async def _eval_service(
 
             async def _single(item: dict) -> tuple[float, float]:
                 q = item.get("question") or ""
-                expected = [u for u in (item.get("expected_urls") or []) if u]
+                expected = _norm(item.get("expected_urls"))
                 if not q:
                     return 0.0, 0.0
                 try:
                     ans = await svc.answer(
                         q, provenance=None, bypass_cache=True, retrieval_only=True, expected_urls=expected
                     )
-                    urls = [c.url for c in ans.sources]
+                    urls = [url_content_key(c.url) for c in ans.sources]
                     return recall_at_k(urls, expected, k), ndcg_at_k(urls, expected, k)
                 except Exception:
                     return 0.0, 0.0
@@ -112,7 +118,7 @@ async def _eval_service(
     else:
         for item in queries:
             q = item.get("question") or ""
-            expected = [u for u in (item.get("expected_urls") or []) if u]
+            expected = _norm(item.get("expected_urls"))
             if not q:
                 per_recall.append(0.0)
                 per_ndcg.append(0.0)
@@ -121,7 +127,7 @@ async def _eval_service(
                 ans = await svc.answer(
                     q, provenance=None, bypass_cache=True, retrieval_only=True, expected_urls=expected
                 )
-                urls = [c.url for c in ans.sources]
+                urls = [url_content_key(c.url) for c in ans.sources]
                 per_recall.append(recall_at_k(urls, expected, k))
                 per_ndcg.append(ndcg_at_k(urls, expected, k))
             except Exception:

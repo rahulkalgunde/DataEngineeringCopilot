@@ -46,7 +46,9 @@ _EXCLUDED_LLM_PROVIDERS = ("opencodego", "opencodezen")
 
 
 def _norm_url(url: str) -> str:
-    return str(url).strip().rstrip("/")
+    from data_engineering_copilot.evaluation.url_normalization import url_content_key
+
+    return url_content_key(str(url))
 
 
 def load_technical_queries(path: str | Path) -> list[dict[str, object]]:
@@ -233,7 +235,7 @@ async def run_retrieval_benchmark(service: Any, rows: list[dict[str, object]]) -
             if "error" in r:
                 continue
             value = r.get(key)
-            if isinstance(value, (int, float)):
+            if isinstance(value, int | float):
                 values.append(float(value))
         if not values:
             return None
@@ -273,7 +275,7 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
     def _delta(key: str) -> float | None:
         b = baseline.get(key)
         c = candidate.get(key)
-        if not isinstance(b, (int, float)) or not isinstance(c, (int, float)):
+        if not isinstance(b, int | float) or not isinstance(c, int | float):
             return None
         return round(float(c) - float(b), 4)
 
@@ -286,7 +288,7 @@ def compare_benchmarks(baseline: dict[str, object], candidate: dict[str, object]
     def _pct_delta(key: str) -> float | None:
         b = baseline.get(key)
         c = candidate.get(key)
-        if not isinstance(b, (int, float)) or not isinstance(c, (int, float)) or b == 0:
+        if not isinstance(b, int | float) or not isinstance(c, int | float) or b == 0:
             return None
         return round(((float(c) - float(b)) / float(b)) * 100.0, 1)
 

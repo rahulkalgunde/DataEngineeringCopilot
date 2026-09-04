@@ -30,8 +30,9 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
-logger = __import__("logging").getLogger(__name__)
+from data_engineering_copilot.evaluation.url_normalization import url_content_key
 
+logger = __import__("logging").getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Chunk statistics
@@ -381,11 +382,11 @@ async def _retrieval_recall(embed, store, recall_rows: list[dict]) -> dict:
     for row in recall_rows:
         if row.get("out_of_scope"):
             continue
-        expected_urls = {str(u).rstrip("/") for u in row.get("expected_urls") or []}
+        expected_urls = {url_content_key(u) for u in row.get("expected_urls") or []}
         query = row.get("question") or ""
         vec = await embed(query)
         retrieved = await store.query(vec, top_k=10, query_text=query)
-        urls = [r.chunk.url.rstrip("/") for r in retrieved]
+        urls = [url_content_key(r.chunk.url) for r in retrieved]
         unique_urls = list(dict.fromkeys(urls))
         hit = sum(1 for u in expected_urls if u in set(unique_urls))
         recall = hit / len(expected_urls) if expected_urls else 0.0

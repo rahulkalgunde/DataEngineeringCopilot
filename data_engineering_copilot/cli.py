@@ -20,6 +20,7 @@ from data_engineering_copilot.config.settings import AppSettings, settings
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.domain.protocols import EmbedderProtocol
 from data_engineering_copilot.evaluation.langfuse_metrics import query_aliases
+from data_engineering_copilot.evaluation.url_normalization import url_content_key
 from data_engineering_copilot.infrastructure.token_budget import TokenEncoder
 from data_engineering_copilot.profiler import cli as profiler_cli
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord
@@ -2365,12 +2366,12 @@ def _compute_stage_recalls(prov_record: dict, expected_urls: list[str], k: int =
     from data_engineering_copilot.evaluation.retrieval_metrics import recall_at_k
 
     snapshots = prov_record.get("stage_snapshots") or []
-    expected = list(expected_urls)
+    expected = [url_content_key(u) for u in expected_urls]
     stage_metrics: dict[str, dict[str, float]] = {}
     prev_ids: set[str] = set()
     for snap in snapshots:
         stage = snap.get("stage", "")
-        urls = [u for u in (snap.get("urls") or []) if u]
+        urls = [url_content_key(u) for u in (snap.get("urls") or []) if u]
         ids = [c for c in (snap.get("chunk_ids") or []) if c]
         recall = recall_at_k(urls, expected, k)
         survival = 1.0 if not prev_ids else len(set(ids) & prev_ids) / len(prev_ids)
@@ -2399,7 +2400,8 @@ def _compute_spark_eval_result(
     """
     out_of_scope = bool(item.get("out_of_scope", False))
     expected_terms = set(item.get("expected_terms", []))
-    expected_urls = set(item.get("expected_urls", []))
+    orig_expected = {url_content_key(u): u for u in (item.get("expected_urls") or [])}
+    expected_urls = set(orig_expected)
     forbidden_terms = [t.lower() for t in item.get("forbidden_terms", [])]
 
     context_lower = context.lower()
@@ -2411,14 +2413,14 @@ def _compute_spark_eval_result(
     # in retrieved evidence are not failures.
     forbidden_hits = [t for t in forbidden_terms if t in text_lower]
 
-    retrieved_urls = {c.url for c in answer.sources}
+    retrieved_urls = {url_content_key(c.url) for c in answer.sources}
     source_recall = sum(1 for u in expected_urls if u in retrieved_urls) / max(1, len(expected_urls))
 
-    fused_urls = [c["url"] for c in prov_record.get("fused", [])] if prov_record else []
-    final_urls = [c["url"] for c in prov_record.get("final_context", [])] if prov_record else []
+    fused_urls = [url_content_key(c["url"]) for c in prov_record.get("fused", [])] if prov_record else []
+    final_urls = [url_content_key(c["url"]) for c in prov_record.get("final_context", [])] if prov_record else []
     candidate_source_recall = sum(1 for u in expected_urls if u in fused_urls) / max(1, len(expected_urls))
-    expected_fused_ranks = {u: fused_urls.index(u) for u in expected_urls if u in fused_urls}
-    dropped_expected = sorted(u for u in expected_urls if u in fused_urls and u not in final_urls)
+    expected_fused_ranks = {orig_expected[u]: fused_urls.index(u) for u in expected_urls if u in fused_urls}
+    dropped_expected = sorted(orig_expected[u] for u in expected_urls if u in fused_urls and u not in final_urls)
 
     stage = (prov_record or {}).get("stage_times")
     stage = stage if isinstance(stage, dict) else dict(answer.stage_times)
@@ -2537,13 +2539,14 @@ def _eval_retrieval_row(query: str, intent: str, expected: list[str], retrieved:
     Hit sets are DEDUPED: sources may return several chunks from the same
     page, and counting each duplicate inflated recall past 1.0 on real runs.
     """
-    relevant = set(expected)
-    topk_hits = {u for u in (retrieved or [])[:k] if u in relevant}
+    relevant = {url_content_key(u) for u in expected}
+    norm_retrieved = [url_content_key(u) for u in (retrieved or [])]
+    topk_hits = {u for u in norm_retrieved[:k] if u in relevant}
     recall = (len(topk_hits) / len(relevant)) if relevant else 1.0
     precision = (len(topk_hits) / k) if k else 0.0
     seen: set[str] = set()
     mrr = 0.0
-    for rank, u in enumerate(retrieved or [], 1):
+    for rank, u in enumerate(norm_retrieved, 1):
         if u in relevant and u not in seen:
             mrr = 1.0 / rank
             break
