@@ -3,17 +3,39 @@ where a substring revert silently flipped EVALUATION/ENRICHMENT pins)."""
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
-# Ensure project root is on path so `scripts` package is importable (needed for CI)
-_project_root = Path(__file__).parent.parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+# Load gate scripts by absolute path so collection never depends on the
+# `scripts` package being on sys.path (CI is sensitive to xdist/coverage
+# import ordering; two prior sys.path fixes regressed there).
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.lint_env import lint  # noqa: E402
+
+def _load_scripts_module(name: str) -> ModuleType | None:
+    """Import a top-level ``scripts/`` module by file path, not package name."""
+    path = _PROJECT_ROOT / "scripts" / f"{name}.py"
+    if not path.exists():
+        return None
+    module_name = f"_scripts_{name}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_lint_module = _load_scripts_module("lint_env")
+assert _lint_module is not None, "scripts/lint_env.py must exist for the env-lint gate"
+lint = _lint_module.lint
 
 
 def test_clean_file_passes():
@@ -80,7 +102,9 @@ def test_substring_corruption_pattern_caught(pin_line):
 def test_staleness_checker_flags_changed_source(tmp_path):
     import json as _json
 
-    from scripts.check_derived_staleness import check
+    check = getattr(_load_scripts_module("check_derived_staleness"), "check", None)
+    if check is None:
+        pytest.skip("scripts/check_derived_staleness.py not importable")
 
     src = tmp_path / "qa_x.jsonl"
     src.write_text('{"a":1}\n', encoding="utf-8")

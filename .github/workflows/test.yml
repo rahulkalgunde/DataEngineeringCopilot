@@ -114,11 +114,10 @@ jobs:
       - name: Eval dataset schema gates
         run: uv run make test-eval-data
 
-      - name: Retrieval regression gate
-        run: uv run make eval-retrieval-gate
-
-      - name: Stage recall attribution gate
-        run: uv run make eval-stage-recall-gate
+  # Retrieval regression gate (eval-retrieval-gate) and stage recall
+  # attribution gate (eval-stage-recall-gate) require a live Qdrant corpus with
+  # a fit BM25 tokenizer, which the hermetic CI runner does not provision.
+  # They stay local-only (cd98d04 "infra gates move local-only").
 
   test-eval-deep:
     runs-on: ubuntu-latest
@@ -150,11 +149,7 @@ jobs:
       - name: Prompt-aug smoke
         run: uv run make eval-prompt-aug-smoke
 
-      - name: Pipeline ablation soft-gate
-        run: uv run make eval-soft-gate-ablation
-
-      - name: RRF k tuning soft-gate
-        run: uv run make eval-soft-gate-tune-k
-
-      - name: RRF weights tuning soft-gate
-        run: uv run make eval-soft-gate-tune-weights
+  # The pipeline-ablation, RRF-k, and RRF-weights soft-gates
+  # (eval-soft-gate-{ablation,tune-k,tune-weights}) run live Qdrant retrieval
+  # against a BM25-prepared corpus and cannot run in the hermetic CI runner;
+  # they stay local-only (cd98d04 "infra gates move local-only").
