@@ -31,6 +31,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     count_tokens,
     split_text_losslessly,
 )
+from data_engineering_copilot.services.chunker import deduplicate_chunks, embedding_text_for_chunk
 from data_engineering_copilot.services.prepared_source import PreparedSource
 from data_engineering_copilot.services.spark_index_builder import (
     CoverageRecord,
@@ -116,7 +117,7 @@ class PinnedIndexBuilder:
                 raise ValueError(f"pinned build validation failed for {package.slug}: {failures[:3]}")
 
         combined = [chunk for package in packages for chunk in package.chunks]
-        combined = self._dedup_by_content_hash(combined)
+        combined = deduplicate_chunks(combined)
         _reject_duplicate_ids(combined)
 
         normalized: list[DocumentChunk] = []
@@ -153,7 +154,7 @@ class PinnedIndexBuilder:
             package.slug: sum(1 for c in normalized if c.source_name == package.source_name) for package in packages
         }
 
-        corpus_texts = [c.text for c in normalized]
+        corpus_texts = [embedding_text_for_chunk(c) for c in normalized]
         self._store.fit_bm25_corpus(corpus_texts)
 
         await self._embed_all_with_checkpoint(normalized)
@@ -196,7 +197,7 @@ class PinnedIndexBuilder:
             self._embedding_batch_size = ckpt_batch_size
             _structlog.info("embedding_batch_size_from_checkpoint", batch_size=ckpt_batch_size)
         else:
-            sample_texts = [c.text for c in chunks[:100]]  # sample first 100 chunks
+            sample_texts = [embedding_text_for_chunk(c) for c in chunks[:100]]  # sample first 100 chunks
             sizer = DynamicBatchSizer(self._settings)
             # Detect provider from embedder (fallback chain wraps multiple)
             provider = getattr(self._embedder, "name", "nvidia")
@@ -225,7 +226,7 @@ class PinnedIndexBuilder:
             batch_start = batch_idx * self._embedding_batch_size
             batch_end = min(batch_start + self._embedding_batch_size, len(chunks))
             batch = chunks[batch_start:batch_end]
-            batch_texts = [c.text for c in batch]
+            batch_texts = [embedding_text_for_chunk(c) for c in batch]
 
             try:
                 batch_vectors = await self._embed_batch_with_crash_recovery(batch_texts, batch_idx, total_batches)
@@ -474,18 +475,6 @@ class PinnedIndexBuilder:
         path = self._output_dir / "embedding_checkpoint.json"
         if path.exists():
             path.unlink()
-
-    @staticmethod
-    def _dedup_by_content_hash(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
-        seen: set[str] = set()
-        deduped: list[DocumentChunk] = []
-        for chunk in chunks:
-            key = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(chunk)
-        return deduped
 
     def _normalize_chunk(self, chunk: DocumentChunk) -> list[DocumentChunk]:
         """Split *chunk* into lossless, budget-safe segments with metadata."""

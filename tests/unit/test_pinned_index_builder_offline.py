@@ -15,6 +15,7 @@ import pytest
 
 from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import DocumentChunk
+from data_engineering_copilot.services.chunker import deduplicate_chunks
 from data_engineering_copilot.services.pinned_index_builder import (
     CHECKPOINT_BATCH_SIZE,
     EMBEDDING_MAX_RETRIES,
@@ -326,10 +327,10 @@ class TestDedupAndNormalize:
             )
             for i in range(5)
         ]
-        result = builder._dedup_by_content_hash(chunks)
+        result = deduplicate_chunks(chunks)
         assert len(result) == 1
 
     def test_dedup_keeps_unique(self, builder: PinnedIndexBuilder) -> None:
         chunks = _make_chunks(5, text="unique")
-        result = builder._dedup_by_content_hash(chunks)
+        result = deduplicate_chunks(chunks)
         assert len(result) == 5

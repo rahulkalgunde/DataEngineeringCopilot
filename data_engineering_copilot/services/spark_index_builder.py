@@ -35,7 +35,7 @@ from data_engineering_copilot.infrastructure.token_budget import (
     count_tokens,
     split_text_losslessly,
 )
-from data_engineering_copilot.services.chunker import embedding_text_for_chunk
+from data_engineering_copilot.services.chunker import deduplicate_chunks, embedding_text_for_chunk
 from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_metadata import derive_spark_metadata
 from data_engineering_copilot.services.spark_rendered_chunker import SparkRenderedChunker
@@ -225,7 +225,7 @@ class SparkIndexBuilder:
 
     async def _build_from_manifest_inner(self, manifest: SparkManifest) -> IndexBuildReport:
         chunks, coverage = await self._chunk_all(manifest)
-        chunks = self._dedup_by_content_hash(chunks)
+        chunks = deduplicate_chunks(chunks)
         self._reject_duplicate_chunk_ids(chunks)
 
         # Split every chunk losslessly BEFORE fitting BM25/embedding so the
@@ -258,7 +258,7 @@ class SparkIndexBuilder:
         self._write_chunks_jsonl(normalized)
         self._write_coverage(coverage)
 
-        corpus_texts = [c.text for c in normalized]
+        corpus_texts = [embedding_text_for_chunk(c) for c in normalized]
         self._store.fit_bm25_corpus(corpus_texts)
 
         vectors = await self._embed_all(normalized)
@@ -715,24 +715,6 @@ class SparkIndexBuilder:
             if end != -1:
                 body = body[end + 4 :]
         return "under construction" in body and len(body.strip()) < 400
-
-    @staticmethod
-    def _dedup_by_content_hash(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
-        """Remove exact duplicate normalized content, keeping the first copy.
-
-        Dedup compares the normalized (stripped) text so identical content that
-        differs only in leading/trailing whitespace (e.g. the ASF license
-        header appearing in many files) collapses to a single copy.
-        """
-        seen: set[str] = set()
-        deduped: list[DocumentChunk] = []
-        for chunk in chunks:
-            normalized_key = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
-            if normalized_key in seen:
-                continue
-            seen.add(normalized_key)
-            deduped.append(chunk)
-        return deduped
 
     def _with_function_registry(self, manifest: SparkManifest) -> SparkChunker:
         """Return a chunker preloaded with FunctionRegistry.scala, when present."""

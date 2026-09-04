@@ -295,7 +295,7 @@ Uses `langchain_text_splitters.RecursiveCharacterTextSplitter`.
 #### 7b HeaderAwareChunker
 
 **File:** `services/header_aware_chunker.py:49-250`
-**Config:** `chunk_size_words=375`, `overlap_words=90`, `min_chunk_words=int(chunk_size_words * 0.1) = 37`
+**Config:** `chunk_size_words=500`, `overlap_words=120`, `min_chunk_words=int(chunk_size_words * 0.1) = 50`
 
 ```
 Input:  ParsedDocument
@@ -318,7 +318,7 @@ ID fmt: {source}:{url_sha1}:hdr:{index:04d}
 #### 7c SemanticChunker
 
 **File:** `services/semantic_chunker.py:89-348`
-**Config:** `min_semantic_similarity=0.5`, `chunk_size_words=375`, `overlap_words=90`, `min_chunk_words=37`, `max_chunk_words=562`
+**Config:** `min_semantic_similarity=0.5`, `chunk_size_words=500`, `overlap_words=120`, `min_chunk_words=50`, `max_chunk_words=750`
 
 **Special path in ingestion** (`async_ingestion.py:174-200`):
 ```python
@@ -1397,10 +1397,10 @@ All empty string = fall back to global `llm_provider`/`llm_model`:
 | Setting | Default | File:Line |
 |---|---|---|
 | `chunking_strategy` | `sentence_preserving` | `settings.py:610` |
-| `chunk_size_words` | 375 | `settings.py:611` |
-| `chunk_overlap_words` | 90 | `settings.py:612` |
+| `chunk_size_words` | 500 | `settings.py:611` |
+| `chunk_overlap_words` | 120 | `settings.py:612` |
 | `min_semantic_similarity` | 0.5 | `settings.py:614` |
-| `max_chunk_words` | None (→ 1.5× chunk_size_words = 562) | `settings.py:615` |
+| `max_chunk_words` | None (→ 1.5× chunk_size_words = 750) | `settings.py:615` |
 | `enable_semantic_chunking` | True | `settings.py:617` |
 | `embedding_batch_size` | 64 | `settings.py:397` |
 

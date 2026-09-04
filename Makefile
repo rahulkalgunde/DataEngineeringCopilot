@@ -344,19 +344,19 @@ eval-oos-gate:
 # Soft-gate wrapper: run exploratory eval scripts with CI-failing warnings.
 # Usage: make eval-soft-gate SCRIPT=data_engineering_copilot/evaluation/gates/pipeline_ablation.py ARGS="--k 10"
 eval-soft-gate:
-	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci $(SCRIPT) $(ARGS)
+	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci -- $(SCRIPT) $(ARGS)
 
 # Soft-gate ablation: pipeline stage ablation with CI-failing warnings.
 eval-soft-gate-ablation:
-	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci data_engineering_copilot/evaluation/gates/pipeline_ablation.py --k 10 --split held
+	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci -- data_engineering_copilot/evaluation/gates/pipeline_ablation.py --k 10 --split held
 
 # Soft-gate tune: RRF k tuning with CI-failing warnings.
 eval-soft-gate-tune-k:
-	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci scripts/tune_rrf_k.py --k 10
+	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci -- scripts/tune_rrf_k.py --k 10
 
 # Soft-gate tune: RRF weights tuning with CI-failing warnings.
 eval-soft-gate-tune-weights:
-	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci scripts/tune_rrf_weights.py --k 10
+	$(PYTHON) -m data_engineering_copilot.evaluation.gates.soft_gate --ci -- scripts/tune_rrf_weights.py --k 10
 
 # Drift gate hook: trigger re-evaluation when eval drift exceeds thresholds.
 # This target is invoked automatically by DriftDetector.record() when drift is detected.

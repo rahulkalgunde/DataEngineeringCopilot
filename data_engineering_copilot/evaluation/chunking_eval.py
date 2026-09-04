@@ -30,9 +30,14 @@ def _build_chunker(strategy: str):
     if strategy == "sentence":
         return SentencePreservingChunker(max_tokens=3800, max_chars=6000)
     if strategy == "header":
-        # min_chunk_words follows the production formula (cli.py ingest path):
-        # chunk_size_words * 0.1 — keeps the eval measuring what ships.
-        return HeaderAwareChunker(chunk_size_words=375, overlap_words=90, min_chunk_words=int(375 * 0.1))
+        from data_engineering_copilot.config.settings import AppSettings
+
+        settings = AppSettings(skip_provider_check=True)
+        return HeaderAwareChunker(
+            chunk_size_words=settings.chunk_size_words,
+            overlap_words=settings.chunk_overlap_words,
+            min_chunk_words=int(settings.chunk_size_words * 0.1),
+        )
     if strategy == "structured":
         return StructuredDataChunker(max_tokens=3800, max_chars=6000)
     raise ValueError(f"Unsupported strategy for chunking eval: {strategy!r}")

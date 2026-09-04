@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
@@ -10,6 +12,26 @@ if TYPE_CHECKING:
     from langchain_text_splitters import Language
 
 logger = logging.getLogger(__name__)
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_for_dedup(text: str) -> str:
+    normalized = text.strip().lower()
+    normalized = _WHITESPACE_RE.sub(" ", normalized)
+    return normalized
+
+
+def deduplicate_chunks(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+    seen: set[str] = set()
+    deduped: list[DocumentChunk] = []
+    for chunk in chunks:
+        key = hashlib.sha256(normalize_for_dedup(chunk.text).encode("utf-8")).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chunk)
+    return deduped
 
 
 class DocumentChunker:

@@ -71,8 +71,8 @@ class HeaderAwareChunker:
 
     def __init__(
         self,
-        chunk_size_words: int = 375,
-        overlap_words: int = 90,
+        chunk_size_words: int = 500,
+        overlap_words: int = 120,
         min_chunk_words: int = 10,
     ) -> None:
         if chunk_size_words <= 0:

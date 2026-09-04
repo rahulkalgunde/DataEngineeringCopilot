@@ -253,20 +253,25 @@ class ContextAssembler:
             return "", [], []
 
         # Phase 1: Fast exact-match dedup (content hash)
-        working = self._content_hash_dedup(chunks) if content_hash_dedup else chunks
+        p1 = self._content_hash_dedup(chunks) if content_hash_dedup else chunks
 
         # Phase 2: Merge adjacent siblings from same parent
-        if enable_sibling_merge:
-            working = self._merge_adjacent_siblings(working)
+        p2 = self._merge_adjacent_siblings(p1) if enable_sibling_merge else p1
 
         # Phase 3: Diversity — MMR or Jaccard dedup
         if mmr_enabled:
-            working = self._mmr_diversify(working, lambda_param=mmr_lambda)
+            working = self._mmr_diversify(p2, lambda_param=mmr_lambda)
             deduped = working
         else:
-            deduped = self._deduplicate_chunks(working) if deduplicate else working
+            deduped = self._deduplicate_chunks(p2) if deduplicate else p2
 
-        logger.info("Assembly dedup: %d → %d chunks", len(chunks), len(deduped))
+        logger.info(
+            "[ContextAssembler Diagnostic] Stage Counts: Incoming=%d -> HashDedup=%d -> SiblingMerged=%d -> Deduped=%d",
+            len(chunks),
+            len(p1),
+            len(p2),
+            len(deduped),
+        )
 
         # Step 1: Source-coverage budget selection
         selected, dropped_records = self._select_with_source_coverage(deduped)
@@ -286,9 +291,10 @@ class ContextAssembler:
         context = "\n".join(context_lines)
 
         logger.info(
-            "Context assembled: %d chunks, %d chars, sources=%s, dropped=%d",
+            "[ContextAssembler Diagnostic] Final Selected: %d chunks (%d chars / %d max) | Sources: %s | Total Dropped Records: %d",
             len(context_lines),
             len(context),
+            self.max_context_chars,
             list(set(source_names)),
             len(dropped_records),
         )
@@ -328,6 +334,15 @@ class ContextAssembler:
             # total budget, so a single over-budget segment still produces a
             # usable context.
             if new_length > self.max_context_chars and selected:
+                logger.info(
+                    "[ContextAssembler Drop] BUDGET_EXCEEDED | rank=%d chunk_id=%s url=%s len=%d (+%d) > max=%d",
+                    rank,
+                    chunk.chunk.chunk_id,
+                    chunk.chunk.url,
+                    current_length,
+                    len(formatted),
+                    self.max_context_chars,
+                )
                 dropped_records.append(self._drop_record(chunk, rank, reason))
                 return False
             selected.append(chunk)
@@ -368,6 +383,14 @@ class ContextAssembler:
             if url not in covered_urls:
                 continue
             if url_counts[url] >= self.max_chunks_per_source:
+                logger.info(
+                    "[ContextAssembler Drop] PER_SOURCE_CAP | rank=%d chunk_id=%s url=%s count=%d >= max=%d",
+                    rank,
+                    chunk.chunk.chunk_id,
+                    chunk.chunk.url,
+                    url_counts[url],
+                    self.max_chunks_per_source,
+                )
                 dropped_records.append(self._drop_record(chunk, rank, "dropped_due_per_source_cap"))
                 continue
             try_place(chunk, rank, "dropped_due_total_context_budget")
@@ -449,7 +472,12 @@ class ContextAssembler:
             parent_id = current_chunk.chunk.parent_chunk_id
             if parent_id:
                 if parent_id in seen_parents:
-                    logger.debug("Deduplication: skipped sibling child of parent %s (already included)", parent_id)
+                    logger.info(
+                        "[ContextAssembler Drop] PARENT_ID_DEDUP | chunk_id=%s url=%s parent_id=%s",
+                        current_chunk.chunk.chunk_id,
+                        current_chunk.chunk.url,
+                        parent_id,
+                    )
                     continue
                 seen_parents.add(parent_id)
 
@@ -461,7 +489,13 @@ class ContextAssembler:
 
                 if similarity > 0.70:
                     is_duplicate = True
-                    logger.debug("Deduplication: removed chunk (%.0f%% overlap with existing)", similarity * 100)
+                    logger.info(
+                        "[ContextAssembler Drop] JACCARD_OVERLAP | chunk_id=%s url=%s (%.0f%% overlap with %s)",
+                        current_chunk.chunk.chunk_id,
+                        current_chunk.chunk.url,
+                        similarity * 100,
+                        existing_chunk.chunk.chunk_id,
+                    )
                     break
 
             if not is_duplicate:

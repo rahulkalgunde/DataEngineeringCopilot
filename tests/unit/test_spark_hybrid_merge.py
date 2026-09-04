@@ -19,6 +19,7 @@ from data_engineering_copilot.infrastructure.spark_rendered_builder import (
     load_rendered_manifest,
 )
 from data_engineering_copilot.infrastructure.spark_source_resolver import SparkFileRecord, SparkManifest
+from data_engineering_copilot.services.chunker import deduplicate_chunks
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_index_builder import CoverageRecord, SparkIndexBuilder
@@ -397,7 +398,7 @@ def test_dedup_by_content_hash_keeps_first() -> None:
         content_hash="h2",
         doc_type="guide",
     )
-    deduped = SparkIndexBuilder._dedup_by_content_hash([chunk_a, chunk_b, chunk_c])
+    deduped = deduplicate_chunks([chunk_a, chunk_b, chunk_c])
     assert [c.chunk_id for c in deduped] == ["a", "c"]
 
 
@@ -423,7 +424,31 @@ def test_dedup_by_content_hash_normalizes_whitespace() -> None:
         content_hash="raw-hash-b",
         doc_type="guide",
     )
-    deduped = SparkIndexBuilder._dedup_by_content_hash([chunk_a, chunk_b])
+    deduped = deduplicate_chunks([chunk_a, chunk_b])
+    assert [c.chunk_id for c in deduped] == ["a"]
+
+
+def test_dedup_normalizes_case_and_whitespace() -> None:
+    """Near-duplicates differing only in case and whitespace must collapse."""
+    chunk_a = DocumentChunk(
+        chunk_id="a",
+        source_name="Apache Spark 4.0.0",
+        title="T",
+        url="http://x",
+        text="License Header Text",
+        content_hash="raw-hash-a",
+        doc_type="guide",
+    )
+    chunk_b = DocumentChunk(
+        chunk_id="b",
+        source_name="Apache Spark 4.0.0",
+        title="T2",
+        url="http://y",
+        text="license  header   text\n",  # lowercase + extra whitespace
+        content_hash="raw-hash-b",
+        doc_type="guide",
+    )
+    deduped = deduplicate_chunks([chunk_a, chunk_b])
     assert [c.chunk_id for c in deduped] == ["a"]
 
 

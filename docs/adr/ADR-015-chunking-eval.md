@@ -14,7 +14,7 @@ SegEval boundary similarity, and structural fracture rate
 (`evaluation/chunking_metrics.py`). Gate: fracture rate `≤0.25`
 (`FRACTURE_GATE_THRESHOLD`).
 
-Production chunker is `HeaderAwareChunker(chunk_size_words=375, overlap_words=90,
+Production chunker is `HeaderAwareChunker(chunk_size_words=500, overlap_words=120,
 min_chunk_words=37)` (min = 10% of target, shipped in `chunking_eval.py:35`
 and `services/header_aware_chunker.py:49`). Latency/quality question is
 whether `recursive` (1000 chars/100 overlap), `sentence`, or `structured`

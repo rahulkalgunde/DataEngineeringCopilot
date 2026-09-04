@@ -1208,8 +1208,8 @@ class AppSettings(BaseSettings):
 
     # Chunking strategy: "fixed_size", "sentence_preserving", or "semantic"
     chunking_strategy: str = "sentence_preserving"
-    chunk_size_words: int = 375
-    chunk_overlap_words: int = 90
+    chunk_size_words: int = 500
+    chunk_overlap_words: int = 120
     # Semantic chunker specific settings
     min_semantic_similarity: float = 0.5
     max_chunk_words: int | None = None  # Auto: 1.5x chunk_size_words if None
@@ -1221,13 +1221,11 @@ class AppSettings(BaseSettings):
     reranker_enabled: bool = True
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 30
-    max_context_chars: int = 24000
+    max_context_chars: int = 48000
     # Diversity cap on final context: at most this many chunks per distinct
     # source URL, applied after a one-per-source coverage guarantee. Keeps the
     # context compact (context-rot safe) while ensuring cross-source coverage.
-    # Raised to 3 to cover multi-corpus queries (e.g. spark+airflow+claude) without
-    # starving any corpus when max_context_chars is shared across intents.
-    max_chunks_per_source: int = 3
+    max_chunks_per_source: int = 5
     # Context assembly optimization
     assembly_mmr_enabled: bool = False
     assembly_mmr_lambda: float = 0.5

@@ -28,7 +28,7 @@ from data_engineering_copilot.domain.protocols import (
 from data_engineering_copilot.infrastructure.async_crawler import AsyncDocumentationCrawler
 from data_engineering_copilot.infrastructure.async_url_registry import AsyncUrlRegistry
 from data_engineering_copilot.services.api_extractor import ApiDocExtractor
-from data_engineering_copilot.services.chunker import embedding_text_for_chunk
+from data_engineering_copilot.services.chunker import deduplicate_chunks, embedding_text_for_chunk
 from data_engineering_copilot.services.chunker_router import ChunkerRoute, ChunkerRouter
 from data_engineering_copilot.services.code_block_parser import CodeBlockParser
 from data_engineering_copilot.services.contextual_chunk_enricher import ContextualChunkEnricher
@@ -352,6 +352,8 @@ class AsyncIngestionService:
                 self._chunk_executor,
                 lambda: self._apply_enrichers(batch_chunks),
             )
+
+        batch_chunks = deduplicate_chunks(batch_chunks)
 
         batch_size = len(batch_chunks)
         self._emit(

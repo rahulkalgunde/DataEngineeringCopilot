@@ -619,11 +619,16 @@ def test_build_embeds_and_fits_exactly_the_persisted_segments(tmp_path) -> None:
 
     persisted_texts = [c.text for c in store.upsert_frozen_chunks.call_args.args[0]]
     assert store.upsert_frozen_chunks.call_args.args[0]
-    # BM25 corpus == embedded texts == persisted segment texts.
+    # BM25 corpus == embedded texts == breadcrumb-prefixed representations.
     bm25_texts = store.fit_bm25_corpus.call_args.args[0]
     embedded_texts = [t for batch in embedder.batches for t in batch]
     assert bm25_texts == embedded_texts
-    assert embedded_texts == persisted_texts
+    # Persisted text is the raw chunk body; the embedded/bm25 form adds a
+    # leading breadcrumb so its size can only grow relative to the stored text.
+    assert len(persisted_texts) == len(embedded_texts)
+    for persisted, embedded in zip(persisted_texts, embedded_texts, strict=True):
+        assert embedded.endswith(persisted)
+        assert len(embedded) >= len(persisted)
     assert report.chunk_count == len(persisted_texts)
     for text in persisted_texts:
         assert len(text) <= 6000

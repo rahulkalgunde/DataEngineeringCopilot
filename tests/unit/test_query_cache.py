@@ -208,7 +208,12 @@ class TestIsCacheable:
         assert QueryCache.is_cacheable("not an envelope") is False  # type: ignore[arg-type]
 
     def test_low_confidence_not_cacheable(self):
-        assert QueryCache.is_cacheable(CachedAnswer(text="ok", sources=(_source(),), confidence=0.3)) is False
+        # MIN_CACHE_CONFIDENCE floor is 0.1; below it must not cache.
+        assert QueryCache.is_cacheable(CachedAnswer(text="ok", sources=(_source(),), confidence=0.05)) is False
+
+    def test_above_floor_is_cacheable(self):
+        # Confidence 0.3 sits above the 0.1 cache floor (was 0.5 before 689914a).
+        assert QueryCache.is_cacheable(CachedAnswer(text="ok", sources=(_source(),), confidence=0.3)) is True
 
     def test_no_sources_not_cacheable(self):
         assert QueryCache.is_cacheable(CachedAnswer(text="ok", confidence=0.95)) is False
