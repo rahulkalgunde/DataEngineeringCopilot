@@ -1421,10 +1421,9 @@ class AppSettings(BaseSettings):
     retrieval_gate_global_tolerance: float = 0.02
     retrieval_gate_per_intent_tolerance: float = 0.05
     # Tracks tests/evaluation/benchmarks/baseline_recall_all.json overall R@10
-    # minus global_tolerance. Re-derived 2026-09-04 after the golden dataset
-    # corruption repair (switched gate from skewed 220-row recall_inscope to
-    # the corrected 486-row recall_all): baseline R@10=0.258 → floor 0.24.
-    retrieval_gate_global_floor: float = 0.24
+    # minus global_tolerance. Re-derived 2026-09-04 after URL-norm + source-name fix:
+    # baseline R@10=0.387 → floor 0.367.
+    retrieval_gate_global_floor: float = 0.367
     retrieval_gate_per_intent_min_n: int = 5
     # Generation-layer gates (mirrors evaluation/generation_eval.py + judge_calibration.py)
     generation_faithfulness_gate: float = 0.85
