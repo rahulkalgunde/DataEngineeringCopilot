@@ -115,13 +115,13 @@ def select_search_mode(
     """Select the search mechanism based on intent and query signals.
 
     Routing logic:
-    - api_lookup, code_example -> BM25_ONLY (exact token matching for API/code)
+    - api_lookup, code_example -> HYBRID_DENSE_BIAS (sparse 0.006 drags RRF; exact+semantic)
     - debugging -> HYBRID_SPARSE_BIAS (error terms + semantic)
     - factual, how_to, synthesis -> DENSE_ONLY (semantic similarity)
     - comparative -> HYBRID_EQUAL (both modes matter)
     - configuration -> HYBRID_DENSE_BIAS (conceptual + exact terms)
 
-    ADR-012: ``api_lookup`` must *always* return :attr:`SearchMode.BM25_ONLY`
+    ADR-012: ``api_lookup`` must *always* return :attr:`SearchMode.HYBRID_DENSE_BIAS`
     even when the rewrite drifts (e.g. ``dense_rank()`` → ``"dense ranking"``).
     Intent is the hard gate; signals are only a fallback for unknown intents.
     Callers MUST pass the **original** question (not the rewritten
@@ -142,8 +142,9 @@ def select_search_mode(
         effective_signals = None
 
     # Intent-based primary routing — hard gate, ignores signals/query drift
+    # api_lookup/code_example: BM25_ONLY (sparse 0.006) drags RRF; use hybrid_dense_bias for exact+semantic
     if intent in ("api_lookup", "code_example"):
-        return SearchMode.BM25_ONLY
+        return SearchMode.HYBRID_DENSE_BIAS
     if intent == "debugging":
         return SearchMode.HYBRID_SPARSE_BIAS
     if intent in ("factual", "how_to", "synthesis"):

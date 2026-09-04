@@ -698,7 +698,20 @@ class AsyncQdrantVectorStore:
                 if query_filter is not None:
                     query_kwargs["query_filter"] = query_filter
 
-            raw_results = await self._client.query_points(**query_kwargs)
+            try:
+                raw_results = await self._client.query_points(**query_kwargs)
+            except Exception as exc:
+                msg = str(exc)
+                if "Not existing vector name" in msg:
+                    # Collection was built hybrid (named vectors) but store is dense-only or vice versa.
+                    # Retry with flipped using to handle settings/collection mismatch.
+                    if "using" in query_kwargs:
+                        query_kwargs.pop("using", None)
+                    else:
+                        query_kwargs["using"] = "dense"
+                    raw_results = await self._client.query_points(**query_kwargs)
+                else:
+                    raise
             retrieved: list[RetrievedChunk] = []
             points_list = cast(list[models.ScoredPoint], getattr(raw_results, "points", raw_results))
             for hit in points_list:

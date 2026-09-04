@@ -3,69 +3,69 @@
     "n": 486,
     "n_total": 486,
     "n_failed": 0,
-    "recall@k": 0.25823045267489714,
-    "mrr@k": 0.11702756548435561,
-    "precision@k": 0.026131687242798355,
-    "ndcg@k": 0.14845687885568337,
-    "recall_at_5": 0.19135802469135801,
-    "recall_at_20": 0.2890946502057613,
-    "latency_ms_p50": 11212.611861497862,
-    "latency_ms_p95": 46386.70485674811,
+    "recall@k": 0.36213991769547327,
+    "mrr@k": 0.17069316794504333,
+    "precision@k": 0.037037037037037035,
+    "ndcg@k": 0.21080051427847163,
+    "recall_at_5": 0.2602880658436214,
+    "recall_at_20": 0.4351851851851852,
+    "latency_ms_p50": 13844.56093350309,
+    "latency_ms_p95": 26579.942957258027,
     "k": 10
   },
   "per_intent": {
     "synthesis": {
-      "recall@k": 0.22340425531914893,
-      "mrr@k": 0.1168017561634583,
-      "precision@k": 0.025531914893617023,
+      "recall@k": 0.3404255319148936,
+      "mrr@k": 0.1767277235642297,
+      "precision@k": 0.0425531914893617,
       "n": 47
     },
     "how_to": {
-      "recall@k": 0.3125,
-      "mrr@k": 0.13801020408163264,
-      "precision@k": 0.03125,
+      "recall@k": 0.4732142857142857,
+      "mrr@k": 0.22187291443890822,
+      "precision@k": 0.04732142857142858,
       "n": 112
     },
     "code_example": {
-      "recall@k": 0.17142857142857143,
-      "mrr@k": 0.09149659863945579,
-      "precision@k": 0.017142857142857144,
+      "recall@k": 0.2,
+      "mrr@k": 0.10578231292517007,
+      "precision@k": 0.02,
       "n": 35
     },
     "api_lookup": {
-      "recall@k": 0.13513513513513514,
-      "mrr@k": 0.0527027027027027,
-      "precision@k": 0.013513513513513514,
+      "recall@k": 0.1891891891891892,
+      "mrr@k": 0.06782496782496783,
+      "precision@k": 0.01891891891891892,
       "n": 37
     },
     "factual": {
-      "recall@k": 0.3176470588235294,
-      "mrr@k": 0.11841736694677871,
-      "precision@k": 0.031764705882352945,
+      "recall@k": 0.49411764705882355,
+      "mrr@k": 0.21603216321710222,
+      "precision@k": 0.049411764705882356,
       "n": 85
     },
     "debugging": {
-      "recall@k": 0.30612244897959184,
-      "mrr@k": 0.1455539358600583,
-      "precision@k": 0.030612244897959183,
+      "recall@k": 0.32653061224489793,
+      "mrr@k": 0.1498693462347345,
+      "precision@k": 0.0326530612244898,
       "n": 49
     },
     "comparative": {
-      "recall@k": 0.0,
-      "mrr@k": 0.0,
-      "precision@k": 0.0,
+      "recall@k": 0.10714285714285714,
+      "mrr@k": 0.06460084033613446,
+      "precision@k": 0.010714285714285716,
       "n": 28
     },
     "configuration": {
-      "recall@k": 0.28125,
-      "mrr@k": 0.12477678571428572,
-      "precision@k": 0.028125,
+      "recall@k": 0.328125,
+      "mrr@k": 0.15981814600840336,
+      "precision@k": 0.0328125,
       "n": 64
     },
     "troubleshooting": {
-      "recall@k": 0.3103448275862069,
-      "mrr@k": 0.19285714285714284,
-      "precision@k": 0.03103448275862069,
+      "recall@k": 0.3793103448275862,
+      "mrr@k": 0.20156857661394864,
+      "precision@k": 0.03793103448275863,
       "n": 29
     }
   },
@@ -73,20 +73,20 @@
   "per_query": [
     {
       "id": "mh-window-config-001",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.21840743681816419
     },
     {
       "id": "mh-aqe-tuning-002",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
     },
     {
       "id": "mh-streaming-api-003",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.06666666666666667,
       "ndcg": 0.0
     },
     {
@@ -104,7 +104,7 @@
     {
       "id": "fast-window-001",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05555555555555555,
       "ndcg": 0.0
     },
     {
@@ -115,9 +115,9 @@
     },
     {
       "id": "fast-groupby-003",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "fast-orderby-004",
@@ -128,32 +128,32 @@
     {
       "id": "fast-join-005",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.07692307692307693,
       "ndcg": 0.0
     },
     {
       "id": "fast-having-006",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "fast-limit-007",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "fast-select-008",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "fast-lateral-view-009",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "fast-offset-010",
@@ -169,9 +169,9 @@
     },
     {
       "id": "spark-window-dense-rank-002",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "spark-nested-array-filter-003",
@@ -217,39 +217,39 @@
     },
     {
       "id": "spark-jdbc-read-011",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-jdbc-write-012",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-csv-read-013",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "spark-load-save-functions-015",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-sql-perf-tuning-025",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-sql-null-semantics-026",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-api-dataframe-029",
@@ -289,21 +289,21 @@
     },
     {
       "id": "spark-ml-pipeline-035",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "spark-rdd-037",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-streaming-programming-038",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-api-lookup-001",
@@ -349,9 +349,9 @@
     },
     {
       "id": "spark-api-lookup-008",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "spark-api-lookup-009",
@@ -385,14 +385,14 @@
     },
     {
       "id": "spark-api-lookup-014",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
     },
     {
       "id": "spark-api-lookup-015",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.08333333333333333,
       "ndcg": 0.0
     },
     {
@@ -475,9 +475,9 @@
     },
     {
       "id": "spark-code-example-029",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-code-example-030",
@@ -565,9 +565,9 @@
     },
     {
       "id": "spark-debugging-044",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "spark-debugging-045",
@@ -625,9 +625,9 @@
     },
     {
       "id": "spark-comparative-054",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-synthesis-055",
@@ -673,27 +673,27 @@
     },
     {
       "id": "airflow-dags-201",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-operators-202",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "airflow-dynamic-task-mapping-203",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "airflow-xcoms-204",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "airflow-connections-205",
@@ -703,9 +703,9 @@
     },
     {
       "id": "airflow-cron-206",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-assets-207",
@@ -715,20 +715,20 @@
     },
     {
       "id": "mh-airflow-assets-008",
-      "recall": 0.5,
-      "mrr": 0.1111111111111111,
-      "ndcg": 0.18457569677956817
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.448643819352159
     },
     {
       "id": "airflow-dag-040",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.09090909090909091,
       "ndcg": 0.0
     },
     {
       "id": "airflow-operators-041",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.0625,
       "ndcg": 0.0
     },
     {
@@ -739,9 +739,9 @@
     },
     {
       "id": "airflow-cron-043",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-how-to-001",
@@ -751,9 +751,9 @@
     },
     {
       "id": "airflow-how-to-002",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-how-to-003",
@@ -763,9 +763,9 @@
     },
     {
       "id": "airflow-how-to-004",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "airflow-how-to-005",
@@ -817,9 +817,9 @@
     },
     {
       "id": "airflow-how-to-013",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "airflow-how-to-014",
@@ -932,7 +932,7 @@
     {
       "id": "airflow-factual-032",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.07142857142857142,
       "ndcg": 0.0
     },
     {
@@ -943,15 +943,15 @@
     },
     {
       "id": "airflow-factual-034",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "airflow-factual-035",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "airflow-factual-036",
@@ -1045,9 +1045,9 @@
     },
     {
       "id": "airflow-comparative-051",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "airflow-comparative-052",
@@ -1171,9 +1171,9 @@
     },
     {
       "id": "airflow-synthesis-072",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "airflow-synthesis-073",
@@ -1261,9 +1261,9 @@
     },
     {
       "id": "airflow-troubleshooting-087",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "airflow-troubleshooting-088",
@@ -1274,14 +1274,14 @@
     {
       "id": "delta-batch-301",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.043478260869565216,
       "ndcg": 0.0
     },
     {
       "id": "delta-concurrency-302",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "delta-best-practices-303",
@@ -1291,44 +1291,44 @@
     },
     {
       "id": "delta-optimizations-304",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "mh-delta-spark-004",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 0.5,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "mh-delta-concurrency-005",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.21840743681816419
     },
     {
       "id": "delta-update-044",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "delta-quickstart-045",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "delta-sharing-046",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "delta-how-to-001",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05555555555555555,
       "ndcg": 0.0
     },
     {
@@ -1388,14 +1388,14 @@
     {
       "id": "delta-how-to-011",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05555555555555555,
       "ndcg": 0.0
     },
     {
       "id": "delta-how-to-012",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "delta-how-to-013",
@@ -1448,20 +1448,20 @@
     {
       "id": "delta-how-to-021",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05555555555555555,
       "ndcg": 0.0
     },
     {
       "id": "delta-factual-022",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.058823529411764705,
       "ndcg": 0.0
     },
     {
       "id": "delta-factual-023",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "delta-factual-024",
@@ -1484,7 +1484,7 @@
     {
       "id": "delta-factual-027",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05263157894736842,
       "ndcg": 0.0
     },
     {
@@ -1513,15 +1513,15 @@
     },
     {
       "id": "delta-factual-032",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "delta-factual-033",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "delta-factual-034",
@@ -1544,7 +1544,7 @@
     {
       "id": "delta-factual-037",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05263157894736842,
       "ndcg": 0.0
     },
     {
@@ -1562,7 +1562,7 @@
     {
       "id": "delta-configuration-040",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.058823529411764705,
       "ndcg": 0.0
     },
     {
@@ -1622,14 +1622,14 @@
     {
       "id": "delta-configuration-050",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.058823529411764705,
       "ndcg": 0.0
     },
     {
       "id": "delta-configuration-051",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "delta-configuration-052",
@@ -1646,7 +1646,7 @@
     {
       "id": "delta-debugging-054",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.058823529411764705,
       "ndcg": 0.0
     },
     {
@@ -1676,7 +1676,7 @@
     {
       "id": "delta-debugging-059",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05263157894736842,
       "ndcg": 0.0
     },
     {
@@ -1705,15 +1705,15 @@
     },
     {
       "id": "delta-synthesis-064",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "delta-synthesis-065",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
     },
     {
       "id": "delta-synthesis-066",
@@ -1736,7 +1736,7 @@
     {
       "id": "delta-synthesis-069",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05263157894736842,
       "ndcg": 0.0
     },
     {
@@ -1754,14 +1754,14 @@
     {
       "id": "delta-comparative-072",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.058823529411764705,
       "ndcg": 0.0
     },
     {
       "id": "delta-comparative-073",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
     },
     {
       "id": "delta-comparative-074",
@@ -1784,7 +1784,7 @@
     {
       "id": "delta-comparative-077",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.08333333333333333,
       "ndcg": 0.0
     },
     {
@@ -1813,9 +1813,9 @@
     },
     {
       "id": "delta-troubleshooting-082",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
     },
     {
       "id": "delta-troubleshooting-083",
@@ -1844,7 +1844,7 @@
     {
       "id": "delta-troubleshooting-087",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.05263157894736842,
       "ndcg": 0.0
     },
     {
