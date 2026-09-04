@@ -3,21 +3,21 @@
     "n": 486,
     "n_total": 486,
     "n_failed": 0,
-    "recall@k": 0.36213991769547327,
-    "mrr@k": 0.17069316794504333,
-    "precision@k": 0.037037037037037035,
-    "ndcg@k": 0.21080051427847163,
-    "recall_at_5": 0.2602880658436214,
-    "recall_at_20": 0.4351851851851852,
-    "latency_ms_p50": 13844.56093350309,
-    "latency_ms_p95": 26579.942957258027,
+    "recall@k": 0.3868312757201646,
+    "mrr@k": 0.18524714391877237,
+    "precision@k": 0.03991769547325103,
+    "ndcg@k": 0.2265815541974685,
+    "recall_at_5": 0.2829218106995885,
+    "recall_at_20": 0.4619341563786008,
+    "latency_ms_p50": 13651.506436493946,
+    "latency_ms_p95": 26155.90921099647,
     "k": 10
   },
   "per_intent": {
     "synthesis": {
-      "recall@k": 0.3404255319148936,
-      "mrr@k": 0.1767277235642297,
-      "precision@k": 0.0425531914893617,
+      "recall@k": 0.3723404255319149,
+      "mrr@k": 0.22211779448621555,
+      "precision@k": 0.048936170212765966,
       "n": 47
     },
     "how_to": {
@@ -27,15 +27,15 @@
       "n": 112
     },
     "code_example": {
-      "recall@k": 0.2,
-      "mrr@k": 0.10578231292517007,
-      "precision@k": 0.02,
+      "recall@k": 0.2571428571428571,
+      "mrr@k": 0.11609977324263038,
+      "precision@k": 0.025714285714285714,
       "n": 35
     },
     "api_lookup": {
-      "recall@k": 0.1891891891891892,
-      "mrr@k": 0.06782496782496783,
-      "precision@k": 0.01891891891891892,
+      "recall@k": 0.4189189189189189,
+      "mrr@k": 0.1915759915759916,
+      "precision@k": 0.043243243243243246,
       "n": 37
     },
     "factual": {
@@ -85,21 +85,21 @@
     },
     {
       "id": "mh-streaming-api-003",
-      "recall": 0.0,
-      "mrr": 0.06666666666666667,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
     },
     {
       "id": "mh-array-column-009",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
     },
     {
       "id": "mh-schema-create-010",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 0.2,
+      "ndcg": 0.23719771276929622
     },
     {
       "id": "fast-window-001",
@@ -175,15 +175,15 @@
     },
     {
       "id": "spark-nested-array-filter-003",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.1111111111111111,
+      "ndcg": 0.3010299956639812
     },
     {
       "id": "spark-array-transform-004",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "spark-array-aggregate-005",
@@ -193,27 +193,27 @@
     },
     {
       "id": "spark-struct-access-006",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 0.5,
+      "mrr": 0.25,
+      "ndcg": 0.2640681225725909
     },
     {
       "id": "spark-api-filter-007",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-api-transform-008",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
     },
     {
       "id": "spark-api-aggregate-009",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-jdbc-read-011",
@@ -253,39 +253,39 @@
     },
     {
       "id": "spark-api-dataframe-029",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
     },
     {
       "id": "spark-api-session-030",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
     },
     {
       "id": "spark-api-column-031",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
     },
     {
       "id": "spark-sqlref-substring-032",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-sqlref-math-033",
       "recall": 0.0,
-      "mrr": 0.0,
+      "mrr": 0.045454545454545456,
       "ndcg": 0.0
     },
     {
       "id": "spark-sqlref-collection-034",
-      "recall": 0.0,
-      "mrr": 0.0,
-      "ndcg": 0.0
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
     },
     {
       "id": "spark-ml-pipeline-035",
