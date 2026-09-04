@@ -1245,7 +1245,7 @@ class AppSettings(BaseSettings):
     # confidence (relevant pairs commonly land ~0.10-0.15). When a reranker
     # ran for a query, the quality gate compares against this value; without a
     # reranker it falls back to ``confidence_threshold``.
-    reranker_confidence_threshold: float = 0.05
+    reranker_confidence_threshold: float = 0.1
     # LLM-based (cloud) reranking: when enabled, ``rerank_fallback_order`` is
     # tried before the local cross-encoder (which stays the degraded last
     # resort). All providers normalize scores to [0, 1] so the confidence gate
