@@ -1,0 +1,27 @@
+{
+  "generated_at": "2026-09-04T11:01:25.276025+00:00",
+  "generator": "promote_baseline",
+  "generation": "pinned-d3dbad402105",
+  "git_commit": "380ec3507dfd",
+  "commit": "380ec3507dfd",
+  "k": 10,
+  "retrieval_top_k": 50,
+  "top_k": 50,
+  "mrl_multistage_enabled": false,
+  "mrl": false,
+  "metrics": {
+    "n": 486,
+    "n_total": 486,
+    "n_failed": 0,
+    "recall@k": 0.25823045267489714,
+    "mrr@k": 0.11702756548435561,
+    "precision@k": 0.026131687242798355,
+    "ndcg@k": 0.14845687885568337,
+    "recall_at_5": 0.19135802469135801,
+    "recall_at_20": 0.2890946502057613,
+    "latency_ms_p50": 11212.611861497862,
+    "latency_ms_p95": 46386.70485674811,
+    "k": 10
+  },
+  "source": "/tmp/eval_recall_all/retrieval_eval.json"
+}

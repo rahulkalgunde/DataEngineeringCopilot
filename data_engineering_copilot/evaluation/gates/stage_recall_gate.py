@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from data_engineering_copilot.evaluation.retrieval_metrics import recall_at_k
+from data_engineering_copilot.evaluation.url_normalization import url_content_key
 from data_engineering_copilot.factory import build_rag_service
 
 
@@ -37,7 +38,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("tests/evaluation/golden/recall_inscope.jsonl"),
+        default=Path("tests/evaluation/golden/recall_all.jsonl"),
         help="JSONL eval dataset",
     )
     parser.add_argument(
@@ -79,7 +80,7 @@ async def _run(queries: list[dict], k: int) -> tuple[list[dict], dict]:
 
     for i, item in enumerate(queries, 1):
         q = item.get("question") or ""
-        expected = list(item.get("expected_urls", []))
+        expected = [url_content_key(u) for u in (item.get("expected_urls") or []) if u]
         prov: list[dict] = []
         t0 = time.monotonic()
         try:
@@ -101,7 +102,7 @@ async def _run(queries: list[dict], k: int) -> tuple[list[dict], dict]:
                 "id": item.get("id", f"q{i}"),
                 "question": q,
                 "expected_urls": expected,
-                "final_recall": recall_at_k([c.url for c in answer.sources], expected, k),
+                "final_recall": recall_at_k([url_content_key(c.url) for c in answer.sources], expected, k),
                 "latency_ms": latency,
                 "provenance": prov_record,
             }
@@ -111,7 +112,7 @@ async def _run(queries: list[dict], k: int) -> tuple[list[dict], dict]:
         prev_recall = None
         for snap in prov_record.get("stage_snapshots") or []:
             stage = snap.get("stage", "unknown")
-            urls = [u for u in (snap.get("urls") or []) if u]
+            urls = [url_content_key(u) for u in (snap.get("urls") or []) if u]
             ids = [c for c in (snap.get("chunk_ids") or []) if c]
             rec = recall_at_k(urls, expected, k)
             surv = 1.0 if not prev_ids else len(set(ids) & prev_ids) / len(prev_ids)

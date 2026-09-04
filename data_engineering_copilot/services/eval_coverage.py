@@ -22,6 +22,8 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
+from data_engineering_copilot.evaluation.url_normalization import url_content_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,7 +77,9 @@ class CoverageValidator:
     def __init__(self, generation_root: Path) -> None:
         self._generation_root = generation_root
         self._urls: set[str] = set()
+        self._url_keys: set[str] = set()
         self._url_source: dict[str, str] = {}
+        self._key_source: dict[str, str] = {}
         self._source_names: set[str] = set()
         self._corpus_text: str = ""
         self._source_text: dict[str, str] = {}
@@ -102,6 +106,9 @@ class CoverageValidator:
                     text = d.get("text") or ""
                     if url:
                         self._urls.add(url)
+                        key = url_content_key(url, src)
+                        self._url_keys.add(key)
+                        self._key_source[key] = src
                         self._url_source[url] = src
                     if src:
                         self._source_names.add(src)
@@ -126,12 +133,19 @@ class CoverageValidator:
         return url.strip().rstrip("/")
 
     def _url_path_match(self, url: str) -> bool:
-        """Flexible URL matching by path components.
+        """Flexible URL matching by canonical content key.
 
-        Matches if the last 2-3 path components of the URL exist in the corpus.
-        Handles differences like raw.githubusercontent.com vs spark.apache.org.
+        Matches canonical public URLs (``spark.apache.org/docs/4.0.0/X.md``)
+        against the indexed raw-GitHub corpus form via a shared content key, so
+        coverage reflects content presence rather than host spelling. Falls back
+        to the previous last-2-3-component substring match for unrecognized
+        domains (best-effort, may over-match).
         """
         self._load()
+        key = url_content_key(url)
+        if key and key in self._url_keys:
+            return True
+
         norm_url = self._norm(url)
         if norm_url in self._urls:
             return True
@@ -174,9 +188,19 @@ class CoverageValidator:
         """Return ``(recall, missing_terms)`` against the url-scoped (or whole) corpus."""
         self._load()
         if urls:
-            haystack = " ".join(
-                text for url in urls for text in [self._source_text.get(self._url_source.get(self._norm(url), ""), "")]
-            )
+            # Resolve each url (canonical or raw) to its corpus source text via
+            # the shared content key, falling back to whole-source text.
+            source_texts: list[str] = []
+            for url in urls:
+                key = url_content_key(url)
+                src = None
+                if key in self._key_source:
+                    src = self._key_source[key]
+                elif self._norm(url) in self._url_source:
+                    src = self._url_source[self._norm(url)]
+                if src:
+                    source_texts.append(self._source_text.get(src, ""))
+            haystack = " ".join(t for t in source_texts if t)
         elif source:
             haystack = self._source_text.get(source, "")
         else:

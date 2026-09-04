@@ -19,8 +19,8 @@ def split_queries(
 ) -> tuple[list[dict], list[dict]]:
     """Deterministic 50/50 shuffle split (seed=42).
 
-    Mirrors plan Task 3: 220q baseline_inscope → 110 train / 110 held-out.
-    When n is odd, train gets the larger half.
+    Deterministic 50/50 shuffle split on the gate dataset (seed=42), e.g.
+    recall_all (486q) → 243 train / 243 held-out.
     """
     qs = list(queries)
     rnd = random.Random(seed)

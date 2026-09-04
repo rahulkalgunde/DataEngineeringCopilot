@@ -7,7 +7,7 @@ Emit ``data/tune_rrf_k.json`` with best_k, best_prefetch, train_ndcg, held_ndcg,
 If CI includes 0 -> keep k=60 prefetch 40 (settings.py unchanged).
 If CI excludes 0 and Δ>0 -> ship best_k + retrieval_prefetch_limit=100.
 
-Uses ``tests/evaluation/golden/recall_inscope.jsonl`` 220q, deterministic split seed=42.
+Uses ``tests/evaluation/golden/recall_all.jsonl``, deterministic split seed=42.
 Reuses embedding cache (embed each query once, reuse across 8 configs) to avoid
 880 embedding calls. No LLM calls (rewriter detached).
 """
@@ -141,7 +141,7 @@ def main() -> int:
     import argparse
 
     ap = argparse.ArgumentParser(description="Tune RRF k + prefetch on train/holdout")
-    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_inscope.jsonl")
+    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_all.jsonl")
     ap.add_argument("--k", type=int, default=10, help="top_k for nDCG/recall")
     ap.add_argument("--output", default="data/tune_rrf_k.json")
     args = ap.parse_args()

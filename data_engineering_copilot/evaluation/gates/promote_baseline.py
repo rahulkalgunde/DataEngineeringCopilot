@@ -1,7 +1,7 @@
-"""Atomic promotion of retrieval eval to baseline_inscope with provenance sidecar.
+"""Atomic promotion of retrieval eval to baseline_recall_all with provenance sidecar.
 
-Copies ``retrieval_eval.json`` → ``baseline_inscope.json`` via tmp→rename
-and writes ``baseline_inscope.provenance.json`` with git_commit,
+Copies ``retrieval_eval.json`` → ``baseline_recall_all.json`` via tmp→rename
+and writes ``baseline_recall_all.provenance.json`` with git_commit,
 generation pinned-d3dbad402105, k, top_k, mrl, timestamp.
 
 This module can be invoked as:
@@ -21,8 +21,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOURCE = Path("/tmp/new_baseline3/retrieval_eval.json")
-DEFAULT_DEST = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_inscope.json"
-DEFAULT_PROVENANCE = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_inscope.provenance.json"
+DEFAULT_DEST = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_recall_all.json"
+DEFAULT_PROVENANCE = PROJECT_ROOT / "tests/evaluation/benchmarks/baseline_recall_all.provenance.json"
 DEFAULT_BASELINE = DEFAULT_DEST
 GENERATION = "pinned-d3dbad402105"
 RELATIVE_TOLERANCE = 0.015  # 1.5% relative drop allowed
@@ -174,7 +174,7 @@ def main() -> int:
     """CLI entrypoint for baseline promotion."""
     ap = argparse.ArgumentParser(description="Promote retrieval eval to baseline with provenance")
     ap.add_argument("--source", default=str(DEFAULT_SOURCE), help="path to retrieval_eval.json")
-    ap.add_argument("--dest", default=str(DEFAULT_DEST), help="destination baseline_inscope.json")
+    ap.add_argument("--dest", default=str(DEFAULT_DEST), help="destination baseline_recall_all.json")
     ap.add_argument("--provenance", default=str(DEFAULT_PROVENANCE), help="provenance sidecar path")
     ap.add_argument("--generation", default=GENERATION, help="pinned generation id")
     ap.add_argument("--check-gate", action="store_true", help="run gate check without promoting")

@@ -7,7 +7,7 @@ at b=0.75). Rebuilding vocab per b requires gen-bm25-rebuild (~15s each); this s
 mutates the live tokenizer's b for query tokenization only. If approximation wins,
 a full gen-build is required to bake b.
 
-Uses tests/evaluation/golden/recall_inscope.jsonl 220q, deterministic split seed=42.
+Uses tests/evaluation/golden/recall_all.jsonl, deterministic split seed=42.
 Reuses embedding cache (each query embedded once). No LLM calls.
 
 Emits data/tune_rrf_weights.json with train/held nDCG, Δ CI, decision.
@@ -93,7 +93,7 @@ def main() -> int:
     import argparse
 
     ap = argparse.ArgumentParser(description="Tune RRF weights + bm25 b")
-    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_inscope.jsonl")
+    ap.add_argument("--dataset", default="tests/evaluation/golden/recall_all.jsonl")
     ap.add_argument("--k", type=int, default=10, help="top_k for nDCG/recall")
     ap.add_argument("--output", default="data/tune_rrf_weights.json")
     ap.add_argument("--b-sweep", action="store_true", help="also sweep b∈{0.5,0.75} (query-side approx)")

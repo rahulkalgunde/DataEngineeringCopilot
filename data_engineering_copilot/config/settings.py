@@ -1412,20 +1412,19 @@ class AppSettings(BaseSettings):
     # only if held Δ DBSF-RRF CI>0 and reranker gate passes; otherwise keep "rrf".
     # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     retrieval_fusion: Literal["rrf", "dbsf"] = "rrf"  # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
-    # Retrieval regression gates — honest inscope baseline (220 rows,
-    # tests/evaluation/benchmarks/baseline_inscope.json R@10=0.259). Global
-    # gate: R@10 >= baseline - 0.02 (absolute floor 0.24 for 220-row, i.e.
-    # baseline_inscope overall -0.02). Per-intent gate (n>=5):
-    # R@10 >= max(0, baseline_intent -0.05). CIs via
+    # Retrieval regression gates — corrected full benchmark (486 in-scope rows,
+    # tests/evaluation/benchmarks/baseline_recall_all.json). Global gate:
+    # R@10 >= baseline - 0.02 (absolute floor = baseline overall - 0.02).
+    # Per-intent gate (n>=5): R@10 >= max(0, baseline_intent - 0.05). CIs via
     # evaluation/stats.py:bootstrap_ci / regression_verdict. Keep dark-flag
     # comments above.
     retrieval_gate_global_tolerance: float = 0.02
     retrieval_gate_per_intent_tolerance: float = 0.05
-    # Tracks tests/evaluation/benchmarks/baseline_inscope.json overall R@10
-    # minus global_tolerance. Updated 2026-09-02 after baseline refresh:
-    # R@10=0.168 for full pipeline, ablation dense-only=0.266.
-    # Floor reflects current realistic ceiling, not aspirational pre-tuning baseline.
-    retrieval_gate_global_floor: float = 0.15
+    # Tracks tests/evaluation/benchmarks/baseline_recall_all.json overall R@10
+    # minus global_tolerance. Re-derived 2026-09-04 after the golden dataset
+    # corruption repair (switched gate from skewed 220-row recall_inscope to
+    # the corrected 486-row recall_all): baseline R@10=0.258 → floor 0.24.
+    retrieval_gate_global_floor: float = 0.24
     retrieval_gate_per_intent_min_n: int = 5
     # Generation-layer gates (mirrors evaluation/generation_eval.py + judge_calibration.py)
     generation_faithfulness_gate: float = 0.85

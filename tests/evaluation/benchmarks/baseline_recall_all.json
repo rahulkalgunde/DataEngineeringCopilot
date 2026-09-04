@@ -1,0 +1,2991 @@
+{
+  "overall": {
+    "n": 486,
+    "n_total": 486,
+    "n_failed": 0,
+    "recall@k": 0.3868312757201646,
+    "mrr@k": 0.18524714391877237,
+    "precision@k": 0.03991769547325103,
+    "ndcg@k": 0.2265815541974685,
+    "recall_at_5": 0.2829218106995885,
+    "recall_at_20": 0.4619341563786008,
+    "latency_ms_p50": 13651.506436493946,
+    "latency_ms_p95": 26155.90921099647,
+    "k": 10
+  },
+  "per_intent": {
+    "synthesis": {
+      "recall@k": 0.3723404255319149,
+      "mrr@k": 0.22211779448621555,
+      "precision@k": 0.048936170212765966,
+      "n": 47
+    },
+    "how_to": {
+      "recall@k": 0.4732142857142857,
+      "mrr@k": 0.22187291443890822,
+      "precision@k": 0.04732142857142858,
+      "n": 112
+    },
+    "code_example": {
+      "recall@k": 0.2571428571428571,
+      "mrr@k": 0.11609977324263038,
+      "precision@k": 0.025714285714285714,
+      "n": 35
+    },
+    "api_lookup": {
+      "recall@k": 0.4189189189189189,
+      "mrr@k": 0.1915759915759916,
+      "precision@k": 0.043243243243243246,
+      "n": 37
+    },
+    "factual": {
+      "recall@k": 0.49411764705882355,
+      "mrr@k": 0.21603216321710222,
+      "precision@k": 0.049411764705882356,
+      "n": 85
+    },
+    "debugging": {
+      "recall@k": 0.32653061224489793,
+      "mrr@k": 0.1498693462347345,
+      "precision@k": 0.0326530612244898,
+      "n": 49
+    },
+    "comparative": {
+      "recall@k": 0.10714285714285714,
+      "mrr@k": 0.06460084033613446,
+      "precision@k": 0.010714285714285716,
+      "n": 28
+    },
+    "configuration": {
+      "recall@k": 0.328125,
+      "mrr@k": 0.15981814600840336,
+      "precision@k": 0.0328125,
+      "n": 64
+    },
+    "troubleshooting": {
+      "recall@k": 0.3793103448275862,
+      "mrr@k": 0.20156857661394864,
+      "precision@k": 0.03793103448275863,
+      "n": 29
+    }
+  },
+  "rewrite_mode": "disabled",
+  "per_query": [
+    {
+      "id": "mh-window-config-001",
+      "recall": 0.5,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.21840743681816419
+    },
+    {
+      "id": "mh-aqe-tuning-002",
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
+    },
+    {
+      "id": "mh-streaming-api-003",
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
+    },
+    {
+      "id": "mh-array-column-009",
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
+    },
+    {
+      "id": "mh-schema-create-010",
+      "recall": 0.5,
+      "mrr": 0.2,
+      "ndcg": 0.23719771276929622
+    },
+    {
+      "id": "fast-window-001",
+      "recall": 0.0,
+      "mrr": 0.05555555555555555,
+      "ndcg": 0.0
+    },
+    {
+      "id": "fast-where-002",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "fast-groupby-003",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "fast-orderby-004",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "fast-join-005",
+      "recall": 0.0,
+      "mrr": 0.07692307692307693,
+      "ndcg": 0.0
+    },
+    {
+      "id": "fast-having-006",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "fast-limit-007",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "fast-select-008",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "fast-lateral-view-009",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "fast-offset-010",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-window-rolling-001",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-window-dense-rank-002",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "spark-nested-array-filter-003",
+      "recall": 1.0,
+      "mrr": 0.1111111111111111,
+      "ndcg": 0.3010299956639812
+    },
+    {
+      "id": "spark-array-transform-004",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "spark-array-aggregate-005",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-struct-access-006",
+      "recall": 0.5,
+      "mrr": 0.25,
+      "ndcg": 0.2640681225725909
+    },
+    {
+      "id": "spark-api-filter-007",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-api-transform-008",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "spark-api-aggregate-009",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-jdbc-read-011",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-jdbc-write-012",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-csv-read-013",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "spark-load-save-functions-015",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-sql-perf-tuning-025",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-sql-null-semantics-026",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-api-dataframe-029",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "spark-api-session-030",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "spark-api-column-031",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-sqlref-substring-032",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-sqlref-math-033",
+      "recall": 0.0,
+      "mrr": 0.045454545454545456,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-sqlref-collection-034",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-ml-pipeline-035",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "spark-rdd-037",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-streaming-programming-038",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "spark-api-lookup-001",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-002",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-003",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-004",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-005",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-006",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-007",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-008",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "spark-api-lookup-009",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-010",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-011",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-012",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-013",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-api-lookup-014",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "spark-api-lookup-015",
+      "recall": 0.0,
+      "mrr": 0.08333333333333333,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-016",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-017",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-018",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-019",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-020",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-021",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-022",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-023",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-024",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-025",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-026",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-027",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-028",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-029",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-code-example-030",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-031",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-code-example-032",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-factual-033",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-factual-034",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-factual-035",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-factual-036",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-037",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-038",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-039",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-040",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-041",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-042",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-043",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-044",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "spark-debugging-045",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-debugging-046",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-047",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-048",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-049",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-050",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-051",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-052",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-053",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-comparative-054",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "spark-synthesis-055",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-synthesis-056",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-configuration-057",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-configuration-058",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-configuration-059",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-configuration-060",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "spark-configuration-061",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-dags-201",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "airflow-operators-202",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "airflow-dynamic-task-mapping-203",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "airflow-xcoms-204",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "airflow-connections-205",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-cron-206",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "airflow-assets-207",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "mh-airflow-assets-008",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.448643819352159
+    },
+    {
+      "id": "airflow-dag-040",
+      "recall": 0.0,
+      "mrr": 0.09090909090909091,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-operators-041",
+      "recall": 0.0,
+      "mrr": 0.0625,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-taskflow-042",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "airflow-cron-043",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "airflow-how-to-001",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-002",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "airflow-how-to-003",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-004",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "airflow-how-to-005",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-006",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-007",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-008",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-009",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-010",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-011",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-012",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-013",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "airflow-how-to-014",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-015",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-016",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-017",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-018",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-019",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-020",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-how-to-021",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-022",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-023",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-024",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-025",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-026",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-027",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-028",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-029",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-030",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-031",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-032",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-033",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-034",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "airflow-factual-035",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "airflow-factual-036",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-factual-037",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-038",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-039",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-040",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-041",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-042",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-043",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-044",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-045",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-046",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-047",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-048",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-configuration-049",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-050",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-051",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "airflow-comparative-052",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-053",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-054",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-055",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-056",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-057",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-058",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-comparative-059",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-060",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-061",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-062",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-063",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-064",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-065",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-066",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-067",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-068",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-debugging-069",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-070",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-071",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-072",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "airflow-synthesis-073",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-074",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-075",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-076",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-077",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-synthesis-078",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-code-example-079",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-code-example-080",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-code-example-081",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-code-example-082",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-code-example-083",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-troubleshooting-084",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-troubleshooting-085",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-troubleshooting-086",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "airflow-troubleshooting-087",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "airflow-troubleshooting-088",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-batch-301",
+      "recall": 0.0,
+      "mrr": 0.043478260869565216,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-concurrency-302",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "delta-best-practices-303",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-optimizations-304",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "mh-delta-spark-004",
+      "recall": 0.5,
+      "mrr": 0.5,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "mh-delta-concurrency-005",
+      "recall": 0.5,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.21840743681816419
+    },
+    {
+      "id": "delta-update-044",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "delta-quickstart-045",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "delta-sharing-046",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "delta-how-to-001",
+      "recall": 0.0,
+      "mrr": 0.05555555555555555,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-002",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-003",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-004",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-005",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-006",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-007",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-008",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-009",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-010",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-011",
+      "recall": 0.0,
+      "mrr": 0.05555555555555555,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-012",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "delta-how-to-013",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-014",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-015",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-016",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-017",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-018",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-019",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-020",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-how-to-021",
+      "recall": 0.0,
+      "mrr": 0.05555555555555555,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-022",
+      "recall": 0.0,
+      "mrr": 0.058823529411764705,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-023",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "delta-factual-024",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-025",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-026",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-027",
+      "recall": 0.0,
+      "mrr": 0.05263157894736842,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-028",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-029",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-030",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-031",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-032",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "delta-factual-033",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "delta-factual-034",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-035",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-036",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-037",
+      "recall": 0.0,
+      "mrr": 0.05263157894736842,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-038",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-factual-039",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-040",
+      "recall": 0.0,
+      "mrr": 0.058823529411764705,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-041",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-042",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-043",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-044",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-045",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-046",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-047",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-048",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-049",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-050",
+      "recall": 0.0,
+      "mrr": 0.058823529411764705,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-051",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "delta-configuration-052",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-configuration-053",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-054",
+      "recall": 0.0,
+      "mrr": 0.058823529411764705,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-055",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-056",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-057",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-058",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-059",
+      "recall": 0.0,
+      "mrr": 0.05263157894736842,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-060",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-061",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-062",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-debugging-063",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-064",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "delta-synthesis-065",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "delta-synthesis-066",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-067",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-068",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-069",
+      "recall": 0.0,
+      "mrr": 0.05263157894736842,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-070",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-synthesis-071",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-072",
+      "recall": 0.0,
+      "mrr": 0.058823529411764705,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-073",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "delta-comparative-074",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-075",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-076",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-077",
+      "recall": 0.0,
+      "mrr": 0.08333333333333333,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-078",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-079",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-080",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-comparative-081",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-082",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "delta-troubleshooting-083",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-084",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-085",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-086",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-087",
+      "recall": 0.0,
+      "mrr": 0.05263157894736842,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-088",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-089",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-090",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "delta-troubleshooting-091",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-messages-api-001",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-prompt-caching-002",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-streaming-003",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-structured-outputs-004",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-tool-use-005",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-errors-007",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-beta-api-008",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-compliance-009",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-vision-011",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-thinking-012",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-agent-skills-013",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-models-overview-014",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "mh-claude-cache-tools-006",
+      "recall": 0.5,
+      "mrr": 0.5,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "mh-claude-stream-messages-007",
+      "recall": 0.5,
+      "mrr": 0.2,
+      "ndcg": 0.23719771276929622
+    },
+    {
+      "id": "claude-messages-047",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-prompt-caching-048",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-tool-use-049",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-mcp-050",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-how-to-001",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-how-to-002",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-how-to-003",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-how-to-005",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-how-to-007",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-how-to-009",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-how-to-010",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-how-to-011",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-how-to-012",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-013",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-factual-015",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-factual-017",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-factual-019",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-factual-020",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-021",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-023",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-024",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-factual-025",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-factual-027",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-factual-028",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-029",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-factual-030",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-factual-031",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-configuration-032",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-configuration-033",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-configuration-034",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-configuration-035",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-configuration-036",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-configuration-037",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-configuration-038",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-configuration-039",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-configuration-040",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-configuration-041",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-configuration-042",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-configuration-044",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-configuration-045",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-046",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-api-lookup-047",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-048",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-api-lookup-049",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-050",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-052",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-api-lookup-054",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-api-lookup-055",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-056",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-api-lookup-058",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-debugging-059",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-debugging-060",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-debugging-061",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-debugging-062",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-debugging-063",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-debugging-064",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-debugging-065",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-debugging-066",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-debugging-067",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-synthesis-069",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "claude-platform-synthesis-070",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-synthesis-071",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-synthesis-072",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-synthesis-073",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-synthesis-074",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-synthesis-075",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-synthesis-076",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-platform-troubleshooting-077",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-troubleshooting-078",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-troubleshooting-079",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-platform-api-lookup-059",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-platform-api-lookup-060",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "cc-hooks-015",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "id": "cc-skills-016",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "cc-mcp-017",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "cc-subagents-018",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "cc-env-vars-019",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "cc-settings-020",
+      "recall": 0.0,
+      "mrr": 0.06666666666666667,
+      "ndcg": 0.0
+    },
+    {
+      "id": "cc-plugins-023",
+      "recall": 1.0,
+      "mrr": 0.1,
+      "ndcg": 0.2890648263178879
+    },
+    {
+      "id": "cc-monitoring-024",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "cc-permissions-025",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "cc-commands-026",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "cc-gateway-027",
+      "recall": 0.0,
+      "mrr": 0.08333333333333333,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-hooks-051",
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "id": "claude-code-subagents-052",
+      "recall": 1.0,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163
+    },
+    {
+      "id": "claude-code-mcp-053",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-how-to-001",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-how-to-002",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-how-to-003",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-how-to-004",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "claude-code-how-to-005",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-how-to-006",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-how-to-007",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-how-to-008",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-how-to-009",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-how-to-010",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-how-to-011",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-how-to-012",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-how-to-013",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-how-to-014",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-how-to-015",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-how-to-016",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-factual-017",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-factual-018",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-factual-019",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-factual-020",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-factual-021",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-factual-022",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-factual-023",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-factual-024",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-factual-025",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-factual-026",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-factual-027",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-factual-028",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "claude-code-factual-029",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-factual-030",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "claude-code-factual-031",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-factual-032",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-factual-033",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-factual-034",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-factual-035",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-factual-036",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-configuration-037",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-configuration-038",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-configuration-039",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-configuration-040",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "claude-code-configuration-041",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-configuration-042",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-configuration-043",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-configuration-044",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-configuration-045",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-configuration-046",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-configuration-047",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-debugging-048",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-debugging-049",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-debugging-050",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-debugging-051",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-debugging-052",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-debugging-053",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-debugging-054",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-debugging-055",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-debugging-056",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-debugging-057",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-058",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-synthesis-059",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-synthesis-060",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-synthesis-061",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-062",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-synthesis-063",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-064",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-065",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-synthesis-066",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-synthesis-067",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-troubleshooting-068",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-troubleshooting-069",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-troubleshooting-070",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-troubleshooting-071",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-troubleshooting-072",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-troubleshooting-073",
+      "recall": 1.0,
+      "mrr": 0.125,
+      "ndcg": 0.31546487678572877
+    },
+    {
+      "id": "claude-code-troubleshooting-074",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-troubleshooting-075",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-troubleshooting-076",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-code-example-078",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-code-example-079",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-code-example-080",
+      "recall": 1.0,
+      "mrr": 0.14285714285714285,
+      "ndcg": 0.3333333333333333
+    },
+    {
+      "id": "claude-code-code-example-081",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-code-example-082",
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "id": "claude-code-code-example-083",
+      "recall": 0.0,
+      "mrr": 0.07142857142857142,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-code-example-084",
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "id": "claude-code-code-example-085",
+      "recall": 1.0,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.3562071871080222
+    },
+    {
+      "id": "claude-code-code-example-086",
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg": 0.0
+    },
+    {
+      "id": "claude-code-code-example-087",
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    }
+  ]
+}
