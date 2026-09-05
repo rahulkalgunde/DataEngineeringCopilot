@@ -208,8 +208,10 @@ def test_namespace_bm25_setting_defaults_to_off() -> None:
 
 
 def test_namespace_bm25_setting_can_be_enabled() -> None:
-    settings = make_settings(namespace_bm25_enabled=True)
+    # namespace_bm25 requires hybrid_search_enabled=True (validation rule).
+    settings = make_settings(namespace_bm25_enabled=True, hybrid_search_enabled=True)
     assert settings.namespace_bm25_enabled is True
+    assert settings.hybrid_search_enabled is True
 
 
 def test_validate_generation_artifacts_rejects_unsupported_version() -> None:
