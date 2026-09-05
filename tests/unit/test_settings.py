@@ -69,7 +69,7 @@ def test_app_settings_default_logging_enabled() -> None:
 
 def test_app_settings_hybrid_search_defaults() -> None:
     settings = make_settings()
-    assert settings.hybrid_search_enabled is True
+    assert settings.hybrid_search_enabled is False
     assert settings.hybrid_rrf_k == 20
     assert settings.retrieval_prefetch_limit == 100
     assert settings.context_compression_enabled is False

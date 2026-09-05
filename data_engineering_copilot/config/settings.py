@@ -1369,9 +1369,10 @@ class AppSettings(BaseSettings):
     mrl_small_dim: int = 256
     mrl_oversample_factor: int = 4
     # RETRIEVAL TUNING — FROZEN until store recall@10 ≥0.35 on held 110 — ADR-010
-    # Shipped base stays: hybrid k=20 L100 (74236d9). Dark flags below stay False/rrf
-    # until held recall gate passes — docs == code.
-    hybrid_search_enabled: bool = True
+    # Shipped base stays: dense-only (hybrid disabled 2026-09-05 after ablation
+    # showed sparse/BM25 drags dense by -0.09 CI [-0.126,-0.056] on held 243q).
+    # Dark flags below stay False/rrf until held recall gate passes — docs == code.
+    hybrid_search_enabled: bool = False
     # RRF k: 2..5 for ~1 rel/query (our n=220 avg 1.1 relevant), 60 for many — tuned per ADR-006 (train best k=20 prefetch 100, held ΔnDCG +0.034 CI [0.004,0.064] ship)
     # Frozen until store recall@10 ≥0.35 on held 110 — ADR-010
     hybrid_rrf_k: int = 20
