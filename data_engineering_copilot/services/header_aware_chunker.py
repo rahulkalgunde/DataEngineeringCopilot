@@ -67,6 +67,9 @@ class HeaderAwareChunker:
         when merging sections.  Preserves continuity across boundaries.
     min_chunk_words:
         Minimum words for a chunk to be included in the output.
+    prepend_heading_path:
+        If True, prepend the heading path (e.g. ``pyspark.sql.functions``)
+        to each chunk's text for breadcrumb context in vector embeddings.
     """
 
     def __init__(
@@ -74,6 +77,7 @@ class HeaderAwareChunker:
         chunk_size_words: int = 500,
         overlap_words: int = 120,
         min_chunk_words: int = 10,
+        prepend_heading_path: bool = False,
     ) -> None:
         if chunk_size_words <= 0:
             raise ValueError("chunk_size_words must be positive")
@@ -85,6 +89,7 @@ class HeaderAwareChunker:
         self.chunk_size_words = chunk_size_words
         self.overlap_words = overlap_words
         self.min_chunk_words = min_chunk_words
+        self.prepend_heading_path = prepend_heading_path
 
     async def chunk(
         self, document: ParsedDocument, precomputed_embeddings: list[list[float]] | None = None
@@ -158,23 +163,24 @@ class HeaderAwareChunker:
                     )
                 )
                 continue
-            # Oversized paragraph: emit word windows so each section stays
-            # within the budget. Windows share no heading path.
-            for start in range(0, len(words), self.chunk_size_words):
-                window = " ".join(words[start : start + self.chunk_size_words])
-                idx = text.find(window, cursor)
-                wstart = idx if idx != -1 else cursor
-                wend = wstart + len(window)
-                cursor = wend
+            # Oversized paragraph: use code-aware splitting to avoid breaking mid-function
+            text_chunks = self._split_oversized_section(paragraph, self.chunk_size_words)
+            # Calculate start/end positions for each chunk
+            chunk_cursor = 0
+            for text_chunk in text_chunks:
+                idx = text.find(text_chunk, chunk_cursor)
+                chunk_start = idx if idx != -1 else chunk_cursor
+                chunk_end = chunk_start + len(text_chunk)
+                chunk_cursor = chunk_end
                 sections.append(
                     _RawSection(
                         header="",
                         level=0,
                         heading_path=(),
-                        text=window,
-                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(window)),
-                        start=wstart,
-                        end=wend,
+                        text=text_chunk,
+                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(text_chunk)),
+                        start=chunk_start,
+                        end=chunk_end,
                     )
                 )
         return sections
@@ -257,28 +263,137 @@ class HeaderAwareChunker:
             if not section.text or len(section.text.split()) <= self.chunk_size_words:
                 windowed.append(section)
                 continue
-            words = section.text.split()
-            cursor = section.start
-            for w in range(0, len(words), self.chunk_size_words):
-                window_text = " ".join(words[w : w + self.chunk_size_words])
-                idx = text.find(window_text, cursor)
-                wstart = idx if idx != -1 else cursor
-                wend = wstart + len(window_text)
-                cursor = wend
+            # Split oversized section at code-block and function boundaries
+            text_chunks = self._split_oversized_section(section.text, self.chunk_size_words)
+            for text_chunk in text_chunks:
                 windowed.append(
                     _RawSection(
                         header=section.header,
                         level=section.level,
                         heading_path=section.heading_path,
-                        text=window_text,
-                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(window_text)),
-                        start=wstart,
-                        end=wend,
+                        text=text_chunk,
+                        code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(text_chunk)),
+                        start=section.start,
+                        end=section.start + len(text_chunk),
                     )
                 )
         sections = windowed
 
         return sections
+
+    def _word_count_of_text(self, text: str) -> int:
+        return len(text.split())
+
+    def _split_oversized_section(self, text: str, max_words: int) -> list[str]:
+        """Split *text* (which exceeds max_words) into chunks.
+
+        Strategy: keep fenced code blocks intact; split prose by word windows;
+        for oversized code blocks, split at ``def``/``class``/``async def`` boundaries
+        first, then fall back to line-based windows.
+        """
+        result: list[str] = []
+        cursor = 0
+
+        for m in _FENCE_RE.finditer(text):
+            start, end = m.start(), m.end()
+            # Process prose before this fence
+            if cursor < start:
+                prose = text[cursor:start]
+                result.extend(self._split_prose_chunk(prose, max_words))
+            # Process code block (may span many lines)
+            code = m.group(0)
+            if len(code.split()) > max_words:
+                result.extend(self._split_code_chunk(code, max_words))
+            else:
+                result.append(code)
+            cursor = end
+
+        # Trailing prose
+        if cursor < len(text):
+            result.extend(self._split_prose_chunk(text[cursor:], max_words))
+
+        return result
+
+    def _split_prose_chunk(self, text: str, max_words: int) -> list[str]:
+        """Split prose into word-window chunks, respecting blank-line boundaries."""
+        if not text.strip():
+            return []
+        chunks: list[str] = []
+        words = text.split()
+        if len(words) <= max_words:
+            return [text]
+        for i in range(0, len(words), max_words):
+            chunks.append(" ".join(words[i : i + max_words]))
+        return chunks
+
+    # Lines that start a new top-level function/class in common Spark languages.
+    _FN_BOUNDARY_RE = re.compile(r"^(\s*)(def |class |async\s+def |@)")
+
+    def _split_code_chunk(self, code: str, max_words: int) -> list[str]:
+        """Split an oversized fenced code block at function/class boundaries.
+
+        The block is first grouped into *units* at definition boundaries
+        (``def``/``class``/``async def``/decorators), then whole units are packed
+        greedily into chunks up to ``max_words``.  A unit is only sub-split by
+        line when a single definition alone exceeds the word budget, so ordinary
+        functions are never cut in half.
+        """
+        if not code.strip() or len(code.split()) <= max_words:
+            return [code]
+
+        lines = code.splitlines(keepends=True)
+        units: list[list[str]] = []
+        current_unit: list[str] = []
+        for line in lines:
+            if self._FN_BOUNDARY_RE.match(line) and current_unit:
+                units.append(current_unit)
+                current_unit = [line]
+            else:
+                current_unit.append(line)
+        if current_unit:
+            units.append(current_unit)
+
+        # A single definition larger than the budget is sub-split by lines so
+        # the packer never emits an oversized chunk.
+        expanded: list[str] = []
+        for unit in units:
+            unit_text = "".join(unit)
+            if len(unit_text.split()) > max_words and len(unit) > 1:
+                expanded.extend(self._split_lines(unit, max_words))
+            else:
+                expanded.append(unit_text)
+
+        chunks: list[str] = []
+        current_chunk: list[str] = []
+        current_words = 0
+        for unit_text in expanded:
+            unit_words = len(unit_text.split())
+            if current_words + unit_words > max_words and current_chunk:
+                chunks.append("".join(current_chunk))
+                current_chunk = []
+                current_words = 0
+            current_chunk.append(unit_text)
+            current_words += unit_words
+        if current_chunk:
+            chunks.append("".join(current_chunk))
+        return chunks
+
+    def _split_lines(self, lines: list[str], max_words: int) -> list[str]:
+        """Sub-split an over-budget unit into line-bounded chunks."""
+        chunks: list[str] = []
+        current: list[str] = []
+        current_words = 0
+        for line in lines:
+            line_words = len(line.split())
+            if current_words + line_words > max_words and current:
+                chunks.append("".join(current))
+                current = []
+                current_words = 0
+            current.append(line)
+            current_words += line_words
+        if current:
+            chunks.append("".join(current))
+        return chunks
 
     # ------------------------------------------------------------------
     # Merging
@@ -309,6 +424,9 @@ class HeaderAwareChunker:
                 current_section_offsets = []
                 current_words = 0
                 return
+
+            if self.prepend_heading_path and current_path:
+                body = " ".join(current_path) + "\n\n" + body
 
             wc = len(body.split())
             if wc >= self.min_chunk_words:
@@ -351,7 +469,10 @@ class HeaderAwareChunker:
                 # below the minimum is filtered out (matches the no-content
                 # contract of ``min_chunk_words``).
                 last = chunks[-1]
-                merged_text = last.text + "\n\n" + body
+                merged_body = body
+                if self.prepend_heading_path and current_path:
+                    merged_body = " ".join(current_path) + "\n\n" + merged_body
+                merged_text = last.text + "\n\n" + merged_body
                 merged_end = current_section_offsets[-1][1] if current_section_offsets else last.end_offset
                 chunks[-1] = replace(
                     last,

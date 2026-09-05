@@ -244,3 +244,27 @@ class TestIntegration:
         chunker = build_chunker(settings)
         assert isinstance(chunker, SentencePreservingChunker)
         assert chunker.max_chars == 250 * 5
+
+
+class TestBreadcrumbPrefixing:
+    def test_breadcrumb_prefixing_flag_defaults_false(self):
+        assert AppSettings().chunk_breadcrumb_prefixing_enabled is False
+
+    def test_header_aware_chunker_receives_breadcrumb_flag(self):
+        from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+
+        settings = AppSettings(
+            chunking_strategy="header_aware",
+            chunk_breadcrumb_prefixing_enabled=False,
+        )
+        chunker = build_chunker(settings)
+        assert isinstance(chunker, HeaderAwareChunker)
+        assert chunker.prepend_heading_path is False
+
+        settings_on = AppSettings(
+            chunking_strategy="header_aware",
+            chunk_breadcrumb_prefixing_enabled=True,
+        )
+        chunker_on = build_chunker(settings_on)
+        assert isinstance(chunker_on, HeaderAwareChunker)
+        assert chunker_on.prepend_heading_path is True

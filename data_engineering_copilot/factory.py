@@ -1589,6 +1589,7 @@ def build_chunker(app_settings: AppSettings = settings):
             chunk_size_words=app_settings.chunk_size_words,
             overlap_words=app_settings.chunk_overlap_words,
             min_chunk_words=int(app_settings.chunk_size_words * 0.1),
+            prepend_heading_path=app_settings.chunk_breadcrumb_prefixing_enabled,
         )
 
     if strategy == "sentence_preserving":
