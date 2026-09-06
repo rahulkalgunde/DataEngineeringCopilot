@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from data_engineering_copilot.config.settings import AppSettings
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
@@ -115,6 +116,30 @@ def test_build_combines_and_embeds_packages() -> None:
     for chunk in store._chunks.values():
         assert chunk.index_generation == generation
         assert chunk.source_commit in {"a" * 40, "b" * 40}
+
+
+def test_build_skips_bm25_fit_when_hybrid_disabled(tmp_path) -> None:
+    """The build path always fits BM25: the index is inherently sparse and the
+    runtime dense-only query flag must not propagate into the build store
+    (``dec gen-build`` hardwires ``hybrid_search=True`` on its store). A builder
+    with a hybrid-disabled store must fail loudly, not silently produce a
+    dense-only generation that diverges from the active one.
+    """
+    store = InMemoryVectorStore(hybrid_search=False)
+    embedder = _StubEmbedder()
+    generation = "gen-dense"
+    package = _package("delta", "Delta Lake Documentation", "b" * 40, generation, [_LONG_BODY])
+
+    with pytest.raises(ValueError, match="hybrid_search_enabled"):
+        asyncio.run(
+            PinnedIndexBuilder(
+                cast(AsyncQdrantVectorStore, store),
+                embedder,
+                generation,
+                output_dir=tmp_path,
+                settings=AppSettings(hybrid_search_enabled=False),
+            ).build([package])
+        )
 
 
 def test_build_rejects_mismatched_source_commit() -> None:

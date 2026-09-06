@@ -16,8 +16,21 @@ from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
-_HEADER_RE = re.compile(r"^(#{1,6})\s+(.*)", re.MULTILINE)
-_FENCE_RE = re.compile(r"^```(\w*)\n(.*?)^```", re.MULTILINE | re.DOTALL)
+# ``.+`` (not ``.*``) is deliberate, and the separator is ``[ \t]+`` rather
+# than ``\s+``: heading lines may never cross into the next line. ``## `` on
+# its own line otherwise lets ``\s+`` swallow the newline and the NEXT PARAGRAPH
+# becomes the heading text. Requiring same-line space + at least one heading
+# char keeps empty heading markers as prose.
+_HEADER_RE = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
+# Fenced code: 0-3 leading spaces, `` ``` `` or ``~~~`` markers, optional
+# language tag on the opening line. CRLF is tolerated on both the opening and
+# closing lines. Only ``m.group(0)`` is consumed by callers.
+_FENCE_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n(.*?)^\1\2[^\r\n]*", re.MULTILINE | re.DOTALL)
+# HTML tables are atomic split units: prose word windows must never cut a table
+# mid-row, otherwise the markdown-to-HTML rendering (and downstream extraction)
+# silently drops half the rows.
+_TABLE_RE = re.compile(r"<table\b.*?</table>", re.DOTALL | re.IGNORECASE)
+_TR_RE = re.compile(r"<tr.*?</tr>", re.DOTALL | re.IGNORECASE)
 # Leading YAML frontmatter block (Jekyll ``---\n...\n---``) stripped before
 # sectioning so license/title boilerplate never leaks into chunk text.
 _FRONTMATTER_RE = re.compile(r"^\ufeff?---\r?\n.*?\r?\n---\r?\n?", re.DOTALL)
@@ -39,6 +52,19 @@ _NAV_STUB_MARKERS = (
 def _inside_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
     """Return True when *pos* falls within any ``(start, end)`` span."""
     return any(start <= pos < end for start, end in spans)
+
+
+def _verbatim_tail(text: str, n: int) -> str:
+    """Return the last *n* whitespace-separated words of *text* verbatim.
+
+    Unlike a naive ``" ".join(text.split()[-n:])``, the slice keeps the
+    original line breaks/spacing between those words, so an overlap prefix
+    reproduces the source tail byte-for-byte.
+    """
+    spans = [m for m in re.finditer(r"\S+", text)]
+    if not spans or len(spans) <= n:
+        return text
+    return text[spans[-n].start() :]
 
 
 @dataclass
@@ -122,12 +148,15 @@ class HeaderAwareChunker:
     # Section splitting
     # ------------------------------------------------------------------
 
-    def _split_heading_less_paragraphs(self, text: str) -> list[_RawSection]:
+    def _split_heading_less_paragraphs(self, text: str, offset_base: int = 0) -> list[_RawSection]:
         """Split heading-less *text* into paragraph-sized level-0 sections.
 
         Returns an empty list for blank input. Paragraphs longer than
         ``chunk_size_words`` are further split into word windows so the
         downstream merge never accumulates an oversized chunk.
+        ``offset_base`` shifts reported offsets when *text* is a sub-splice
+        (e.g. after front-matter stripping) so offsets stay relative to the
+        original document.
         """
         body = text.strip()
         if not body:
@@ -158,8 +187,8 @@ class HeaderAwareChunker:
                         heading_path=(),
                         text=paragraph,
                         code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(paragraph)),
-                        start=start,
-                        end=end,
+                        start=offset_base + start,
+                        end=offset_base + end,
                     )
                 )
                 continue
@@ -179,8 +208,8 @@ class HeaderAwareChunker:
                         heading_path=(),
                         text=text_chunk,
                         code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(text_chunk)),
-                        start=chunk_start,
-                        end=chunk_end,
+                        start=offset_base + chunk_start,
+                        end=offset_base + chunk_end,
                     )
                 )
         return sections
@@ -191,7 +220,11 @@ class HeaderAwareChunker:
         Headings that appear *inside* a fenced code block are ignored so that
         a ``# comment`` line in code never starts a spurious section.
         """
-        text = _FRONTMATTER_RE.sub("", text, count=1)
+        stripped = _FRONTMATTER_RE.sub("", text, count=1)
+        # Offsets are reported relative to the ORIGINAL *text*: any front-matter
+        # that was stripped shifts all subsequent section spans by its length.
+        offset_base = len(text) - len(stripped)
+        text = stripped
         fence_spans = [(m.start(), m.end()) for m in _FENCE_RE.finditer(text)]
         matches = [m for m in _HEADER_RE.finditer(text) if not _inside_spans(m.start(), fence_spans)]
         if not matches:
@@ -200,7 +233,7 @@ class HeaderAwareChunker:
             # ``_merge_sections`` can chunk by word budget instead of
             # silently dropping the page. Oversized single paragraphs are
             # further split into word windows.
-            return self._split_heading_less_paragraphs(text)
+            return self._split_heading_less_paragraphs(text, offset_base)
 
         sections: list[_RawSection] = []
 
@@ -214,8 +247,8 @@ class HeaderAwareChunker:
                     heading_path=(),
                     text=preamble,
                     code_blocks=(),
-                    start=0,
-                    end=len(preamble),
+                    start=offset_base,
+                    end=offset_base + len(preamble),
                 )
             )
 
@@ -238,7 +271,7 @@ class HeaderAwareChunker:
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
             heading_stack.append((level, header_text))
-            path = tuple(text for _, text in heading_stack)
+            path = tuple(t for _, t in heading_stack if t)
 
             sections.append(
                 _RawSection(
@@ -247,8 +280,8 @@ class HeaderAwareChunker:
                     heading_path=path,
                     text=raw_body.strip(),
                     code_blocks=code_blocks,
-                    start=start,
-                    end=end,
+                    start=offset_base + start,
+                    end=offset_base + end,
                 )
             )
 
@@ -265,6 +298,7 @@ class HeaderAwareChunker:
                 continue
             # Split oversized section at code-block and function boundaries
             text_chunks = self._split_oversized_section(section.text, self.chunk_size_words)
+            cursor = section.start
             for text_chunk in text_chunks:
                 windowed.append(
                     _RawSection(
@@ -273,10 +307,11 @@ class HeaderAwareChunker:
                         heading_path=section.heading_path,
                         text=text_chunk,
                         code_blocks=tuple(blk.group(0) for blk in _FENCE_RE.finditer(text_chunk)),
-                        start=section.start,
-                        end=section.start + len(text_chunk),
+                        start=cursor,
+                        end=cursor + len(text_chunk),
                     )
                 )
+                cursor += len(text_chunk)
         sections = windowed
 
         return sections
@@ -287,35 +322,46 @@ class HeaderAwareChunker:
     def _split_oversized_section(self, text: str, max_words: int) -> list[str]:
         """Split *text* (which exceeds max_words) into chunks.
 
-        Strategy: keep fenced code blocks intact; split prose by word windows;
-        for oversized code blocks, split at ``def``/``class``/``async def`` boundaries
-        first, then fall back to line-based windows.
+        Strategy: keep fenced code blocks and HTML tables intact as atomic
+        spans; split prose by word windows; for oversized code blocks, split at
+        ``def``/``class``/``async def`` boundaries first, then fall back to
+        line-based windows; for oversized tables, pack whole rows greedily.
         """
+        spans: list[tuple[int, int, str]] = [(m.start(), m.end(), "fence") for m in _FENCE_RE.finditer(text)]
+        spans.extend((m.start(), m.end(), "table") for m in _TABLE_RE.finditer(text))
+        spans.sort(key=lambda s: s[0])
+
         result: list[str] = []
         cursor = 0
 
-        for m in _FENCE_RE.finditer(text):
-            start, end = m.start(), m.end()
-            # Process prose before this fence
+        for start, end, kind in spans:
+            if start < cursor:
+                # Overlaps an already-processed span (e.g. table inside a
+                # fenced block) — already emitted, skip.
+                continue
             if cursor < start:
-                prose = text[cursor:start]
-                result.extend(self._split_prose_chunk(prose, max_words))
-            # Process code block (may span many lines)
-            code = m.group(0)
-            if len(code.split()) > max_words:
-                result.extend(self._split_code_chunk(code, max_words))
+                result.extend(self._split_prose_chunk(text[cursor:start], max_words))
+            block = text[start:end]
+            if len(block.split()) > max_words:
+                if kind == "table":
+                    result.extend(self._split_table_chunk(block, max_words))
+                else:
+                    result.extend(self._split_code_chunk(block, max_words))
             else:
-                result.append(code)
+                result.append(block)
             cursor = end
 
-        # Trailing prose
         if cursor < len(text):
             result.extend(self._split_prose_chunk(text[cursor:], max_words))
 
         return result
 
-    def _split_prose_chunk(self, text: str, max_words: int) -> list[str]:
-        """Split prose into word-window chunks, respecting blank-line boundaries."""
+    def _split_prose_chunk(self, text: str, max_words: int, tail_floor: int = 25) -> list[str]:
+        """Split prose into word-window chunks, respecting blank-line boundaries.
+
+        A trailing window smaller than ``tail_floor`` words is merged into the
+        previous window so word-window splitting never emits 1–9 word nubs.
+        """
         if not text.strip():
             return []
         chunks: list[str] = []
@@ -324,6 +370,52 @@ class HeaderAwareChunker:
             return [text]
         for i in range(0, len(words), max_words):
             chunks.append(" ".join(words[i : i + max_words]))
+        if len(chunks) >= 2 and len(chunks[-1].split()) < tail_floor:
+            chunks[-2] = chunks[-2] + " " + chunks[-1]
+            chunks.pop()
+        return chunks
+
+    def _split_table_chunk(self, table: str, max_words: int) -> list[str]:
+        """Split an oversized HTML table into greedy ``<tr>`` row-unit chunks.
+
+        Rows are packed up to ``max_words``; a row is never cut in half.  The
+        ``<table>``/``</table>`` wrapper stays with the first/last chunk so the
+        emitted fragments are still self-delimiting.
+        """
+        rows = [m.group(0) for m in _TR_RE.finditer(table)]
+        if not rows:
+            return [table]
+
+        packed: list[list[str]] = []
+        current: list[str] = []
+        current_words = 0
+        for row in rows:
+            row_words = len(row.split())
+            if current_words + row_words > max_words and current:
+                packed.append(current)
+                current = []
+                current_words = 0
+            current.append(row)
+            current_words += row_words
+        if current:
+            packed.append(current)
+
+        head = table[: table.find("<tr")]
+        tail = table[table.rfind("</tr>") + len("</tr>") :] if "</tr>" in table else ""
+        if head == table:
+            head = ""
+
+        chunks: list[str] = []
+        for i, piece in enumerate(packed):
+            body = "".join(piece)
+            if i == 0 and len(packed) == 1:
+                chunks.append(head + body + tail)
+            elif i == 0:
+                chunks.append(head + body)
+            elif i == len(packed) - 1:
+                chunks.append(body + tail)
+            else:
+                chunks.append(body)
         return chunks
 
     # Lines that start a new top-level function/class in common Spark languages.
@@ -336,12 +428,22 @@ class HeaderAwareChunker:
         (``def``/``class``/``async def``/decorators), then whole units are packed
         greedily into chunks up to ``max_words``.  A unit is only sub-split by
         line when a single definition alone exceeds the word budget, so ordinary
-        functions are never cut in half.
+        functions are never cut in half.  Every emitted chunk is re-wrapped in
+        its own balanced fence (same markers/language tag), so a split fence
+        never leaves a dangling opener in one chunk and its closer in another.
         """
         if not code.strip() or len(code.split()) <= max_words:
             return [code]
 
-        lines = code.splitlines(keepends=True)
+        # Split off the opening fence line and the closing marker.
+        fence = re.match(r"^(\s{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n", code)
+        opener = fence.group(0) if fence else ""
+        marker = fence.group(2) if fence else "```"
+        body = code[len(opener) :]
+        close_pat = re.compile(r"\s*" + re.escape(marker) + r"[^\r\n]*(?:\r?\n)?\Z")
+        body = close_pat.sub("", body)
+
+        lines = body.splitlines(keepends=True)
         units: list[list[str]] = []
         current_unit: list[str] = []
         for line in lines:
@@ -376,7 +478,9 @@ class HeaderAwareChunker:
             current_words += unit_words
         if current_chunk:
             chunks.append("".join(current_chunk))
-        return chunks
+
+        # Re-fence each emitted chunk so fences stay balanced per chunk.
+        return [opener + body_text + "\n" + marker for body_text in chunks]
 
     def _split_lines(self, lines: list[str], max_words: int) -> list[str]:
         """Sub-split an over-budget unit into line-bounded chunks."""
@@ -412,26 +516,42 @@ class HeaderAwareChunker:
         current_heading: str = ""
         current_path: tuple[str, ...] = ()
         current_words = 0
+        overlap_tail: str = ""
 
         def _flush() -> None:
-            nonlocal current_text_parts, current_code_parts, current_words, current_section_offsets
+            nonlocal current_text_parts, current_code_parts, current_words, current_section_offsets, overlap_tail
             if not current_text_parts:
                 return
             body = "\n\n".join(current_text_parts).strip()
             if not body:
+                overlap_tail = ""
                 current_text_parts = []
                 current_code_parts = []
                 current_section_offsets = []
                 current_words = 0
                 return
 
+            # min-chunk gate counts CONTENT words only: a breadcrumb prefix must
+            # never inflate a tiny section past the minimum.
+            content_wc = len(body.split())
             if self.prepend_heading_path and current_path:
                 body = " ".join(current_path) + "\n\n" + body
-
             wc = len(body.split())
-            if wc >= self.min_chunk_words:
+            if content_wc >= self.min_chunk_words:
+                # Stash the verbatim tail of the last accumulated section so
+                # the next chunk can open with it (overlap), preserving line
+                # structure instead of a whitespace-flattened fragment.
+                if self.overlap_words > 0:
+                    overlap_tail = _verbatim_tail(current_text_parts[-1], self.overlap_words)
                 chunk_id = self._chunk_id(document, len(chunks))
-                # Determine chunk type
+                # Determine chunk type. NOTE (M8): ``"code"`` is produced here
+                # only when a section's body is empty while its code blocks are
+                # non-empty — unreachable from the markdown paths, because
+                # ``section.text`` always contains the fence body too. The
+                # corpus ``code`` rows (2,664 in the pinned generation) come
+                # exclusively from the Spark extractors, which create
+                # ``DocumentChunk`` rows directly; this branch stays as a guard
+                # for any future zero-prose code source.
                 ct = "text"
                 if current_code_parts and not current_text_parts:
                     ct = "code"
@@ -468,6 +588,7 @@ class HeaderAwareChunker:
                 # page keeps every word. Only a document whose *entire* body is
                 # below the minimum is filtered out (matches the no-content
                 # contract of ``min_chunk_words``).
+                overlap_tail = ""
                 last = chunks[-1]
                 merged_body = body
                 if self.prepend_heading_path and current_path:
@@ -486,6 +607,15 @@ class HeaderAwareChunker:
             current_section_offsets = []
             current_words = 0
 
+        def _open_chunk() -> None:
+            nonlocal overlap_tail, current_text_parts, current_words
+            # Populate a freshly flushed accumulation with the verbatim tail of
+            # the previous chunk's last section (overlap across ANY boundary).
+            if self.overlap_words > 0 and overlap_tail:
+                current_text_parts.append(overlap_tail)
+                current_words = len(overlap_tail.split())
+                overlap_tail = ""
+
         for section in sections:
             section_wc = len(section.text.split()) if section.text else 0
 
@@ -495,7 +625,9 @@ class HeaderAwareChunker:
             # would silently drop the whole (small) section, losing content from
             # short API-reference pages whose nested headings each own a couple
             # of lines. Carrying the content forward merges it with the next
-            # section instead of discarding it.
+            # section instead of discarding it. Overlap is NOT carried across a
+            # parent transition: re-opening the previous topic's tail would mix
+            # unrelated content under the new header.
             parent_current = current_path[:-1] if current_path else ()
             parent_new = section.heading_path[:-1] if section.heading_path else ()
             if parent_current != parent_new and current_text_parts and current_words >= self.min_chunk_words:
@@ -504,20 +636,7 @@ class HeaderAwareChunker:
             # Would adding this section exceed the target?
             if current_words + section_wc > self.chunk_size_words and current_text_parts:
                 _flush()
-                # Start new chunk with overlap
-                if self.overlap_words > 0 and chunks:
-                    prev_text = current_text_parts[-1] if current_text_parts else ""
-                    if not prev_text and chunks:
-                        # Extract overlap from last flushed chunk text (strip prefix)
-                        last_body = chunks[-1].text
-                        prefix_end = last_body.find("\n")
-                        if prefix_end != -1:
-                            last_body = last_body[prefix_end + 1 :]
-                        words = last_body.split()[-self.overlap_words :]
-                        if words:
-                            overlap_text = " ".join(words)
-                            current_text_parts.append(overlap_text)
-                            current_words = len(words)
+                _open_chunk()
 
             # Accumulate
             if section.text:

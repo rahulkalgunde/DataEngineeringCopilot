@@ -94,6 +94,23 @@ def test_empty_pred_chunks():
     assert excerpt_precision(doc_text, gold, []) == 0.0
 
 
+def test_token_iou_nonascii_uses_byte_offset_basis():
+    # H3: char offsets must be converted to byte offsets before bisecting the
+    # byte-offset table, otherwise non-ASCII spans skew token boundaries.
+    doc_text = "前缀 superscalar 中文 anchor text"
+    gold = [{"start": 0, "end": len(doc_text)}]
+    pred = [_chunk(0, len(doc_text))]
+    assert token_iou(doc_text, gold, pred) == 1.0
+    assert excerpt_precision(doc_text, gold, pred) == 1.0
+
+    from data_engineering_copilot.evaluation.chunking_metrics import char_to_byte
+
+    mid = len(doc_text) // 2
+    # the doc contains multibyte chars, so char != byte at that offset
+    assert doc_text[:mid].encode("utf-8") != doc_text[:mid].encode("ascii", errors="replace")
+    assert char_to_byte(doc_text, mid) != mid
+
+
 # ---------------------------------------------------------------------------
 # SegEval boundary metrics
 # ---------------------------------------------------------------------------

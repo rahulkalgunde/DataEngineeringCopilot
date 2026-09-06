@@ -175,3 +175,92 @@ class TestHeaderAwareChunker:
         headers = {c.section_header for c in chunks}
         assert "Intro" in headers
         assert "Config" in headers
+
+
+HTML_TABLE = (
+    "<table>"
+    "<tr><td>alpha alpha alpha alpha alpha</td></tr>"
+    "<tr><td>beta beta beta beta beta</td></tr>"
+    "<tr><td>gamma gamma gamma gamma gamma</td></tr>"
+    "<tr><td>delta delta delta delta delta</td></tr>"
+    "</table>"
+)
+
+
+class TestTableAwareAndTailMerge:
+    def test_small_table_kept_intact(self):
+        chunker = HeaderAwareChunker(chunk_size_words=500, overlap_words=120, min_chunk_words=10)
+        chunks = chunker._sync_chunk(_doc(HTML_TABLE))
+        assert len(chunks) == 1
+        assert chunks[0].text.count("<tr>") == 4
+
+    def test_oversized_table_splits_at_row_boundary(self):
+        chunker = HeaderAwareChunker(chunk_size_words=15, overlap_words=0, min_chunk_words=1)
+        chunks = chunker._sync_chunk(_doc(HTML_TABLE))
+        assert len(chunks) > 1
+        for ch in chunks:
+            # a boundary may fall between rows, never inside a row: every
+            # chunk holds complete <tr>…</tr> pairs (an opened row would leave
+            # an unmatched "<tr>"), and all 4 rows survive in total.
+            assert "<tr>" in ch.text
+            assert ch.text.count("<tr>") == ch.text.count("</tr>")
+            assert ch.text.startswith(("<table", "<tr"))
+            assert ch.text.rstrip().endswith(("</table>", "</tr>"))
+        assert sum(ch.text.count("<tr>") for ch in chunks) == 4
+        assert sum(ch.text.count("</tr>") for ch in chunks) == 4
+
+    def test_no_fence_boundary_inside_code_block(self):
+        code = "```python\ndef foo():\n    return 1\n\ndef bar():\n    return 2\n```"
+        chunker = HeaderAwareChunker(chunk_size_words=10, overlap_words=0, min_chunk_words=1)
+        chunks = chunker._sync_chunk(_doc(code))
+        for ch in chunks:
+            assert ch.text.count("```") % 2 == 0  # no mid-fence cut
+
+    def test_prose_tail_merge_no_nub(self):
+        text = ("word " * 60) + "tail tail tail tail"
+        chunker = HeaderAwareChunker(chunk_size_words=50, overlap_words=0, min_chunk_words=1)
+        chunks = chunker._sync_chunk(_doc(text))
+        assert chunks
+        for ch in chunks:
+            assert len(ch.text.split()) >= 20  # no <10-word nubs from word windows
+
+
+class TestWindowedSectionOffsets:
+    def test_windowed_offsets_are_monotonic_and_in_bounds(self):
+        text = "# Big\n" + ("word " * 900)
+        chunker = HeaderAwareChunker(chunk_size_words=200, overlap_words=0, min_chunk_words=10)
+        chunks = chunker._sync_chunk(_doc(text))
+        assert len(chunks) > 1
+        starts = [c.start_offset for c in chunks]
+        ends = [c.end_offset for c in chunks]
+        assert all(0 <= s <= e <= len(text) for s, e in zip(starts, ends, strict=True))
+        # non-overlapping, monotonic windows (no shared start_offset)
+        assert all(nxt >= prev for prev, nxt in zip(ends[:-1], starts[1:], strict=True))
+
+
+def test_overlap_tail_is_verbatim():
+    text = "# A\n" + ("word " * 105) + "AAA\nBBB\n\n# B\n" + ("beta " * 110)
+    chunker = HeaderAwareChunker(chunk_size_words=120, overlap_words=6, min_chunk_words=10)
+    chunks = chunker._sync_chunk(_doc(text))
+    assert len(chunks) == 2
+    # the last-6-word tail of section A (…word word word word AAA\nBBB) opens
+    # chunk 2 verbatim — the newline between AAA and BBB is preserved. A
+    # whitespace-flattened "AAA BBB" would not contain the '\n'.
+    assert chunks[1].text.startswith("word word word word")
+    assert "AAA\nBBB" in chunks[1].text
+    # the own section still follows the overlap
+    assert "\n\nbeta" in chunks[1].text
+
+
+def test_no_overlap_across_parent_boundary():
+    # overlap is carried only at size-overflow boundaries; a parent/child
+    # transition is a topical boundary and must NOT reopen the parent topic's
+    # tail (context-fragmentation guard: preamble chunks keep their header).
+    text = "# A\n" + ("word " * 100) + "\n\n## B\n" + ("beta " * 110)
+    chunker = HeaderAwareChunker(chunk_size_words=300, overlap_words=10, min_chunk_words=10)
+    chunks = chunker._sync_chunk(_doc(text))
+    assert len(chunks) == 2
+    assert chunks[0].section_header == "A"
+    assert chunks[1].section_header == "B"
+    # section B starts fresh under its own heading
+    assert chunks[1].text.startswith("beta")

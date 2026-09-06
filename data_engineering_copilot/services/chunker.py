@@ -23,10 +23,20 @@ def normalize_for_dedup(text: str) -> str:
 
 
 def deduplicate_chunks(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+    """Drop duplicate chunks keyed on the *contextful* identity of each chunk.
+
+    Two chunks that share body text but live under different headings are
+    semantically distinct (e.g. the same code block re-documented under two
+    parents in API references) — de-duping on the bare body would silently
+    drop one.  The key therefore combines heading path + section header +
+    normalized body so identical text under different headings survives.
+    """
     seen: set[str] = set()
     deduped: list[DocumentChunk] = []
     for chunk in chunks:
-        key = hashlib.sha256(normalize_for_dedup(chunk.text).encode("utf-8")).hexdigest()
+        path = "/".join(chunk.heading_path) if chunk.heading_path else ""
+        context = "|".join((path, chunk.section_header or "''", chunk.text))
+        key = hashlib.sha256(normalize_for_dedup(context).encode("utf-8")).hexdigest()
         if key in seen:
             continue
         seen.add(key)

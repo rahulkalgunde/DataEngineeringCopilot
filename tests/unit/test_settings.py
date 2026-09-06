@@ -67,6 +67,25 @@ def test_app_settings_default_logging_enabled() -> None:
     assert settings.logging_enabled is True
 
 
+def test_app_settings_honors_explicit_kwargs_over_env_file() -> None:
+    """Task 4.1 regression: requested values win over .env / env-file aliasing.
+
+    A long-lived process (API/worker/Streamlit) keeps the module-level
+    ``settings`` singleton from import time, so ``.env`` edits do not reach it
+    without a restart; fresh construction with explicit kwargs must always honor
+    the requested values regardless of what any env file declares.
+    """
+    settings = make_settings(
+        reranker_top_k=30,
+        max_context_chars=24000,
+        chunk_size_words=700,
+    )
+    assert settings.reranker_top_k == 30
+    assert settings.max_context_chars == 24000
+    assert settings.chunk_size_words == 700
+    assert settings.chunk_breadcrumb_prefixing_enabled is False
+
+
 def test_app_settings_hybrid_search_defaults() -> None:
     settings = make_settings()
     assert settings.hybrid_search_enabled is False

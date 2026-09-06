@@ -26,10 +26,13 @@ class InMemoryVectorStore(VectorStoreProtocol):
     """Thread-of-record store for hermetic RAG tests.
 
     Only dense cosine retrieval is implemented; BM25 fitting is recorded and
-    no-ops (mirroring a hybrid-disabled Qdrant collection).
+    no-ops (mirroring a hybrid-disabled sparse side). Matches
+    ``AsyncQdrantVectorStore``'s ``hybrid_search`` default and raises when
+    ``fit_bm25_corpus`` is called with hybrid disabled.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hybrid_search: bool = True) -> None:
+        self._hybrid_search = hybrid_search
         self._chunks: dict[str, DocumentChunk] = {}
         self._vectors: dict[str, list[float]] = {}
         self._bm25_fit_count = 0
@@ -46,6 +49,8 @@ class InMemoryVectorStore(VectorStoreProtocol):
         await self.upsert_chunks(chunks, vectors)
 
     def fit_bm25_corpus(self, texts: list[str]) -> None:
+        if not self._hybrid_search:
+            raise ValueError("fit_bm25_corpus requires hybrid_search_enabled=True")
         self._bm25_fit_count += 1
 
     async def validate_index_generation(self, expected_points: int | None = None) -> dict[str, object]:

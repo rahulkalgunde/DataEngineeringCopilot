@@ -60,6 +60,47 @@ def test_guide_metadata_propagated() -> None:
     assert chunks[0].deployment_mode == "yarn"
 
 
+def test_guide_sections_never_split_inside_code_fence() -> None:
+    """H9 regression: a line matching ``#``/``##`` inside a ``` fence (e.g. a
+    shell comment in an ``sh`` block) must not become a section boundary —
+    that split fences across chunks (fence_fracture debt on docs/README.md,
+    docs/building-spark.md after the RST→Markdown switch).
+    """
+    md = """# Build the docs
+
+## Prerequisites
+
+```sh
+# Skip generating API docs (which takes a while)
+$ SKIP_API=1 bundle exec jekyll build
+
+# Build the site with extra features used on the live page
+$ PRODUCTION=1 bundle exec jekyll build
+```
+
+## After
+
+Tear down.
+
+```sh
+# Serve content locally on port 4000
+$ bundle exec jekyll serve
+```
+"""
+    doc = _document(md, "Build the docs")
+    chunks = chunk_spark_document(doc, _metadata("guide"))
+    section_headers = [c.section_header for c in chunks]
+    assert "Skip generating API docs (which takes a while)" not in section_headers
+    assert "Build the site with extra features used on the live page" not in section_headers
+    assert "Serve content locally on port 4000" not in section_headers
+    assert all(c.text.count("```") % 2 == 0 for c in chunks), [
+        c.section_header for c in chunks if c.text.count("```") % 2
+    ]
+    fence_chunk = next(c for c in chunks if "SKIP_API=1" in c.text)
+    assert "PRODUCTION=1" in fence_chunk.text
+    assert "After" in section_headers
+
+
 def test_api_chunk_propagates_empty_deployment_mode() -> None:
     doc = _document("def foo():\n    return 1\n", "Functions")
     chunks = chunk_spark_document(doc, _metadata("api_reference", language="python"))

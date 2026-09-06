@@ -122,7 +122,7 @@ def mock_embedder():
 @pytest.fixture
 def gold_chunking_dataset():
     """Load the committed chunking gold fixtures (synthetic + human slices)."""
-    base = Path("tests/evaluation/golden/chunking")
+    base = Path(__file__).resolve().parents[1] / "evaluation" / "golden" / "chunking"
     docs: list[ChunkingGoldDoc] = []
     for name in ["synthetic_gold.jsonl", "human_slice.jsonl"]:
         path = base / name

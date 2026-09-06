@@ -243,7 +243,7 @@ def chunk_spark_document(
                     section_header=document.title,
                     chunk_type="api",
                     word_count=len(piece.split()),
-                    heading_path=(),
+                    heading_path=(document.title,) if document.title else (),
                     chunk_index=index,
                     total_chunks=max(1, len(_split_python_top_level(document.text) or [document.text])),
                     doc_type=metadata.doc_type,
@@ -342,14 +342,26 @@ def _split_on_blank_lines(text: str, max_lines: int = 200) -> list[str]:
     return [p for p in pieces if p.strip()]
 
 
+_FENCE_RE = re.compile(r"^\s*```")
+
+
 def _split_markdown_sections(text: str) -> list[tuple[str, str]]:
-    """Split Markdown into (header, body) sections at heading boundaries."""
+    """Split Markdown into (header, body) sections at heading boundaries.
+
+    Fence-aware (H9): a line inside a ````` code fence is never a section
+    boundary, so fences are never split across chunks. Shell comments like
+    ``# Build the site...`` inside ``sh`` blocks previously acted as heading
+    splits, producing unbalanced-fence chunks and tiny fragments.
+    """
     sections: list[tuple[str, str]] = []
     current_header = ""
     current_parts: list[str] = []
+    in_fence = False
     for line in text.splitlines():
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
         m = _HEADING_RE.match(line)
-        if m and m.group(1) in ("#", "##", "###"):
+        if m and m.group(1) in ("#", "##", "###") and not in_fence:
             if current_parts:
                 sections.append((current_header, "\n".join(current_parts)))
             current_header = m.group(2).strip()
@@ -535,7 +547,7 @@ def _build_chunk(
         section_header=header,
         chunk_type=chunk_type,
         word_count=len(text.split()),
-        heading_path=(),
+        heading_path=(document.title,) if chunk_type == "api" and document.title else (),
         chunk_index=index,
         total_chunks=0,
         doc_type=metadata.doc_type,

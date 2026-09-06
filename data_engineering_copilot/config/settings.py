@@ -1216,7 +1216,10 @@ class AppSettings(BaseSettings):
     # Feature flags
     enable_semantic_chunking: bool = True  # Enable semantic chunker (requires embedding model)
     # Prepend the heading path (e.g. ``pyspark.sql.functions``) to each chunk's
-    # text so the embedding carries breadcrumb context for fragmented sections.
+    # embedding input so the vector representation carries breadcrumb context
+    # for fragmented sections. Single-owner (M1): breadcrumbs are applied ONLY
+    # by ``embedding_text_for_chunk``; this flag mirrors the old
+    # ``prepend_heading_path`` wiring and stays in settings for gate tracking.
     # Ships dark (False); flip only after the chunking benchmark gate passes.
     chunk_breadcrumb_prefixing_enabled: bool = False
     # Retrieve a broad candidate pool per query variant; reranking narrows it

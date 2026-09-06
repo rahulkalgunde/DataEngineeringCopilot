@@ -84,8 +84,8 @@ class SentencePreservingChunker:
         return None
 
     def _sync_chunk(self, document: ParsedDocument) -> list[DocumentChunk]:
-        text = document.text.strip()
-        if not text:
+        text = document.text
+        if not text.strip():
             return []
 
         sentences = self._split_sentences_losslessly(text)
@@ -137,9 +137,10 @@ class SentencePreservingChunker:
 
         Code spans are masked before tokenization so a sentence boundary never
         falls inside code; each sentence is unmasked afterwards. Inter-sentence
-        whitespace is attached to the following sentence so
-        ``"".join(sentences) == text`` exactly. Falls back to ``[text]`` when
-        sentence tokenization is unavailable so content is never dropped.
+        whitespace is attached to the following sentence and the trailing run
+        to the final one, so ``"".join(sentences) == text`` exactly. Falls back
+        to ``[text]`` when sentence tokenization is unavailable so content is
+        never dropped.
         """
         masked = mask_code_spans(text)
         try:
@@ -152,9 +153,11 @@ class SentencePreservingChunker:
             return [text]
 
         sentences: list[str] = []
+        last = len(spans) - 1
         for index, (_start, end) in enumerate(spans):
             seg_start = spans[index - 1][1] if index > 0 else 0
-            sentences.append(unmask_code_spans(masked.text[seg_start:end], masked))
+            seg_end = end if index < last else len(masked.text)
+            sentences.append(unmask_code_spans(masked.text[seg_start:seg_end], masked))
         return sentences
 
     def _pack_sentences(self, sentences: list[str]) -> list[str]:

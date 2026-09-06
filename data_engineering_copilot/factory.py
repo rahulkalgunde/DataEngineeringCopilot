@@ -1589,7 +1589,12 @@ def build_chunker(app_settings: AppSettings = settings):
             chunk_size_words=app_settings.chunk_size_words,
             overlap_words=app_settings.chunk_overlap_words,
             min_chunk_words=int(app_settings.chunk_size_words * 0.1),
-            prepend_heading_path=app_settings.chunk_breadcrumb_prefixing_enabled,
+            # Single-owner breadcrumbs (M1): the embedding input is the ONLY
+            # breadcrumb owner, via ``embedding_text_for_chunk``. Baking the
+            # heading path into ``chunk.text`` here would double-prefix once
+            # the embedding path adds its own source/title/heading prefix, and
+            # would leak category text into retrieval snippets.
+            prepend_heading_path=False,
         )
 
     if strategy == "sentence_preserving":

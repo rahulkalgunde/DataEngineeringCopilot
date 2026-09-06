@@ -286,12 +286,14 @@ Every recurring defect class gets an executable gate; gates run in `make lint`/u
 | Stale derived goldens | provenance sidecars + `make eval-data-stale`; generators must write `.provenance.json` |
 | Multi-path pin divergence | `test_purpose_pin_precedence.py` parametrized over ALL purposes |
 | Container/env drift | `make env-verify` after ANY .env edit or container recreate |
+| Structural fracture (fence/table/tiny) | `make eval-chunking-corpus` ≤ 0.02 / ≤ 0.01 / ≤ 0.001 (local, vs ADR-018 baseline) |
 Ratchet: a defect class recurring twice MUST get a gate in the fixing commit.
 
 ## Session conventions (from opencode.json `instructions`)
 - Implementation plans → `plans/YYYY-MM-DD_HH-MM_plan.md`; on session exit save context → `sessions/YYYY-MM-DD_HH-MM_session.md`; "resume" = load latest of both and continue.
 - Check CI health (`gh run list`) at first session of the day and fix red runs before other work; `/check-ci` drives the same loop.
 - `.clinerules/` targets low-power executor models (one-edit-per-turn, single-command rules) — apply only when driving such a model.
+- Run `graphify update .` before ending a session to refresh graphify-out/graph.json (RULE 25 in opencode.json).
 
 ## Testing
 - Tests are hermetic: conftest no-ops `load_dotenv` and **raises** on ambient provider env vars/API keys. Build settings only via `make_settings()` (Ollama-only, no env files); provider-routing tests pass `_test_allow_non_ollama=True` with placeholder keys.

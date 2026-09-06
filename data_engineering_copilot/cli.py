@@ -1453,7 +1453,13 @@ def gen_build(generation: str | None = None) -> int:  # pragma: no cover: CLI en
     store = AsyncQdrantVectorStore(
         url=settings.qdrant_url,
         collection_name=collection,
-        hybrid_search=settings.hybrid_search_enabled,
+        # The index data model is inherently sparse: ``upsert_frozen_chunks``
+        # writes BM25 sparse vectors unconditionally and ``fit_bm25_corpus`` /
+        # collection creation require the hybrid shape. The runtime query flag
+        # (``hybrid_search_enabled``) only governs serving, not the build — the
+        # active generation carries sparse vectors on every point, so the build
+        # must always produce the same shape regardless of the query-side flag.
+        hybrid_search=True,
         hybrid_rrf_k=settings.hybrid_rrf_k,
         embedding_dimension=settings.get_embedding_dimension(),
         bm25_namespace=settings.namespace_bm25_enabled,
@@ -1558,7 +1564,10 @@ def gen_validate(generation: str) -> int:  # pragma: no cover: CLI entry point, 
     store = AsyncQdrantVectorStore(
         url=settings.qdrant_url,
         collection_name=collection,
-        hybrid_search=settings.hybrid_search_enabled,
+        # Validating a generation inspects a sparse-bearing collection; the
+        # in-memory tokenizer must be loaded to report ``bm25_ready`` correctly
+        # (mirrors ``gen_build``'s always-hybrid store).
+        hybrid_search=True,
         embedding_dimension=settings.get_embedding_dimension(),
         bm25_namespace=settings.namespace_bm25_enabled,
     )
@@ -3554,15 +3563,38 @@ def eval_chunking_main(  # pragma: no cover: CLI entry point, requires file I/O
     strategy: str = "all",
     gold: str = "all",
     output: str = "/tmp/chunking_eval.json",
+    corpus: str | None = None,
 ) -> int:
-    """Run isolated chunking quality evaluation (offline) on a gold dataset."""
-    from data_engineering_copilot.evaluation.chunking_eval import run_chunking_eval
+    """Run isolated chunking quality evaluation (offline) on a gold dataset.
+
+    With ``corpus`` set, run the corpus adequacy gate on a generation's
+    ``chunks.jsonl`` instead and exit 1 when the gate fails.
+    """
+    from data_engineering_copilot.evaluation.chunking_eval import (
+        run_chunking_eval,
+        run_corpus_quality_gate,
+    )
 
     try:
-        report = run_chunking_eval(strategy, gold, output)
+        report = run_corpus_quality_gate(corpus, output) if corpus else run_chunking_eval(strategy, gold, output)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Chunking evaluation failed: {exc}")
         return 2
+
+    if corpus:
+        gates = report.get("gates") or {}
+        ok = bool(gates.get("pass")) if isinstance(gates, dict) else True
+        w = report.get("word_count") or {}
+        print(
+            f"corpus: total={report.get('total')} median={w.get('median')} "
+            f"tiny={report.get('tiny_rate', 0):.3f} "
+            f"fence_fracture={report.get('fence_fracture_rate', 0):.3f} "
+            f"oversized={report.get('oversized_rate', 0):.3f}"
+        )
+        for chk in (gates.get("checks") or {}).values():
+            print(f"  {chk['value']:.3f} <= {chk['threshold']:.3f} -> {'PASS' if chk['ok'] else 'FAIL'}")
+        print(f"\nReport written to {output}")
+        return 0 if ok else 1
 
     print(f"{'Strategy':<15} {'IoU':>6} {'Prec':>6} {'B-Sim':>6} {'Fract':>6}")
     gates = report.get("gates") or {}
@@ -5317,15 +5349,24 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover: CLI entry po
             "structured",
         ],
         default="all",
-        help="Chunking strategy to evaluate (strategies supported by _build_chunker).",
+        help="Chunking strategy to evaluate. Eval names differ from runtime "
+        "settings.chunking_strategy values: 'sentence' == runtime "
+        "'sentence_preserving', 'header' == header-aware, 'structured' == "
+        "structured-data; L5 keeps this vocabulary stable.",
     )
     eval_chunking_parser.add_argument(
         "--gold",
-        choices=["synthetic", "human", "all"],
+        choices=["synthetic", "human", "corpus_slice", "all"],
         default="all",
-        help="Gold dataset source.",
+        help="Gold dataset source (corpus_slice = hand-verified real-page spans).",
     )
     eval_chunking_parser.add_argument("--output", default="/tmp/chunking_eval.json", help="Output JSON path.")
+    eval_chunking_parser.add_argument(
+        "--corpus",
+        default=None,
+        help="Path to a generation's chunks.jsonl for the corpus quality gate "
+        "(overrides --strategy/--gold with the corpus adequacy gate).",
+    )
     eval_chunking_parser.set_defaults(func=eval_chunking_main)
 
     # Judge-vs-human calibration harness
@@ -5830,6 +5871,7 @@ def main() -> None:  # pragma: no cover: CLI entry point
                     strategy=getattr(args, "strategy", "all"),
                     gold=getattr(args, "gold", "all"),
                     output=getattr(args, "output", "/tmp/chunking_eval.json"),
+                    corpus=getattr(args, "corpus", None),
                 )
             )
         elif args.command == "eval-judge-calibrate":

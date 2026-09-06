@@ -9,6 +9,7 @@ attached post-chunking (its ``chunk()`` takes no metadata parameter).
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from data_engineering_copilot.infrastructure.spark_source_resolver import (
 )
 from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 from data_engineering_copilot.services.prepared_source import PreparedSource
+from data_engineering_copilot.services.rst_parser import rst_to_markdown, strip_jsx_wrappers
 from data_engineering_copilot.services.spark_chunker import SparkChunker
 from data_engineering_copilot.services.spark_index_builder import (
     _FUNCTION_REGISTRY_RELATIVE_PATH,
@@ -95,8 +97,9 @@ class GithubSourcePreparer:
         chunk_count_by_path: dict[str, int] = {}
         for record in manifest.files:
             parsed = self._parse_record(record)
+            parsed = replace(parsed, text=_strip_apache_license(parsed.text))
             if _is_rst(record.relative_path) and record.doc_type == "guide":
-                parsed = replace(parsed, text=_rst_to_markdown_headings(parsed.text))
+                parsed = replace(parsed, text=rst_to_markdown(parsed.text, source_path=str(record.absolute_path)))
             metadata = derive_spark_metadata(record, self._config, title=parsed.title, text=parsed.text)
             doc_chunks = await chunker.chunk(parsed, metadata)
             doc_chunks = [self._attach_spark_metadata(chunk) for chunk in doc_chunks]
@@ -110,7 +113,9 @@ class GithubSourcePreparer:
         for record in manifest.files:
             parsed = self._parse_record(record)
             if _is_rst(record.relative_path):
-                parsed = replace(parsed, text=_rst_to_markdown_headings(parsed.text))
+                parsed = replace(parsed, text=rst_to_markdown(parsed.text, source_path=str(record.absolute_path)))
+            else:
+                parsed = replace(parsed, text=strip_jsx_wrappers(parsed.text))
             doc_chunks = await self._header_chunker.chunk(parsed)
             doc_chunks = [self._attach_generic_metadata(chunk) for chunk in doc_chunks]
             chunk_count_by_path[record.relative_path] = len(doc_chunks)
@@ -185,34 +190,31 @@ class GithubSourcePreparer:
         return records
 
 
-# RST heading underline characters mapped to Markdown heading levels. The
-# HeaderAwareChunker only splits on ``#`` headings, so RST guides (Airflow) are
-# converted to Markdown headings before chunking.
-_RST_UNDERLINE_LEVELS = {"=": 1, "-": 2, "~": 3, "^": 4, '"': 5, "'": 6}
+# RST → Markdown is delegated to :mod:`rst_parser` (docutils-based) since the
+# regex path was blind to overline styles, code-block/literalinclude directives,
+# and nested include trees. The old ``_RST_UNDERLINE_LEVELS`` mapping moved into
+# ``rst_parser._rst_underline_headings`` as the offline fallback.
+
+# A leading Jekyll ``license: |`` front-matter block (Spark/Delta docs) would
+# otherwise be chunked verbatim — every API/guide page emits boilerplate chunks.
+_FRONTMATTER_RE = re.compile(r"^---\r?\n.*?\r?\n---\r?\n?", re.DOTALL)
 
 
 def _is_rst(relative_path: str) -> bool:
     return Path(relative_path).suffix in {".rst", ".rst.txt"}
 
 
-def _rst_to_markdown_headings(text: str) -> str:
-    """Convert RST underlined headings into Markdown ``#`` headings."""
-    lines = text.splitlines()
-    out: list[str] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if line and i + 1 < len(lines):
-            underline = lines[i + 1].strip()
-            chars = set(underline)
-            if len(chars) == 1 and chars & set(_RST_UNDERLINE_LEVELS) and len(underline) >= len(line):
-                level = _RST_UNDERLINE_LEVELS[chars.pop()]
-                out.append("#" * level + " " + line)
-                i += 2
-                continue
-        out.append(lines[i])
-        i += 1
-    return "\n".join(out)
+def _strip_apache_license(text: str) -> str:
+    """Strip a leading Jekyll ``license:`` front-matter block (Spark/Delta).
+
+    Only removes the block when it actually declares ``license:`` so regular
+    (non-Apache) sources are untouched; content after the closing ``---`` is
+    kept verbatim (including trailing newline normalization).
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if match and "license:" in match.group(0):
+        return text[match.end() :].lstrip("\r\n")
+    return text
 
 
 def _file_content_hash(path: Path) -> str:

@@ -1,0 +1,57 @@
+{
+  "created": "2026-09-06",
+  "purpose": "H5: real-corpus slice for the chunking gold set; supersedes the vacuous 7-doc synthetic-only fracture measurement",
+  "dependency": "Verified real pages from the pinned generation d3dbad402105 source trees (data/{spark_src,pinned_src})",
+  "boundary_rule": "gold = structural section spans anchored at Markdown heading starts (content = exact text slice)",
+  "regeneration": "generate_chunking_gold.py does NOT cover corpus_slice (manually authored); re-run the inline generator (plan Task 7.3) and update this sidecar when sources change",
+  "files": [
+    {
+      "doc_id": "real-001",
+      "source_path": "data/spark_src/v4.0.0-b4ee7de0c9dc539a/docs/security.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-002",
+      "source_path": "data/spark_src/v4.0.0-b4ee7de0c9dc539a/docs/sql-data-sources-protobuf.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-003",
+      "source_path": "data/spark_src/v4.0.0-b4ee7de0c9dc539a/docs/sql-data-sources-avro.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-004",
+      "source_path": "data/spark_src/v4.0.0-b4ee7de0c9dc539a/docs/sql-data-sources-jdbc.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-005",
+      "source_path": "data/spark_src/v4.0.0-b4ee7de0c9dc539a/docs/ml-classification-regression.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-006",
+      "source_path": "data/pinned_src/claude-code/mcp.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-007",
+      "source_path": "data/pinned_src/claude-code/cli-reference.md",
+      "num_spans": 5,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    },
+    {
+      "doc_id": "real-008",
+      "source_path": "data/pinned_src/claude-code/sandboxing.md",
+      "num_spans": 14,
+      "boundary_rule": "markdown heading boundaries (preamble-through-next-heading)"
+    }
+  ]
+}

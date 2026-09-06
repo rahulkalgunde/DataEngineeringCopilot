@@ -117,3 +117,33 @@ class TestSentencePreservingChunker:
             SentencePreservingChunker(max_tokens=0)
         with pytest.raises(ValueError):
             SentencePreservingChunker(max_chars=0)
+
+    def test_leading_and_trailing_whitespace_do_not_crash(self):
+        # C1 regression: _sync_chunk stripped the text but asserted chunks
+        # against the unstripped document.text -> AssertionError on any
+        # leading/trailing whitespace (the production default chunker).
+        for text in (
+            "\n\nFirst sentence. Second.",
+            "First sentence. Second.\n",
+            "First sentence. Second.  ",
+            " \n  First sentence. Second. \n",
+        ):
+            chunks = _chunk(_doc(text))
+            assert chunks
+
+    def test_offsets_are_exact_substrings_of_source(self):
+        # Offsets must index the ORIGINAL document.text and the reconstruction
+        # must be lossless (chunk.text == document.text[start:end]).
+        texts = [
+            "First sentence. Second sentence! Third?",
+            "  Indented lead. Second.\n\nTail.  \n",
+            "Intro. ```python\ndef f():\n    return 1\n```\nOutro. ",
+            "\n\nAlpha. Beta.\n",
+        ]
+        for text in texts:
+            doc = _doc(text)
+            chunks = _chunk(doc)
+            assert chunks
+            assert "".join(c.text for c in chunks) == text
+            for c in chunks:
+                assert c.text == doc.text[c.start_offset : c.end_offset]

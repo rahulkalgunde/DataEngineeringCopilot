@@ -1,6 +1,7 @@
 """Tests for chunking factory and configuration."""
 
 from data_engineering_copilot.config.settings import AppSettings
+from data_engineering_copilot.domain.models import ParsedDocument
 from data_engineering_copilot.factory import build_chunker
 from data_engineering_copilot.services.chunker import DocumentChunker
 from data_engineering_copilot.services.semantic_chunker import SemanticChunker
@@ -250,21 +251,35 @@ class TestBreadcrumbPrefixing:
     def test_breadcrumb_prefixing_flag_defaults_false(self):
         assert AppSettings().chunk_breadcrumb_prefixing_enabled is False
 
-    def test_header_aware_chunker_receives_breadcrumb_flag(self):
+    def test_header_aware_chunker_single_owner_breadcrumbs(self):
+        # M1 single-owner breadcrumbs: the embedding input (via
+        # ``embedding_text_for_chunk``) is the ONLY breadcrumb owner. The
+        # factory must NOT bake the heading path into ``chunk.text`` — doing so
+        # would double-prefix once the embedding path adds its own breadcrumb
+        # and would leak category text into retrieval snippets.
+        from data_engineering_copilot.services.chunker import embedding_text_for_chunk
         from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
 
         settings = AppSettings(
             chunking_strategy="header_aware",
-            chunk_breadcrumb_prefixing_enabled=False,
+            chunk_breadcrumb_prefixing_enabled=True,
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, HeaderAwareChunker)
         assert chunker.prepend_heading_path is False
 
-        settings_on = AppSettings(
-            chunking_strategy="header_aware",
-            chunk_breadcrumb_prefixing_enabled=True,
+        chunks = chunker._sync_chunk(
+            ParsedDocument(
+                source_name="Spark",
+                title="T",
+                url="http://x",
+                text="# Functions\n\n" + "description word about functions here. " * 12,
+            )
         )
-        chunker_on = build_chunker(settings_on)
-        assert isinstance(chunker_on, HeaderAwareChunker)
-        assert chunker_on.prepend_heading_path is True
+        assert chunks
+        # chunk.text stays unprefixed — no breadcrumb baked into retrieval text
+        assert not chunks[0].text.startswith("Functions")
+        # the embedding input carries exactly one breadcrumb prefix
+        embedded = embedding_text_for_chunk(chunks[0])
+        assert embedded.startswith("[Spark > T > Functions]")
+        assert embedded.count("[") == 1

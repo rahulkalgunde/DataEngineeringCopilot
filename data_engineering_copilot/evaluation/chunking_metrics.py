@@ -43,15 +43,32 @@ def tokenize_whole_doc(doc: str) -> tuple[list[int], list[int]]:
 
 
 def char_span_to_token_interval(start: int, end: int, byte_offsets: list[int]) -> tuple[int, int]:
-    """Map a character ``[start, end)`` span to a token index interval.
+    """Map a byte ``[start, end)`` span to a token index interval.
 
-    Uses ``bisect_left`` on the cumulative byte table so the mapping is stable
-    regardless of whether the character boundary falls inside a token or on a
-    token boundary.
+    ``byte_offsets`` is the cumulative table built by :func:`tokenize_whole_doc`
+    (byte positions in the UTF-8 encoding of the document), so *both* endpoints
+    must already be byte offsets.  Char offsets must be converted first with
+    :func:`char_to_byte`.  Uses ``bisect_left`` so the mapping is stable
+    regardless of whether the boundary falls inside a token or on a token
+    boundary.
     """
     token_start = bisect.bisect_left(byte_offsets, start)
     token_end = bisect.bisect_left(byte_offsets, end)
     return token_start, token_end
+
+
+def char_to_byte(doc_text: str, char_pos: int) -> int:
+    """Convert a character offset into its UTF-8 byte offset in *doc_text*.
+
+    ``#`` premultiplied character positions cannot be compared against the
+    byte-offset table from :func:`tokenize_whole_doc` without this conversion —
+    mixing the two bases silently skews token spans on every non-ASCII doc.
+    """
+    if char_pos <= 0:
+        return 0
+    if char_pos >= len(doc_text):
+        return len(doc_text.encode("utf-8"))
+    return len(doc_text[:char_pos].encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -74,10 +91,14 @@ def token_iou(doc_text: str, gold_spans: list[dict], pred_chunks: list[DocumentC
     _, byte_offsets = tokenize_whole_doc(doc_text)
     ious: list[float] = []
     for span in gold_spans:
-        g_start, g_end = char_span_to_token_interval(_span_start(span), _span_end(span), byte_offsets)
+        g_start, g_end = char_span_to_token_interval(
+            char_to_byte(doc_text, _span_start(span)), char_to_byte(doc_text, _span_end(span)), byte_offsets
+        )
         best_iou = 0.0
         for chunk in pred_chunks:
-            c_start, c_end = char_span_to_token_interval(chunk.start_offset, chunk.end_offset, byte_offsets)
+            c_start, c_end = char_span_to_token_interval(
+                char_to_byte(doc_text, chunk.start_offset), char_to_byte(doc_text, chunk.end_offset), byte_offsets
+            )
             inter = max(0, min(g_end, c_end) - max(g_start, c_start))
             union = max(g_end, c_end) - min(g_start, c_start)
             if union > 0:
@@ -93,11 +114,15 @@ def excerpt_precision(doc_text: str, gold_spans: list[dict], pred_chunks: list[D
     _, byte_offsets = tokenize_whole_doc(doc_text)
     precisions: list[float] = []
     for span in gold_spans:
-        g_start, g_end = char_span_to_token_interval(_span_start(span), _span_end(span), byte_offsets)
+        g_start, g_end = char_span_to_token_interval(
+            char_to_byte(doc_text, _span_start(span)), char_to_byte(doc_text, _span_end(span)), byte_offsets
+        )
         best_overlap = 0
         best_pred_size = 1
         for chunk in pred_chunks:
-            c_start, c_end = char_span_to_token_interval(chunk.start_offset, chunk.end_offset, byte_offsets)
+            c_start, c_end = char_span_to_token_interval(
+                char_to_byte(doc_text, chunk.start_offset), char_to_byte(doc_text, chunk.end_offset), byte_offsets
+            )
             inter = max(0, min(g_end, c_end) - max(g_start, c_start))
             pred_size = max(1, c_end - c_start)
             if inter > best_overlap:

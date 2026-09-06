@@ -141,3 +141,28 @@ class TestStaticLLMExemption:
         assert await llm.generate("q1") == "same"
         assert await llm.generate("totally different q2") == "same"
         assert llm.call_count == 2
+
+
+@pytest.mark.unit
+class TestInMemoryStoreHybridGatingFidelity:
+    """InMemoryVectorStore.fit_bm25_corpus must mirror the real store's gate:
+    record when hybrid is on, raise when off (paired-call contract)."""
+
+    def _store(self, hybrid: bool):
+        from tests.doubles.vector_store import InMemoryVectorStore
+
+        return InMemoryVectorStore(hybrid_search=hybrid)
+
+    def test_hybrid_on_records_fit(self):
+        store = self._store(hybrid=True)
+        store.fit_bm25_corpus(["a", "b"])
+        assert store._bm25_fit_count == 1
+
+    def test_hybrid_off_raises_like_real_store(self):
+        store = self._store(hybrid=False)
+        try:
+            store.fit_bm25_corpus(["a"])
+        except ValueError as exc:
+            assert "hybrid_search_enabled" in str(exc)
+        else:  # pragma: no cover - failure to raise is the defect
+            raise AssertionError("hybrid-off fit must raise like AsyncQdrantVectorStore")

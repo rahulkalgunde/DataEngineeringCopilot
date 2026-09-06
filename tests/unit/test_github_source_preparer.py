@@ -102,7 +102,7 @@ def test_chunk_spark_converts_rst_guide_headings_before_chunking(tmp_path) -> No
         "conceptual",
         "Apache Arrow in PySpark\n=======================\n\n"
         "Real content about Arrow transfers between JVM and Python.\n\n"
-        "Pandas UDFs\n-----------\n\nMore useful body about vectorized operations.\n",
+        "Pandas UDFs\n-----------\n\nMore useful body about vectorized operations high overhead.\n",
     )
     manifest = _manifest(tmp_path / "repo", [record])
 
@@ -125,7 +125,7 @@ def test_chunk_generic_uses_header_aware_with_attached_metadata(tmp_path) -> Non
         "docs/apache-airflow/start.rst",
         "guide",
         "conceptual",
-        "Starting Airflow\n===============\n\nReal content body.\n\nIntroduction\n------------\n\nMore useful body here.\n",
+        "Starting Airflow\n===============\n\nReal content body about running Airflow with the scheduler.\n\nIntroduction\n------------\n\nMore useful body here that explains DAG scheduling in depth.\n",
     )
     manifest = _manifest(tmp_path / "repo", [record])
 

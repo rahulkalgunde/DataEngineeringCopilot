@@ -8,10 +8,12 @@ child's text with its parent's text so the LLM receives broader context.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import replace
 
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.infrastructure.token_budget import (
+    DEFAULT_MAX_CHARS,
     DEFAULT_MAX_TOKENS,
     count_tokens,
     split_text_losslessly,
@@ -50,6 +52,64 @@ def _merge_blank_pieces(pieces: list[str]) -> list[str]:
     return merged
 
 
+_TINY_WORD_FLOOR = 10
+
+
+def _merge_tiny_pieces(
+    pieces: list[str],
+    min_words: int = _TINY_WORD_FLOOR,
+    max_tokens: int | None = None,
+) -> list[str]:
+    """Fold sub-minimum pieces into an adjacent piece.
+
+    Lossless fragmentation must never orphan retrieval-dead fragments — a lone
+    pipe-table header row (``| Classification | Description |``), a sentence
+    tail split mid-row, or an (almost) empty fenced block (`` ```\\n\\n``` ``).
+    Each such piece is appended to the preceding piece (or the following one
+    when it is first), preserving ``"".join(result) == "".join(pieces)`` so
+    reconstruction hashes and segment-budget validation stay valid. When the
+    merge would exceed *max_tokens* the piece is left in place rather than
+    silently growing the segment past its budget.
+    """
+    merged: list[str] = []
+    pending = ""
+    for piece in pieces:
+        if not pending:
+            pending = piece
+            continue
+        if len(pending.split()) < min_words:
+            candidate = pending + piece
+            if max_tokens is None or count_tokens(candidate) <= max_tokens:
+                pending = candidate
+                continue
+        merged.append(pending)
+        pending = piece
+    if pending:
+        if (
+            merged
+            and len(pending.split()) < min_words
+            and (max_tokens is None or count_tokens(merged[-1] + pending) <= max_tokens)
+        ):
+            merged[-1] += pending
+        else:
+            merged.append(pending)
+    return merged
+
+
+def _has_unbalanced_fence(pieces: list[str]) -> bool:
+    """True if any *piece* carries an odd number of fence markers.
+
+    ``split_text_losslessly`` line-splits oversized fences by stripping the
+    closer/opener from intermediate fragments, so a fence that does not fit
+    the requested budget is emitted as two unbalanced fragments (one opener,
+    one closer) plus continuation lines. Such fragments fail the fence-fracture
+    corpus gate and hurt retrieval (an opener with no closer reads as a broken
+    block). A larger budget that holds the whole fence is preferable; escalate
+    until the pieces are balanced.
+    """
+    return any(len(re.findall(r"^[`~]{3,}", piece, re.M)) % 2 for piece in pieces)
+
+
 def _split_children(
     text: str,
     child_max_tokens: int,
@@ -58,20 +118,26 @@ def _split_children(
     """Split *text* into child sub-splits, falling back to larger budgets.
 
     The child token budget is a retrieval-quality target, not a hard
-    embedding limit. Rare atomic pieces (a single long code line or URL
-    longer than ``child_max_tokens * 4`` characters) cannot be split
-    further without losing characters; failing the whole build over them
-    would drop otherwise-good documents. Retry at the parent budget, then
-    at the provider hard cap, before giving up.
+    embedding limit. Two kinds of pieces cannot be meaningfully split at the
+    child budget: atomic pieces (a single long code line or URL longer than
+    ``child_max_tokens * 4`` characters) and oversized fences (line-splitting
+    a fence fragments it into unbalanced opener/closer pieces). Retry at the
+    parent budget, then at the provider hard cap, before giving up.
     """
     for budget in (child_max_tokens, parent_max_tokens, DEFAULT_MAX_TOKENS):
         try:
-            pieces = split_text_losslessly(text, max_tokens=budget, max_chars=budget * 4)
+            pieces = split_text_losslessly(text, max_tokens=budget, max_chars=min(budget * 4, DEFAULT_MAX_CHARS))
         except ValueError:
             continue
-        return _merge_blank_pieces(pieces)
-    pieces = split_text_losslessly(text, max_tokens=parent_max_tokens, max_chars=parent_max_tokens * 4)
-    return _merge_blank_pieces(pieces)
+        pieces = _merge_blank_pieces(pieces)
+        pieces = _merge_tiny_pieces(pieces, max_tokens=budget)
+        if budget == DEFAULT_MAX_TOKENS or not _has_unbalanced_fence(pieces):
+            return pieces
+    pieces = split_text_losslessly(
+        text, max_tokens=parent_max_tokens, max_chars=min(parent_max_tokens * 4, DEFAULT_MAX_CHARS)
+    )
+    pieces = _merge_blank_pieces(pieces)
+    return _merge_tiny_pieces(pieces, max_tokens=parent_max_tokens)
 
 
 def hierarchical_chunk(
@@ -111,13 +177,21 @@ def hierarchical_chunk(
             )
         ]
 
-    parent_texts = _merge_blank_pieces(
-        split_text_losslessly(
-            chunk.text,
-            max_tokens=parent_max_tokens,
-            max_chars=parent_max_tokens * 4,
-        )
-    )
+    parent_texts = []
+    for budget in (parent_max_tokens, DEFAULT_MAX_TOKENS):
+        try:
+            pieces = split_text_losslessly(
+                chunk.text,
+                max_tokens=budget,
+                max_chars=min(budget * 4, DEFAULT_MAX_CHARS),
+            )
+        except ValueError:
+            continue
+        pieces = _merge_blank_pieces(pieces)
+        pieces = _merge_tiny_pieces(pieces, max_tokens=budget)
+        parent_texts = pieces
+        if budget == DEFAULT_MAX_TOKENS or not _has_unbalanced_fence(pieces):
+            break
 
     result: list[DocumentChunk] = []
     cursor = 0
@@ -153,16 +227,23 @@ def hierarchical_chunk(
 
         # Mirror _split_children: try the child budget, fall back to larger
         # budgets so rare atomic pieces (a single long line) don't break
-        # splitting. Returns lossless, blank-merged child pieces.
+        # splitting and oversized fences stay balanced. Returns lossless,
+        # blank-merged child pieces.
         child_pieces: list[str] = []
         for budget in (child_max_tokens, parent_max_tokens, DEFAULT_MAX_TOKENS):
             try:
                 child_pieces = _merge_blank_pieces(
-                    split_text_losslessly(parent_text, max_tokens=budget, max_chars=budget * 4)
+                    split_text_losslessly(
+                        parent_text,
+                        max_tokens=budget,
+                        max_chars=min(budget * 4, DEFAULT_MAX_CHARS),
+                    )
                 )
-                break
             except ValueError:
                 continue
+            if budget == DEFAULT_MAX_TOKENS or not _has_unbalanced_fence(child_pieces):
+                break
+        child_pieces = _merge_tiny_pieces(child_pieces, max_tokens=child_max_tokens)
 
         child_segments: list[tuple[str, int, int]] = []
         cursor = 0

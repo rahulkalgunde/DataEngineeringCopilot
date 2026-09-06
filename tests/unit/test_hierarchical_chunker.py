@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from data_engineering_copilot.domain.models import DocumentChunk
 from data_engineering_copilot.infrastructure.token_budget import count_tokens
-from data_engineering_copilot.services.hierarchical_chunker import _merge_blank_pieces, hierarchical_chunk
+from data_engineering_copilot.services.hierarchical_chunker import (
+    _has_unbalanced_fence,
+    _merge_blank_pieces,
+    _merge_tiny_pieces,
+    _split_children,
+    hierarchical_chunk,
+)
 
 
 def _chunk(text: str, chunk_id: str = "c0") -> DocumentChunk:
@@ -233,3 +240,136 @@ def test_no_blank_chunks_for_corpus_shaped_paragraph_and_fence_text() -> None:
             )
             if siblings:
                 assert "".join(s.text for s in siblings).strip() == parent.text.strip(), "lossless reconstruction"
+
+
+def test_pipe_table_rows_fold_into_children_over_the_tiny_floor() -> None:
+    """Regression: a markdown pipe table exceeding the child budget was
+    line-split so each row (and a sentence tail) became its own sub-10-word
+    child segment — e.g. ``| Classification | Description |`` (5 words). The
+    reproduced section (from ``build-with-claude/overview.md``) must yield no
+    child under the 10-word floor while staying lossless."""
+    section = (
+        "Features on the Claude Platform are assigned one of the following "
+        "availability classifications per platform (shown in the Availability "
+        "column of each following table).\n\n"
+        "| Classification | Description |\n"
+        "| --- | --- |\n"
+        "| **Beta** | Preview features used for gathering feedback and iterating on "
+        "a less mature use case. Availability may be limited, including through "
+        "sign-up requirements or waitlists, and may not be publicly announced. "
+        "Features may change significantly or be discontinued based on feedback. "
+        "Not guaranteed for ongoing production use. Breaking changes are possible "
+        "with notice, and some platform-specific limitations may apply. Beta "
+        "features on the Claude API and Claude Platform on AWS have a beta header. |\n"
+        "| **Generally available (GA)** | Feature is stable, fully supported, and "
+        "recommended for production use. Should not have a beta header or other "
+        "indicator that the feature is in a preview state. Covered by standard API "
+        "versioning guarantees. |\n"
+        "| **Deprecated** | Feature is still functional but no longer recommended. "
+        "A migration path and removal timeline are provided. |\n"
+        "| **Retired** | Feature is no longer available. |\n"
+        "| [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) | "
+        "Up to 1M tokens for processing large documents, extensive code bases, and long conversations. |\n"
+        "| [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) | "
+        "Let Claude dynamically decide when and how much to think. The only thinking mode on recent "
+        "models. Use the effort parameter to control thinking depth. |\n"
+        "| [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support) | "
+        "Process and analyze text and visual content from PDF documents. |\n"
+    )
+    assert count_tokens(section) > 256, "section must exceed the child budget to reproduce the split"
+    result = hierarchical_chunk(_chunk(section), child_max_tokens=256, parent_max_tokens=1024)
+
+    tiny = [c for c in result if len(c.text.split()) < 10]
+    assert tiny == [], f"no child may fall under the 10-word floor: {[c.text[:40] for c in tiny]}"
+
+    for parent in (c for c in result if not c.parent_chunk_id):
+        siblings = sorted(
+            (c for c in result if c.parent_chunk_id == parent.chunk_id),
+            key=lambda c: c.segment_index,
+        )
+        if siblings:
+            assert "".join(s.text for s in siblings).strip() == parent.text.strip(), "lossless reconstruction"
+
+
+def test_lone_heading_fragment_folds_into_previous_parent() -> None:
+    """Regression: a trailing heading split off by the paragraph boundary (e.g.
+    ``\\n\\n### Using prompt caching with Message Batches``) became its own
+    sub-minimum parent. It must fold into the previous parent."""
+    text = " ".join(f"word{i}" for i in range(1500)) + "\n\n### Using prompt caching with Message Batches"
+    result = hierarchical_chunk(_chunk(text))
+
+    parents = [c for c in result if not c.parent_chunk_id]
+    assert parents
+    tiny_parents = [c for c in parents if len(c.text.split()) < 10]
+    assert tiny_parents == [], f"no parent may fall under the 10-word floor: {[c.text[:40] for c in tiny_parents]}"
+
+    joined = "".join(p.text for p in parents)
+    assert joined.strip() == text.strip(), "parents must reconstruct the source losslessly"
+
+
+def test_merge_tiny_pieces_folds_into_neighbors_losslessly() -> None:
+    """Sub-minimum pieces fold into an adjacent piece while preserving every
+    character and the original ordering (lossless join)."""
+    pieces = ["|} header row", "| long row | with | many | cells |", "tail", "short"]
+    merged = _merge_tiny_pieces(pieces, max_tokens=256)
+    assert "".join(merged) == "".join(pieces), "merge must be lossless"
+    assert all(len(p.split()) >= 10 for p in merged), "no sub-minimum piece may remain when a neighbor absorbs it"
+
+
+def test_merge_tiny_pieces_leading_and_trailing_fold() -> None:
+    assert _merge_tiny_pieces(["tiny", "long piece one two three four five six seven eight nine ten"]) == [
+        "tiny" + "long piece one two three four five six seven eight nine ten"
+    ]
+    merged = _merge_tiny_pieces(["long piece one two three four five six seven eight nine ten", "tiny"])
+    assert merged == ["long piece one two three four five six seven eight nine ten" + "tiny"]
+    assert _merge_tiny_pieces(["tiny"]) == ["tiny"]
+
+
+def test_merge_tiny_pieces_respects_budget() -> None:
+    """An over-budget merge must leave the tiny piece in place rather than grow
+    the segment past its token budget."""
+    pieces = ["tiny", " ".join(["word"] * 500)]
+    merged = _merge_tiny_pieces(pieces, max_tokens=256)
+    assert merged == pieces, "merge exceeding max_tokens must not be applied"
+
+
+def _fence(line_count: int, lang: str = "python") -> str:
+    return f"```{lang}\n" + "\n".join(f"f{i} = compute(payload{i}, mode='a')" for i in range(line_count)) + "\n```"
+
+
+def test_has_unbalanced_fence() -> None:
+    assert not _has_unbalanced_fence(["no fences here", "```python\nx\n```"])
+    assert _has_unbalanced_fence(["```python\nx = 1\n"])
+    assert _has_unbalanced_fence(["x = 1\n```\n"])
+    assert not _has_unbalanced_fence(["~~~sql\nSELECT 1\n~~~\n"])
+
+
+def _fence_markers(text: str) -> list[str]:
+    return re.findall(r"^[`~]{3,}", text, re.M)
+
+
+def test_oversized_fence_escalates_child_budget_and_stays_balanced() -> None:
+    """A fence larger than the child budget fragments into unbalanced opener/
+    closer pieces; _split_children must escalate so the whole fence survives
+    as one balanced piece instead."""
+    fence = _fence(140)
+    assert count_tokens(fence) > 256
+    pieces = _split_children(fence, child_max_tokens=256, parent_max_tokens=1024)
+    assert not _has_unbalanced_fence(pieces), [repr(p[:40]) for p in pieces]
+    assert "".join(pieces) == fence, "escalation must stay lossless"
+    assert pieces == [fence], "the fence fits the hard cap and should stay whole"
+
+
+def test_oversized_fence_in_hierarchical_stays_balanced_and_lossless() -> None:
+    """End-to-end: a fence over the child budget must survive hierarchical
+    chunking with balanced fences in every produced chunk and lossless
+    parent/child reconstruction."""
+    fence = _fence(140)
+    result = hierarchical_chunk(_chunk(fence))
+    for c in result:
+        assert len(_fence_markers(c.text)) % 2 == 0, f"unbalanced fence in chunk {c.chunk_id}: {repr(c.text[:50])}"
+    parents = [c for c in result if not c.parent_chunk_id]
+    children = [c for c in result if c.parent_chunk_id]
+    assert len(parents) == 1
+    assert parents[0].text == fence
+    assert "".join(c.text for c in children) == parents[0].text, "children must reconstruct the parent"

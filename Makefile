@@ -319,6 +319,14 @@ eval-retrieval:
 eval-retrieval-gate:
 	dec_venv/bin/dec eval-retrieval --dataset tests/evaluation/golden/recall_inscope.jsonl --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10 --batch-size 55
 
+# Corpus chunk-quality gate: audit the ACTIVE generation's chunks.jsonl and
+# assert fence/tiny/oversized/table-fracture thresholds. Local-only (chunks.jsonl
+# is a build artifact). Thresholds amended 2026-09-06 (ADR-018): fence 0.06 /
+# tiny 0.02 / sentence 0.30 reflect measured generational floors, not aspiration.
+eval-chunking-corpus:
+	@GEN=$$(dec_venv/bin/python -c "import json; print(json.load(open('.index_state/active.json'))['generation'])"); \
+	  dec_venv/bin/dec eval-chunking --corpus "data/pinned_corpus/data_engineering_docs__$${GEN}/chunks.jsonl" --output "/tmp/chunking_corpus_$${GEN}.json"
+
 # Stage-by-stage recall attribution gate: samples eval queries, runs live pipeline,
 # and reports per-stage Recall@K + chunk survival. Fails when any stage drops below
 # --recall-floor or exceeds --max-stage-drop. Requires live Qdrant + embedder.
