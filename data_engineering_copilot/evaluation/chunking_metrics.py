@@ -33,12 +33,19 @@ def tokenize_whole_doc(doc: str) -> tuple[list[int], list[int]]:
     position of token ``i`` in the UTF-8 encoded original string.
     ``byte_offsets`` has length ``len(token_ids) + 1`` so that ``byte_offsets[-1]``
     equals ``len(doc.encode("utf-8"))``.
+
+    The table is built from ``decode_bytes`` (the raw byte concatenation), NOT
+    by re-encoding ``decode(token_ids[:i])``: when a multi-byte UTF-8 character
+    is split across two tokens, ``decode`` yields a ``U+FFFD`` replacement whose
+    re-encoded length (3 bytes) differs from the true partial bytes, silently
+    drifting interior byte offsets on any non-ASCII document (H3).
     """
     token_ids = _ENCODER.encode(doc)
     byte_offsets = [0] * (len(token_ids) + 1)
-    for i in range(len(token_ids)):
-        prefix = _ENCODER.decode(token_ids[: i + 1])
-        byte_offsets[i + 1] = len(prefix.encode("utf-8"))
+    raw = bytearray()
+    for i, token_id in enumerate(token_ids):
+        raw += _ENCODER.decode_bytes([token_id])
+        byte_offsets[i + 1] = len(raw)
     return token_ids, byte_offsets
 
 

@@ -111,6 +111,34 @@ def test_token_iou_nonascii_uses_byte_offset_basis():
     assert char_to_byte(doc_text, mid) != mid
 
 
+def test_tokenize_whole_doc_byte_offsets_bit_exact_nonascii():
+    # H3: a multi-byte char split across two tokens must NOT drift the byte
+    # table (the old re-encode-of-decode approach emitted a U+FFFD whose
+    # re-encoded length differs from the partial bytes). Every interior offset
+    # must equal the true cumulative UTF-8 byte position.
+    import tiktoken
+
+    doc_text = "Apache \u2606 \u4f60\u597d\u4e16\u754c \U0001f60a 前缀 anchor \U0001f44d 结束" * 4
+    enc = tiktoken.get_encoding("cl100k_base")
+    token_ids, offsets = tokenize_whole_doc(doc_text)
+    raw = bytearray()
+    for i, token_id in enumerate(token_ids):
+        raw += enc.decode_bytes([token_id])
+        assert offsets[i + 1] == len(raw), f"byte drift at token {i}"
+    assert offsets[0] == 0
+    assert offsets[-1] == len(doc_text.encode("utf-8"))
+
+
+def test_token_iou_nonascii_interior_span_no_drift():
+    # Interior (non-final) span ending on a token boundary after a split-char
+    # region: a drifted byte table would mis-bisect the boundary and drop IoU.
+    doc_text = "Apache \u2606 \u4f60\u597d\u4e16\u754c \U0001f60a 前缀 superscalar 中文 anchor" * 4
+    gold = [{"start": 0, "end": len(doc_text) // 2}]
+    pred = [_chunk(0, len(doc_text) // 2)]
+    assert token_iou(doc_text, gold, pred) == 1.0
+    assert excerpt_precision(doc_text, gold, pred) == 1.0
+
+
 # ---------------------------------------------------------------------------
 # SegEval boundary metrics
 # ---------------------------------------------------------------------------

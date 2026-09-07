@@ -42,6 +42,20 @@ def test_subminimum_nested_content_not_carried_across_topic_root():
         assert not ("tiny" in ch.text and "beta" in ch.text), f"cross-topic merge: {ch.text[:60]!r}"
 
 
+def test_breadcrumb_never_inflates_subminimum_body_past_min_gate():
+    # M2: min_chunk_words must count CONTENT words only. With
+    # prepend_heading_path=True, a breadcrumb prefix in its own right exceeds
+    # min_chunk_words; the 8-word body must still merge backward into its
+    # topic's chunk instead of being emitted standalone.
+    text = "# A\n" + "intro " * 30 + "\n\n## A-longish\n" + "tiny " * 8 + "\n\n# B\n" + "beta " * 60
+    chunker = HeaderAwareChunker(chunk_size_words=500, overlap_words=0, min_chunk_words=10, prepend_heading_path=True)
+    chunks = chunker._sync_chunk(_doc(text))
+    tiny_chunks = [c for c in chunks if "tiny" in c.text]
+    assert tiny_chunks == [chunks[0]], "sub-min body emitted standalone via breadcrumb inflation"
+    assert "tiny" in chunks[0].text and "intro" in chunks[0].text, "tiny body not merged into A chunk"
+    assert chunks[-1].text.startswith("B"), "B chunk must carry its own breadcrumb, not merge above"
+
+
 def test_nested_sections_never_merge_across_parents_above_minimum():
     text = (
         "# A\n" + "alpha " * 40 + "\n\n"
