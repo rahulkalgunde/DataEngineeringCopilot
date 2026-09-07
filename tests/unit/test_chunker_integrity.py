@@ -7,6 +7,7 @@ Covers parent-recombination invariants (H2), front-matter offset bookkeeping
 
 from data_engineering_copilot.domain.models import DocumentChunk, ParsedDocument
 from data_engineering_copilot.services.chunker import deduplicate_chunks
+from data_engineering_copilot.services.github_source_preparer import _strip_apache_license
 from data_engineering_copilot.services.header_aware_chunker import (
     _FENCE_RE,
     HeaderAwareChunker,
@@ -26,6 +27,19 @@ def test_overflow_window_offsets_monotonic_in_bounds():
     assert starts == sorted(starts)
     for c in chunks:
         assert 0 <= c.start_offset < c.end_offset <= len(text)
+
+
+def test_subminimum_nested_content_not_carried_across_topic_root():
+    # A nested section below the min word budget must not ride into a
+    # DIFFERENT top-level topic's chunk (cross-parent contamination). The
+    # sub-minimum slice stays in its own topic's chunk instead.
+    text = "# A\n" + "intro " * 20 + "\n\n## A-small\n" + "tiny " * 3 + "\n\n# B\n" + "beta " * 60
+    chunker = HeaderAwareChunker(chunk_size_words=100, overlap_words=0, min_chunk_words=10)
+    chunks = chunker._sync_chunk(_doc(text))
+    joined = " ".join(c.text for c in chunks)
+    assert "tiny" in joined, "sub-minimum nested content dropped"
+    for ch in chunks:
+        assert not ("tiny" in ch.text and "beta" in ch.text), f"cross-topic merge: {ch.text[:60]!r}"
 
 
 def test_nested_sections_never_merge_across_parents_above_minimum():
@@ -81,6 +95,27 @@ def test_frontmatter_offsets_relative_to_original():
         assert c.text == text[c.start_offset : c.end_offset], "front-matter shifted offsets"
 
 
+def test_preparer_stripped_license_offsets_stay_on_post_strip_text():
+    # H1: the Spark/Delta preparer strips ``license:`` front-matter BEFORE the
+    # chunker sees the text, so the chunker's offsets are relative to the
+    # post-strip document it actually received — never the raw file. A consumer
+    # that slices the ORIGINAL source by those offsets lands on shifted bytes.
+    original = "---\nlicense: |\n  Apache-2.0 (c) 2026\n---\n# API\nSome actual doc body here.\n"
+    stripped = _strip_apache_license(original)
+    assert stripped != original, "fixture must exercise the license strip"
+    chunks = HeaderAwareChunker(chunk_size_words=50, overlap_words=0, min_chunk_words=3)._sync_chunk(_doc(stripped))
+    assert chunks
+    assert "Apache-2.0" not in " ".join(c.text for c in chunks), "license prefix leaked into chunks"
+    for c in chunks:
+        assert 0 <= c.start_offset <= c.end_offset <= len(stripped), "offsets exceed post-strip source"
+        region = stripped[c.start_offset : c.end_offset]
+        assert c.text == region.strip(), "offset not aligned to the post-strip source"
+        # ...and slicing the RAW file at those offsets must NOT reproduce the
+        # chunk (the strip shifted the region) — pins consumers to post-strip.
+        raw_region = original[c.start_offset : c.end_offset]
+        assert not raw_region.startswith(c.text.split("\n")[0]), "offsets must be post-strip-relative"
+
+
 def test_split_code_chunk_refences_balanced():
     defs = "".join(f"def f{i}(x):\n    return x * {i}\n\n" for i in range(30))
     text = "# Big code\n\n```python\n" + defs + "```"
@@ -92,6 +127,24 @@ def test_split_code_chunk_refences_balanced():
         assert c.text.count("```") % 2 == 0, "unbalanced fence (dangling opener)"
         assert c.text.lstrip().startswith("```python"), "fence opener lost"
         assert c.text.rstrip().endswith("```"), "fence closer lost"
+
+
+def test_multi_language_oversized_code_no_detached_rejoin():
+    # M12: oversized fenced spans split into chunks must stay self-fenced and
+    # never be re-joined such that a closing fence is directly followed by a
+    # blank line and another opening fence (a "detached rejoin" would mark a
+    # mid-fence split to fence-aware extractors).
+    fenced = "```"
+    defs = "".join(f"def f{i}(x):\n    return x * {i}\n\n" for i in range(30))
+    sqls = "".join(f"SELECT col_{i} FROM t{i};\n" for i in range(40))
+    text = "# Multi\n\n" + fenced + "python\n" + defs + fenced + "\n\n" + fenced + "sql\n" + sqls + fenced
+    chunker = HeaderAwareChunker(chunk_size_words=30, overlap_words=0, min_chunk_words=3)
+    chunks = chunker._sync_chunk(_doc(text))
+    fenced_chunks = [c for c in chunks if fenced in c.text]
+    assert fenced_chunks, "oversized fence should wind up in chunks"
+    for c in fenced_chunks:
+        assert c.text.count(fenced) % 2 == 0, "unbalanced fence (dangling opener)"
+        assert fenced + "\n\n" + fenced not in c.text, "detached fence rejoin"
 
 
 def test_tilde_and_indented_fences_are_code_not_sections():

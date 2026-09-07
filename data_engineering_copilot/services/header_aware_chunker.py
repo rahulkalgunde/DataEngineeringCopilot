@@ -619,18 +619,29 @@ class HeaderAwareChunker:
         for section in sections:
             section_wc = len(section.text.split()) if section.text else 0
 
-            # If this section is under a different parent than current accumulation,
-            # flush first to preserve topical boundaries — but only when enough
-            # words have accumulated to clear the minimum. A sub-minimum flush
-            # would silently drop the whole (small) section, losing content from
-            # short API-reference pages whose nested headings each own a couple
-            # of lines. Carrying the content forward merges it with the next
-            # section instead of discarding it. Overlap is NOT carried across a
-            # parent transition: re-opening the previous topic's tail would mix
-            # unrelated content under the new header.
+            # Parent of the current accumulation vs. the incoming section.
+            # Flush when the parent STRICTLY differs (a sibling under another
+            # ``#`` root): but top-level sections all share the empty parent,
+            # so ``# A`` → ``# B`` siblings still merge under budget (existing
+            # behavior).
             parent_current = current_path[:-1] if current_path else ()
             parent_new = section.heading_path[:-1] if section.heading_path else ()
-            if parent_current != parent_new and current_text_parts and current_words >= self.min_chunk_words:
+            # Cross-topic guard (H2): sub-minimum content under a NESTED
+            # heading must never be carried across a top-level topic root. Top-
+            # level sections (path length 1) keep merging under budget, but once
+            # the accumulation is nested (``## A1`` …) and the incoming section
+            # belongs to a different root, flush immediately — even below the
+            # min-chunk gate — so the small slice lands in its own topic's chunk
+            # (backward-merge at flush) instead of contaminating the next one.
+            cross_topic = (
+                len(current_path) >= 2
+                and bool(current_text_parts)
+                and bool(section.heading_path)
+                and section.heading_path[0] != current_path[0]
+            )
+            if (parent_current != parent_new and current_text_parts and current_words >= self.min_chunk_words) or (
+                cross_topic and current_text_parts
+            ):
                 _flush()
 
             # Would adding this section exceed the target?
