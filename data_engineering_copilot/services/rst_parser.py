@@ -24,6 +24,37 @@ _INCLUDE_RE = re.compile(
 _FENCE_LANG_RE = re.compile(r":language:\s*(\S+)")
 _MAX_INCLUDE_DEPTH = 3
 
+# Leading Apache Software Foundation site-license preamble. Stripped BEFORE
+# parsing: as an RST comment at column 0 (``.. Licensed…``) docutils already
+# drops it, but the Airflow/Docs-style variant indents the ``..`` block, which
+# doctree models as a *block quote ``> ``* that would ride into every chunk.
+_LICENSE_HINT = "Licensed to the Apache Software Foundation"
+_LICENSE_TAIL = "under the License."
+
+
+def _strip_site_license_preamble(text: str) -> str:
+    """Drop a leading ASF license preamble, comment- or quote-encoded.
+
+    Only removes a block that sits before the real content (every non-blank
+    line is a ``..`` comment marker or indented/quote body) and that contains
+    the Apache boilerplate start and end; anything else is left untouched.
+    """
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if _LICENSE_HINT in ln), None)
+    if start is None:
+        return text
+    end = next((i for i in range(start, min(start + 60, len(lines))) if _LICENSE_TAIL in lines[i]), None)
+    if end is None:
+        return text
+    header = lines[: end + 1]
+    if any(ln.strip() and not ln.startswith("..") and not ln[0].isspace() for ln in header):
+        return text
+    out = lines[end + 1 :]
+    while out and not out[0].strip():
+        out.pop(0)
+    return "\n".join(out)
+
+
 # JSX/MDX wrappers used by the Claude / Delta mirror sources: open/close and
 # self-closing tags (props included) are stripped; inner Markdown is kept.
 _JSX_TAGS = (
@@ -204,6 +235,7 @@ def rst_to_markdown(text: str, source_path: str | None = None) -> str:
     """
     from docutils.core import publish_doctree
 
+    text = _strip_site_license_preamble(text)
     text = _expand_includes(text, source_path)
     try:
         doctree = publish_doctree(text, settings_overrides={"report_level": 5, "halt_level": 6})

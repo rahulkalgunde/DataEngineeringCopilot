@@ -4,12 +4,20 @@ license preamble, Spark API breadcrumbs (H8/M/6.4). Hermetic, 0 LLM.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from data_engineering_copilot.services.github_source_preparer import _strip_apache_license
-from data_engineering_copilot.services.rst_parser import rst_to_markdown, strip_jsx_wrappers
+from data_engineering_copilot.services.rst_parser import (
+    _strip_site_license_preamble,
+    rst_to_markdown,
+    strip_jsx_wrappers,
+)
 
 pytestmark = [pytest.mark.unit]
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "rst"
 
 
 class TestRstToMarkdown:
@@ -143,3 +151,90 @@ class TestApacheLicenseStrip:
     def test_no_frontmatter_unchanged(self) -> None:
         text = "plain doc\n\nno license\n"
         assert _strip_apache_license(text) == text
+
+
+@pytest.fixture(scope="module")
+def keda_md() -> str:
+    src = _FIXTURES / "keda_excerpt.rst"
+    return rst_to_markdown(src.read_text(encoding="utf-8"), source_path=str(src))
+
+
+def test_directive_fraction_zero(keda_md: str) -> None:
+    directive_lines = [ln for ln in keda_md.splitlines() if ln.lstrip().startswith(".. ") or ".. code-block::" in ln]
+    assert directive_lines == [], f"directive boilerplate survived: {directive_lines[:4]}"
+    assert ".. note::" not in keda_md and ".. code-block::" not in keda_md
+
+
+def test_fence_balance_is_one(keda_md: str) -> None:
+    assert keda_md.count("```") % 2 == 0
+    assert keda_md.count("```") >= 6, "expected code-block + literal fences preserved"
+
+
+def test_license_comment_preamble_dropped(keda_md: str) -> None:
+    assert "Licensed to the Apache Software Foundation" not in keda_md
+    assert "ASF licenses this file" not in keda_md
+    assert not keda_md.lstrip().startswith(">"), "preamble must not survive as a block quote"
+
+
+def test_headings_carry_breadcrumbs(keda_md: str) -> None:
+    assert "# Autoscaling with KEDA" in keda_md
+    assert "## KEDA Installation and usage" in keda_md
+    assert "## Triggers (aka Scalers)" in keda_md
+    assert "## ScaledObject" in keda_md and "## Metrics" in keda_md
+
+
+def test_code_block_bodies_fenced(keda_md: str) -> None:
+    assert "```bash" in keda_md
+    assert "helm install keda kedacore/keda \\" in keda_md
+    assert "```none" in keda_md
+    assert "ceil(COUNT(*)::decimal / {{ .Values.config.celery.worker_concurrency }})" in keda_md
+
+
+def test_note_directive_body_preserved(keda_md: str) -> None:
+    assert "Set Celery worker concurrency through the Helm Chart value" in keda_md
+    assert "They will compete with each other resulting in odd scaling behavior" in keda_md
+
+
+def test_bullet_list_and_inline_code_preserved(keda_md: str) -> None:
+    assert "- cooldownPeriod specifies the number of seconds" in keda_md
+    assert "- AverageValue (default) controls a per-worker average" in keda_md
+
+
+def test_chunker_consumes_fixture_without_fracture(keda_md: str) -> None:
+    from data_engineering_copilot.domain.models import ParsedDocument
+    from data_engineering_copilot.services.header_aware_chunker import HeaderAwareChunker
+
+    chunks = HeaderAwareChunker(chunk_size_words=500, overlap_words=120, min_chunk_words=10)._sync_chunk(
+        ParsedDocument(source_name="Airflow", title="t", url="u", text=keda_md)
+    )
+    assert chunks
+    for ch in chunks:
+        assert ch.text.count("```") % 2 == 0, "chunk boundary tore a code fence"
+    assert all(".. " not in ln for ch in chunks for ln in ch.text.splitlines() if ln.lstrip()[:2] == "..")
+
+
+class TestStripSiteLicensePreamble:
+    _QUOTED = " .. Licensed to the Apache Software Foundation (ASF) under one\n     or more contributor license agreements.\n .. under the License.\n\nTitle\n=====\n\nbody\n"
+    _COMMENT = ".. Licensed to the Apache Software Foundation (ASF) under one\n   or more contributor license agreements.\n.. under the License.\n\nTitle\n=====\n\nbody\n"
+
+    def test_indented_quote_style_stripped(self) -> None:
+        out = _strip_site_license_preamble(self._QUOTED)
+        assert "Licensed to the Apache" not in out and "ASF" not in out
+        assert out.startswith("Title")
+
+    def test_column_zero_comment_style_stripped(self) -> None:
+        out = _strip_site_license_preamble(self._COMMENT)
+        assert "Licensed to the Apache" not in out
+        assert out.startswith("Title")
+
+    def test_body_mention_left_alone(self) -> None:
+        text = "Intro\n=====\n\nSee the Licensed to the Apache Software Foundation (ASF) terms.\n\nBody continues.\n"
+        assert _strip_site_license_preamble(text) == text
+
+    def test_mid_document_mention_left_alone(self) -> None:
+        text = "Title\n=====\n\nreal prose here\n\nLicensed to the Apache Software Foundation (ASF) under one\nmore terms.\n"
+        assert _strip_site_license_preamble(text) == text
+
+    def test_no_license_unchanged(self) -> None:
+        text = "Title\n=====\n\nplain body\n"
+        assert _strip_site_license_preamble(text) == text
