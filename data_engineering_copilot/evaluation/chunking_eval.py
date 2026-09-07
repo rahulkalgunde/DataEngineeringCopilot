@@ -65,30 +65,28 @@ BUILTIN_STRATEGIES = ["recursive", "sentence", "header", "structured"]
 # or just above the best level a known-good chunker achieves today, so a
 # reversion trips the gate. ADR-018 records the amendment (2026-09-06).
 #
-#   fence_fracture 0.12  - floor of the continuation-heavy rebuilt generation
-#                          (2026-09-06 re-cert). Real-build measurement after
-#                          the hierarchical fence-balance fix: 0.1108 (73,017
-#                          chunks). Two residual classes keep the rate above a
-#                          tighter tripwire: (1) genuinely-oversize fences
-#                          > 3800 tokens / ~14k chars that cannot be embedded
-#                          whole at the app hard caps, and (2) CP platform-tabs
-#                          nested fences (outer empty fence + inner languaged
-#                          fences from CodeGroup/Tab HTML) whose pairing the
-#                          fence matcher cannot balance within a budget.
-#                          The old-gen 0.0586 level was measured on a smaller
-#                          corpus without those classes. ADR-018 amendment 2
-#                          records the re-calibration and the follow-up task
-#                          (nested-fence pairing rework) that would allow
-#                          tightening it again.
+#   fence_fracture 0.08  - re-tightened 2026-09-07 (ADR-018 amendment 3). The
+#                          nested-fence pairing rework (header_aware_chunker
+#                          fence-regex indent `\s{0,3}` -> `[ \t]{0,3}`) fixed
+#                          4-tick fences that were "paired" to a distant
+#                          closer across a blank line, exposing fence-body
+#                          headings as fake sections. Real-build re-cert on the
+#                          rebuilt generation (79,760 chunks, same pinned
+#                          sources): 0.0379 — down from the 73,017-chunk build
+#                          floor 0.1108. Tripwire sits at 2x the measured floor
+#                          (0.038) with headroom for the irreducible classes
+#                          (genuinely-oversize fences > 3800 tok / ~14k chars,
+#                          CP CodeGroup/Tab nested fences).
 #   tiny_rate      0.02  - old-gen level 0.0170; rebuilt generation 0.0093
 #   sentence       0.30  - best measured 0.2870 (rebuilt gen), above old 0.3110
 #   table/oversized      - unchanged, both generations already pass
 #
 # The active generation (cd208afaf0f8) turned the existing gates green on
 # 2026-09-06; fence was re-calibrated from the projected 0.10 to the measured
-# 0.1108 (tripwire 0.12).
+# 0.1108 (tripwire 0.12), then tightened to 0.08 after the fence-pairing fix
+# re-cert measured 0.0379 (2026-09-07).
 CORPUS_GATES = {
-    "fence_fracture": 0.12,
+    "fence_fracture": 0.08,
     "tiny_rate": 0.02,
     "oversized_rate": 0.001,
     "table_fracture": 0.01,

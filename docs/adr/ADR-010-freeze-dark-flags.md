@@ -59,6 +59,35 @@ Freeze — docs == code — until held 110 bootstrap gate passes:
 - Audit: `docs/RAG_SYSTEM_LEARNER_GUIDE.md:44` 16-stage diagram.
 - Plan: `plans/2026-09-02_rag_pipeline_simplification_plan.md:Task 1`.
 
+## Re-measurement on the rebuilt generation (2026-09-07)
+
+Post fence-pairing rebuild (`pinned-cd208afaf0f8`, 79,760 chunks), the **unfreeze gate is MET**:
+
+| Mode | R@10 | nDCG@10 | MRR@10 |
+|------|------|---------|--------|
+| dense (shipped base) | **0.859** | **0.586** | **0.526** |
+| sparse (BM25) | 0.577 | 0.213 | 0.129 |
+| hybrid RRF k=60 | 0.859 | 0.480 | 0.393 |
+| hybrid RRF k=5 | 0.786 | 0.442 | 0.369 |
+
+Held-110 (seed 42, `recall_inscope.jsonl`), store path, hybrid-shaped store via the
+ablation harness. Dense alone clears `recall@10 ≥0.35` with 95% CI excluding 0
+(standalone dense CI [0.700, 0.855] / harness 0.859).
+
+**Decision: keep the freeze on the flags.** The gate probes *enabledness*, not
+*shipping*: per-row shipping requires each flag's own benchmark to prove a gain.
+On the rebuilt generation none does — hybrid RRF matches dense recall exactly
+(Δ CI [−0.027, +0.027] includes 0) while measurably **degrading nDCG −0.106 /
+MRR −0.133**, sparse alone is far weaker (0.577), and k=5 is worse still. The
+dense-only shipped base stands; `hybrid_search_enabled` stays `False`, all dark
+flags stay dark. `identifier_sparse_rrf`/`namespace_bm25` gates would additionally
+require their specific +0.05 identifier-recall benchmarks (not met on prior gens).
+
+**Harness fix**: `eval-retrieval --ablation` now elects a hybrid-shaped store
+(force `hybrid_search=True`, mirroring `gen_build`) instead of inheriting the
+serving flag, so sparse/hybrid mode deltas can actually be measured again
+(cli.py `_eval_ablation_main`).
+
 ## Alternatives Considered
 
 - Ship dark flags now with `True` defaults: rejected — A/B with correct NVIDIA embeddings shows `identifier_sparse_rrf` hurts (`Δ -0.066`), `namespace_bm25` needs new generation and never passed generic recall gate, `DBSF` underperforms (`Δ -0.008`), `llm_rerank` and `compression` dilute without store headroom.

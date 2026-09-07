@@ -248,9 +248,6 @@ class TestIntegration:
 
 
 class TestBreadcrumbPrefixing:
-    def test_breadcrumb_prefixing_flag_defaults_false(self):
-        assert AppSettings().chunk_breadcrumb_prefixing_enabled is False
-
     def test_header_aware_chunker_single_owner_breadcrumbs(self):
         # M1 single-owner breadcrumbs: the embedding input (via
         # ``embedding_text_for_chunk``) is the ONLY breadcrumb owner. The
@@ -262,7 +259,6 @@ class TestBreadcrumbPrefixing:
 
         settings = AppSettings(
             chunking_strategy="header_aware",
-            chunk_breadcrumb_prefixing_enabled=True,
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, HeaderAwareChunker)

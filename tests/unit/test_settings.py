@@ -83,7 +83,6 @@ def test_app_settings_honors_explicit_kwargs_over_env_file() -> None:
     assert settings.reranker_top_k == 30
     assert settings.max_context_chars == 24000
     assert settings.chunk_size_words == 700
-    assert settings.chunk_breadcrumb_prefixing_enabled is False
 
 
 def test_app_settings_hybrid_search_defaults() -> None:

@@ -2636,6 +2636,21 @@ def _eval_ablation_main(  # pragma: no cover: CLI entry point, requires Qdrant
 
     service = build_rag_service(embedding_purpose="evaluation")
     _disable_rewrites_for_eval(service)
+    # The ablation compares dense vs sparse vs hybrid on the SAME index shape the
+    # build produced. The serving-side flag (hybrid_search_enabled, ADR-010,
+    # currently False) only governs the shipped query path — mirror gen_build's
+    # rationale: elect a hybrid-shaped store here so BM25_ONLY/HYBRID modes can
+    # actually run and measure their delta vs dense. gen_build: hybrid_search=True.
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+    service.vector_store = AsyncQdrantVectorStore(
+        url=settings.qdrant_url,
+        collection_name=settings.collection_name,
+        hybrid_search=True,
+        hybrid_rrf_k=settings.hybrid_rrf_k,
+        embedding_dimension=settings.get_embedding_dimension(),
+        bm25_namespace=settings.namespace_bm25_enabled,
+    )
 
     mode_defs: dict[str, tuple[SearchMode, int | None]] = {
         "dense": (SearchMode.DENSE_ONLY, None),

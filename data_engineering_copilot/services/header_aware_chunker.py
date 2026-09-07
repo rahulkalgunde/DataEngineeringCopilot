@@ -25,7 +25,7 @@ _HEADER_RE = re.compile(r"^(#{1,6})[ \t]+(.+)$", re.MULTILINE)
 # Fenced code: 0-3 leading spaces, `` ``` `` or ``~~~`` markers, optional
 # language tag on the opening line. CRLF is tolerated on both the opening and
 # closing lines. Only ``m.group(0)`` is consumed by callers.
-_FENCE_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n(.*?)^\1\2[^\r\n]*", re.MULTILINE | re.DOTALL)
+_FENCE_RE = re.compile(r"^([ \t]{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n(.*?)^\1\2[^\r\n]*", re.MULTILINE | re.DOTALL)
 # HTML tables are atomic split units: prose word windows must never cut a table
 # mid-row, otherwise the markdown-to-HTML rendering (and downstream extraction)
 # silently drops half the rows.
@@ -436,7 +436,7 @@ class HeaderAwareChunker:
             return [code]
 
         # Split off the opening fence line and the closing marker.
-        fence = re.match(r"^(\s{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n", code)
+        fence = re.match(r"^([ \t]{0,3})(`{3,}|~{3,})[^\r\n]*\r?\n", code)
         opener = fence.group(0) if fence else ""
         marker = fence.group(2) if fence else "```"
         body = code[len(opener) :]

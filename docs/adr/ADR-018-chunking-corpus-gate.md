@@ -149,16 +149,47 @@ generation (`make eval-chunking-corpus`, report
 by the two residual classes described above; the nested-fence pairing rework
 is the tracked lever that would allow tightening the tripwire again.
 
+### Amendment-3 (2026-09-07) — the nested-fence pairing rework landed
+
+The tracked follow-up turned out to live in `header_aware_chunker.py`, not
+`token_budget._FENCE_RE` (which pairs col0 4-tick fences correctly). The
+chunker's fence regex used `(\s{0,3})` as the opener indent; `\s` matches
+newlines, so a blank line before a fence became "indent" (`group(1)="\n"`), and
+the closer `^\1\2` then required a blank-line+marker — pairing e.g.
+`overview.md`'s ````markdown` block to a 3-tick closer 123 lines away,
+exposing `# PDF Processing` / `## Quick start` as fake headings and tearing one
+fence across several header chunks. Fix: `[ \t]{0,3}` (also in
+`_split_code_chunk`), matching the CommonMark ≤3-space indent rule.
+
+Mirror (566 CP docs): odd header-chunk rate 33.1% → 5.0%; odd segs 0.314 →
+0.055. Rebuilt generation (79,760 chunks — up from 73,017 because mis-paired
+fences now split into more correctly-paired chunks):
+
+| Metric | `cd208afaf0f8` (73,017 chunks) | `cd208afaf0f8` (79,760 chunks, amendment-3) | Threshold |
+|--------|---------|---------------------------------------------|-----------|
+| `fence_fracture_rate` | 0.1108 | **0.0379** | **0.08** (was 0.12) |
+| `tiny_rate` | 0.0093 | 0.0087 | 0.02 |
+| `oversized_rate` | 0.000 | 0.000 | 0.001 |
+| `table_fracture_rate` | 0.0038 | 0.0025 | 0.01 |
+| `sentence_fracture_rate` | 0.2870 | 0.2560 | 0.30 |
+
+Tripwire 0.12 → **0.08** (2× the measured floor 0.0379, retaining headroom
+for the irreducible classes: genuinely-oversize fences > 3800 tokens / ~14k
+chars and CP `CodeGroup`/`Tab` nested fences). `make eval-chunking-corpus`
+PASS on the rebuilt generation.
+
 ## Known follow-ups (from this session)
 
-- **Resume-reconciliation bug**: `gen-build` resume (embedding_checkpoint.json)
-  trusts the local `last_batch` blindly. When Qdrant is bounced mid-build the
-  collection may be empty/recreated; a resume then only upserts the tail
-  batches and the final point-count validation fails (`expected 73017, got
-  36153`). The build fails loudly (good) but wastes an embed cycle — the
-  resume should reconcile the checkpoint against the collection's actual point
-  count and rewind to 0 when they disagree.
-- **Nested-fence pairing rework** (`_FENCE_RE` in `token_budget.py`): CP
-  `CodeGroup`/`Tab` HTML renders outer-empty-fence + inner languaged fences;
-  the matcher pairs the outer opener against an inner run, leaving unbalanced
-  remainder pieces. Would tighten the fence tripwire below 0.10.
+- **Resume-reconciliation bug** ~~resolved 2026-09-07~~: `_reconcile_resume_checkpoint`
+  in `pinned_index_builder.py` probes `store.count()` on resume and rewinds the
+  checkpoint to `persisted // batch_size` when the collection holds fewer points
+  than the checkpoint implies (fail-open on probe error). Build 7's *other*
+  failure mode — points *left over* from a prior generation because `gen-build`
+  upserts into the existing collection without a drop — surfaced in the same
+  count gate (`expected 79760, got 93466`); recovery is `dec reset-qdrant`
+  (deletes the alias only) then dropping the generation collection via the
+  Qdrant API before rebuilding.
+- **Nested-fence pairing rework** ~~resolved 2026-09-07~~: root cause was
+  `header_aware_chunker._FENCE_RE`'s `\s{0,3}` indent group (newline-as-indent,
+  blank-line-anchored pairing); fixed with `[ \t]{0,3}`. See Amendment-3. Fence
+  tripwire tightened 0.12 → 0.08.

@@ -177,6 +177,44 @@ class PinnedIndexBuilder:
             coverage_count=sum(len(package.coverage) for package in packages),
         )
 
+    async def _reconcile_resume_checkpoint(self, checkpoint: dict, last_batch: int, total_batches: int) -> int:
+        """Rebase the resume point onto what the collection actually holds.
+
+        The checkpoint records only what *this* builder upserted last run. If the
+        backing collection lost points (Qdrant container recreated, connection
+        reset mid-build), trusting it leaves an orphaned tail and the final
+        point-count validation fails (build 5b: expected 73017, got 36153).
+        Rewind to the largest fully-persisted batch boundary instead; whether we
+        re-embed a few already-persisted batches is harmless (upsert replaces by
+        id). Fail open when the store exposes no count or the probe errors — the
+        final count validation still guards completeness.
+
+        Returns the (possibly rebased) resume batch index.
+        """
+        has_count = hasattr(self._store, "count")
+        if not has_count:
+            return last_batch
+        expected = last_batch * self._embedding_batch_size
+        try:
+            persisted = await self._store.count()
+        except Exception:
+            _structlog.warning("embedding_checkpoint_reconcile_skip", reason="count_probe_failed")
+            return last_batch
+        if persisted is None or persisted >= expected:
+            return last_batch
+        rewinded = persisted // self._embedding_batch_size
+        _structlog.warning(
+            "embedding_checkpoint_reconcile_rewind",
+            checkpoint_batches=last_batch,
+            total_batches=total_batches,
+            expected_points=expected,
+            persisted_points=persisted,
+            rewind_batch=rewinded,
+        )
+        checkpoint["last_batch"] = rewinded
+        self._save_checkpoint(checkpoint)
+        return rewinded
+
     async def _embed_all_with_checkpoint(self, chunks: list[DocumentChunk]) -> list[list[float]]:
         """Embed with crash-resilient checkpointing.
 
@@ -214,6 +252,7 @@ class PinnedIndexBuilder:
 
         if last_batch > 0:
             _structlog.info("embedding_resuming", resume_batch=last_batch, total_batches=total_batches)
+            last_batch = await self._reconcile_resume_checkpoint(checkpoint, last_batch, total_batches)
 
         vectors: list[list[float]] = []
         # Track what's already been upserted — on resume, chunks before last_batch

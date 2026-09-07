@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -186,6 +187,150 @@ def test_build_writes_artifacts(tmp_path) -> None:
     assert (tmp_path / "chunks.jsonl").is_file()
     assert (tmp_path / "coverage.json").is_file()
     assert (tmp_path / "build_report.json").is_file()
+
+
+def _write_checkpoint(output_dir: Path, last_batch: int, batch_size: int) -> None:
+    """Write an ``embedding_checkpoint.json`` the way ``_save_checkpoint`` does."""
+    import json
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "embedding_checkpoint.json").write_text(
+        json.dumps({"last_batch": last_batch, "batch_size": batch_size}), encoding="utf-8"
+    )
+
+
+def _seed_store(store: InMemoryVectorStore, count: int) -> None:
+    """Simulate points a previous attempt already persisted into the store.
+
+    Ids are intentionally unrelated to the builder-generated ids — they stand in
+    purely for the point count the builder must reconcile against.
+    """
+    seeds = []
+    for i in range(count):
+        parsed = ParsedDocument(
+            source_name="preseed",
+            title=f"Seed {i}",
+            url=f"https://example.com/seed/{i}",
+            text=f"# Seed {i}\n\n" + "seed " * 40,
+            doc_type="guide",
+            language="conceptual",
+            source_commit="a" * 40,
+            file_path=f"docs/seed-{i}.md",
+            license="Apache-2.0",
+        )
+        chunk = asyncio.run(HeaderAwareChunker().chunk(parsed))[0]
+        seeds.append(replace(chunk, chunk_id=f"preseed-{i}", index_generation="gen-x", source_commit="a" * 40))
+    asyncio.run(store.upsert_chunks(seeds, [[float(i + 1), 1.0] for i in range(count)]))
+
+
+def _distinct_package_many(slug: str, name: str, commit: str, generation: str, texts: list[str]) -> PreparedSource:
+    """Multi-doc package: one unique URL/file_path per text so chunk ids differ."""
+    chunks: list[DocumentChunk] = []
+    coverage: list[CoverageRecord] = []
+    for i, text in enumerate(texts):
+        parsed = ParsedDocument(
+            source_name=name,
+            title=f"Doc {i}",
+            url=f"https://example.com/{slug}/{i}",
+            text=text,
+            doc_type="guide",
+            language="conceptual",
+            source_commit=commit,
+            file_path=f"docs/{slug}-{i}.md",
+            license="Apache-2.0",
+        )
+        chunk = asyncio.run(HeaderAwareChunker().chunk(parsed))[0]
+        chunks.append(
+            replace(chunk, source_commit=commit, index_generation=generation, file_path=f"docs/{slug}-{i}.md")
+        )
+        coverage.append(
+            CoverageRecord(
+                relative_path=f"docs/{slug}-{i}.md",
+                representation="native",
+                doc_type="guide",
+                canonical_url=f"https://example.com/{slug}/{i}",
+                status="indexed",
+                chunk_count=1,
+                content_hash="",
+            )
+        )
+    return PreparedSource(
+        slug=slug,
+        source_name=name,
+        generation=generation,
+        commit=commit,
+        chunks=tuple(chunks),
+        coverage=tuple(coverage),
+    )
+
+
+def _assert_embedded(embedder: _StubEmbedder, expected: int) -> None:
+    assert len([t for batch in embedder.calls for t in batch]) == expected
+
+
+def test_build_resume_rewinds_to_zero_when_collection_lost(tmp_path) -> None:
+    """Regression: build 5b trusted ``embedding_checkpoint.json`` after a Qdrant
+    container bounce, resumed at batch 384, and validated with only the tail
+    batches present (expected 73017, got 36153). A resume must reconcile its
+    resume point against the store's actual point count: when the collection
+    holds no points but the checkpoint claims 64 batches, rewind to 0 and
+    re-embed the whole corpus.
+    """
+    store = InMemoryVectorStore()
+    embedder = _StubEmbedder()
+    generation = "gen-x"
+    texts = [_long(f"Doc {i}") for i in range(150)]
+    package = _distinct_package_many("delta", "Delta Lake Documentation", "a" * 40, generation, texts)
+    _write_checkpoint(tmp_path, last_batch=64, batch_size=2)
+
+    report = asyncio.run(_builder(store, embedder, generation, output_dir=tmp_path).build([package]))
+
+    assert report.chunk_count == 150
+    assert report.validation_passed is True
+    assert len(store._chunks) == 150
+    _assert_embedded(embedder, 150)
+
+
+def test_build_resume_trusts_checkpoint_when_points_persisted(tmp_path) -> None:
+    """When the collection really holds the checkpointed points, the resume must
+    NOT re-embed the prefix — only the tail beyond the resume point.
+    """
+    store = InMemoryVectorStore()
+    _seed_store(store, 128)
+    embedder = _StubEmbedder()
+    generation = "gen-x"
+    texts = [_long(f"Doc {i}") for i in range(150)]
+    package = _distinct_package_many("delta", "Delta Lake Documentation", "a" * 40, generation, texts)
+    _write_checkpoint(tmp_path, last_batch=64, batch_size=2)
+
+    report = asyncio.run(_builder(store, embedder, generation, output_dir=tmp_path).build([package]))
+
+    assert report.chunk_count == 150
+    assert report.validation_passed is True
+    assert len(store._chunks) == 150
+    _assert_embedded(embedder, 22)
+
+
+def test_build_resume_rewinds_to_persisted_prefix_on_partial_loss(tmp_path) -> None:
+    """With a partially-persisted collection (100 of 128 checkpointed points),
+    the resume point must rebase to the largest fully-persisted batch
+    boundary (batch 50) and re-embed from there — not from the distrustful 0
+    and not the naive checkpoint 64.
+    """
+    store = InMemoryVectorStore()
+    _seed_store(store, 100)
+    embedder = _StubEmbedder()
+    generation = "gen-x"
+    texts = [_long(f"Doc {i}") for i in range(150)]
+    package = _distinct_package_many("delta", "Delta Lake Documentation", "a" * 40, generation, texts)
+    _write_checkpoint(tmp_path, last_batch=64, batch_size=2)
+
+    report = asyncio.run(_builder(store, embedder, generation, output_dir=tmp_path).build([package]))
+
+    assert report.chunk_count == 150
+    assert report.validation_passed is True
+    assert len(store._chunks) == 150
+    _assert_embedded(embedder, 50)
 
 
 def test_build_produces_parent_and_child_chunks() -> None:

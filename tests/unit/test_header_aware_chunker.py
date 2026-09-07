@@ -54,6 +54,41 @@ class TestHeaderAwareChunker:
         assert "def foo" in sections[0].text
         assert "# this hash comment must NOT start a section" in sections[0].text
 
+    def test_headings_inside_four_tick_fence_are_not_sections(self):
+        # Regression: the fence opener's indent group used ``\s{0,3}``, which
+        # treats newlines as indentation, so a blank line before a fence let the
+        # regex anchor on newline+marker. A 4-backtick fence holding an inner
+        # 3-backtick block was then "paired" to a distant 3-backtick closer,
+        # exposing headings that live *inside* the fence body as real sections
+        # (e.g. ``# PDF Processing`` under a ````markdown```` block) and tearing
+        # the fence across chunks.
+        md = (
+            "### Level 2\n"
+            "The main body of SKILL.md contains procedural knowledge.\n\n"
+            "````markdown\n"
+            "# PDF Processing\n\n"
+            "## Quick start\n\n"
+            "Use pdfplumber to extract text from PDFs:\n\n"
+            "```python\n"
+            "import pdfplumber\n"
+            "```\n\n"
+            "For advanced form filling, see FORMS.md.\n"
+            "````\n\n"
+            "### Level 3\n"
+            "Skills can bundle additional materials.\n"
+        )
+        chunker = HeaderAwareChunker(chunk_size_words=400, overlap_words=10, min_chunk_words=3)
+        sections = chunker._split_into_sections(md)
+        headers = [s.header for s in sections]
+        # The in-fence '#' headings must NOT become section headers.
+        assert headers == ["Level 2", "Level 3"]
+        section = next(s for s in sections if s.header == "Level 2")
+        # The whole 4-backtick fence (including its inner 3-backtick block)
+        # stays intact and balanced inside the owning section.
+        assert "````markdown" in section.text
+        assert "PDF Processing" in section.text
+        assert section.text.count("```") % 2 == 0
+
     def test_code_blocks_preserved(self):
         md = "## Example\nText before code.\n\n```python\ndef foo():\n    pass\n```\n\nText after code.\n"
         chunker = HeaderAwareChunker(chunk_size_words=200, overlap_words=10, min_chunk_words=3)
