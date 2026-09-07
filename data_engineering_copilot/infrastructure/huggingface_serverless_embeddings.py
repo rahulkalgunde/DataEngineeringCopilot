@@ -30,7 +30,7 @@ from collections.abc import Callable
 
 import httpx
 import tiktoken
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
@@ -47,6 +47,21 @@ FEATURE_EXTRACTION_PATH = "/models/{model}/pipeline/feature-extraction"
 # HTTP statuses that mean "try again shortly" (the fallback chain also sees
 # these after the tenacity retries are exhausted).
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """Retry only transient network errors and 429 rate limits.
+
+    5xx (500/502/503/504) is a server-side outage: single attempt. The
+    offline wait controller owns the persistent exponential backoff, and
+    online queries map 5xx to TEMPORARY_UNAVAILABLE and fall through.
+    """
+    if isinstance(exc, httpx.TimeoutException | httpx.ConnectError | OSError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429
+    return False
+
 
 # Fallback token encoder (matches the OpenAI-compatible tokenizer ratio; the
 # real model tokenizer is threaded in via ``token_counter`` when available).
@@ -91,7 +106,7 @@ class HuggingFaceServerlessEmbeddings(SafeAsyncClientMixin):
         self._request_feature_extraction = retry(
             stop=stop_after_attempt(4),
             wait=retry_wait or wait_exponential(multiplier=1, min=1, max=8),
-            retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
+            retry=retry_if_exception(_should_retry),
             reraise=True,
         )(self._request_feature_extraction)
 
@@ -140,7 +155,10 @@ class HuggingFaceServerlessEmbeddings(SafeAsyncClientMixin):
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in _RETRYABLE_STATUSES:
-                raise  # tenacity retries; fallback categorizer maps 5xx -> TEMPORARY_UNAVAILABLE
+                # 5xx: propagate immediately — single attempt; the offline wait
+                # controller owns persistent backoff. 429 also surfaces here for
+                # the chain, which maps it to RATE_LIMITED.
+                raise
             raise EmbeddingError(f"Failed to get embeddings from Hugging Face: {exc}") from exc
 
         try:

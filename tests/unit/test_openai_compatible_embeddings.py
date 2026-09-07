@@ -209,7 +209,13 @@ async def test_embed_http_error(embeddings):
 
 
 @pytest.mark.asyncio
-async def test_embed_5xx_retries_then_succeeds(tmp_path):
+async def test_embed_5xx_is_single_attempt_then_raises(tmp_path):
+    """5xx (503 etc.) must fail after exactly ONE attempt.
+
+    The offline wait controller owns persistent exponential backoff for
+    server-side outages, so the client must not hammer the endpoint with
+    tenacity retries.
+    """
     from tenacity.wait import wait_fixed
 
     from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
@@ -224,15 +230,15 @@ async def test_embed_5xx_retries_then_succeeds(tmp_path):
     )
     with respx.mock:
         route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
-            side_effect=[
-                httpx.Response(503, json={"error": "Service Unavailable"}),
-                httpx.Response(200, json={"data": [{"embedding": [0.1] * 2048, "index": 0}]}),
-            ]
+            return_value=httpx.Response(503, json={"error": "Service Unavailable"})
         )
-        result = await emb.embed_texts(["hello"])
-        assert len(result) == 1
-        assert len(result[0]) == 2048
-        assert len(route.calls) == 2
+        # 503 must surface as the raw HTTPStatusError after a single attempt
+        # (so the fallback categorizer maps it TEMPORARY_UNAVAILABLE and the
+        # wait controller applies backoff).
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            await emb.embed_texts(["hello"])
+        assert excinfo.value.response.status_code == 503
+        assert len(route.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -253,16 +259,16 @@ async def test_embed_5xx_exhausted_raises_http_status_error(tmp_path):
         route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
             return_value=httpx.Response(502, json={"error": "Bad Gateway"})
         )
-        # 5xx must surface as the raw HTTPStatusError after retries are
-        # exhausted (so the fallback categorizer maps it TEMPORARY_UNAVAILABLE),
-        # but the in-provider retry must have happened too.
+        # 5xx surfaces as the raw HTTPStatusError (fallback categorizer maps it
+        # TEMPORARY_UNAVAILABLE) after a SINGLE attempt — the offline wait
+        # controller owns server-side backoff, never the client.
         try:
             await emb.embed_texts(["hello"])
         except httpx.HTTPStatusError as exc:
             assert exc.response.status_code == 502
         else:
             pytest.fail("expected httpx.HTTPStatusError")
-        assert len(route.calls) == 5
+        assert len(route.calls) == 1
 
 
 def test_reject_over_budget_text():

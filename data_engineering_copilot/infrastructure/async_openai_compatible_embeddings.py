@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import httpx
 import tiktoken
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 from tenacity.wait import wait_base
 
 from data_engineering_copilot.domain.exceptions import EmbeddingError
@@ -23,6 +23,25 @@ logger = logging.getLogger(__name__)
 
 # Retryable network errors — these should propagate to the @retry decorator
 _RETRYABLE_ERRORS = (httpx.TimeoutException, httpx.ConnectError, OSError)
+
+
+def _should_retry(exc: BaseException) -> bool:
+    """Retry only transient network errors and 429 rate limits.
+
+    5xx (503 Service Unavailable etc.) is a server-side outage that needs a
+    real backoff window: the offline wait controller owns that (persistent
+    exponential backoff up to 60 min), and online queries map it to
+    TEMPORARY_UNAVAILABLE and fall through the chain. Retrying a 5xx 5x
+    inside the client just hammers a degrading endpoint — so 5xx is a
+    single attempt.
+    """
+    if isinstance(exc, httpx.TimeoutException | httpx.ConnectError | OSError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        # 429: rate-limit, honor Retry-After backoff. 5xx: single attempt.
+        return exc.response.status_code == 429
+    return False
+
 
 # Fallback token encoder (matches common OpenAI-compatible tokenizer ratio)
 _TOKENIZER = tiktoken.get_encoding("cl100k_base")
@@ -75,7 +94,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self._request_embeddings = retry(
             stop=stop_after_attempt(5),
             wait=retry_wait or wait_exponential(multiplier=1, min=1, max=10),
-            retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, OSError, httpx.HTTPStatusError)),
+            retry=retry_if_exception(_should_retry),
             reraise=True,
         )(self._request_embeddings)
 
@@ -168,10 +187,10 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code >= 500:
-                # Transient server-side failure: propagate the raw HTTPStatusError
-                # so the tenacity retry decorator (which retries HTTPStatusError)
-                # retries it, and the fallback categorizer maps it to
-                # TEMPORARY_UNAVAILABLE after retries are exhausted.
+                # Server-side outage (503 etc.): propagate the raw HTTPStatusError
+                # immediately — single attempt, no in-client retry. The fallback
+                # categorizer maps it to TEMPORARY_UNAVAILABLE; the offline wait
+                # controller owns the persistent exponential backoff.
                 raise
             raise EmbeddingError(f"Failed to get embeddings: {exc}") from exc
         resp_data = response.json()

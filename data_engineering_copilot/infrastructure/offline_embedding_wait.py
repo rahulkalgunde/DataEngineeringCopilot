@@ -13,11 +13,15 @@ PinnedIndexBuilder / SparkIndexBuilder).  Semantics:
   before the probe.
 
 * **Wait only when none callable.**  When the collective check is
-  ``False``, enter an exponential backoff loop with jitter.  Cumulative
-  *wait-time only* (not execution time) is capped by
-  ``offline_embedding_max_wait_s`` (default 3600).  When the budget is
-  exhausted, raise ``OfflineEmbeddingPaused`` after flushing checkpoint
-  state — the builder will catch it and exit gracefully for resume.
+  ``False``, sleep on a persistent exponential backoff with jitter.  The
+  backoff level **survives across ``embed_texts`` calls** (not reset per
+  batch): it grows ``base · 2^level`` up to the per-sleep cap
+  ``offline_embedding_backoff_cap_s`` (default 3600 = 60 min) and cools
+  one notch per successful call.  Cumulative *wait-time only* (not
+  execution time) is capped by ``offline_embedding_max_wait_s`` (default
+  21600 = 6h).  When the budget is exhausted, raise
+  ``OfflineEmbeddingPaused`` after flushing checkpoint state — the builder
+  will catch it and exit gracefully for resume.
 
 Online query embeddings (``AsyncRagService``) do NOT use this controller —
 they keep fail-fast behaviour.
@@ -74,9 +78,9 @@ class OfflineEmbeddingWaitController:
         # fallback if caller passes None (tests).
         if app_settings is None:
             # Use defaults aligned with AppSettings defaults.
-            self._max_wait_s = max_wait_s if max_wait_s is not None else 3600.0
+            self._max_wait_s = max_wait_s if max_wait_s is not None else 21600.0
             self._backoff_base_s = backoff_base_s if backoff_base_s is not None else 10.0
-            self._backoff_cap_s = backoff_cap_s if backoff_cap_s is not None else 60.0
+            self._backoff_cap_s = backoff_cap_s if backoff_cap_s is not None else 3600.0
             self._jitter = jitter if jitter is not None else 0.2
             self._rpd_wait = rpd_wait if rpd_wait is not None else True
         else:
@@ -91,6 +95,12 @@ class OfflineEmbeddingWaitController:
             )
             self._jitter = jitter if jitter is not None else float(app_settings.offline_embedding_jitter)
             self._rpd_wait = rpd_wait if rpd_wait is not None else bool(app_settings.offline_embedding_rpd_wait)
+        # Persistent backoff state. Level and cumulative wait survive across
+        # every embed_texts call for the controller's lifetime (a gen-build):
+        # consecutive failures escalate 10→20→40→…→3600s even when batches
+        # interleave successes; the cumulative budget is shared, not per-batch.
+        self._attempt = 0
+        self._waited_s = 0.0
 
     @property
     def inner(self) -> Any:
@@ -190,14 +200,12 @@ class OfflineEmbeddingWaitController:
         return max(0.5, capped)
 
     async def _execute_with_collective_wait(self, request: Any) -> Any:
-        waited = 0.0
-        attempt = 0
         while True:
             any_callable, min_wait = self._any_callable()
             if any_callable:
                 # Try immediately — chain will probe nvidia→or→hf via try_acquire
                 try:
-                    return await self._chain.execute(request)
+                    result = await self._chain.execute(request)
                 except Exception as exc:
                     # Only wait on rate-limit / temporary categories; others (dimension, permanent) fail fast.
                     from data_engineering_copilot.domain.exceptions import ProviderError  # local import
@@ -218,22 +226,27 @@ class OfflineEmbeddingWaitController:
                     }
                     if cat not in retryable_cats:
                         raise
-                    # This provider is now on cooldown; loop will re-check collective gate and potentially sleep.
-                    # Don't sleep here — go back to collective gate to see if a sibling is still free.
-                    # Small yield to avoid tight loop.
-                    await asyncio.sleep(0)
-                    any_callable2, _ = self._any_callable()
+                    # The provider just failed and is now on cooldown — re-check
+                    # the collective gate so a sibling can still take this batch,
+                    # and refresh min_wait with the fresh cooldown/RPD wait.
+                    any_callable2, min_wait2 = self._any_callable()
                     if any_callable2:
                         continue
-                    # else fall through to backoff sleep below
+                    min_wait = min_wait2
                 else:
-                    # Should not reach here (return already in try)
-                    pass
-            # None callable — need to sleep with exponential backoff (wait-time only budget)
-            # Determine desired sleep: min(backoff, min_wait_until_any)
-            desired = min(self._backoff_step(attempt), min_wait if min_wait > 0 else self._backoff_cap_s)
-            if waited + desired > self._max_wait_s:
-                raise OfflineEmbeddingPaused(waited_s=waited, max_wait_s=self._max_wait_s)
+                    # Success — cool the persistent backoff one notch so it
+                    # re-ramps fast if the outage returns but decays fully
+                    # after a clean streak. Never a hard reset.
+                    self._attempt = max(0, self._attempt - 1)
+                    return result
+            # None callable (or just-failed) — sleep. The level PERSISTS
+            # across batches and grows exponentially (base·2^level, jittered,
+            # capped). Never sleep below the schedule level (that would make a
+            # flappy outage look like a flat 10s retry) — but a longer
+            # cooldown/RPD closure is still waited out.
+            desired = max(self._backoff_step(self._attempt), min_wait if min_wait > 0 else 0.0)
+            if self._waited_s + desired > self._max_wait_s:
+                raise OfflineEmbeddingPaused(waited_s=self._waited_s, max_wait_s=self._max_wait_s)
             await asyncio.sleep(desired)
-            waited += desired
-            attempt += 1
+            self._waited_s += desired
+            self._attempt += 1

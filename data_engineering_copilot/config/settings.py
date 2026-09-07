@@ -1020,13 +1020,15 @@ class AppSettings(BaseSettings):
     # Offline bulk embedding waits (gen-build / pinned / spark). Online
     # queries keep fail-fast (try_acquire). When any of the offline pool
     # is free we call immediately; we sleep only when *none* is callable.
-    # Cumulative wait-time (not execution time) capped at 1h, then
-    # checkpoint & graceful pause for resume.
+    # The backoff level PERSISTS across batches and grows exponentially
+    # (base · 2^level) up to the per-sleep cap (60 min); each success cools
+    # the level by one notch. Cumulative wait-time (not execution time)
+    # capped at 6h, then checkpoint & graceful pause for resume.
     offline_embedding_wait_enabled: bool = True
     offline_embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia"])
-    offline_embedding_max_wait_s: int = 3600  # cumulative wait-time only
+    offline_embedding_max_wait_s: int = 21600  # cumulative wait-time only
     offline_embedding_backoff_base_s: float = 10.0
-    offline_embedding_backoff_cap_s: float = 60.0
+    offline_embedding_backoff_cap_s: float = 3600.0  # per-sleep cap, 60 min
     offline_embedding_jitter: float = 0.2
     offline_embedding_rpd_wait: bool = True
 
