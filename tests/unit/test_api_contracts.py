@@ -186,19 +186,24 @@ class TestLLMClientErrorContract:
 
 
 class TestFactoryEmbeddingContract:
-    """build_embedding_fallback_chain must include local-hf as last resort."""
+    """Embedding chain is NVIDIA-only by decision (2026-09-07).
 
-    def test_default_embedding_order_includes_local_hf(self) -> None:
-        """Removing local-hf breaks the app when no API keys are set.
-        This test pins local-hf as a required fallback."""
+    Last 5 gen-builds: NVIDIA served 99.9% of embedding requests, openrouter 0%
+    (always 503), huggingface 0.1% (transient NVIDIA blips). Abstraction of the
+    chain into a single provider keeps failures fast and config simple.
+    """
+
+    def test_default_embedding_order_is_nvidia_only(self) -> None:
         from data_engineering_copilot.config.settings import AppSettings
 
         settings = AppSettings()
-        assert "local-hf" in settings.embedding_fallback_order
+        assert settings.embedding_fallback_order == ["nvidia"]
+        assert settings.offline_embedding_fallback_order == ["nvidia"]
 
     def test_build_rag_service_works_with_no_api_keys(self) -> None:
-        """The exact failure mode: build_rag_service() raises ValueError
-        when no API keys are set AND local-hf is not in the chain."""
+        """Hermetic tests pin local-hf in make_settings() so the no-api-key
+        chain still builds (local-hf stays a standalone provider even though it
+        is no longer a production chain fallback)."""
         from data_engineering_copilot.factory import build_rag_service
         from tests.conftest import make_settings
 

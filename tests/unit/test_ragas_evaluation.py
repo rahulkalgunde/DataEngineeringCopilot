@@ -324,10 +324,12 @@ class TestRagasEvaluator:
         from data_engineering_copilot.services.ragas_adapters import AdaptiveRagasEmbeddings
         from tests.conftest import make_settings
 
+        # Embedding chain is NVIDIA-only (2026-09-07); with a placeholder key the
+        # runtime must wrap the external provider chain, not fall back to bare local.
         app_settings = make_settings(
             nvidia_api_key="placeholder",
-            openrouter_api_key="placeholder",
             embedding_provider="local-hf",
+            embedding_fallback_order=["nvidia"],
         )
         llm_wrapper, embeddings_wrapper = RagasEvaluator._build_runtime(app_settings=app_settings)
         assert isinstance(embeddings_wrapper, AdaptiveRagasEmbeddings)
@@ -335,10 +337,10 @@ class TestRagasEvaluator:
             providers = [p.name for p in embeddings_wrapper._chain._config.providers]
             if embeddings_wrapper._chain._config.degraded_fallback:
                 providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
+            assert "nvidia" in providers
         else:
-            providers = ["bare"]
-        # NVIDIA + OpenRouter lead; local-hf rides the ordered chain (no key needed)
-        assert providers == ["nvidia", "openrouter", "local-hf"]
+            # Single-provider chain returns the bare nvidia embedder directly.
+            assert embeddings_wrapper._chain.model_name == "nvidia/nemotron-3-embed-1b"
         assert llm_wrapper is not None
 
     def test_build_runtime_adaptive_judge_has_no_pinned_primary(self):

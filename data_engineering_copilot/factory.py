@@ -1107,45 +1107,12 @@ def _build_embedding_chain_config(
     main_providers = [p for p in providers_config if p.name.lower() != "ollama"]
     degraded = next((p for p in providers_config if p.name.lower() == "ollama"), None)
 
-    # Offline bulk path: when wait is enabled, do NOT attach local-hf
-    # degraded fallback — the offline controller will wait/collectively gate
-    # rather than silently degrading to slow CPU.
-    _is_offline = purpose in {"offline_batch", "pinned", "spark"} and app_settings.offline_embedding_wait_enabled
-    if _is_offline:
-        # Strip any accidental local-hf from main (should not be in offline order anyway)
-        # but keep it when the user explicitly asked for local-hf-only tail
-        # (remaining 27 batches after 704).
-        offline_order = [p.lower() for p in app_settings.offline_embedding_fallback_order]
-        if offline_order != ["local-hf"]:
-            main_providers = [p for p in main_providers if p.name.lower() != "local-hf"]
-            if degraded and degraded.name.lower() == "local-hf":
-                degraded = None
-
-    # When a purpose-specific provider is pinned (e.g. evaluation_embedding_provider),
-    # the chain may have only 1 main provider with no degraded fallback. In that case,
-    # attach local-hf as a degraded fallback so rate-limited queries don't fail
-    # outright — they fall back to local-hf with correct input_type (query vs passage)
-    # thanks to the FallbackEmbedder/CooldownAwareEmbeddingRouter fix.
-    # The local-hf embedder (nvidia/Nemotron-3-Embed-1B-BF16) produces semantically
-    # close vectors even if quantization differs (BF16 API vs FP16 local).
-    # Suppressed for offline wait mode above.
-    _purpose_specific_provider = (purpose == "evaluation" and app_settings.evaluation_embedding_provider) or (
-        purpose == "enrichment" and app_settings.enrichment_embedding_provider
-    )
-    if (
-        not degraded
-        and not _is_offline
-        and _purpose_specific_provider
-        and not any(p.name.lower() == "local-hf" for p in main_providers)
-    ):
-        local_config = _build_local_hf_provider(app_settings, limiters, health_registry)
-        if local_config is not None:
-            degraded = local_config
-            logger.info(
-                "added_local_hf_as_degraded_fallback",
-                purpose=purpose,
-                primary_provider=main_providers[0].name if main_providers else "none",
-            )
+    # NOTE (2026-09-07): the embedding chain is NVIDIA-only by decision
+    # (last 5 gen-builds fx: NVIDIA served 99.9% of requests; openrouter 0;
+    # huggingface only 0.1%). local-hf is intentionally NOT attached as a
+    # degraded fallback anymore — single-provider chains fail fast instead of
+    # silently degrading to slow CPU; eval-fast still hardwires its own
+    # in-process local-hf embedder independently of this chain.
 
     return FallbackChainConfig(
         providers=main_providers,
@@ -1153,43 +1120,6 @@ def _build_embedding_chain_config(
         max_degraded_consecutive_failures=app_settings.ollama_degraded_max_consecutive_failures,
         error_categorizer=_categorize_embedding_error,
     )
-
-
-def _build_local_hf_provider(
-    app_settings,
-    limiters: dict,
-    health_registry,
-):
-    """Build a local-hf ProviderConfig as a degraded fallback."""
-    local_hf_provider = next(
-        (p for p in app_settings.embedding_fallback_order if p.lower() == "local-hf"),
-        None,
-    )
-    if local_hf_provider is None:
-        return None
-    try:
-        client = LocalSentenceTransformerEmbeddings(
-            model_name=app_settings.local_hf_embedding_model,
-            embedding_dimension=app_settings.embedding_model_dimensions.get(
-                app_settings.local_hf_embedding_model, app_settings.default_embedding_dimension
-            ),
-            batch_size=app_settings.embedding_batch_sizes.get("local-hf", app_settings.embedding_batch_size),
-        )
-        health_registry.register_provider(
-            local_hf_provider.lower(),
-            [getattr(client, "model_name", getattr(client, "model", "unknown"))],
-        )
-        return ProviderConfig(
-            name=local_hf_provider.lower(),
-            client=client,
-            rate_limiter=limiters.get(local_hf_provider.lower()),
-        )
-    except Exception as exc:
-        logger.warning(
-            "Skipping local-hf degraded fallback in embedding chain",
-            error=str(exc),
-        )
-        return None
 
 
 def build_embedding_fallback_chain(

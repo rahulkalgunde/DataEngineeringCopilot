@@ -59,6 +59,7 @@ class TestFactoryFunctionBehavior:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -83,6 +84,7 @@ class TestFactoryFunctionBehavior:
             enable_semantic_chunking=True,
             min_semantic_similarity=0.7,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -95,6 +97,7 @@ class TestFactoryFunctionBehavior:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         expected_max = int(250 * 1.5)
@@ -108,6 +111,7 @@ class TestFactoryFunctionBehavior:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -134,6 +138,7 @@ class TestStrategySelection:
                 chunking_strategy=strategy,
                 enable_semantic_chunking=True,
                 embedding_provider="local-hf",
+                embedding_fallback_order=["local-hf"],
             )
             chunker = build_chunker(settings)
             assert isinstance(chunker, SemanticChunker)
@@ -143,6 +148,7 @@ class TestStrategySelection:
             chunking_strategy="semantic",
             enable_semantic_chunking=True,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker_semantic = build_chunker(settings_semantic)
         assert isinstance(chunker_semantic, SemanticChunker)
@@ -160,6 +166,7 @@ class TestSemanticChunkerConfiguration:
             enable_semantic_chunking=True,
             local_hf_embedding_model="nvidia/Nemotron-3-Embed-1B-BF16",
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)
@@ -174,6 +181,7 @@ class TestSemanticChunkerConfiguration:
             min_semantic_similarity=0.6,
             max_chunk_words=300,
             embedding_provider="local-hf",
+            embedding_fallback_order=["local-hf"],
         )
         chunker = build_chunker(settings)
         assert isinstance(chunker, SemanticChunker)

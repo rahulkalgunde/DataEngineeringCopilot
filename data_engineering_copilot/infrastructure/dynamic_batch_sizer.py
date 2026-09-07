@@ -2,15 +2,21 @@
 
 Computes optimal batch size at runtime based on:
 1. Model context window (tokens)
-2. Average token length of input texts
+2. Average token length of input texts (counted with the real model tokenizer)
 3. Provider hard batch limit
 4. Safety margin for tokenization variance
 
 Formula:
-    max_tokens = context_window * safety_margin
-    max_by_tokens = max_tokens / avg_tokens_per_text
-    batch_size = min(max_by_tokens, provider_limit)
+    usable_tokens = context_window * safety_margin
+    batch_size = min(floor(usable_tokens / avg_tokens), provider_limit)
     batch_size = floor(batch_size / 32) * 32  # round down to multiple of 32
+
+The batch is sized by AVERAGE token length (sum-based context budget), not by
+the longest text: per-text length is already bounded by the per-input token
+budget (``MAX_SAFE_TOKENS`` / declared input limit) enforced at embed time, so
+a single long text only consumes its own tokens inside the request. This
+yields the largest legal batch — i.e. the fewest embedding API requests for a
+given corpus.
 
 Usage:
     sizer = DynamicBatchSizer(settings)
@@ -36,6 +42,12 @@ class DynamicBatchSizer:
         self._safety_margin = app_settings.embedding_safety_margin
         self._default_batch = app_settings.embedding_batch_size
 
+    def _token_counter(self, model_name: str | None):
+        """Resolve a real token counter for the model (cl100k fallback)."""
+        from data_engineering_copilot.infrastructure.tokenizer_registry import token_counter_for
+
+        return token_counter_for(model_name) if model_name else (lambda t: max(len(t) // 4, 1))
+
     def compute_batch_size(self, provider: str, texts: list[str], model_name: str | None = None) -> int:
         """Compute optimal batch size for a provider given sample texts.
 
@@ -53,22 +65,20 @@ class DynamicBatchSizer:
         provider_limit = self._provider_limits.get(provider, self._default_batch)
         context_window = self._get_context_window(provider, model_name)
 
-        # Measure token lengths from sample texts
-        token_counts = [self._count_tokens(t) for t in texts]
+        # Count tokens with the model's own tokenizer (cl100k fallback), not a
+        # blind 4-chars/token guess — accurate counts let us pack the largest
+        # legal batch (fewest API requests) without risking context overflow.
+        counter = self._token_counter(model_name)
+        token_counts = [counter(t) for t in texts]
         avg_tokens = statistics.mean(token_counts)
         max_tokens = max(token_counts)
 
         if avg_tokens <= 0:
             return self._default_batch
 
-        # Calculate batch size based on context window
+        # Sum-based context budget: the batch total must fit the context window.
         usable_tokens = context_window * self._safety_margin
-        # Ensure even the longest text fits with headroom
-        max_texts_by_avg = int(usable_tokens / avg_tokens)
-        max_texts_by_max = int(usable_tokens / max_tokens) if max_tokens > 0 else max_texts_by_avg
-
-        # Use the more conservative of avg-based and max-based estimates
-        max_texts_by_context = min(max_texts_by_avg, max_texts_by_max)
+        max_texts_by_context = int(usable_tokens / avg_tokens)
 
         # Apply provider hard limit
         batch_size = min(max_texts_by_context, provider_limit)
@@ -106,12 +116,3 @@ class DynamicBatchSizer:
             "huggingface": 512,
         }
         return defaults.get(provider, 8192)
-
-    @staticmethod
-    def _count_tokens(text: str) -> int:
-        """Estimate token count from character length.
-
-        Uses ~4 chars/token as a fast estimate. For production accuracy,
-        could use tiktoken, but this is sufficient for batch sizing.
-        """
-        return max(len(text) // 4, 1)

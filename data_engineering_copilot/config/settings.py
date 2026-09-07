@@ -938,10 +938,11 @@ class AppSettings(BaseSettings):
     )
     llm_fallback_call_timeout: int = 10  # per-attempt timeout for non-primary fallback providers (tuned for speed)  # per-attempt timeout for non-primary fallback providers
 
-    # Embedding fallback chain: ordered list of embedding providers to try on failure
-    embedding_fallback_order: list[str] = Field(
-        default_factory=lambda: ["nvidia", "openrouter", "huggingface", "local-hf"]
-    )
+    # Embedding fallback chain: ordered list of embedding providers to try on failure.
+    # NVIDIA-only since 2026-09-07: last 5 gen-builds showed NVIDIA served 99.9%
+    # of embedding requests; openrouter always 503'd; huggingface only during
+    # transient NVIDIA blips. Single-provider chain keeps failure fast.
+    embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia"])
 
     # Per-provider embedding batch sizes calibrated for MINIMUM API calls.
     # These are DEFAULTS — actual batch size is computed at runtime by
@@ -1022,7 +1023,7 @@ class AppSettings(BaseSettings):
     # Cumulative wait-time (not execution time) capped at 1h, then
     # checkpoint & graceful pause for resume.
     offline_embedding_wait_enabled: bool = True
-    offline_embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia", "openrouter", "huggingface"])
+    offline_embedding_fallback_order: list[str] = Field(default_factory=lambda: ["nvidia"])
     offline_embedding_max_wait_s: int = 3600  # cumulative wait-time only
     offline_embedding_backoff_base_s: float = 10.0
     offline_embedding_backoff_cap_s: float = 60.0

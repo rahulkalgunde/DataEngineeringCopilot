@@ -367,6 +367,10 @@ def make_settings(**overrides) -> "AppSettings":
         "llm_provider": "ollama",
         "llm_model": "llama3.2:3b",
         "embedding_provider": "local-hf",
+        # Production default is NVIDIA-only; hermetic tests pin local-hf so the
+        # no-api-key chain still builds without touching the network.
+        "embedding_fallback_order": ["local-hf"],
+        "offline_embedding_fallback_order": ["local-hf"],
         "local_hf_embedding_model": "nvidia/Nemotron-3-Embed-1B-BF16",
         "ollama_local_base_url": "http://localhost:11434",
         "ollama_model": "llama3.2:3b",
