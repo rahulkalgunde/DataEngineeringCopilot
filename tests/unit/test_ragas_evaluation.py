@@ -311,13 +311,15 @@ class TestRagasEvaluator:
         # keys -> local Ollama degraded fallback (never a paid provider).
         from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
 
-        if isinstance(embeddings_wrapper._chain, ProviderFallbackChain):
-            providers = [p.name for p in embeddings_wrapper._chain._config.providers]
-            if embeddings_wrapper._chain._config.degraded_fallback:
-                providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
-        else:
-            providers = ["bare"]  # bare EmbedderProtocol
-        assert providers == ["bare"]
+        # Embeddings always build through a ProviderFallbackChain (single-provider
+        # chains are wrapped, not returned bare). Under hermetic settings the
+        # external providers are skipped for lack of keys, so it degrades to
+        # local-hf — never a paid provider.
+        assert isinstance(embeddings_wrapper._chain, ProviderFallbackChain)
+        providers = [p.name for p in embeddings_wrapper._chain._config.providers]
+        if embeddings_wrapper._chain._config.degraded_fallback:
+            providers.append(embeddings_wrapper._chain._config.degraded_fallback.name)
+        assert providers == ["local-hf"]
 
     def test_build_runtime_prefers_external_embedding_providers(self):
         from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
