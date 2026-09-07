@@ -211,6 +211,42 @@ class TestFactoryEmbeddingContract:
         service = build_rag_service(app_settings=settings)
         assert service is not None
 
+    def test_single_provider_chain_is_wrapped_not_bare_client(self) -> None:
+        """2026-09-07 decision: nvidia-only embedding order must NOT short-circuit
+        to the bare client. The single provider still goes through
+        ProviderFallbackChain so health cooldowns, the offline wait controller,
+        and 503 exponential backoff apply (a bare client only had ~15s of
+        tenacity retries — cannot ride a multi-minute provider outage)."""
+        from data_engineering_copilot.factory import build_embedding_fallback_chain
+        from data_engineering_copilot.infrastructure.async_openai_compatible_embeddings import (
+            OpenAICompatibleEmbeddings,
+        )
+        from data_engineering_copilot.infrastructure.offline_embedding_wait import (
+            OfflineEmbeddingWaitController,
+        )
+        from data_engineering_copilot.infrastructure.provider_fallback import ProviderFallbackChain
+        from tests.conftest import make_settings
+
+        s = make_settings(
+            embedding_fallback_order=["nvidia"],
+            offline_embedding_fallback_order=["nvidia"],
+            nvidia_api_key="nvapi-placeholder",
+            _test_allow_non_ollama=True,
+        )
+        assert s.embedding_fallback_order == ["nvidia"]
+
+        chain = build_embedding_fallback_chain(purpose="global", app_settings=s)
+        assert isinstance(chain, ProviderFallbackChain)
+        assert not isinstance(chain, OpenAICompatibleEmbeddings)
+        assert [p.name for p in chain._config.providers] == ["nvidia"]
+
+        offline = build_embedding_fallback_chain(purpose="offline_batch", app_settings=s)
+        assert isinstance(offline, OfflineEmbeddingWaitController)
+        assert not isinstance(offline, OpenAICompatibleEmbeddings)
+        assert isinstance(offline.inner, ProviderFallbackChain)
+        assert hasattr(offline, "embed_texts")
+        assert hasattr(offline, "embed_query")
+
 
 # ---------------------------------------------------------------------------
 # MagicMock contract

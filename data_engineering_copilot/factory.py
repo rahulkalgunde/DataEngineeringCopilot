@@ -1137,7 +1137,10 @@ def build_embedding_fallback_chain(
         health_registry: Shared health registry (optional)
 
     Returns:
-        ProviderFallbackChain when ≥2 providers, or single EmbedderProtocol when only 1 available.
+        ProviderFallbackChain (wrapped in OfflineEmbeddingWaitController for
+        offline purposes, CooldownAwareEmbeddingRouter when a degraded fallback
+        is configured). Single-provider chains are still wrapped so health
+        cooldowns and 503 backoff apply.
     """
     health = health_registry or _build_provider_health_registry(app_settings)
     limiters = provider_rate_limiters or _build_provider_rate_limiters(app_settings)
@@ -1153,22 +1156,6 @@ def build_embedding_fallback_chain(
         raise ValueError(
             f"No embedding client could be built for purpose '{purpose}'. Check API keys and EMBEDDING_FALLBACK_ORDER configuration."
         )
-
-    if len(config.providers) + (1 if config.degraded_fallback else 0) == 1:
-        if config.providers:
-            client = config.providers[0].client
-            name = config.providers[0].name
-        else:
-            assert config.degraded_fallback is not None
-            client = config.degraded_fallback.client
-            name = config.degraded_fallback.name
-        logger.info(
-            "embedding_fallback_chain_built",
-            purpose=purpose,
-            chain="single",
-            provider=name,
-        )
-        return client  # type: ignore[return-value]
 
     chain: Any = ProviderFallbackChain(config, health)  # type: ignore[assignment]
 

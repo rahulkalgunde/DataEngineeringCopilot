@@ -1,8 +1,9 @@
 """EmbedderProtocol adapter over the unified embedding fallback chain.
 
-``build_embedding_fallback_chain`` returns a ``ProviderFallbackChain`` when ≥2
-providers are configured (e.g. ``embedding_fallback_order=["nvidia",
-"openrouter"]``), else a bare ``EmbedderProtocol``. RAG/ingestion callers use
+``build_embedding_fallback_chain`` returns a ``ProviderFallbackChain`` (wrapped
+in ``OfflineEmbeddingWaitController`` for offline batch purposes). Every chain —
+including single-provider chains — is wrapped so health cooldowns and 503
+backoff apply even when only NVIDIA is configured. RAG/ingestion callers use
 the plain ``build_embedder`` single-provider path; offline batch pipelines
 (Spark index build) want the same adaptive NVIDIA→OpenRouter→Ollama fallback
 used everywhere else. This adapter exposes that chain through the standard
