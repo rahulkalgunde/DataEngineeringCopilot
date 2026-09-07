@@ -950,7 +950,7 @@ class AppSettings(BaseSettings):
     # See: docs/research/2026-08-26_embedding_batch_calibration.md
     embedding_batch_sizes: dict[str, int] = Field(
         default_factory=lambda: {
-            "nvidia": 1024,  # Tested 64-1024, all OK — use max
+            "nvidia": 256,  # API-declared max (probe 2026-09-07: 300 -> 400 "maximum of 256"); runtime may go lower by context
             "openrouter": 256,  # Tested 32-256, all OK — use max
             "gemini": 64,  # Moderate capacity
             "huggingface": 32,  # Conservative (402 without paid tier)
@@ -972,7 +972,7 @@ class AppSettings(BaseSettings):
     # DynamicBatchSizer will never exceed this regardless of context calc.
     embedding_provider_batch_limits: dict[str, int] = Field(
         default_factory=lambda: {
-            "nvidia": 1024,
+            "nvidia": 256,  # API-declared max (probe 2026-09-07: 300 -> 400 "input count 300 exceeds maximum allowed batch size; maximum of 256")
             "openrouter": 256,
             "gemini": 128,
             "huggingface": 64,

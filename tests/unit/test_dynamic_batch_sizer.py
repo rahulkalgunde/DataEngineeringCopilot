@@ -16,13 +16,13 @@ def sizer() -> DynamicBatchSizer:
 def test_short_texts_get_max_batch(sizer: DynamicBatchSizer) -> None:
     texts = ["short text " + str(i) for i in range(100)]
     batch = sizer.compute_batch_size("nvidia", texts)
-    assert batch == 1024  # max provider limit for nvidia
+    assert batch == 256  # API-declared max for nvidia (probe 2026-09-07)
 
 
 def test_long_texts_reduce_batch(sizer: DynamicBatchSizer) -> None:
     texts = ["x" * 4000 for _ in range(100)]  # ~1000 tokens each
     batch = sizer.compute_batch_size("nvidia", texts)
-    assert batch < 1024  # reduced by context window
+    assert batch < 256  # reduced below provider cap by context window
 
 
 def test_openrouter_lower_limit(sizer: DynamicBatchSizer) -> None:
@@ -51,7 +51,7 @@ def test_unknown_provider_uses_default(sizer: DynamicBatchSizer) -> None:
 
 
 def test_model_specific_context_window(sizer: DynamicBatchSizer) -> None:
-    texts = ["short text " + str(i) for i in range(100)]
+    texts = ["x" * 800 for _ in range(100)]  # ~200 tokens each — large enough to separate context windows
     # OpenRouter free tier has 16K context vs NVIDIA 131K
     batch_free = sizer.compute_batch_size("openrouter", texts, "nvidia/nemotron-3-embed-1b:free")
     batch_nvidia = sizer.compute_batch_size("nvidia", texts, "nvidia/nemotron-3-embed-1b")
