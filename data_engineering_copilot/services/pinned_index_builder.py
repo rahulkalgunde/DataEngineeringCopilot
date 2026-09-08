@@ -53,6 +53,10 @@ if TYPE_CHECKING:
     from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
 
 
+# Legacy fallback flush cadence (upsert + checkpoint every N embed batches).
+# Runtime value comes from ``settings.embedding_checkpoint_batch_size``
+# (default 1 = flush after every batch); this constant only guards against a
+# settings object that lacks the field.
 CHECKPOINT_BATCH_SIZE = 32
 EMBEDDING_MAX_RETRIES = 2
 EMBEDDING_COOLDOWN_BASE_S = 5
@@ -102,6 +106,9 @@ class PinnedIndexBuilder:
         self._max_embed_chars = max_embed_chars
         self._output_dir = Path(output_dir) if output_dir is not None else None
         self._settings = settings or AppSettings()
+        self._checkpoint_batch_size = int(
+            getattr(self._settings, "embedding_checkpoint_batch_size", CHECKPOINT_BATCH_SIZE)
+        )
         self._transformer_pool: ProcessPoolExecutor | None = None
 
     async def build(self, packages: Sequence[PreparedSource]) -> IndexBuildReport:
@@ -220,8 +227,10 @@ class PinnedIndexBuilder:
 
         Embeds in batches sized dynamically based on model context window and
         corpus token distribution. Checkpointing progress after every
-        ``CHECKPOINT_BATCH_SIZE`` batches. On restart, already-embedded
-        chunks are skipped — saving hours of re-work on crashes.
+        ``self._checkpoint_batch_size`` batches (configurable via
+        ``settings.embedding_checkpoint_batch_size``, default 1 = durable after
+        every batch). On restart, already-embedded chunks are skipped — saving
+        hours of re-work on crashes.
         """
         from data_engineering_copilot.infrastructure.dynamic_batch_sizer import DynamicBatchSizer
 
@@ -300,7 +309,7 @@ class PinnedIndexBuilder:
             pct = (batch_idx + 1) / total_batches * 100
             _structlog.info("embedding_progress", batch=batch_idx, total_batches=total_batches, pct=f"{pct:.1f}%")
 
-            if (batch_idx + 1) % CHECKPOINT_BATCH_SIZE == 0:
+            if (batch_idx + 1) % self._checkpoint_batch_size == 0:
                 # Only upsert NEW chunks+vectors since last checkpoint/resume
                 upsert_end = (batch_idx + 1) * self._embedding_batch_size
                 new_chunks = chunks[already_upserted_chunks:upsert_end]

@@ -630,6 +630,13 @@ class AppSettings(BaseSettings):
     image_git_sha: str = Field(default="unknown", validation_alias="IMAGE_GIT_SHA")
 
     embedding_batch_size: int = 64
+    # Flush (upsert + write resume checkpoint) after this many successful embed
+    # batches in offline bulk builders (gen-build / pinned / spark). Default 1
+    # keeps every paid batch durable immediately — a crash/kill loses at most
+    # one batch of work, never up to 32. Larger values amortize Qdrant writes at
+    # the cost of a wider crash-loss window. Applied via AppSettings in
+    # PinnedIndexBuilder / SparkIndexBuilder.
+    embedding_checkpoint_batch_size: int = 1
     embed_concurrency: int = 4
     enrichment_batch_size: int = 32
 

@@ -951,6 +951,7 @@ def spark_build(generation: str | None = None) -> int:  # pragma: no cover: CLI 
         rendered_manifest=rendered_manifest,
         chunks_path=artifact_root / "chunks.jsonl",
         telemetry=build_telemetry_tracer(),
+        checkpoint_batch_size=int(getattr(settings, "embedding_checkpoint_batch_size", 1)),
     )
     try:
         report = asyncio.run(builder.build())

@@ -93,7 +93,8 @@ class TestEmbedAllWithCheckpoint:
 
     @pytest.mark.asyncio
     async def test_checkpoint_saved_at_interval(self, builder: PinnedIndexBuilder, tmp_output: Path) -> None:
-        # Set batch size so we hit checkpoint at CHECKPOINT_BATCH_SIZE
+        # Default cadence (1) flushes after every batch, so the checkpoint file
+        # is always present mid-run and the final upsert carries the tail.
         builder._embedding_batch_size = 32
         chunks = _make_chunks(CHECKPOINT_BATCH_SIZE * 32 + 10)  # Just over 1 checkpoint
 
@@ -104,6 +105,85 @@ class TestEmbedAllWithCheckpoint:
         if checkpoint_file.exists():
             data = json.loads(checkpoint_file.read_text())
             assert "last_batch" in data
+
+    @pytest.mark.asyncio
+    async def test_default_cadence_flushes_every_batch(self, tmp_output: Path) -> None:
+        """Cadence defaults to 1: every successful embed batch is upserted."""
+        store = MagicMock()
+        store._collection_name = "test-coll"
+        store.initialize = AsyncMock()
+        store.upsert_frozen_chunks = AsyncMock()
+
+        embedder = _make_mock_embedder()
+        b = PinnedIndexBuilder(
+            store=store,
+            embedder=embedder,
+            generation="test-gen",
+            embedding_batch_size=10,
+            output_dir=tmp_output,
+            settings=AppSettings(),
+        )
+        # Pin batch size via a checkpoint so the dynamic sizer path is skipped.
+        b._save_checkpoint({"last_batch": 0, "batch_size": 10})
+        chunks = _make_chunks(25)  # 3 batches: 10, 10, 5
+
+        await b._embed_all_with_checkpoint(chunks)
+
+        calls = store.upsert_frozen_chunks.await_args_list
+        assert len(calls) == 3
+        assert [len(c.args[0]) for c in calls] == [10, 10, 5]
+
+    @pytest.mark.asyncio
+    async def test_configurable_cadence_batches_flushes(self, tmp_output: Path) -> None:
+        """Cadence N>1 buffers N batches before a single upsert."""
+        store = MagicMock()
+        store._collection_name = "test-coll"
+        store.initialize = AsyncMock()
+        store.upsert_frozen_chunks = AsyncMock()
+
+        embedder = _make_mock_embedder()
+        b = PinnedIndexBuilder(
+            store=store,
+            embedder=embedder,
+            generation="test-gen",
+            embedding_batch_size=10,
+            output_dir=tmp_output,
+            settings=AppSettings(embedding_checkpoint_batch_size=2),
+        )
+        b._save_checkpoint({"last_batch": 0, "batch_size": 10})
+        chunks = _make_chunks(25)  # 3 batches: 10, 10, 5 → flush at 20, tail 5
+
+        await b._embed_all_with_checkpoint(chunks)
+
+        calls = store.upsert_frozen_chunks.await_args_list
+        assert len(calls) == 2
+        assert [len(c.args[0]) for c in calls] == [20, 5]
+
+    @pytest.mark.asyncio
+    async def test_resume_respects_configurable_cadence(self, tmp_output: Path) -> None:
+        """A resumed build with cadence 1 does not re-embed or double-flush work."""
+        store = MagicMock()
+        store._collection_name = "test-coll"
+        store.initialize = AsyncMock()
+        store.upsert_frozen_chunks = AsyncMock()
+
+        embedder = _make_mock_embedder()
+        b = PinnedIndexBuilder(
+            store=store,
+            embedder=embedder,
+            generation="test-gen",
+            embedding_batch_size=10,
+            output_dir=tmp_output,
+            settings=AppSettings(),  # cadence 1
+        )
+        b._save_checkpoint({"last_batch": 2, "batch_size": 10})  # chunks 0-19 persisted
+        chunks = _make_chunks(45)  # 5 batches: 10×4 + 5; remaining after 2: 10, 10, 5
+
+        await b._embed_all_with_checkpoint(chunks)
+
+        calls = store.upsert_frozen_chunks.await_args_list
+        assert len(calls) == 3
+        assert [len(c.args[0]) for c in calls] == [10, 10, 5]  # never re-flushes 0-19
 
     @pytest.mark.asyncio
     async def test_resume_from_checkpoint(self, builder: PinnedIndexBuilder, tmp_output: Path) -> None:

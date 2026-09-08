@@ -163,6 +163,7 @@ class SparkIndexBuilder:
         rendered_manifest: RenderedManifest | None = None,
         chunks_path: Path | None = None,
         telemetry=None,
+        checkpoint_batch_size: int | None = None,
     ) -> None:
         self._config = config
         self._resolver = resolver
@@ -178,6 +179,7 @@ class SparkIndexBuilder:
         self._rendered_manifest = rendered_manifest
         self._chunks_path = chunks_path
         self._telemetry = telemetry
+        self._checkpoint_batch_size = checkpoint_batch_size if checkpoint_batch_size is not None else 32
 
     async def build(self) -> IndexBuildReport:
         """Build a generation collection from the pinned Spark source.
@@ -795,7 +797,7 @@ class SparkIndexBuilder:
         # Qdrant upsert offset separately.
         already_upserted_batches = start_batch
         already_upserted_chunks = already_upserted_batches * self._embedding_batch_size
-        checkpoint_interval = 32
+        checkpoint_interval = self._checkpoint_batch_size
         upserted_vecs = 0
         batch_idx = start_batch
         try:
