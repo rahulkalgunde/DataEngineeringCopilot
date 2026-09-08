@@ -319,6 +319,19 @@ eval-retrieval:
 eval-retrieval-gate:
 	dec_venv/bin/dec eval-retrieval --dataset tests/evaluation/golden/recall_inscope.jsonl --compare-baseline tests/evaluation/benchmarks/baseline_inscope.json --k 10 --batch-size 55
 
+# Rerank gate: measure cross-encoder gain over embedding baseline on real
+# retrieval pools (tests/evaluation/golden/rerank_eval_golden.jsonl, 10 rows).
+# Reports nDCG/MRR/Precision/Recall gain; requires live Qdrant + embedder
+# (pools are frozen in-file, embedding baseline computed live).
+eval-rerank-gate:
+	dec_venv/bin/dec eval-rerank --dataset tests/evaluation/golden/rerank_eval_golden.jsonl --k 10
+
+# Assembly gate: duplicate-rate / source-coverage / compression / needle-loss on
+# real verbatim needles (tests/evaluation/golden/assembly_eval_golden.jsonl, 5 rows).
+# Requires live Qdrant + embedder.
+eval-assembly-gate:
+	dec_venv/bin/dec eval-assembly --dataset tests/evaluation/golden/assembly_eval_golden.jsonl --k 20
+
 # Corpus chunk-quality gate: audit the ACTIVE generation's chunks.jsonl and
 # assert fence/tiny/oversized/table-fracture thresholds. Local-only (chunks.jsonl
 # is a build artifact). Thresholds amended 2026-09-06 (ADR-018): fence 0.06 /
