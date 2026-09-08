@@ -64,6 +64,8 @@ The full suite between milestones only burns time; Tier 2 exists to catch cross-
 
 **RULE 25** — Graphify knowledge-graph closing loop: BEFORE ending a session (after saving session context per RULE 3 but before final reply), run `graphify update .` to refresh graphify-out/graph.json; Do NOT skip on short sessions — stale graph.json causes dead-import regressions (e.g. async_embeddings) that CI catches later.
 
+**RULE 32** — No upstream issue filing (retro 2026-09-08 — mutmut#556 wasted effort): NEVER file upstream issues/bugs/defects for third-party tool failures — document the blocker locally (session log + plans/BLOCKER_<timestamp>.md), work around it, and move on. Upstream issues consume disproportionate time with near-zero return; vendor triage is not your responsibility. If a tool is fundamentally broken, switch to an alternative or drop the feature — do not invest in vendor support cycles.
+
 ## Tooling & Setup
 
 ### Local Development Setup
