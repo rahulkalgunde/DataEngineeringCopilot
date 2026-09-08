@@ -9,6 +9,7 @@ import pathlib
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from data_engineering_copilot.cli_catalog import main as catalog_probe_main
@@ -565,24 +566,60 @@ def unskip(source: str) -> None:  # pragma: no cover: CLI entry point, requires 
     print(f"Re-ingestion complete: {total} chunks indexed.")
 
 
+def _resolve_reset_collection(
+    collection_name: str,
+    collections: Sequence[str],
+    aliases_by_collection: Mapping[str, Sequence[str]],
+) -> tuple[str, bool]:
+    """Resolve the real Qdrant collection a reset must target.
+
+    In the Spark generation world ``collection_name`` (e.g. ``data_engineering_docs``)
+    is a Qdrant *alias*, not a collection: deleting by that name is a no-op and
+    recreating it 400s. This resolver returns the real generation collection the
+    alias points to. When ``collection_name`` is itself a real collection (legacy
+    world) it is returned unchanged.
+
+    Returns ``(real_collection_name, is_alias_target)``.
+    """
+    if collection_name in collections:
+        return collection_name, False
+    for real, aliases in aliases_by_collection.items():
+        if collection_name in aliases:
+            return real, True
+    return collection_name, False
+
+
 def _recreate_qdrant_collection() -> None:  # pragma: no cover: CLI entry point, requires Qdrant
-    """Delete and recreate the Qdrant collection with the current dimension/hybrid config."""
-    url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
-    logger.warning("Resetting Qdrant collection=%s url=%s", settings.collection_name, url)
+    """Delete and recreate the Qdrant collection with the current dimension/hybrid config.
+
+    Generation-aware: when ``settings.collection_name`` is a Qdrant alias (the
+    Spark generation world), the real index lives in ``data_engineering_docs__<gen>``.
+    The alias is dropped, the real collection deleted + recreated, and the alias
+    re-pointed at the recreated (empty) collection so the logical name still resolves.
+    """
+    collections = _list_qdrant_collections()
+    aliases_by_collection = {name: _qdrant_collection_aliases(name) for name in collections}
+    real_collection, is_alias_target = _resolve_reset_collection(
+        settings.collection_name, collections, aliases_by_collection
+    )
+    if is_alias_target:
+        # Qdrant requires the alias be removed before its target can be deleted.
+        _qdrant_drop_alias()
+    logger.warning("Resetting Qdrant collection=%s url=%s", real_collection, settings.qdrant_url)
     try:
-        req = urllib.request.Request(url, method="DELETE")
+        req = urllib.request.Request(f"{settings.qdrant_url}/collections/{real_collection}", method="DELETE")
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read().decode())
-            print(f"Deleted collection '{settings.collection_name}': {body}")
+            print(f"Deleted collection '{real_collection}': {body}")
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            print(f"Collection '{settings.collection_name}' does not exist (nothing to reset).")
+            print(f"Collection '{real_collection}' does not exist (nothing to reset).")
         else:
             raise
 
     dim = settings.get_embedding_dimension()
     hybrid = settings.hybrid_search_enabled
-    create_url = f"{settings.qdrant_url}/collections/{settings.collection_name}"
+    create_url = f"{settings.qdrant_url}/collections/{real_collection}"
     if hybrid:
         payload = {
             "vectors": {"dense": {"size": dim, "distance": "Cosine"}},
@@ -598,9 +635,12 @@ def _recreate_qdrant_collection() -> None:  # pragma: no cover: CLI entry point,
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = json.loads(resp.read().decode())
-        print(f"Created collection '{settings.collection_name}' (dim={dim}, hybrid={hybrid}): {body}")
+        print(f"Created collection '{real_collection}' (dim={dim}, hybrid={hybrid}): {body}")
 
-    logger.info("Qdrant collection reset completed collection=%s", settings.collection_name)
+    if is_alias_target:
+        _qdrant_create_alias(settings.active_collection_alias, real_collection)
+
+    logger.info("Qdrant collection reset completed collection=%s", real_collection)
 
 
 def _bm25_cache_path() -> pathlib.Path:
@@ -1731,6 +1771,21 @@ def _qdrant_drop_alias() -> None:
             raise RuntimeError(f"Qdrant alias drop failed: {body}")
 
 
+def _qdrant_create_alias(alias_name: str, collection_name: str) -> None:
+    """Point an alias at a target collection (already-existing names never created)."""
+    payload = {"actions": [{"create_alias": {"alias_name": alias_name, "collection_name": collection_name}}]}
+    req = urllib.request.Request(
+        f"{settings.qdrant_url}/collections/aliases",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read().decode())
+        if isinstance(body, dict) and body.get("status") != "ok":
+            raise RuntimeError(f"Qdrant alias create failed: {body}")
+
+
 def _purge_generation_state() -> None:
     """Delete active.json, history.jsonl, and validation reports from index state."""
     state_dir = settings.index_state_dir
@@ -1875,16 +1930,22 @@ def _get_bm25_status() -> dict[str, object]:  # pragma: no cover: CLI entry poin
 
 
 def _delete_bm25_cache() -> None:
-    """Best-effort removal of the persisted BM25 tokenizer for the current collection."""
-    path = _bm25_cache_path()
-    if not path.exists():
-        print(f"No BM25 cache to delete: {path}")
-        return
-    try:
-        path.unlink()
-        print(f"Deleted BM25 cache: {path}")
-    except OSError as exc:
-        print(f"Warning: could not delete BM25 cache {path}: {exc}")
+    """Best-effort removal of the persisted BM25 tokenizer for the current collection.
+
+    Deletes the resolved cache (generation-scoped ``data_engineering_docs__
+    <gen>.json`` when a generation is active) plus the literal ``<collection>.json``
+    file a legacy ``gen-activate`` may have mirrored under the alias name.
+    """
+    primary = _bm25_cache_path()
+    candidates = {primary, primary.parent / f"{settings.collection_name}.json"}
+    for path in sorted(candidates, key=str):
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+            print(f"Deleted BM25 cache: {path}")
+        except OSError as exc:
+            print(f"Warning: could not delete BM25 cache {path}: {exc}")
 
 
 def reset_qdrant() -> None:  # pragma: no cover: CLI entry point, requires Qdrant

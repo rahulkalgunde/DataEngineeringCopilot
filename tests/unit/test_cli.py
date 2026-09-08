@@ -28,6 +28,7 @@ from data_engineering_copilot.cli import (
     _purge_generation_bm25_caches,
     _purge_generation_state,
     _qdrant_collection_aliases,
+    _qdrant_create_alias,
     _qdrant_delete_collection,
     _qdrant_drop_alias,
     _resolve_spark_embedding_name,
@@ -522,6 +523,30 @@ class TestQdrantDropAlias:
         req = call_args[0][0]
         assert req.get_full_url() == "http://qdrant:6333/collections/aliases"
         assert req.get_method() == "POST"
+
+
+class TestQdrantCreateAlias:
+    def test_sends_create_alias_request(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = json.dumps({"status": "ok"}).encode()
+        with (
+            patch("data_engineering_copilot.cli.settings") as mock_settings,
+            patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen,
+        ):
+            mock_settings.qdrant_url = "http://qdrant:6333"
+            _qdrant_create_alias("my_alias", "data_engineering_docs__pinned-x")
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        assert req.get_full_url() == "http://qdrant:6333/collections/aliases"
+        assert req.get_method() == "POST"
+        payload = json.loads(req.data.decode())
+        assert payload == {
+            "actions": [
+                {"create_alias": {"alias_name": "my_alias", "collection_name": "data_engineering_docs__pinned-x"}}
+            ]
+        }
 
 
 class TestQdrantCollectionAliases:

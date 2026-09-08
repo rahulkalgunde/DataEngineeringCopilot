@@ -348,3 +348,18 @@ class TestPromptAugConstructionContract:
         m = compute_prompt_aug_construction_metrics([], [], [], [])
         assert m.salted_tag_pair_rate == 0.0
         assert m.query_embedded_rate == 0.0
+
+
+class TestResetCollectionResolverContract:
+    def test_signature_and_return_type(self) -> None:
+        from data_engineering_copilot.cli import _resolve_reset_collection
+
+        sig = inspect.signature(_resolve_reset_collection)
+        assert list(sig.parameters) == ["collection_name", "collections", "aliases_by_collection"]
+        assert sig.return_annotation == "tuple[str, bool]"
+
+    def test_bool_confirms_alias_targeting(self) -> None:
+        from data_engineering_copilot.cli import _resolve_reset_collection
+
+        assert _resolve_reset_collection("c", ["c"], {}) == ("c", False)
+        assert _resolve_reset_collection("alias", ["real__gen1"], {"real__gen1": ["alias"]}) == ("real__gen1", True)

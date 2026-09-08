@@ -43,6 +43,49 @@ def test_delete_bm25_cache_missing_is_noop(bm25_path):
     assert not bm25_path.exists()
 
 
+def test_delete_bm25_cache_removes_generation_and_literal(monkeypatch, tmp_path):
+    from tests.conftest import make_settings
+
+    monkeypatch.setattr(cli, "settings", make_settings(collection_name="data_engineering_docs"))
+    gen_path = tmp_path / ".bm25_cache" / "data_engineering_docs__pinned-x.json"
+    literal_path = tmp_path / ".bm25_cache" / "data_engineering_docs.json"
+    gen_path.parent.mkdir(parents=True)
+    gen_path.write_text("{}")
+    literal_path.write_text("{}")
+    monkeypatch.setattr(cli, "_bm25_cache_path", lambda: gen_path)
+
+    cli._delete_bm25_cache()
+
+    assert not gen_path.exists()
+    assert not literal_path.exists()
+
+
+class TestResolveResetCollection:
+    def test_legacy_when_name_is_a_real_collection(self) -> None:
+        result = cli._resolve_reset_collection(
+            "test_collection",
+            ["test_collection", "other"],
+            {"test_collection": [], "other": []},
+        )
+        assert result == ("test_collection", False)
+
+    def test_generation_alias_resolves_to_target(self) -> None:
+        result = cli._resolve_reset_collection(
+            "data_engineering_docs",
+            ["data_engineering_docs__pinned-abc", "other"],
+            {"data_engineering_docs__pinned-abc": ["data_engineering_docs"], "other": []},
+        )
+        assert result == ("data_engineering_docs__pinned-abc", True)
+
+    def test_falls_back_to_name_when_alias_unresolvable(self) -> None:
+        result = cli._resolve_reset_collection(
+            "data_engineering_docs",
+            ["data_engineering_docs__pinned-abc", "other"],
+            {"data_engineering_docs__pinned-abc": ["some_other_alias"], "other": []},
+        )
+        assert result == ("data_engineering_docs", False)
+
+
 def test_reset_qdrant_recreates_collection_and_deletes_bm25(monkeypatch, bm25_path):
     bm25_path.write_text("{}")
     recreated = MagicMock()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -234,4 +235,97 @@ def test_reset_qdrant_recreates_collection_and_deletes_bm25(qdrant_url, tmp_path
 
         client = QdrantClient(url=qdrant_url, prefer_grpc=False)
         client.delete_collection(collection_name="test_collection")
+        client.close()
+
+
+def test_reset_qdrant_resolves_generation_alias(qdrant_url, tmp_path, monkeypatch):
+    """reset-qdrant drops+recreates the real generation collection and re-points the alias.
+
+    In the Spark generation world ``settings.collection_name`` is a Qdrant alias.
+    A plain delete by alias name is a no-op, so the reset must resolve the alias
+    to its ``data_engineering_docs__<gen>`` target, reset that, and re-point the
+    alias at the empty recreated collection.
+    """
+    import uuid
+
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import CreateAlias, CreateAliasOperation, DeleteAlias, DeleteAliasOperation
+
+    from data_engineering_copilot.domain.models import DocumentChunk
+    from tests.conftest import make_settings, unique_collection_name
+
+    alias = unique_collection_name("alias_reset")
+    real_collection = f"data_engineering_docs__pinned-{uuid.uuid4().hex[:12]}"
+
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        make_settings(
+            qdrant_url=qdrant_url,
+            collection_name=alias,
+            active_collection_alias=alias,
+            redis_url="redis://localhost:6379/0",
+        ),
+    )
+    bm25_path = tmp_path / ".bm25_cache" / f"{real_collection}.json"
+    bm25_path.parent.mkdir(parents=True, exist_ok=True)
+    bm25_path.write_text("{}")
+    monkeypatch.setattr(cli, "_bm25_cache_path", lambda: bm25_path)
+
+    chunk = DocumentChunk(
+        chunk_id="c_https://example.com/keep",
+        source_name="test",
+        title="Title",
+        url="https://example.com/keep",
+        text="some indexed content",
+    )
+
+    async def _seed() -> None:
+        from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+        store = AsyncQdrantVectorStore(url=qdrant_url, collection_name=real_collection, embedding_dimension=2048)
+        await store.initialize()
+        await store.upsert_chunks([chunk], [[0.1] * 2048])
+        assert await store.count() == 1
+        await store.close()
+
+    asyncio.run(_seed())
+
+    client = QdrantClient(url=qdrant_url, prefer_grpc=False)
+    client.update_collection_aliases(
+        change_aliases_operations=[
+            CreateAliasOperation(create_alias=CreateAlias(alias_name=alias, collection_name=real_collection))
+        ]
+    )
+    client.close()
+
+    try:
+        cli.reset_qdrant()
+
+        assert not bm25_path.exists()
+
+        async def _verify() -> None:
+            from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+
+            fresh = AsyncQdrantVectorStore(url=qdrant_url, collection_name=real_collection, embedding_dimension=2048)
+            await fresh.initialize()
+            assert await fresh.count() == 0
+            await fresh.close()
+
+        asyncio.run(_verify())
+
+        verify = QdrantClient(url=qdrant_url, prefer_grpc=False)
+        try:
+            aliases = verify.get_collection_aliases(collection_name=real_collection)
+            alias_names = {a.alias_name for a in aliases.aliases}
+            assert {alias} == alias_names  # alias re-pointed at the recreated (empty) collection
+        finally:
+            verify.close()
+    finally:
+        client = QdrantClient(url=qdrant_url, prefer_grpc=False)
+        with contextlib.suppress(Exception):
+            client.update_collection_aliases(
+                change_aliases_operations=[DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias))]
+            )
+        client.delete_collection(collection_name=real_collection)
         client.close()
