@@ -40,6 +40,24 @@ def _is_model_not_supported_text(text: str) -> bool:
     )
 
 
+# Content-route rejection markers. Some gateways (NVIDIA) route embedding/LLM
+# request *content*; an incompatible input (e.g. ``data:image/``) is rejected
+# with a 503 that looks transient but is actually content-anchored and will
+# never pass on retry. Classify as INVALID_REQUEST so offline wait / retry
+# loops fail fast instead of spinning on an unrecoverable request.
+_CONTENT_ROUTE_REJECTION_MARKERS = (
+    "image inputs require vlm serving",
+    "image inputs require",
+    "vlm serving to be enabled",
+    "vision model in the grpc",
+)
+
+
+def _is_content_route_rejection_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _CONTENT_ROUTE_REJECTION_MARKERS)
+
+
 def _response_body(exc: Exception) -> str:
     if isinstance(exc, LLMClientError) and exc.response_body:
         return exc.response_body
@@ -50,6 +68,11 @@ def _response_body(exc: Exception) -> str:
 
 def _status_category(status: int, body: str) -> ProviderErrorCategory:
     if body and _is_model_not_supported_text(body) and status in (401, 403):
+        return ProviderErrorCategory.INVALID_REQUEST
+    if body and status >= 500 and _is_content_route_rejection_text(body):
+        # Content-routing rejection (e.g. ``data:image/`` → "VLM serving"):
+        # the request content is incompatible and can never pass on retry.
+        # NOT a transient outage — fail fast, don't feed the offline-wait loop.
         return ProviderErrorCategory.INVALID_REQUEST
     if status == 429:
         return ProviderErrorCategory.RATE_LIMITED
@@ -86,15 +109,13 @@ def categorize_provider_error(exc: Exception, provider: str, model: str) -> Prov
 
     if isinstance(
         exc,
-        (
-            httpx.TimeoutException,
-            httpx.ConnectError,
-            httpx.TransportError,
-            httpx.ProtocolError,
-            httpx.DecodingError,
-            TimeoutError,
-            OSError,
-        ),
+        httpx.TimeoutException
+        | httpx.ConnectError
+        | httpx.TransportError
+        | httpx.ProtocolError
+        | httpx.DecodingError
+        | TimeoutError
+        | OSError,
     ):
         # TransportError/ProtocolError cover mid-stream drops (ReadError,
         # RemoteProtocolError, ...) that often carry EMPTY messages — these

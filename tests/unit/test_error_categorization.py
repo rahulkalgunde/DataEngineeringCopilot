@@ -26,6 +26,30 @@ def test_status_and_body_mapping(status, body, expected):
     assert err.category is expected
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"message": "image inputs require VLM serving to be enabled on this server"}',
+        "image inputs require VLM serving",
+        "error: requires VLM serving to be enabled",
+        "image inputs require vlm serving to be enabled on this server",
+    ],
+)
+def test_content_route_rejection_5xx_maps_invalid_request(body):
+    """A 503 whose body declares a content-routing rejection (e.g. data:image/
+    on NVIDIA) is NOT a transient outage — it is an unrecoverable content
+    incompatibility and must fail fast instead of feeding the offline-wait loop."""
+    exc = LLMClientError("x", status_code=503, response_body=body)
+    err = categorize_provider_error(exc, "prov", "model")
+    assert err.category is ProviderErrorCategory.INVALID_REQUEST
+
+
+def test_plain_5xx_still_maps_temporary_unavailable():
+    exc = LLMClientError("x", status_code=503, response_body="Service Unavailable")
+    err = categorize_provider_error(exc, "prov", "model")
+    assert err.category is ProviderErrorCategory.TEMPORARY_UNAVAILABLE
+
+
 def test_timeout_maps_retryable():
     err = categorize_provider_error(TimeoutError("t"), "prov", "model")
     assert err.category is ProviderErrorCategory.RETRYABLE

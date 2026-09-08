@@ -17,6 +17,10 @@ from tenacity.wait import wait_base
 from data_engineering_copilot.domain.exceptions import EmbeddingError
 from data_engineering_copilot.domain.models import EmbeddingRequest, LLMUsage
 from data_engineering_copilot.infrastructure.async_client import SafeAsyncClientMixin
+from data_engineering_copilot.infrastructure.embedding_input_guard import (
+    DEFAULT_EMBEDDING_TRIGGER_PATTERNS,
+    neutralize_embedding_input,
+)
 from data_engineering_copilot.infrastructure.rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -72,6 +76,7 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         max_tokens_per_input: int = MAX_SAFE_TOKENS,
         token_counter: Callable[[str], int] | None = None,
         declared_input_limit: tuple[str, int] | None = None,
+        input_guard_triggers: tuple[str, ...] | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
@@ -83,6 +88,13 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         self._include_provider_param = include_provider_param
         self._max_tokens_per_input = max_tokens_per_input
         self._token_counter = token_counter or _count_tokens
+        # Pattern-level guard: neutralizes trigger tokens (e.g. NVIDIA's
+        # ``data:image/`` → 503 "VLM serving") in embedding INPUT only, so the
+        # request never carries the content signature the router rejects.
+        # Default-on; pass an empty tuple to disable.
+        self._input_guard_triggers = (
+            DEFAULT_EMBEDDING_TRIGGER_PATTERNS if input_guard_triggers is None else input_guard_triggers
+        )
         if declared_input_limit is not None:
             unit, limit = declared_input_limit
             if unit == "tokens" and max_tokens_per_input > limit:
@@ -157,9 +169,23 @@ class OpenAICompatibleEmbeddings(SafeAsyncClientMixin):
         # text so silent content loss can never corrupt the index.
         self._reject_over_budget(texts)
 
+        # Pattern-level content guard on embedding input only (see module):
+        # neutralizes trigger tokens the provider's content router rejects
+        # deterministically (e.g. "data:image/" → 503 on NVIDIA).
+        payload_texts, n_modified = neutralize_embedding_input(texts, self._input_guard_triggers)
+        if n_modified:
+            logger.warning(
+                "Embedding-input guard neutralized content-route trigger tokens "
+                "for model=%s provider=%s: %d text(s) with patterns %s",
+                self.model_name,
+                self.base_url,
+                n_modified,
+                self._input_guard_triggers,
+            )
+
         payload: dict = {
             "model": self.model_name,
-            "input": texts,
+            "input": payload_texts,
         }
         if input_type is not None:
             # Dual-mode models (nemotron-3-embed-1b) require the retrieval role

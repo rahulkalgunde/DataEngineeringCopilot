@@ -390,6 +390,16 @@ class PinnedIndexBuilder:
                     ) or any(k in msg2 for k in ("503", "429", "rate_limited", "temporary_unavailable"))
                     if is_rate:
                         raise
+                    # Content-anchored rejection (e.g. ``data:image/`` → "VLM
+                    # serving") is categorized INVALID_REQUEST, not transient —
+                    # the guard neutralizes known triggers, but an unguarded one
+                    # must fail fast, not sleep-escalate a permanent request.
+                    is_content_rejection = cat2 in (
+                        ProviderErrorCategory.INVALID_REQUEST,
+                        ProviderErrorCategory.PERMANENT_ERROR,
+                    )
+                    if is_content_rejection:
+                        raise
                 cooldown = EMBEDDING_COOLDOWN_BASE_S * (attempt + 1)
                 _structlog.warning(
                     "embedding_batch_failed",

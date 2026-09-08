@@ -90,6 +90,23 @@ async def test_embed_sends_correct_payload(embeddings):
 
 
 @pytest.mark.asyncio
+async def test_embed_neutralizes_trigger_token_in_payload(embeddings):
+    """Input containing ``data:image/`` must be neutralized before it hits
+    the provider — embedding INPUT only, never stored text."""
+    with respx.mock:
+        route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"embedding": [0.1] * 2048, "index": 0}]},
+            )
+        )
+        await embeddings.embed_texts(["no `data:image/...;base64,` prefix"])
+        body = json.loads(route.calls.last.request.content)
+        assert "data:image/" not in body["input"][0]
+        assert "\u200b" in body["input"][0]
+
+
+@pytest.mark.asyncio
 async def test_embed_texts_sends_passage_input_type(embeddings):
     """Index-time chunks must be embedded in passage mode for dual-mode models."""
     with respx.mock:

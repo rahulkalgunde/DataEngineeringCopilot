@@ -386,6 +386,32 @@ class TestEmbedBatchWithRetry:
         assert len(result) == 1
         assert embedder.embed_texts.call_count == 5  # 4 retries + 1 final
 
+    @pytest.mark.parametrize(
+        "category",
+        [
+            "INVALID_REQUEST",
+            "PERMANENT_ERROR",
+            "AUTHENTICATION_ERROR",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_fails_fast_on_non_transient_category(self, category: str) -> None:
+        """Content-anchored rejections (INVALID_REQUEST etc.) must NOT be retried
+        with the long _EMBED_RETRY_SLEEPS — they can never succeed on retry."""
+        from data_engineering_copilot.domain.exceptions import ProviderErrorCategory
+        from data_engineering_copilot.infrastructure.llm_client import LLMClientError
+        from data_engineering_copilot.services.spark_index_builder import _embed_batch_with_retry
+
+        embedder = AsyncMock()
+        embedder.embed_texts.side_effect = [
+            LLMClientError("content rejection", category=ProviderErrorCategory[category])
+        ] * 6
+
+        with patch("asyncio.sleep", new_callable=AsyncMock), pytest.raises(LLMClientError):
+            await _embed_batch_with_retry(embedder, ["test"])
+
+        assert embedder.embed_texts.call_count == 1
+
 
 class TestDedupAndNormalize:
     """Tests for dedup and normalize helpers."""

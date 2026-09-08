@@ -59,12 +59,22 @@ _FUNCTION_REGISTRY_RELATIVE_PATH = (
 # instead of aborting.
 _EMBED_RETRY_SLEEPS = (60.0, 120.0, 240.0, 480.0)
 
+# Content-anchored 5xx (e.g. ``data:image/`` → "VLM serving") is categorized
+# as INVALID_REQUEST, not a transient outage — retrying it with the sleeps
+# below would spin the build on an unrecoverable request. Fail fast instead.
+_EMBED_RETRY_FAIL_FAST_CATEGORIES = {
+    "invalid_request",
+    "permanent_error",
+    "authentication_error",
+}
+
 
 async def _embed_batch_with_retry(embedder: object, batch: list[str]) -> list[list[float]]:
     """Embed *batch*, retrying when every provider in the fallback chain failed.
 
-    Only ``LLMClientError`` (all providers down) is retried; permanent failures
-    (4xx, budget, dimension) surface as other exceptions and fail fast.
+    Only ``LLMClientError`` carrying a transient category (rate-limit,
+    temporary outage) is retried; permanent failures (4xx, content rejection,
+    budget, dimension) surface immediately and fail fast.
     """
     from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
@@ -72,6 +82,10 @@ async def _embed_batch_with_retry(embedder: object, batch: list[str]) -> list[li
         try:
             return await embedder.embed_texts(batch)  # type: ignore[attr-defined]  # injected embedder
         except LLMClientError as exc:
+            category = getattr(exc, "category", None)
+            category_value = category.value if category is not None else None
+            if category_value in _EMBED_RETRY_FAIL_FAST_CATEGORIES:
+                raise
             _structlog.warning(
                 "spark_index.embed_all_providers_down",
                 attempt=attempt,

@@ -83,6 +83,15 @@ _EMBED_BATCH_SIZE = 64
 # out instead of dying; the resume + per-doc flush make long waits safe.
 _EMBED_RETRY_SLEEPS = (60.0, 120.0, 240.0, 480.0)
 
+# Content-anchored 5xx (e.g. ``data:image/`` → "VLM serving") is categorized
+# as INVALID_REQUEST, not a transient outage — retrying it with the sleeps
+# below would spin the job on an unrecoverable request. Fail fast instead.
+_EMBED_RETRY_FAIL_FAST_CATEGORIES = {
+    "invalid_request",
+    "permanent_error",
+    "authentication_error",
+}
+
 
 def parse_llms_index(text: str, url_prefix: str) -> list[tuple[str, str]]:
     """Parse ``- [Title](url.md)`` lines from an ``llms.txt`` index.
@@ -304,8 +313,9 @@ async def _embed_batch_with_retry(embedder: object, batch: list[str]) -> list[li
     exhausted NVIDIA → OpenRouter and raised ``LLMClientError``, sleep past the
     provider cooldowns and retry the whole batch — the bulk-ingest analogue of
     the tenacity backoff already used inside each provider client. Only
-    ``LLMClientError`` is retried: permanent failures (4xx, budget) surface as
-    ``EmbeddingError`` and must fail fast.
+    ``LLMClientError`` carrying a transient category (rate-limit, temporary
+    outage) is retried: permanent failures (content rejection, 4xx, budget)
+    surface as other exceptions and must fail fast.
     """
     from data_engineering_copilot.infrastructure.llm_client import LLMClientError
 
@@ -313,6 +323,10 @@ async def _embed_batch_with_retry(embedder: object, batch: list[str]) -> list[li
         try:
             return await embedder.embed_texts(batch)  # type: ignore[attr-defined]  # injected embedder
         except LLMClientError as exc:
+            category = getattr(exc, "category", None)
+            category_value = category.value if category is not None else None
+            if category_value in _EMBED_RETRY_FAIL_FAST_CATEGORIES:
+                raise
             _structlog.warning(
                 "claude_docs.embed_all_providers_down",
                 attempt=attempt,
