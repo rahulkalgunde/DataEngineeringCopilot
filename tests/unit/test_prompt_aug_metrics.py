@@ -10,6 +10,7 @@ from data_engineering_copilot.evaluation.prompt_aug_metrics import (
     compute_citation_recall,
     compute_format_compliance,
     compute_injection_defense_rate,
+    compute_prompt_aug_construction_metrics,
     compute_zero_context_fallback_accuracy,
 )
 
@@ -145,3 +146,149 @@ class TestPromptAugMetricsSummary:
         s = m.summary()
         assert "Format compliance" in s
         assert "1.0000" in s
+
+
+def _valid_salted_prompt(query: str = "What is Spark?", context: str = "ctx") -> str:
+    salt = "a1b2c3d4"
+    return (
+        f"## STUFF\n<context_data_{salt}>\n[DENSITY: LOW]\n{context}\n</context_data_{salt}>\n"
+        f"## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: {query}"
+    )
+
+
+class TestPromptAugConstructionMetrics:
+    def test_all_invariants_pass_with_default_config(self):
+        prompts = [_valid_salted_prompt()]
+        m = compute_prompt_aug_construction_metrics(
+            prompts,
+            ["ctx"],
+            ["What is Spark?"],
+            [True],
+        )
+        assert m.salted_tag_pair_rate == 1.0
+        assert m.trailing_block_rate == 1.0
+        assert m.citation_instruction_rate == 1.0
+        assert m.context_preserved_rate == 1.0
+        assert m.query_embedded_rate == 1.0
+        assert m.zero_context_fallback_rate == 1.0
+
+    def test_salted_tags_disabled_expects_chunk_tags(self):
+        prompt = "<chunk>\n[DENSITY: LOW]\nctx\n</chunk>\n## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        m = compute_prompt_aug_construction_metrics(
+            [prompt],
+            ["ctx"],
+            ["Q"],
+            [True],
+            salted_tags=False,
+        )
+        assert m.salted_tag_pair_rate == 1.0
+
+    def test_salted_tags_expected_but_missing(self):
+        prompt = "<chunk>\nctx\n</chunk>\n## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        m = compute_prompt_aug_construction_metrics(
+            [prompt],
+            ["ctx"],
+            ["Q"],
+            [True],
+        )
+        assert m.salted_tag_pair_rate == 0.0
+
+    def test_unmatching_salt_close_fails(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\nctx\n</context_data_ffffffff>\n"
+            "## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        )
+        assert compute_prompt_aug_construction_metrics([prompt], ["ctx"], ["Q"], [True]).salted_tag_pair_rate == 0.0
+
+    def test_trailing_block_missing_when_enabled(self):
+        prompt = "<context_data_a1b2c3d4>\nctx\n</context_data_a1b2c3d4>\nCITATION RULES:\nQuestion: Q"
+        m = compute_prompt_aug_construction_metrics([prompt], ["ctx"], ["Q"], [True])
+        assert m.trailing_block_rate == 0.0
+
+    def test_trailing_block_present_when_disabled(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\nctx\n</context_data_a1b2c3d4>\n"
+            "## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        )
+        m = compute_prompt_aug_construction_metrics(
+            [prompt],
+            ["ctx"],
+            ["Q"],
+            [True],
+            trailing_instructions=False,
+        )
+        assert m.trailing_block_rate == 0.0
+
+    def test_citation_rules_missing_when_strict(self):
+        prompt = "<context_data_a1b2c3d4>\nctx\n</context_data_a1b2c3d4>\n## CRITICAL REMINDERS\nQuestion: Q"
+        m = compute_prompt_aug_construction_metrics([prompt], ["ctx"], ["Q"], [True])
+        assert m.citation_instruction_rate == 0.0
+
+    def test_citation_rules_present_when_off(self):
+        m = compute_prompt_aug_construction_metrics(
+            [_valid_salted_prompt()],
+            ["ctx"],
+            ["Q"],
+            [True],
+            citation_enforcement="off",
+        )
+        assert m.citation_instruction_rate == 0.0
+
+    def test_zero_context_requires_marker(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\nNo relevant documents found.\n</context_data_a1b2c3d4>\n"
+            "## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        )
+        m = compute_prompt_aug_construction_metrics(
+            [prompt],
+            [""],
+            ["Q"],
+            [False],
+        )
+        assert m.zero_context_fallback_rate == 1.0
+        assert m.context_preserved_rate == 1.0
+
+    def test_zero_context_without_marker_fails(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\n</context_data_a1b2c3d4>\n## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        )
+        m = compute_prompt_aug_construction_metrics(
+            [prompt],
+            [""],
+            ["Q"],
+            [False],
+        )
+        assert m.zero_context_fallback_rate == 0.0
+
+    def test_query_not_embedded_fails(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\nctx\n</context_data_a1b2c3d4>\n"
+            "## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: different"
+        )
+        m = compute_prompt_aug_construction_metrics([prompt], ["ctx"], ["zz-not-in-prompt"], [True])
+        assert m.query_embedded_rate == 0.0
+
+    def test_context_not_preserved_fails(self):
+        prompt = (
+            "<context_data_a1b2c3d4>\nWRONG CONTENT\n</context_data_a1b2c3d4>\n"
+            "## CRITICAL REMINDERS\nCITATION RULES:\nQuestion: Q"
+        )
+        m = compute_prompt_aug_construction_metrics([prompt], ["ctx"], ["Q"], [True])
+        assert m.context_preserved_rate == 0.0
+
+    def test_mixed_rows_aggregate_rates(self):
+        prompts = [
+            _valid_salted_prompt(),
+            _valid_salted_prompt(query="other", context="second ctx"),
+        ]
+        m = compute_prompt_aug_construction_metrics(
+            prompts,
+            ["ctx", "second ctx"],
+            ["What is Spark?", "other"],
+            [True, True],
+        )
+        assert m.salted_tag_pair_rate == 1.0
+        assert m.trailing_block_rate == 1.0
+        assert m.citation_instruction_rate == 1.0
+        assert m.context_preserved_rate == 1.0
+        assert m.query_embedded_rate == 1.0

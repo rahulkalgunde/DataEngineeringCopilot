@@ -57,7 +57,7 @@ delta then attributes to that stage alone.
 | Rerank | Do we push the right documents to the top? | `eval-rerank` |
 | Context assembly | Is the assembled prompt clean (no dupes, nothing dropped)? | `eval-assembly` |
 | Chunking | Were documents split at sensible boundaries? | `eval-chunking`, `make test-chunking` |
-| Prompt augmentation | Do prompts enforce format/citations/injection defense? | `eval-prompt-aug` |
+| Prompt augmentation | Do prompts keep their construction invariants (salt tags, instructions, citations, context)? In llm mode, do answers enforce format/citations/injection defense? | `eval-prompt-aug` |
 | Generation | Is the answer faithful to the evidence and on-topic? | `eval-generation`, `evaluate` (QA mode), Ragas |
 | Production | What is actually happening to real users? | Langfuse judges + metrics, drift detection |
 
@@ -444,14 +444,22 @@ usage: dec eval-prompt-aug -h --dataset PATH [--mode {template,llm}] [--provider
 ```
 
 - **`--mode template` (default): fully hermetic — zero infra, zero cost.** Only
-  `PromptBuilder` runs; checks prompt construction itself.
+  `PromptBuilder` runs; checks prompt **construction invariants** (salted
+  `<context_data_XXX>` tag pairs, trailing-instructions block, citation
+  instruction, verbatim context/query embedding, zero-context fallback marker).
+  It does not score answers — answer-quality metrics require LLM outputs and are
+  only computed in `--mode llm`.
 - **`--mode llm`: paid.** Generates real outputs via the answer-purpose chain
   pinned to `--provider` (default `ollama`). Prompt flags come from settings
   (`prompt_salted_xml_tags`, `prompt_trailing_instructions`,
   `prompt_citation_enforcement`) so you can A/B prompt features on identical data.
 
-Metrics: `format_compliance_rate`, `citation_precision`, `citation_recall`,
-`injection_defense_rate`, `zero_context_fallback_accuracy`.
+Template-mode metrics: `salted_tag_pair_rate`, `trailing_block_rate`,
+`citation_instruction_rate`, `context_preserved_rate`,
+`zero_context_fallback_rate`, `query_embedded_rate` — all should be `1.0000`;
+anything below signals the constructed prompt silently lost required structure.
+LLM-mode metrics: `format_compliance_rate`, `citation_precision`,
+`citation_recall`, `injection_defense_rate`, `zero_context_fallback_accuracy`.
 Informational — no pass/fail gates.
 
 ```bash

@@ -5875,7 +5875,12 @@ def main() -> None:  # pragma: no cover: CLI entry point
                         )
                     )
                 else:
-                    report = run_prompt_aug_eval(dataset_path)
+                    report = run_prompt_aug_eval(
+                        dataset_path,
+                        prompt_salted_xml_tags=settings.prompt_salted_xml_tags,
+                        prompt_trailing_instructions=settings.prompt_trailing_instructions,
+                        prompt_citation_enforcement=settings.prompt_citation_enforcement,
+                    )
                 print(report.summary())
             except Exception as exc:  # noqa: BLE001
                 print(f"❌ eval-prompt-aug failed: {exc}")

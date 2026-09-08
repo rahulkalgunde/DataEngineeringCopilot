@@ -295,3 +295,56 @@ class TestNdcgContract:
 
         result = recall_at_k(["a", "b", "c"], ["b", "a"], k=3)
         assert result == 1.0
+
+
+class TestPromptAugConstructionContract:
+    """Pins the template-mode prompt-aug eval API (construction invariants)."""
+
+    def test_metrics_dataclass_fields(self) -> None:
+        import dataclasses
+
+        from data_engineering_copilot.evaluation.prompt_aug_metrics import PromptAugConstructionMetrics
+
+        names = {f.name for f in dataclasses.fields(PromptAugConstructionMetrics)}
+        assert {
+            "salted_tag_pair_rate",
+            "trailing_block_rate",
+            "citation_instruction_rate",
+            "context_preserved_rate",
+            "zero_context_fallback_rate",
+            "query_embedded_rate",
+        } <= names
+
+    def test_run_prompt_aug_eval_returns_construction_report(self) -> None:
+        from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
+
+        # __future__ annotations makes the annotation a string; assert the name.
+        assert inspect.signature(run_prompt_aug_eval).return_annotation == "PromptAugConstructionReport"
+
+    def test_run_prompt_aug_eval_accepts_config_flags(self) -> None:
+        from data_engineering_copilot.evaluation.prompt_aug_eval import run_prompt_aug_eval
+
+        params = set(inspect.signature(run_prompt_aug_eval).parameters)
+        assert {"prompt_salted_xml_tags", "prompt_trailing_instructions", "prompt_citation_enforcement"} <= params
+
+    def test_compute_construction_metrics_signature(self) -> None:
+        from data_engineering_copilot.evaluation.prompt_aug_metrics import compute_prompt_aug_construction_metrics
+
+        sig = inspect.signature(compute_prompt_aug_construction_metrics)
+        # Positional lists first (prompts, contexts, queries, has flags), then kw-only config
+        positional = [p for p in sig.parameters.values() if p.kind == p.POSITIONAL_OR_KEYWORD]
+        assert [p.name for p in positional] == [
+            "prompts",
+            "contexts",
+            "queries",
+            "has_sufficient_context",
+        ]
+        kwonly = {p.name for p in sig.parameters.values() if p.kind == p.KEYWORD_ONLY}
+        assert {"salted_tags", "trailing_instructions", "citation_enforcement"} <= kwonly
+
+    def test_zero_rows_produce_zero_metrics(self) -> None:
+        from data_engineering_copilot.evaluation.prompt_aug_metrics import compute_prompt_aug_construction_metrics
+
+        m = compute_prompt_aug_construction_metrics([], [], [], [])
+        assert m.salted_tag_pair_rate == 0.0
+        assert m.query_embedded_rate == 0.0

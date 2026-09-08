@@ -1484,7 +1484,7 @@ Each harness freezes its inputs and scores exactly one stage:
 |---|---|---|
 | Reranking | `dec eval-rerank` | nDCG@K / MRR@K / P@K / Recall@K gains (post vs pre rerank) on frozen candidate pools (`evaluation/rerank_metrics.py`) |
 | Context assembly | `dec eval-assembly` | duplicate rate, source coverage, compression ratio, needle-loss over a `--k` candidate pool (default 20) (`evaluation/assembly_eval.py`) |
-| Prompt augmentation | `dec eval-prompt-aug` | `--mode template` (hermetic, no LLM) or `--mode llm`; format compliance, citation precision/recall, injection defense rate, zero-context fallback accuracy (`evaluation/prompt_aug_metrics.py`) |
+| Prompt augmentation | `dec eval-prompt-aug` | `--mode template` (hermetic, no LLM) asserts prompt-construction invariants (salted tag pairs, trailing block, citation instruction, context/query embedding, zero-context marker); `--mode llm` computes answer-quality metrics: format compliance, citation precision/recall, injection defense rate, zero-context fallback accuracy (`evaluation/prompt_aug_metrics.py`) |
 | Chunking quality | `dec eval-chunking` | gold-span token IoU + excerpt precision, SegEval boundary similarity (`pk`/`windowdiff`), structural fracture rate (`evaluation/chunking_metrics.py`) |
 
 ### 6.5 Layer 4 — End-to-End: `dec evaluate`

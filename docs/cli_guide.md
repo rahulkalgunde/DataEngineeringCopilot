@@ -1260,11 +1260,15 @@ Prints one four-line metric block per query. Needs Qdrant + embedder — no LLM.
 
 ### `dec eval-prompt-aug`
 
-Prompt-augmentation evaluation on frozen inputs: swaps prompt templates over
-identical `(query, context)` pairs and scores format, citation, injection
-defense, and zero-context behavior. `--mode template` is fully hermetic (only
-`PromptBuilder` runs — zero infra, zero cost); `--mode llm` makes live LLM calls
-through the answer-purpose chain pinned to `--provider`.
+Prompt-augmentation evaluation on frozen inputs: builds prompts over identical
+`(query, context)` pairs. `--mode template` is fully hermetic (only
+`PromptBuilder` runs — zero infra, zero cost) and asserts **prompt-construction
+invariants** (salted tag pairs, trailing-instructions block, citation
+instruction, verbatim context/query embedding, zero-context fallback marker).
+`--mode llm` makes live LLM calls through the answer-purpose chain pinned to
+`--provider` and scores the real outputs for format, citation, injection
+defense, and zero-context behavior. Answer-quality metrics are only meaningful
+against LLM outputs — template mode never fabricates them.
 
 ```
 usage: dec eval-prompt-aug [-h] --dataset PATH [--mode {template,llm}] [--provider NAME]
@@ -1276,12 +1280,17 @@ usage: dec eval-prompt-aug [-h] --dataset PATH [--mode {template,llm}] [--provid
 | `--mode` | choice | `template` | `template` = hermetic prompt-construction check; `llm` = generate real outputs via the LLM. |
 | `--provider` | str | `ollama` | Provider pinned for the answer chain in `llm` mode. |
 
-**Metrics**: `format_compliance_rate`, `citation_precision`, `citation_recall`,
-`injection_defense_rate`, `zero_context_fallback_accuracy`.
+**Template-mode metrics**: `salted_tag_pair_rate`, `trailing_block_rate`,
+`citation_instruction_rate`, `context_preserved_rate`,
+`zero_context_fallback_rate`, `query_embedded_rate` — all should be `1.0000`;
+below 1.0 means the constructed prompt lost required structure.
+
+**LLM-mode metrics**: `format_compliance_rate`, `citation_precision`,
+`citation_recall`, `injection_defense_rate`, `zero_context_fallback_accuracy`.
 
 **Behavior**
-- In `llm` mode the prompt flags come from settings (`prompt_salted_xml_tags`, `prompt_trailing_instructions`, `prompt_citation_enforcement`), so you can A/B prompt-augmentation features against the same frozen dataset.
-- No pass/fail gates — informational report (`Prompt Aug Eval — N samples` + metric lines).
+- In both modes the prompt flags come from settings (`prompt_salted_xml_tags`, `prompt_trailing_instructions`, `prompt_citation_enforcement`), so you can A/B prompt-augmentation features against the same frozen dataset.
+- No pass/fail gates — informational report (`Prompt Aug Construction — N samples` / `Prompt Aug Eval — N samples` + metric lines).
 
 **Example**
 

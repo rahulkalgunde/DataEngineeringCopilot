@@ -1,9 +1,18 @@
 """Prompt augmentation evaluation harness.
 
-Runs frozen-input evaluation: swaps prompt templates on identical
-query/context pairs and computes format, citation, injection, and
-zero-context metrics without a live LLM. Supports optional LLM generation
-mode for actual output quality evaluation.
+Two modes with distinct, honest semantics:
+
+``--mode template`` (hermetic, no LLM): builds a prompt for each frozen
+query/context/intent triple and asserts *prompt-construction invariants* —
+that the prompt carries the salted context tags, the trailing instructions
+block, the citation instruction, and the query/context verbatim. This cannot
+measure answer quality (there is no answer); measuring answer-quality
+metrics against raw prompts was wrong because templates contain their own
+``[Doc-N]`` examples, code fences, and anti-injection boilerplate. The
+construction checks replace those phantom scores.
+
+``--mode llm`` (live LLM): builds the same prompt, calls the model, and
+computes real answer-quality metrics on the generated outputs.
 """
 
 from __future__ import annotations
@@ -14,11 +23,13 @@ import pathlib
 from dataclasses import dataclass, field
 
 from data_engineering_copilot.evaluation.prompt_aug_metrics import (
+    PromptAugConstructionMetrics,
     PromptAugMetrics,
     compute_citation_precision,
     compute_citation_recall,
     compute_format_compliance,
     compute_injection_defense_rate,
+    compute_prompt_aug_construction_metrics,
     compute_zero_context_fallback_accuracy,
 )
 
@@ -46,6 +57,16 @@ class PromptAugEvalReport:
         return f"Prompt Aug Eval — {self.total_samples} samples\n{self.metrics.summary()}"
 
 
+@dataclass
+class PromptAugConstructionReport:
+    metrics: PromptAugConstructionMetrics
+    total_samples: int
+    details: list[dict] = field(default_factory=list)
+
+    def summary(self) -> str:
+        return f"Prompt Aug Construction — {self.total_samples} samples\n{self.metrics.summary()}"
+
+
 def load_dataset(path: pathlib.Path) -> list[PromptAugEvalRow]:
     rows: list[PromptAugEvalRow] = []
     with open(path) as f:
@@ -68,18 +89,30 @@ def load_dataset(path: pathlib.Path) -> list[PromptAugEvalRow]:
     return rows
 
 
-def run_prompt_aug_eval(dataset_path: pathlib.Path) -> PromptAugEvalReport:
-    """Run isolated eval: build prompts for each frozen row, compute metrics.
+def run_prompt_aug_eval(
+    dataset_path: pathlib.Path,
+    *,
+    prompt_salted_xml_tags: bool = True,
+    prompt_trailing_instructions: bool = True,
+    prompt_citation_enforcement: str = "strict",
+) -> PromptAugConstructionReport:
+    """Run isolated eval: build prompts and assert construction invariants.
 
-    This is hermetic — it validates prompt construction and metric computation
-    without calling a live LLM. LLM generation is a future extension.
+    This is hermetic — it validates that the prompt builder still produces
+    correctly-constructed prompts under frozen inputs and configuration, without
+    calling a live LLM. Answer-quality metrics only make sense against LLM
+    outputs and are computed by ``run_prompt_aug_eval_llm``.
     """
     from data_engineering_copilot.services.prompt_builder import PromptBuilder
 
     dataset = load_dataset(dataset_path)
-    builder = PromptBuilder()
+    builder = PromptBuilder(
+        prompt_salted_xml_tags=prompt_salted_xml_tags,
+        prompt_trailing_instructions=prompt_trailing_instructions,
+        prompt_citation_enforcement=prompt_citation_enforcement,
+    )
 
-    outputs: list[str] = []
+    prompts: list[str] = []
     details: list[dict] = []
 
     for row in dataset:
@@ -88,30 +121,27 @@ def run_prompt_aug_eval(dataset_path: pathlib.Path) -> PromptAugEvalReport:
             question=row.query,
             intent=row.intent,
         )
-        outputs.append(prompt)
+        prompts.append(prompt)
         details.append(
             {
                 "query": row.query,
                 "intent": row.intent,
                 "prompt_length": len(prompt),
-                "expected_citations": row.expected_citations,
-                "expected_format": row.expected_format,
                 "has_sufficient_context": row.has_sufficient_context,
-                "injection_payload": row.injection_payload,
             }
         )
 
-    metrics = PromptAugMetrics(
-        format_compliance_rate=compute_format_compliance(outputs, [r.expected_format for r in dataset]),
-        citation_precision=compute_citation_precision(outputs, [r.expected_citations for r in dataset]),
-        citation_recall=compute_citation_recall(outputs, [r.expected_citations for r in dataset]),
-        injection_defense_rate=compute_injection_defense_rate(outputs, [r.injection_payload for r in dataset]),
-        zero_context_fallback_accuracy=compute_zero_context_fallback_accuracy(
-            outputs, [r.has_sufficient_context for r in dataset]
-        ),
+    metrics = compute_prompt_aug_construction_metrics(
+        prompts,
+        [r.context for r in dataset],
+        [r.query for r in dataset],
+        [r.has_sufficient_context for r in dataset],
+        salted_tags=prompt_salted_xml_tags,
+        trailing_instructions=prompt_trailing_instructions,
+        citation_enforcement=prompt_citation_enforcement,
     )
 
-    return PromptAugEvalReport(
+    return PromptAugConstructionReport(
         metrics=metrics,
         total_samples=len(dataset),
         details=details,
