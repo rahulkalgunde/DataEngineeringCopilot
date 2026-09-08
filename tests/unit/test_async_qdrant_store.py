@@ -924,3 +924,83 @@ async def test_store_namespace_mismatch_fails_before_fit(mock_async_qdrant, tmp_
     assert store._bm25_version_mismatch is True
     with pytest.raises(VectorStoreError, match="version mismatch"):
         store.fit_bm25(["apache spark"])
+
+
+async def test_store_query_time_uses_persisted_cached_tokenizer(mock_async_qdrant, tmp_path):
+    """Hybrid queries must tokenize through the persisted cache, not a fresh tokenizer.
+
+    The sparse prefetch vector sent to Qdrant must be byte-for-byte the output
+    of the tokenizer loaded from disk: fitted vocab ids and IDF weights, with
+    out-of-vocabulary terms dropped (frozen).
+    """
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    tok = BM25Tokenizer()
+    tok.fit(["apache spark"])
+    cache = tmp_path / "bm25.json"
+    tok.save(cache)
+
+    await _rrf_mock_response(mock_async_qdrant, score=0.1)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="ns-test",
+        hybrid_search=True,
+        bm25_persist_path=cache,
+    )
+    assert store._bm25_loaded_from_disk is True
+    assert store.is_hybrid_ready() is True
+
+    query_text = "apache spark unknownxj484"
+    await store.query([0.1] * 2048, top_k=1, query_text=query_text)
+
+    call_kwargs = mock_async_qdrant.query_points.await_args.kwargs
+    sparse_prefetch = call_kwargs["prefetch"][1]
+    assert sparse_prefetch.using == "sparse"
+    sparse = sparse_prefetch.query
+
+    persisted = BM25Tokenizer.load(cache)
+    expected = persisted.tokenize_query(query_text)
+    assert list(sparse.indices) == list(expected.indices)
+    assert list(sparse.values) == pytest.approx(list(expected.values))
+    # Frozen behavior: the OOV term contributes zero indices/weight.
+    known = persisted.tokenize_query("apache spark")
+    assert list(sparse.indices) == list(known.indices)
+
+
+async def test_store_resolves_generation_cache_when_persist_path_omitted(mock_async_qdrant, tmp_path, monkeypatch):
+    """With no explicit persist path, the store resolves the active-generation
+    scoped cache (alias-world) and serves hybrid queries from it."""
+    import data_engineering_copilot.infrastructure.async_qdrant_store as store_mod
+    from data_engineering_copilot.infrastructure.async_qdrant_store import AsyncQdrantVectorStore
+    from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+
+    fake_root = tmp_path / "project_root"
+    fake_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(store_mod, "PROJECT_ROOT", fake_root)
+    monkeypatch.setattr(store_mod, "resolve_active_generation", lambda: "gen-9")
+
+    tok = BM25Tokenizer()
+    tok.fit(["apache spark"])
+    gen_cache = fake_root / ".bm25_cache" / "data_engineering_docs__gen-9.json"
+    gen_cache.parent.mkdir(parents=True, exist_ok=True)
+    tok.save(gen_cache)
+
+    await _rrf_mock_response(mock_async_qdrant, score=0.1)
+
+    store = AsyncQdrantVectorStore(
+        url="http://localhost:6333",
+        collection_name="data_engineering_docs",
+        hybrid_search=True,
+    )
+    assert store._bm25_persist_path == gen_cache
+    assert store._bm25_loaded_from_disk is True
+
+    query_text = "apache spark"
+    await store.query([0.1] * 2048, top_k=1, query_text=query_text)
+
+    sparse = mock_async_qdrant.query_points.await_args.kwargs["prefetch"][1].query
+    expected = BM25Tokenizer.load(gen_cache).tokenize_query(query_text)
+    assert list(sparse.indices) == list(expected.indices)
+    assert list(sparse.values) == pytest.approx(list(expected.values))
