@@ -3899,6 +3899,12 @@ def eval_generation_main(  # pragma: no cover: CLI entry point, requires LLM
         with open(output, "w", encoding="utf-8") as fh:
             json.dump(report.to_dict(), fh, indent=2)
         print(f"\nWrote report to {output}")
+    if report.degraded:
+        print(
+            f"\n❌ DEGRADED RUN: {len(report.degraded_rows)} row(s) answered outside the primary chain "
+            f"(e.g. during provider cooldown): {', '.join(report.degraded_rows)}\n"
+            f"   Scores below are NOT a measurement of the primary chain — re-run with healthy providers."
+        )
     return 0 if report.passed else 2
 
 

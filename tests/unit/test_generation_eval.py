@@ -73,6 +73,27 @@ class FakeGenerator:
         return _faithful_answer(prompt)
 
 
+class _DegradingGenerator(FakeGenerator):
+    """Serves via the primary for the first row, then degrades to a fallback
+    model — reports ``served_by`` accordingly, like a real fallback chain."""
+
+    def __init__(self, primary_model: str, fallback_model: str) -> None:
+        self.model = primary_model
+        self._primary_model = primary_model
+        self._fallback_model = fallback_model
+        self._calls = 0
+
+    @property
+    def served_by(self) -> tuple[str, str]:
+        if self._calls < 1:
+            return "groq", self._primary_model
+        return "cloudflare", self._fallback_model
+
+    async def generate(self, prompt: str) -> str:
+        self._calls += 1
+        return await super().generate(prompt)
+
+
 class FakeJudgeHigh:
     """Returns strong scores so all gates should pass."""
 
@@ -149,6 +170,43 @@ async def test_evaluate_generation_fails_gates_with_weak_judge():
     assert report.relevance_mean < RELEVANCE_GATE
     assert report.rubric_mean < RUBRIC_GATE
     assert report.passed is False
+
+
+@pytest.mark.asyncio
+async def test_degraded_run_fails_gate_and_lists_rows():
+    """Rows answered outside the primary chain must fail the run loudly even
+    when every score is above threshold (the failure mode we observed: silent
+    fallback to llama-3.1-8b during provider cooldowns)."""
+    report = await evaluate_generation(
+        "tests/evaluation/eval_dataset.jsonl",
+        None,
+        generator=_DegradingGenerator("gpt-oss-20b", "llama-3.1-8b"),
+        judge=FakeJudgeHigh(),
+        n_trials=1,
+    )
+    assert report.degraded is True
+    assert report.degraded_count >= 1
+    assert report.degraded_rows, "degraded rows must name the affected row ids"
+    # gate hard-fails despite all score gates passing
+    assert report.passed is False
+    for row in report.rows:
+        assert row.get("served_by") is not None
+        assert len(row["served_by"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_healthy_run_reports_no_degradation():
+    """A single-provider-style generator without served_by stays green."""
+    report = await evaluate_generation(
+        "tests/evaluation/eval_dataset.jsonl",
+        None,
+        generator=FakeGenerator(),
+        judge=FakeJudgeHigh(),
+        n_trials=3,
+    )
+    assert report.degraded is False
+    assert report.degraded_rows == []
+    assert report.passed is True
 
 
 @pytest.mark.asyncio

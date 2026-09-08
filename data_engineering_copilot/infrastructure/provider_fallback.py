@@ -196,6 +196,9 @@ class ProviderFallbackChain[T, R]:
         # used for usage accounting (first-provider last_usage is stale/wrong
         # whenever the router or fallback picked a different provider).
         self._served_client: Any = None
+        # Provider that actually served the most recent successful execute() —
+        # used by eval harnesses to detect degraded/fallback-model answers.
+        self._served_provider: ProviderConfig | None = None
 
     async def execute(self, request: T) -> R:
         """Execute request through the fallback chain."""
@@ -359,6 +362,7 @@ class ProviderFallbackChain[T, R]:
         try:
             result = await provider.client.call(request)
             self._served_client = provider.client
+            self._served_provider = provider
             latency = time.monotonic() - start
             if router is not None:
                 await router.record_success(provider.name, provider.client.model, latency)
@@ -489,6 +493,19 @@ class ProviderFallbackChain[T, R]:
     @property
     def last_error(self) -> ProviderError | None:
         return self._last_error
+
+    @property
+    def served_by(self) -> tuple[str, str] | None:
+        """Return ``(provider_name, model)`` that served the last successful ``execute()``.
+
+        None when no call has succeeded yet. Unlike ``model``/``last_usage`` —
+        which always report the first configured provider — this reflects the
+        actual provider chosen by routing, cooldown gating, or degraded
+        fallback, so evals can attribute answers to the real serving model.
+        """
+        if self._served_provider is None:
+            return None
+        return self._served_provider.name, self._served_provider.client.model
 
     @property
     def model(self) -> str:

@@ -131,10 +131,25 @@ class GenerationEvalReport:
     llm_usage: dict | None = None
     pairwise: dict | None = None
     robustness: dict | None = None
+    # Rows answered by a provider outside the answer chain's primary
+    # (degraded fallback during cooldowns). Empty when every row was served by
+    # the configured primary — when non-empty, the run's scores are NOT a
+    # measurement of the primary chain and the gate must fail loudly.
+    degraded_rows: list[str] = field(default_factory=list)
     passed: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def degraded_count(self) -> int:
+        """Number of rows answered by a degraded/fallback provider."""
+        return len(self.degraded_rows)
+
+    @property
+    def degraded(self) -> bool:
+        """True when any non-probe row was served outside the primary chain."""
+        return bool(self.degraded_rows)
 
     def to_markdown(self) -> str:
         lines = [
@@ -146,6 +161,14 @@ class GenerationEvalReport:
             f"- **Passed gates:** {self.passed}",
             *(
                 [
+                    f"- **Degraded rows:** {len(self.degraded_rows)} answered outside the primary chain: "
+                    + ", ".join(self.degraded_rows)
+                ]
+                if self.degraded
+                else ["- **Degraded rows:** 0 — all rows served by the primary chain"]
+            ),
+            *(
+                [
                     f"- **Pairwise vs baseline:** win={self.pairwise['win']} tie={self.pairwise['tie']} loss={self.pairwise['loss']}"
                 ]
                 if self.pairwise
@@ -154,12 +177,13 @@ class GenerationEvalReport:
             "",
             "## Per-row",
             "",
-            "| id | faithfulness | relevance | rubric |",
-            "|----|--------------|-----------|--------|",
+            "| id | faithfulness | relevance | rubric | served_by |",
+            "|----|--------------|-----------|--------|-----------|",
         ]
         for r in self.rows:
             lines.append(
-                f"| {r.get('id', '')} | {r.get('faithfulness', 0):.3f} | {r.get('relevance', 0):.3f} | {r.get('rubric', 0):.3f} |"
+                f"| {r.get('id', '')} | {r.get('faithfulness', 0):.3f} | {r.get('relevance', 0):.3f} | "
+                f"{r.get('rubric', 0):.3f} | {r.get('served_by') or 'unknown'} |"
             )
         return "\n".join(lines)
 
@@ -521,6 +545,8 @@ async def evaluate_generation(
             context_str = "\n\n".join(row.contexts)
             prompt = pb.build_rag_prompt(context=context_str, question=row.question, intent=intent)
             answer = await _generate_answer(generator, prompt)
+            served_by = getattr(generator, "served_by", None)
+            served = list(served_by) if served_by else None
             if judges:
                 votes = await asyncio.gather(*[_score_with(j, row, answer) for j in judges])
                 faith = statistics.median(v[0] for v in votes)
@@ -530,6 +556,7 @@ async def evaluate_generation(
                     "id": row.id,
                     "question": row.question,
                     "answer": answer,
+                    "served_by": served,
                     "faithfulness": faith,
                     "relevance": rel,
                     "rubric": rubric,
@@ -541,6 +568,7 @@ async def evaluate_generation(
                     "id": row.id,
                     "question": row.question,
                     "answer": answer,
+                    "served_by": served,
                     "faithfulness": faith,
                     "relevance": rel,
                     "rubric": rubric,
@@ -618,7 +646,25 @@ async def evaluate_generation(
         pairwise = {"win": wins, "tie": ties, "loss": losses}
         print(f"Pairwise vs baseline: win={wins} tie={ties} loss={losses}")
 
-    passed = faith_mean >= FAITHFULNESS_GATE and rel_mean >= RELEVANCE_GATE and rubric_mean >= RUBRIC_GATE
+    # Degradation gate: rows answered outside the answer chain's primary
+    # provider are NOT a measurement of the primary chain, so the run fails
+    # loudly instead of averaging degraded answers into a false pass/fail.
+    primary_model = getattr(generator, "model", "")
+    degraded_rows: list[str] = [
+        r["id"] for r in results if isinstance(r.get("served_by"), list | tuple) and r["served_by"][1] != primary_model
+    ]
+    if degraded_rows:
+        print(
+            "⚠️  DEGRADED RUN: rows answered outside the primary chain "
+            f"(primary_model={primary_model or 'unknown'}): {', '.join(degraded_rows)}"
+        )
+
+    passed = (
+        faith_mean >= FAITHFULNESS_GATE
+        and rel_mean >= RELEVANCE_GATE
+        and rubric_mean >= RUBRIC_GATE
+        and not degraded_rows
+    )
     return GenerationEvalReport(
         rows=results,
         faithfulness_mean=faith_mean,
@@ -628,6 +674,7 @@ async def evaluate_generation(
         llm_usage=UsageLedger.snapshot(),
         pairwise=pairwise,
         robustness=robustness,
+        degraded_rows=degraded_rows,
         passed=passed,
     )
 

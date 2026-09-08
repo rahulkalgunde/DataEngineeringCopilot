@@ -152,3 +152,37 @@ async def test_generate_stream_skips_cooldown_provider():
         health=health,
     )
     assert await _collect(chain.generate_stream("q")) == ["OK"]
+
+
+@pytest.mark.asyncio
+async def test_served_by_reflects_actual_serving_provider():
+    """``served_by`` must report the provider that served the call, not the
+    first configured provider (backward-compat ``model`` does the latter)."""
+    primary = _provider("primary", _StreamingClient("p", ["P"]))
+    fallback = _provider("backup", _StreamingClient("b", ["B"]))
+    chain = _chain([primary, fallback])
+
+    assert chain.served_by is None  # before any call
+    await chain.execute("q")
+    assert chain.served_by == ("primary", "p")
+
+    # After a fallback serve, served_by reflects the ACTUAL server.
+    class _AlwaysFail:
+        model = "f"
+
+        async def call(self, request: str) -> str:
+            raise RuntimeError("boom")
+
+        async def close(self) -> None: ...
+
+        @property
+        def last_usage(self):
+            return None
+
+    failing = _provider("failing", _AlwaysFail())
+    degraded = _provider("ollama", _StreamingClient("o", ["Z"]))
+    chain2 = _chain([failing], degraded=degraded)
+    await chain2.execute("q")
+    assert chain2.served_by == ("ollama", "o")
+    # ...while model() still reports the head of the configured list.
+    assert chain2.model == "f"
