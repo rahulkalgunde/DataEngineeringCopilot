@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import tempfile
 from pathlib import Path
 
 from data_engineering_copilot.evaluation.assembly_eval import (
     AssemblyEvalRow,
+    AssemblyEvalServiceAdapter,
     load_assembly_eval_dataset,
+    run_assembly_eval,
 )
 
 
@@ -50,3 +53,27 @@ class TestLoadAssemblyEvalDataset:
 
         rows = load_assembly_eval_dataset(path)
         assert len(rows) == 1
+
+
+class TestAssemblyEvalRunContract:
+    """Pin the eval harness API surface (protects against service-shape drift)."""
+
+    def test_run_assembly_eval_is_async(self) -> None:
+        assert inspect.iscoroutinefunction(run_assembly_eval)
+
+    def test_adapter_exposes_async_retrieve(self) -> None:
+        assert inspect.iscoroutinefunction(AssemblyEvalServiceAdapter.retrieve)
+
+    def test_adapter_adapts_rag_service_surface(self) -> None:
+        class _FakeRag:
+            async def embed_query(self, q: str) -> list[float]:
+                return [0.0]
+
+            async def query(self, embedding, top_k, query_text) -> list[object]:
+                return []
+
+        fake = _FakeRag()
+        adapter = AssemblyEvalServiceAdapter(fake)  # type: ignore[arg-type]
+        assert fake.embed_query is not None
+        assert fake.query is not None
+        assert adapter is not None

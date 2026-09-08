@@ -10,6 +10,7 @@ import json
 import logging
 import pathlib
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from data_engineering_copilot.evaluation.assembly_metrics import (
     AssemblyEvalReport,
@@ -18,6 +19,10 @@ from data_engineering_copilot.evaluation.assembly_metrics import (
     needle_loss_rate,
     source_coverage_rate,
 )
+
+if TYPE_CHECKING:
+    from data_engineering_copilot.infrastructure.async_qdrant_store import RetrievedChunk
+    from data_engineering_copilot.services.async_rag import AsyncRagService
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +52,31 @@ def load_assembly_eval_dataset(path: pathlib.Path) -> list[AssemblyEvalRow]:
     return rows
 
 
-def run_assembly_eval(
+@runtime_checkable
+class AssemblyEvalServiceProtocol(Protocol):
+    """Retrieval surface the assembly eval harness needs from a RAG service."""
+
+    async def retrieve(self, query: str, top_k: int) -> list[RetrievedChunk]: ...
+
+
+class AssemblyEvalServiceAdapter:
+    """Adapts AsyncRagService to AssemblyEvalServiceProtocol for the eval harness."""
+
+    def __init__(self, rag_service: AsyncRagService) -> None:
+        self._rag = rag_service
+
+    async def retrieve(self, query: str, top_k: int) -> list[RetrievedChunk]:
+        q_emb = await self._rag.embedder.embed_query(query)
+        return await self._rag.vector_store.query(
+            q_emb,
+            top_k=top_k,
+            query_text=query,
+        )
+
+
+async def run_assembly_eval(
     dataset: list[AssemblyEvalRow],
-    rag_service: object,
+    rag_service: AssemblyEvalServiceProtocol,
     k: int = 20,
 ) -> list[AssemblyEvalReport]:
     """Run evaluation: for each query, retrieve, assemble, compute metrics."""
@@ -57,7 +84,7 @@ def run_assembly_eval(
 
     reports = []
     for row in dataset:
-        retrieved = rag_service.retrieve(row.query, top_k=k)  # type: ignore[union-attr]
+        retrieved = await rag_service.retrieve(row.query, top_k=k)
         assembler = ContextAssembler(max_context_chars=16000)
         context_str, source_names, _ = assembler.assemble(retrieved)
 

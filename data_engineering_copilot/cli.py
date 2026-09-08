@@ -5825,7 +5825,13 @@ def main() -> None:  # pragma: no cover: CLI entry point
                 print(f"❌ eval-rerank failed: {exc}")
                 sys.exit(2)
         elif args.command == "eval-assembly":
-            from data_engineering_copilot.evaluation.assembly_eval import load_assembly_eval_dataset, run_assembly_eval
+            import asyncio
+
+            from data_engineering_copilot.evaluation.assembly_eval import (
+                AssemblyEvalServiceAdapter,
+                load_assembly_eval_dataset,
+                run_assembly_eval,
+            )
             from data_engineering_copilot.factory import build_rag_service
 
             try:
@@ -5836,7 +5842,8 @@ def main() -> None:  # pragma: no cover: CLI entry point
                 )
                 dataset = load_assembly_eval_dataset(dataset_path)
                 rag_svc = build_rag_service()
-                reports = run_assembly_eval(dataset, rag_svc, k=args.k)
+                adapter = AssemblyEvalServiceAdapter(rag_svc)
+                reports = asyncio.run(run_assembly_eval(dataset, adapter, k=args.k))
                 for i, r in enumerate(reports):
                     print(f"Query {i + 1}: {r.summary()}")
             except Exception as exc:  # noqa: BLE001
