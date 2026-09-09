@@ -725,6 +725,12 @@ def get_catalog_fallback_order(purpose: str, app_settings: AppSettings) -> list[
 
 
 def get_catalog_embedding_order(app_settings: AppSettings) -> list[str] | None:
+    """Return catalog-derived embedding fallback order, or ``None`` if unused.
+
+    Active only when ``catalog_auto_order`` is set; returns ``None`` if the
+    catalog is missing/stale or carries no embedding order. Never raises —
+    catalog failures degrade to the configured static order.
+    """
     if not getattr(app_settings, "catalog_auto_order", False):
         return None
     try:
@@ -745,6 +751,12 @@ def get_catalog_embedding_order(app_settings: AppSettings) -> list[str] | None:
 
 
 def get_catalog_rerank_order(app_settings: AppSettings) -> list[str] | None:
+    """Return catalog-derived rerank fallback order, or ``None`` if unused.
+
+    Same fail-open contract as ``get_catalog_embedding_order``: active only
+    when ``catalog_auto_order`` is set, never raises, degrades to the static
+    order on missing/stale catalog.
+    """
     if not getattr(app_settings, "catalog_auto_order", False):
         return None
     try:
@@ -1450,6 +1462,14 @@ def build_evaluation_embeddings(
 
 
 def build_chunker(app_settings: AppSettings = settings):
+    """Build the chunker selected by ``app_settings.chunking_strategy``.
+
+    Strategies: ``semantic`` (wired to the embedding chain, Redis-cached when
+    ``embedding_cache_enabled``; degrades to ``sentence_preserving`` if
+    ``enable_semantic_chunking`` is off), ``header_aware``, and
+    ``sentence_preserving``. Returns a ``ChunkerProtocol`` implementation
+    wired for synchronous ``_sync_chunk`` / async ``chunk`` use.
+    """
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
 
     strategy = app_settings.chunking_strategy.lower()
@@ -1622,6 +1642,12 @@ def _validate_qdrant(qdrant_url: str) -> None:
 
 
 def build_async_crawler(app_settings: AppSettings = settings) -> AsyncDocumentationCrawler:
+    """Build the async crawler with a Postgres frontier and optional crawl cache.
+
+    Requires ``CRAWL_DB_URL`` (raises ``ValueError`` if unset). The crawl cache
+    (Redis-backed) is used only when ``crawl_cache_enabled``; otherwise a
+    no-op cache is wired in.
+    """
     db_url = app_settings.crawl_db_url
     if not db_url:
         raise ValueError(
@@ -1677,6 +1703,14 @@ def _build_content_aware_parser() -> MarkdownParser:
 
 
 def build_async_ingestion_service(app_settings: AppSettings = settings) -> AsyncIngestionService:
+    """Composition root for ingestion.
+
+    Wires the crawler (Postgres frontier + optional Redis crawl cache), the
+    content-aware parser (RST/HTML), the configured chunker + chunker router,
+    the embedding chain (optionally Redis-cached), the Qdrant store, and the
+    enrichment / graph-extraction / API-extraction / code-block / chunk-filter
+    stages. Requires live Redis and Qdrant (raises early if unreachable).
+    """
     from data_engineering_copilot.infrastructure.graph_store import GraphStore
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.contextual_chunk_enricher import (
@@ -1784,6 +1818,18 @@ def build_rag_service(
     retrieval_tracker: RetrievalTracker | None = None,
     embedding_purpose: str = "global",
 ) -> AsyncRagService:
+    """Composition root for the production RAG service.
+
+    Wires every dependency of ``AsyncRagService`` from ``app_settings``:
+    per-purpose LLM chains (answer, code, rewrite, groundedness, intent,
+    evaluation — each with its own provider/model pin, falling back to the
+    ``global`` chain), the vector store (dense + optional hybrid/BM25/MRL),
+    the embedding chain (optionally Redis-cached), the configured reranker
+    family, the two-tier query cache, and the Phase-2 modules (query
+    rewriting, groundedness, scope, context compression, PII, input
+    guardrails, GraphRAG, multi-hop, CRAG, feedback). Returns a fully wired
+    service ready for ``answer()``.
+    """
     from data_engineering_copilot.infrastructure.graph_store import GraphStore
     from data_engineering_copilot.observability.telemetry import build_telemetry_tracer
     from data_engineering_copilot.services.context_compression import ContextCompressor
