@@ -20,8 +20,8 @@ ALL_SOURCES = ("Apache Spark Documentation", "Databricks Documentation", "Delta 
 
 
 def _open_ingest(page):
-    open_tab(page, Tab.INGEST)
-    page.get_by_test_id("stMultiSelect").filter(visible=True).wait_for(timeout=5000)
+    open_tab(page, Tab.INGEST, page.get_by_test_id("stMultiSelect"))
+    page.get_by_test_id("stMultiSelect").filter(visible=True).wait_for(timeout=15000)
 
 
 def _clear_multiselect(page) -> None:

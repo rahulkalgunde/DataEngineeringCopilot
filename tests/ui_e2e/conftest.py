@@ -83,9 +83,19 @@ def browser():
 
 def _open_app(browser, app_url):
     page = browser.new_page(viewport={"width": 1440, "height": 900})
-    page.goto(app_url, wait_until="domcontentloaded")
-    page.get_by_role("heading", name="DataEngineeringCopilot").wait_for(timeout=30000)
-    page.wait_for_timeout(1200)  # let the first rerun + sidebar health settle
+    heading = page.get_by_role("heading", name="DataEngineeringCopilot")
+    # The single Streamlit dev server can stall ~30-60s right after a live-LLM
+    # test (ask/chat/lab). Retry the load instead of failing on one slow reply.
+    for attempt in range(3):
+        page.goto(app_url, wait_until="domcontentloaded")
+        try:
+            heading.wait_for(timeout=25000)
+            page.wait_for_timeout(1200)  # first rerun + sidebar health settle
+            return page
+        except Exception:
+            if attempt == 2:
+                raise
+            page.wait_for_timeout(2000)
     return page
 
 
@@ -137,10 +147,28 @@ class Tab:
     METRICS = "📊 Metrics"
 
 
-def open_tab(page, name: str) -> None:
-    """Click *name* tab and wait for the rerun to settle."""
-    page.get_by_role("tab", name=name, exact=True).click()
-    page.wait_for_timeout(1500)
+def open_tab(page, name: str, ready=None) -> None:
+    """Click *name* tab and wait for the rerun to settle.
+
+    Pass *ready* (a locator bound to the target tab's content) to retry the
+    click until that content renders: the single-threaded Streamlit server can
+    stall for tens of seconds during LLM/health work, so a click can be dropped
+    or the rerun delayed. ``ready`` filters to visible elements because Streamlit
+    keeps other tabs' content in the DOM (hidden, not removed).
+    """
+    tab = page.get_by_role("tab", name=name, exact=True)
+    if ready is None:
+        tab.click()
+        page.wait_for_timeout(1500)
+        return
+    for _ in range(4):
+        tab.click()
+        try:
+            ready.filter(visible=True).wait_for(timeout=6000)
+            return
+        except Exception:
+            continue
+    ready.filter(visible=True).wait_for(timeout=15000)
 
 
 def visible_button(page, label: str):

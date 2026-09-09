@@ -35,12 +35,12 @@ def test_sidebar_service_status(page):
         + sidebar.get_by_text("Ollama: down", exact=False).count()
         >= 1
     )
-    sidecount = sidebar.get_by_text("Chunks in Store", exact=True).count()
-    assert sidecount >= 1
+    sidebar.get_by_text("Chunks in Store", exact=True).wait_for(timeout=15000)
+    assert sidebar.get_by_text("Chunks in Store", exact=True).count() >= 1
 
 
 def test_ask_tab_renders_controls(page):
-    open_tab(page, Tab.ASK)
+    open_tab(page, Tab.ASK, page.get_by_test_id("stTextArea"))
     page.get_by_test_id("stTextArea").filter(visible=True).wait_for(timeout=5000)
     assert (
         page.get_by_test_id("stTextArea")
@@ -53,14 +53,14 @@ def test_ask_tab_renders_controls(page):
 
 
 def test_chat_tab_renders_input(page):
-    open_tab(page, Tab.CHAT)
+    open_tab(page, Tab.CHAT, page.get_by_test_id("stChatInputTextArea"))
     chat_area = page.get_by_test_id("stChatInputTextArea").filter(visible=True)
     chat_area.wait_for(timeout=5000)
     assert chat_area.first.get_attribute("placeholder") == "Ask a follow-up about Spark, Airflow, Delta Lake…"
 
 
 def test_ingest_tab_renders_controls(page):
-    open_tab(page, Tab.INGEST)
+    open_tab(page, Tab.INGEST, page.get_by_test_id("stMultiSelect"))
     page.get_by_test_id("stMultiSelect").filter(visible=True).wait_for(timeout=5000)
     number = page.get_by_test_id("stNumberInput").filter(visible=True)
     number.wait_for(timeout=5000)
@@ -69,7 +69,7 @@ def test_ingest_tab_renders_controls(page):
 
 
 def test_lab_tab_renders_controls(page):
-    open_tab(page, Tab.LAB)
+    open_tab(page, Tab.LAB, page.get_by_test_id("stRadio"))
     page.get_by_test_id("stRadio").filter(visible=True).wait_for(timeout=5000)
     radio_labels = page.get_by_test_id("stRadio").filter(visible=True).locator("label").all_inner_texts()
     joined = " ".join(radio_labels)
@@ -84,9 +84,9 @@ def test_lab_tab_renders_controls(page):
 
 def test_tabs_navigate_independently(page):
     """Tab switching must show only the active tab's content."""
-    open_tab(page, Tab.HEALTH)
+    open_tab(page, Tab.HEALTH, page.get_by_role("heading", name="System Health"))
     page.get_by_text("System Health", exact=True).filter(visible=True).wait_for(timeout=5000)
-    open_tab(page, Tab.METRICS)
+    open_tab(page, Tab.METRICS, page.get_by_text("RAG Service Metrics"))
     page.get_by_text("RAG Service Metrics", exact=True).filter(visible=True).wait_for(timeout=5000)
-    open_tab(page, Tab.ASK)
+    open_tab(page, Tab.ASK, page.get_by_test_id("stTextArea"))
     assert visible_button(page, "Ask").count() == 1

@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.ui, pytest.mark.timeout(300)]
 
 def test_empty_question_guard(page):
     """Strict: clicking Ask with an empty question shows the guard warning."""
-    open_tab(page, Tab.ASK)
+    open_tab(page, Tab.ASK, page.get_by_test_id("stTextArea"))
     textarea = page.get_by_test_id("stTextArea").filter(visible=True)
     textarea.wait_for(timeout=10000)
     ask_btn = visible_button(page, "Ask")
@@ -36,7 +36,7 @@ def test_empty_question_guard(page):
 
 
 def ask_question(session_page, question: str) -> None:
-    open_tab(session_page, Tab.ASK)
+    open_tab(session_page, Tab.ASK, session_page.get_by_test_id("stTextArea"))
     textarea = session_page.get_by_test_id("stTextArea").filter(visible=True)
     textarea.wait_for(timeout=5000)
     inner = textarea.locator("textarea").first
@@ -87,7 +87,7 @@ def test_reset_metrics_after_query(session_page):
     ``session_page`` so the collector recorded by the live query is visible to
     the metrics tab. ``test_metrics_tab.py`` covers the fresh-session state.
     """
-    open_tab(session_page, Tab.METRICS)
+    open_tab(session_page, Tab.METRICS, session_page.get_by_text("RAG Service Metrics"))
     main = session_page.get_by_test_id("stMainBlockContainer")
     main.get_by_text("RAG Service Metrics", exact=True).filter(visible=True).wait_for(timeout=10000)
     summary = main.get_by_text("Session Summary", exact=True).filter(visible=True)

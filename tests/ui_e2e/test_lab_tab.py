@@ -18,8 +18,7 @@ pytestmark = [pytest.mark.ui, pytest.mark.timeout(300)]
 
 
 def _open_lab(page):
-    open_tab(page, Tab.LAB)
-    page.get_by_test_id("stRadio").filter(visible=True).wait_for(timeout=5000)
+    open_tab(page, Tab.LAB, page.get_by_test_id("stRadio"))
 
 
 def _select_radio_label(page, label: str) -> None:

@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.ui, pytest.mark.timeout(300)]
 
 
 def test_new_chat_button_and_empty_state(page):
-    open_tab(page, Tab.CHAT)
+    open_tab(page, Tab.CHAT, page.get_by_test_id("stChatInputTextArea"))
     sidebar = page.get_by_test_id("stSidebar")
     sidebar.get_by_text("💬 Chat Sessions", exact=True).wait_for(timeout=5000)
     assert sidebar.get_by_role("button", name="🆕 New Chat", exact=True).count() == 1
@@ -19,7 +19,7 @@ def test_new_chat_button_and_empty_state(page):
 
 
 def test_new_chat_button_click_is_idempotent(page):
-    open_tab(page, Tab.CHAT)
+    open_tab(page, Tab.CHAT, page.get_by_test_id("stChatInputTextArea"))
     sidebar = page.get_by_test_id("stSidebar")
     sidebar.get_by_role("button", name="🆕 New Chat", exact=True).wait_for(timeout=5000)
     sidebar.get_by_role("button", name="🆕 New Chat", exact=True).click()
@@ -29,7 +29,7 @@ def test_new_chat_button_click_is_idempotent(page):
 
 def test_session_selectbox_and_delete_absent_on_fresh_session(page):
     """Session controls only render once a session exists — assert the absence."""
-    open_tab(page, Tab.CHAT)
+    open_tab(page, Tab.CHAT, page.get_by_test_id("stChatInputTextArea"))
     sidebar = page.get_by_test_id("stSidebar")
     sidebar.get_by_text("💬 Chat Sessions", exact=True).wait_for(timeout=5000)
     # selectbox (key=chat_session_select) and Delete button (key=chat_delete_btn)
@@ -45,7 +45,7 @@ def test_chat_turn_live(page):
     the chat turn must *react* — a user bubble appears and the assistant bubble
     shows either generated text or a visible failure state.
     """
-    open_tab(page, Tab.CHAT)
+    open_tab(page, Tab.CHAT, page.get_by_test_id("stChatInputTextArea"))
     input_area = page.get_by_test_id("stChatInputTextArea").filter(visible=True)
     input_area.wait_for(timeout=5000)
 
