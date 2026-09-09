@@ -791,6 +791,17 @@ class AsyncRagService:
         expected_urls: list[str] | None = None,
         retrieval_only: bool = False,
     ) -> Answer:
+        """Answer a question end-to-end through the RAG pipeline.
+
+        Pipeline: two-tier cache → query rewriting (intent, decomposition,
+        HyDE) → multi-query hybrid retrieval (dense + BM25, RRF) → reranking →
+        relevance gate → context assembly → guardrails → answer generation.
+        ``retrieval_only`` short-circuits before generation (used by
+        ``dec evaluate --spark``); ``provenance`` (when provided) is appended a
+        per-stage trace record for evaluation tooling. ``on_step`` /
+        ``on_step_detail`` stream human-readable progress and per-stage
+        snapshots to visualizers.
+        """
         _t0 = time.monotonic()
         _stage_times: dict[str, float] = {}
 
