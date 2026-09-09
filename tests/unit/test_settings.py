@@ -277,8 +277,7 @@ def test_env_local_overrides_env(tmp_path) -> None:
 
 
 def test_no_duplicate_embed_concurrency() -> None:
-    settings = make_settings()
-    assert settings.model_fields["embed_concurrency"].default == 4
+    assert AppSettings.model_fields["embed_concurrency"].default == 4
 
 
 def test_validate_all_passes_on_defaults() -> None:
@@ -324,7 +323,7 @@ def test_validate_all_detects_conflicts() -> None:
         base = make_settings()
         kwargs: dict = {
             field: getattr(base, field)
-            for field in base.model_fields
+            for field in AppSettings.model_fields
             if field not in {"sources", "skip_provider_check"}
         }
         kwargs.update(overrides)
@@ -389,7 +388,7 @@ def test_chat_settings_validate_all() -> None:
         base = make_settings()
         kwargs: dict = {
             field: getattr(base, field)
-            for field in base.model_fields
+            for field in AppSettings.model_fields
             if field not in {"sources", "skip_provider_check"}
         }
         kwargs.update(overrides)
@@ -491,7 +490,7 @@ def test_chat_speed_settings_validate_all() -> None:
         base = make_settings()
         kwargs: dict = {
             field: getattr(base, field)
-            for field in base.model_fields
+            for field in AppSettings.model_fields
             if field not in {"sources", "skip_provider_check"}
         }
         kwargs.update(overrides)

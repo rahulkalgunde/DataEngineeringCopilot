@@ -251,7 +251,7 @@ class SparkSourceResolver:
                 member_path = Path(member.name)
                 if member_path.is_absolute() or ".." in member_path.parts:
                     raise RuntimeError(f"Unsafe path in archive: {member.name!r}")
-            tar.extractall(target)
+            tar.extractall(target, filter="data")
 
     @staticmethod
     def _single_top_level_dir(root: Path) -> Path | None:

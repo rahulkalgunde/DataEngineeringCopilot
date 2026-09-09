@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 from docutils.core import publish_parts
+from docutils.writers.html5_polyglot import Writer as HTML5Writer
 
 from data_engineering_copilot.domain.models import ParsedDocument, RawDocument
 from data_engineering_copilot.infrastructure.html_to_markdown import html_to_markdown
@@ -39,7 +40,7 @@ class RstParser:
         try:
             parts = publish_parts(
                 source=rst_text,
-                writer_name="html5",
+                writer=HTML5Writer(),
                 settings_overrides={
                     "report_level": 2,
                     "halt_level": 4,
