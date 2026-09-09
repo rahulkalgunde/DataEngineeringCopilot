@@ -3,6 +3,10 @@
 Dense-only mode: cosine similarity on embedding vectors (default behaviour).
 Hybrid mode:    adds BM25 sparse vectors and uses Qdrant native RRF fusion
                 at query time for combined dense + sparse retrieval.
+
+Fail-open posture: an explicit hybrid/BM25-only search mode degrades to
+dense-only (with a loud, actionable warning) when the BM25 tokenizer is
+missing or unfrozen. Only a genuine persisted-cache *version mismatch* raises.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from data_engineering_copilot.config.settings import PROJECT_ROOT, resolve_activ
 from data_engineering_copilot.domain.exceptions import VectorStoreError
 from data_engineering_copilot.domain.models import DocumentChunk, RetrievalFilters, RetrievedChunk
 from data_engineering_copilot.infrastructure.bm25_tokenizer import BM25Tokenizer
+from data_engineering_copilot.services.chunker import embedding_text_for_chunk
 from data_engineering_copilot.services.query_signals import (
     RRF_DENSE_WEIGHT,
     RRF_EQUAL_PROFILE,
@@ -95,6 +100,29 @@ def _resolve_bm25_cache_path(collection_name: str) -> Path:
     return base / f"{collection_name}.json"
 
 
+def _embedding_text_for_chunk_record(record: dict[str, object]) -> str:
+    """Reconstruct the build-time breadcrumb text for one ``chunks.jsonl`` line.
+
+    The generation builders fit the BM25 tokenizer on ``embedding_text_for_chunk``
+    (breadcrumb-prefixed text, ``chunker.embedding_text_for_chunk``), never on the
+    raw ``text`` field and in exact ``chunks.jsonl`` order. Fitting on the raw body
+    instead would assign different first-seen vocabulary ids, silently desyncing
+    every rebuilt sparse query from the vectors stored in Qdrant.
+    """
+    heading = record.get("heading_path")
+    heading_path = tuple(heading) if isinstance(heading, list | tuple) else ()
+    chunk = DocumentChunk(
+        chunk_id=str(record.get("chunk_id", "")),
+        source_name=str(record.get("source_name", "")),
+        title=str(record.get("title", "")),
+        url=str(record.get("url", "")),
+        text=str(record.get("text", "")),
+        section_header=str(record.get("section_header", "")),
+        heading_path=heading_path,
+    )
+    return embedding_text_for_chunk(chunk)
+
+
 def rebuild_bm25_cache_from_corpus(
     generation: str,
     chunks_path: Path,
@@ -106,6 +134,10 @@ def rebuild_bm25_cache_from_corpus(
     streaming, fits a ``BM25Tokenizer`` (namespace mode follows ``settings``
     when ``namespace`` is None), and atomically persists via tmp+rename.
     Returns the persisted cache path.
+
+    The tokenizer is fitted on the same *breadcrumb-prefixed* corpus the
+    generation build used (``embedding_text_for_chunk``), in file order, so the
+    rebuilt vocabulary ids match the sparse vectors stored in Qdrant.
     """
     import json
 
@@ -128,7 +160,7 @@ def rebuild_bm25_cache_from_corpus(
             obj = json.loads(line)
             txt = obj.get("text", "")
             if isinstance(txt, str):
-                texts.append(txt)
+                texts.append(_embedding_text_for_chunk_record(obj))
     tok = BM25Tokenizer(namespace=ns)
     tok.fit(texts)
     tmp = persist_path.with_suffix(".tmp")
@@ -253,6 +285,7 @@ class AsyncQdrantVectorStore:
         self._last_query_sparse = None
         self._embedding_dimension_override = embedding_dimension
         self._bm25_desync_warned = False
+        self._bm25_fallback_warned = False
 
     async def __aenter__(self) -> Self:
         return self
@@ -532,13 +565,22 @@ class AsyncQdrantVectorStore:
         self._require_no_bm25_version_mismatch()
 
         use_hybrid = self._hybrid_search and self._bm25 is not None and self._bm25._frozen
+        bm25_ready = self._bm25 is not None and self._bm25._frozen
 
         # Apply search_mode routing (only when explicitly set)
         if search_mode is not None:
             if search_mode == SearchMode.DENSE_ONLY or search_mode == SearchMode.BM25_ONLY:
                 use_hybrid = False
             elif search_mode in (SearchMode.HYBRID_EQUAL, SearchMode.HYBRID_SPARSE_BIAS, SearchMode.HYBRID_DENSE_BIAS):
-                use_hybrid = True
+                if bm25_ready:
+                    use_hybrid = True
+                else:
+                    # Fail-open per the store's hybrid-search posture: an
+                    # explicitly requested hybrid mode must never hard-fail a
+                    # query just because the tokenizer is missing or unfrozen —
+                    # degrade to dense-only with a loud, actionable warning.
+                    self._warn_bm25_unavailable("hybrid search requested but tokenizer missing/unfrozen")
+                    use_hybrid = False
 
         # Build Qdrant filter for source names, chunk type, and metadata filters
         query_filter = None
@@ -677,20 +719,30 @@ class AsyncQdrantVectorStore:
                     if query_filter is not None:
                         query_kwargs["query_filter"] = query_filter
             elif search_mode == SearchMode.BM25_ONLY:
-                # BM25-only: use sparse vector if available, otherwise dense
-                self._require_frozen_bm25()
-                assert self._bm25 is not None
-                sparse = self._last_query_sparse
-                if sparse is None and query_text is not None:
-                    sparse = self._bm25.tokenize_query(query_text)
-                if sparse is not None:
-                    query_kwargs["query"] = sparse
-                    query_kwargs["using"] = "sparse"
-                else:
+                # BM25-only: use sparse vector if available, otherwise dense.
+                # A missing/unfrozen tokenizer degrades to dense-only with a
+                # loud warning (fail-open) rather than raising — genuine version
+                # mismatches already hard-failed above via
+                # _require_no_bm25_version_mismatch().
+                if not bm25_ready:
+                    self._warn_bm25_unavailable("BM25-only search requested but tokenizer missing/unfrozen")
                     query_kwargs["query"] = query_embedding
                     query_kwargs["using"] = "dense"
-                if query_filter is not None:
-                    query_kwargs["query_filter"] = query_filter
+                    if query_filter is not None:
+                        query_kwargs["query_filter"] = query_filter
+                else:
+                    assert self._bm25 is not None
+                    sparse = self._last_query_sparse
+                    if sparse is None and query_text is not None:
+                        sparse = self._bm25.tokenize_query(query_text)
+                    if sparse is not None:
+                        query_kwargs["query"] = sparse
+                        query_kwargs["using"] = "sparse"
+                    else:
+                        query_kwargs["query"] = query_embedding
+                        query_kwargs["using"] = "dense"
+                    if query_filter is not None:
+                        query_kwargs["query_filter"] = query_filter
             else:
                 query_kwargs["query"] = query_embedding
                 if self._hybrid_search:
@@ -871,6 +923,29 @@ class AsyncQdrantVectorStore:
         self._require_no_bm25_version_mismatch()
         if self._bm25 is None or not self._bm25._frozen:
             raise VectorStoreError("BM25 tokenizer is not ready")
+
+    def _warn_bm25_unavailable(self, reason: str) -> None:
+        """Log a loud, actionable warning once per store instance.
+
+        Fail-open path: explicit hybrid/BM25-only search requests degrade to
+        dense-only (never hard-fail) when the tokenizer is missing or unfrozen.
+        Genuine version mismatches keep raising via
+        ``_require_no_bm25_version_mismatch``.
+        """
+        if self._bm25_fallback_warned:
+            return
+        self._bm25_fallback_warned = True
+        active_generation = resolve_active_generation()
+        rebuild_hint = (
+            f"; run `dec gen-bm25-rebuild --generation {active_generation}` to restore sparse retrieval"
+            if active_generation
+            else ""
+        )
+        logger.warning(
+            "BM25 tokenizer is not ready (%s) — degrading to dense-only for this query%s",
+            reason,
+            rebuild_hint,
+        )
 
     def clear_query_sparse(self) -> None:
         """Clear the sparse vector set by ``set_query_sparse``."""
