@@ -25,6 +25,7 @@ import asyncio
 import logging
 import sys
 import types
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
@@ -40,9 +41,15 @@ def _ensure_vertexai_shim() -> None:
     ragas 0.3.x imports ``ChatVertexAI`` from this module at package import
     time even for non-Vertex users. langchain-community 0.4.x removed it, so we
     inject a placeholder (never instantiated — used only in isinstance checks).
+
+    The probe import is wrapped in ``warnings.catch_warnings``: importing
+    ``langchain_community`` emits its sunset ``DeprecationWarning``, which must
+    not leak into user-visible output just to satisfy ragas's isinstance check.
     """
     try:
-        __import__("langchain_community.chat_models.vertexai")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=DeprecationWarning)
+            __import__("langchain_community.chat_models.vertexai")
     except ModuleNotFoundError:
         module = types.ModuleType("langchain_community.chat_models.vertexai")
         module.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[reportAttributeAccessIssue]
