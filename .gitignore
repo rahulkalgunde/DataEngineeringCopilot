@@ -68,3 +68,4 @@ docs/research/
 research/
 profiling-output/
 .profiling/
+tests/ui_e2e/artifacts/

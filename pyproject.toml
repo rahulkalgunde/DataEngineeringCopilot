@@ -106,6 +106,7 @@ markers = [
     "api: marks tests that exercise FastAPI endpoints (may require Celery/Redis)",
     "celery: marks tests that exercise Celery workers (requires Redis broker)",
     "e2e: marks end-to-end tests that require a full running Docker stack (Qdrant, Redis, Ollama, API)",
+    "ui: marks browser-based Streamlit UI tests (requires live app on :8501 + Playwright chromium)",
     "evaluation: marks tests that evaluate RAG quality with mocked embedder (no infra needed)",
     "xdist_group(name): tests sharing a resource that must run in the same worker process",
     "serial: tests that must not run in parallel with other tests (shared state)",

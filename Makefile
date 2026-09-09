@@ -433,6 +433,10 @@ label-calibration-auto:
 streamlit:
 	dec_venv/bin/streamlit run data_engineering_copilot/ui/streamlit_app.py
 
+# Browser-based Streamlit UI tests (needs live app on :8501 + Playwright chromium).
+test-ui:
+	$(PYTEST) tests/ui_e2e/ -m "ui" -v -n 0 --durations=20
+
 # Refresh the local Claude docs git mirror (network required). After running,
 # paste the printed commit SHAs into pinned_sources.json `local_mirror` entries.
 mirror-claude-docs:
