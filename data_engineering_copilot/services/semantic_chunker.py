@@ -108,6 +108,13 @@ class SemanticChunker:
 
     @staticmethod
     def extract_sentences(text: str) -> list[str] | None:
+        """Tokenize ``text`` into sentences, preserving code spans.
+
+        Returns ``None`` on any tokenization failure (the caller decides how
+        to degrade) rather than raising; code blocks are masked before
+        tokenization so they are not split mid-token, then unmasked per
+        sentence.
+        """
         try:
             _ensure_punkt_tab()
             masked = mask_code_spans(text)
@@ -136,6 +143,14 @@ class SemanticChunker:
         document: ParsedDocument,
         precomputed_embeddings: list[list[float]] | None = None,
     ) -> list[DocumentChunk]:
+        """Chunk ``document`` into cohesive semantic chunks.
+
+        Pipeline: sentence-tokenize (code spans masked) → embed sentences via
+        the configured embedding model (or reuse ``precomputed_embeddings``
+        when provided) → cluster by cosine distance with dynamic threshold
+        (``clustering_threshold``) → merge clusters into chunks respecting
+        size windows → validate and drop invalid chunks.
+        """
         sentences = self.extract_sentences(document.text)
         if sentences is None:
             raise RuntimeError(f"Sentence tokenization failed for url={document.url}; cannot perform semantic chunking")
