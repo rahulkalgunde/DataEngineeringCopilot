@@ -36,7 +36,7 @@ class TestResetIndexClearsRegistry:
 
         return _urlopen
 
-    def test_reset_index_clears_registry_keys(self) -> None:
+    def test_reset_index_clears_registry_keys(self, tmp_path) -> None:
         import data_engineering_copilot.cli as cli_mod
         from data_engineering_copilot.cli import reset_index
 
@@ -57,6 +57,10 @@ class TestResetIndexClearsRegistry:
 
             with (
                 patch.object(cli_mod, "settings", no_pg_settings),
+                patch(
+                    "data_engineering_copilot.cli._bm25_cache_path",
+                    return_value=tmp_path / ".bm25_cache" / "isolated.json",
+                ),
                 patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis),
             ):
                 reset_index()
@@ -66,7 +70,7 @@ class TestResetIndexClearsRegistry:
         mock_redis.scan_iter.assert_any_call("crawl:*")
         mock_redis.scan_iter.assert_any_call("rag:cache:*")
 
-    def test_reset_index_handles_no_registry_keys(self) -> None:
+    def test_reset_index_handles_no_registry_keys(self, tmp_path) -> None:
         import data_engineering_copilot.cli as cli_mod
         from data_engineering_copilot.cli import reset_index
 
@@ -80,6 +84,10 @@ class TestResetIndexClearsRegistry:
 
             with (
                 patch.object(cli_mod, "settings", no_pg_settings),
+                patch(
+                    "data_engineering_copilot.cli._bm25_cache_path",
+                    return_value=tmp_path / ".bm25_cache" / "isolated.json",
+                ),
                 patch("data_engineering_copilot.workers.progress.get_redis_client", return_value=mock_redis),
             ):
                 reset_index()
