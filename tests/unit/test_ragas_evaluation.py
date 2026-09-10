@@ -407,30 +407,34 @@ class TestRagasEvaluator:
             rest.append(llm_wrapper.client._config.degraded_fallback.name)
         assert rest == ["ollama"]
 
-    def test_build_runtime_wraps_explicit_langchain_objects(self):
+    def test_build_runtime_rejects_non_ragas_llm(self):
         _install_vertexai_shim()
 
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+        from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
-        from ragas.embeddings.base import LangchainEmbeddingsWrapper
-        from ragas.llms.base import LangchainLLMWrapper
 
         chat = ChatOpenAI(
             model="fake-model",
             api_key=SecretStr("k"),
             base_url="http://localhost:1/v1",
         )
+        with pytest.raises(TypeError, match="llm must be a BaseRagasLLM instance"):
+            RagasEvaluator._build_runtime(llm=chat)
+
+    def test_build_runtime_rejects_non_ragas_embeddings(self):
+        _install_vertexai_shim()
+
+        from langchain_openai import OpenAIEmbeddings
+        from pydantic import SecretStr
+
         emb = OpenAIEmbeddings(
             model="fake-embed",
             api_key=SecretStr("k"),
             base_url="http://localhost:1/v1",
             check_embedding_ctx_length=False,
         )
-        llm_wrapper, embeddings_wrapper = RagasEvaluator._build_runtime(llm=chat, embeddings=emb)
-        assert isinstance(llm_wrapper, LangchainLLMWrapper)
-        assert isinstance(embeddings_wrapper, LangchainEmbeddingsWrapper)
-        assert llm_wrapper.langchain_llm is chat
-        assert embeddings_wrapper.embeddings is emb
+        with pytest.raises(TypeError, match="embeddings must be a BaseRagasEmbeddings instance"):
+            RagasEvaluator._build_runtime(embeddings=emb)
 
 
 class _StubEmbedder:

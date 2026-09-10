@@ -161,8 +161,7 @@ class RagasEvaluator:
     ) -> tuple[Any, Any]:
         """Build ragas LLM + embeddings wrappers (adaptive providers by default).
 
-        Accepts raw langchain ``BaseLanguageModel`` / ``BaseEmbeddings`` objects
-        (wrapped for ragas); when omitted, defaults are derived from
+        When ``llm`` and ``embeddings`` are omitted, defaults are derived from
         ``AppSettings`` via the factory:
 
         - LLM: when ``evaluation_llm_provider`` is explicitly set it is the
@@ -178,6 +177,11 @@ class RagasEvaluator:
         The RAGAS LLM/embeddings adapters live in ``ragas_adapters.py`` and are
         only imported here (after ``_install_vertexai_shim``), keeping the rest
         of the system free of the ragas dependency.
+
+        Raises TypeError if ``llm`` or ``embeddings`` are not ragas-compatible
+        (``BaseRagasLLM`` / ``BaseRagasEmbeddings``). Use ``AdaptiveRagasLLM``
+        and ``AdaptiveRagasEmbeddings`` from ``ragas_adapters.py`` to wrap the
+        fallback chains.
         """
         _install_vertexai_shim()
 
@@ -186,7 +190,6 @@ class RagasEvaluator:
         app_settings = app_settings or live_settings
 
         from ragas.embeddings import BaseRagasEmbeddings
-        from ragas.embeddings.base import LangchainEmbeddingsWrapper
 
         from data_engineering_copilot.factory import (
             _build_provider_health_registry,
@@ -220,10 +223,12 @@ class RagasEvaluator:
             llm = AdaptiveRagasLLM(client)
 
         from ragas.llms import BaseRagasLLM
-        from ragas.llms.base import LangchainLLMWrapper
 
         if not isinstance(llm, BaseRagasLLM):
-            llm = LangchainLLMWrapper(llm)
+            raise TypeError(
+                f"llm must be a BaseRagasLLM instance (got {type(llm).__name__}). "
+                "Use AdaptiveRagasLLM from ragas_adapters.py to wrap the fallback chain."
+            )
 
         if embeddings is None:
             # Build unified embedding fallback chain for evaluation
@@ -235,7 +240,10 @@ class RagasEvaluator:
             )
             embeddings = AdaptiveRagasEmbeddings(embedding_chain)
         elif not isinstance(embeddings, BaseRagasEmbeddings):
-            embeddings = LangchainEmbeddingsWrapper(embeddings)
+            raise TypeError(
+                f"embeddings must be a BaseRagasEmbeddings instance (got {type(embeddings).__name__}). "
+                "Use AdaptiveRagasEmbeddings from ragas_adapters.py to wrap the fallback chain."
+            )
 
         return llm, embeddings
 
