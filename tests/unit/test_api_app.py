@@ -222,7 +222,7 @@ class TestReady:
             response = await ready()
 
         assert response.status_code == 200
-        body = json.loads(response.body)
+        body = json.loads(bytes(response.body))
         assert body["status"] == "healthy"
         assert body["checks"]["qdrant"] is True
         assert body["checks"]["ollama"] is True
@@ -244,7 +244,7 @@ class TestReady:
             response = await ready()
 
         assert response.status_code == 503
-        body = json.loads(response.body)
+        body = json.loads(bytes(response.body))
         assert body["status"] == "degraded"
 
     @pytest.mark.asyncio
@@ -263,5 +263,5 @@ class TestReady:
             response = await ready()
 
         assert response.status_code == 503
-        body = json.loads(response.body)
+        body = json.loads(bytes(response.body))
         assert body["status"] == "unhealthy"

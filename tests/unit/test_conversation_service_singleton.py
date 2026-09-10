@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_singleton() -> None:
+def _reset_singleton() -> Iterator[None]:
     """Reset the singleton before and after each test."""
     import data_engineering_copilot.services.conversation_service_singleton as mod
 

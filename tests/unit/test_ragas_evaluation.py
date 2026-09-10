@@ -342,7 +342,7 @@ class TestRagasEvaluator:
             assert "nvidia" in providers
         else:
             # Single-provider chain returns the bare nvidia embedder directly.
-            assert embeddings_wrapper._chain.model_name == "nvidia/nemotron-3-embed-1b"
+            assert embeddings_wrapper._chain.model_name == "nvidia/nemotron-3-embed-1b"  # type: ignore[attr-defined]
         assert llm_wrapper is not None
 
     def test_build_runtime_adaptive_judge_has_no_pinned_primary(self):

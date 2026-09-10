@@ -207,7 +207,7 @@ class TestEmbedAllWithCheckpoint:
         await builder._embed_all_with_checkpoint(chunks)
 
         # Verify upsert was called
-        builder._store.upsert_frozen_chunks.assert_called()
+        builder._store.upsert_frozen_chunks.assert_called()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_checkpoint_cleared_on_success(self, builder: PinnedIndexBuilder, tmp_output: Path) -> None:
@@ -336,8 +336,8 @@ class TestDynamicBatchIntegration:
             await builder._embed_all_with_checkpoint(chunks)
 
         # Inner embedder should have received set_batch_size call
-        if hasattr(builder._embedder.inner, "set_batch_size"):
-            builder._embedder.inner.set_batch_size.assert_called_once()
+        if hasattr(builder._embedder.inner, "set_batch_size"):  # type: ignore[attr-defined]
+            builder._embedder.inner.set_batch_size.assert_called_once()  # type: ignore[attr-defined]
 
 
 class TestEmbedBatchWithRetry:

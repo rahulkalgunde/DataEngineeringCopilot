@@ -150,7 +150,7 @@ class TestPercentile:
         assert _percentile([42], 0.5) == 42.0
 
     def test_quartiles(self) -> None:
-        vals = [1, 2, 3, 4]
+        vals = [1.0, 2.0, 3.0, 4.0]
         assert _percentile(vals, 0.25) == 1.75
         assert _percentile(vals, 0.75) == 3.25
 

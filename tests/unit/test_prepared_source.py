@@ -42,7 +42,7 @@ class TestPreparedSource:
             generation="gen",
             commit="abc",
             chunks=(_make_chunk(),),
-            coverage=cov,
+            coverage=tuple(cov),
             cache_root=Path("/tmp/cache"),
         )
         result = src.provenance_sources()
@@ -57,7 +57,7 @@ class TestPreparedSource:
             generation="gen",
             commit="abc",
             chunks=(),
-            coverage=cov,
+            coverage=tuple(cov),
             cache_root=Path("/tmp/cache"),
         )
         result = src.provenance_sources()
@@ -71,7 +71,7 @@ class TestPreparedSource:
             generation="gen",
             commit="abc",
             chunks=(),
-            coverage=cov,
+            coverage=tuple(cov),
             cache_root=Path("/tmp/cache"),
         )
         result = src.provenance_sources()

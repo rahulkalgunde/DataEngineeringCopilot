@@ -1016,6 +1016,7 @@ def test_ollama_purpose_budget_respected_over_num_predict():
 
     s = _make_settings(llm_provider="ollama")
     client = _build_purpose_llm_client(provider="ollama", model="", purpose="evaluation", app_settings=s)
+    assert client is not None
     assert client._max_tokens == 1536  # purpose_max_tokens["evaluation"], not 512
 
 
