@@ -2,6 +2,15 @@
 
 Python 3.12+. RAG over data-engineering docs: Qdrant + Ollama + FastAPI + Celery + Redis + Streamlit. Tooling: `uv` only, Ruff, Pyright, Pytest.
 
+## ⚠️ ORCHESTRATOR MANDATE — READ BEFORE EVERY ACTION
+
+**You are an orchestrator, not a worker. Violating these = wasted tokens + user frustration.**
+
+1. **COMMANDS >30s** → background: `setsid <cmd> > /tmp/opencode/<name>_<ts>.log 2>&1 & disown`. Poll with `tail -5` / `kill -0 <pid>`. NEVER block foreground.
+2. **2+ FILES or 2+ SUBTASKS** → dispatch `task(subagent_type: "general")`. Write brief. Wait for report. NEVER inline.
+3. **POLLING** → short `tail`/`ps` commands. NEVER `sleep N && tail` in foreground.
+4. **BEFORE ANY ACTION** → load `orchestrator-guard` skill. Answer its 3 questions. If any = YES, dispatch/background instead.
+
 ## Verification Loop (two-tier)
 **Tier 1 — after every edit (~5–10s), only on touched files:**
 1. `dec_venv/bin/python -m ruff check <files> --fix`
@@ -14,443 +23,169 @@ Python 3.12+. RAG over data-engineering docs: Qdrant + Ollama + FastAPI + Celery
 
 The full suite between milestones only burns time; Tier 2 exists to catch cross-module surprises (import wiring, shared fixtures). CI (`.github/workflows/test.yml`) is **hermetic only**: lint → unit → eval-data/schema gates. It does NOT run pyright (local-only gate) and does NOT run integration/e2e/smoke/retrieval-gate — anything needing Docker/Ollama/testcontainers stays local (`make test-integration`, `make test-e2e`, `make test-real`, `dec gen-*`, `eval-retrieval-gate`).
 
-### Key Rules (from opencode.json)
-- **RULE 1**: Commands >90–120s MUST run in background with `setsid <cmd> & disown`, output to log file, poll for status — never block foreground
-- **RULE 11**: Check CI health (`gh run list`) at first session daily; fix red runs before other work
-- **RULE 13**: Two-tier cadence — Tier 1 after every edit, Tier 2 only at milestones
-- **RULE 23**: ASK before long commands (>60s or loading local models); NEVER kill without asking
-- **RULE 24**: API Contract Testing — write contract test before any class tests (pins constructor, methods, properties, invariants)
-- **RULE 26–31 (retro discipline 2026-09-08)** — full text in `opencode.json`; binders below:
-  - **RULE 26 Measurement integrity**: prove every eval gate/harness red on a planted failure before reporting green; gate on full-path metrics (stage-level alongside, never instead); never tune against a baseline without a provenance sidecar; `dec health` + `make eval-fast` preflight before tuning/benchmark sessions
-  - **RULE 27 Tier-2 exception surface**: any commit touching eval harnesses, golden/eval JSONL, test doubles/contracts, `.ambr` snapshots, CI workflows, or lint scripts **is a milestone** → full Tier-2 before push; run the data's own schema gate (`make eval-data`) at golden insert time
-  - **RULE 28 Gen-build pre-flight**: assert collection state (empty/declared-drop, idempotent `initialize()`, checkpoint reconciled) before any gen build; never relaunch into an active wall — `dec health` before relaunch
-  - **RULE 29 Degradation is hypothesis zero**: rule out provider degradation (served provider, rate limits, cooldowns) before investigating LLM quality regressions; every generation eval records `served_by`
-  - **RULE 30 Behavior discipline**: recur-twice defect class → executable gate in the fixing commit; size plans by uncertainty (1-page decision matrix vs long spec); open items end closed/deferred-with-reason/explicitly-abandoned; one concern per commit
-  - **RULE 31 No stash without a cleanup plan**: stash converts to a branch within the session or is dropped; branch (`git switch -c`) instead of stash when WIP conflicts with a new task
-
-**RULE 2** — Planner mode: save plan as `plans/YYYY-MM-DD_HH-MM_plan.md`; zero placeholders; atomic step isolation; exact code skeletons; deterministic verification per task.
-
-**RULE 3** — Session context on exit: save full context under `sessions/YYYY-MM-DD_HH-MM_session.md`; same timestamp convention as plans; no topic/slug prefix.
-
-**RULE 4** — Context grounding & file reconnaissance: inspect workspace before planning; never assume files exist; declare `mkdir -p` for new dirs; verify live paths.
-
-**RULE 5** — Pre-flight environment validation: every plan starts with env pre-flight; verify python env/imports/dependencies; halt on failure with FAILED_PREFLIGHT status.
-
-**RULE 6** — Atomic Git checkpoints: after verification, stage only affected files; commit format `feat(plan-task-X): <short desc>`; never commit unverified/broken code.
-
-**RULE 7** — Structured log diagnostics: on non-zero exit, tail last 100 lines; grep Error/Exception/Failed/Traceback; append error snippet to plan under `## Failure Diagnostics`.
-
-**RULE 8** — Session continuation & resume: on resume, load latest timestamped files from `plans/` and `sessions/`; resume on first incomplete task without regenerating plan.
-
-**RULE 9** — Extreme agentic guardrails: 3-strike circuit breaker (3 identical failures → HALT + BLOCKER_<timestamp>.md); unbounded output shield (pipe raw stdout, compact flags); surgical edits (targeted only, files >100 lines); zero silent failures (explicit exception typing/catch/log); anti-hallucination imports (verify pkg exists before import); memory & scale safety (never unbounded .collect()); idempotent cleanup.
-
-**RULE 10** — Automatic response quality eval & retry: stub/placeholder detection (reject # TODO, '...', truncated functions); mandatory syntax sanity check (`python -m py_compile`); immediate retry on syntax/lint fail (up to 2 times); completeness verification (imports, full bodies, return statements); model degradation fallback (2 consecutive fails → halt + QUALITY_REJECT_<timestamp>.md); rate limit retry (sleep N+2 seconds on rate-limit error).
-
-**RULE 12** — CI command shortcut: use `/check-ci` for on-demand CI health checks; identifies failures, drives same fix loop as RULE 11.
-
-**RULE 14** — Free agentic-coding model fallback ladder: on 429/timeout/EOL/degrade, switch verified order: (1) openrouter/poolside/laguna-xs-2.1:free, (2) openrouter/cohere/north-mini-code:free, (3) openrouter/nvidia/nemotron-3-super-120b-a12b:free, (4) openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (slow, 1M ctx planning), (5) nvidia/nvidia/nemotron-3.5-lightning-30b-a3b (NVIDIA direct); NEVER route to deepseek-ai/deepseek-v4-flash-0731 (hangs), z-ai/glm-5.2 (EOL 2026-08-21, emergency only), google/gemma-4-26b-a4b-it (persistently throttled tool calls); free-tier budget: OpenRouter 20 req/min, 50 req/day without $10 credits; NVIDIA ~36 RPM; never send proprietary code through free routes.
-
-**RULE 15** — Turn discipline & silent-stop prevention: NEVER end a turn with narration as last thing; MUST follow with tool call; complete units per turn (test→implement→verify→commit as chain); never emit >400 lines single output; write large docs in sections via multiple Write/Edit calls; when turn must end early, final line must be `STATE: <what is done> NEXT: <exact next action>`; on user `?`, FIRST read artifact trail (git log -5, plans/*.md checkboxes, sessions/*.md Next Steps), THEN continue exactly where stopped; NO status theater.
-
-**RULE 16** — Agentic velocity & orchestrator mode: dispatch, don't sequence: for 2+ independent subtasks, use subagent-driven-development or executing-plans via task(subagent_type:general); never run 15 tasks inline; plan size by model: RULE 2 scaffolding only for flash/fast; with strong models plans may be 300 lines higher-level; subagents resolve anchors; eval harness FIRST: before any retrieval/gen feature, build gate (make eval-fast + eval-retrieval compare-baseline + eval-rerank frozen pools); ship dark flags (False + acceptance in settings.py); flip ONLY on gate pass; never ship docs then test foundation; NO serial babysitting: long jobs via setsid background + poll; two-strike timebox: after 2 identical failures, HALT + plans/BLOCKER_<timestamp>.md; graphify after mods: run graphify query/path before grep; git hygiene once: pre-commit hook = staged-diff only (ruff/pyright changed-files); never git add -A; uv.lock generated by CI job; Tier 1 on touched files only; Tier 2 full gate once before push; one-day playbook ref: follow 8-hour playbook in plans/2026-08-23_12-35_agentic_coding_self_review.md (Hour 0-1 Wayfinder, Hour 1-2 parallel research x4, Hour 2-6 6-lane dispatch, Hour 6-7 merge worktree, Hour 7-8 zero-LLM gates).
-
-**RULE 17** — User coach: enforce agentic velocity on the human: prevent anti-patterns from recurring even if human explicitly asks for slow path; RULE 9.1 + RULE 16 + RULE 17 override blind obedience; when to intervene: detect before acting any of (a) sequential inline work that could be parallelized, (b) new 500+ line plan without Wayfinder sharding, (c) >90s job in foreground, (d) full suite after every micro-edit, (e) shipping retrieval/gen feature without eval gate first, (f) manual free-tier debugging >2 probes, (g) git reset --hard/add -A/uv.lock hand-edit loop, (h) re-planning already-planned epic instead of resume via RULE 8; how to intervene: before slow path, MUST emit "⚠️ COACH:" naming violated rule and cheaper alternative with estimated saving; propose corrected command/plan; call question tool for explicit human confirmation: options ["✅ Do the fast way (recommended)", "⚠️ Do the slow way anyway (acknowledged)", "Type your own answer"]; do NOT proceed until answered; tone: direct, factual, no fluff (caveman mode); one coaching intervention per turn max; if human picks slow way, respect, log "HUMAN_OVERRIDE: <reason>" in sessions/*.md Next Steps, do not re-nag same decision; if human picks fast way, immediately dispatch per RULE 16.
-
-**RULE 18** — Beginner guide & anti-drift: active mentorship: user is new to agentic coding; default to TEACHING mode until user says "expert mode"; beginner default: explain before acting (1-2 lines which skill + why); never silently dispatch; after completion close with "Next recommended skill: X — reason"; proactive skill recommendations (mandatory suggestion): before any task, check 1% rule — if any skill might help, MUST load it; suggest 1-2 skills max per turn via question tool if multiple fit; parallel & sub-agent teaching: when user asks 2+ independent edits, MUST propose parallel execution via subagent-driven-development + using-git-worktrees; anti-drift guardrail: at start of every session, load latest sessions/*.md Next Steps + plans/*.md checkboxes (RULE 8); every 3-4 turns re-anchor: "Current epic: X — next unchecked task: Y — still on track?"; if user drifts to new unrelated request mid-epic, warn: "⚠️ DRIFT: This diverges from active plan <path>:<task>. (a) Park as new ticket via to-tickets, (b) Switch epic via wayfinder, or (c) Continue anyway?" — ask via question tool; never let context bloat silently; accuracy habits you must model: (a) red-green-refactor TDD via tdd skill, (b) Tier-1 gate after every edit (RULE 13) then Tier-2 at milestone, (c) verification-before-completion + verification-discipline before claiming done — show test output not summary, (d) graphify query before grep when graphify-out/graph.json exists, (e) Keep AGENTS.md lean, push reusable behavior into skills; narrative these as you do them so beginner absorbs; how to suggest without nagging: one suggestion per turn max via question tool with 2-3 options: ["✅ Yes, use recommended skill/flow", "Skip for now", "Type your own"]; if user declines, respect and log, do not re-suggest same skill in same session; offer "expert mode" to reduce guidance when user comfortable; for token hygiene, suggest caveman only after user opts in — beginner mode stays verbose and clear; beginner checklist on session start: first turn of day: (i) /check-ci health (RULE 11), (ii) show current skills count (now 113), (iii) propose next skill for user's stated intent; first turn of any new feature: offer grill-me 2-minute interview; first turn of any bug: offer systematic-debugging Phase 1.
-
-**RULE 21** — Proactive log remediation: when inspecting any log, treat every error/warning as actionable including those unrelated to current change; triage first: classify as real defect vs benign noise; fix root cause in same session where feasible; record anything deferred in session log with its log line.
-
-**RULE 22** — Free-window eval pre-approval: while provider free window is active (currently: opencodezen x-preview-f-free until 2026-08-30), eval/judge/calibration harness runs routed to that free provider are pre-approved; launch them (FORCE=1 as needed) without asking; this pre-approval covers ONLY the free provider's calls; any run that would bill paid providers or probe-llm against non-free models still requires explicit owner approval; keep runs registered in /tmp/opencode/ACTIVE_RUNS.md and respect make runcheck before launch.
-
-**RULE 25** — Graphify knowledge-graph closing loop: BEFORE ending a session (after saving session context per RULE 3 but before final reply), run `graphify update .` to refresh graphify-out/graph.json; Do NOT skip on short sessions — stale graph.json causes dead-import regressions (e.g. async_embeddings) that CI catches later.
-
-**RULE 32** — No upstream issue filing (retro 2026-09-08 — mutmut#556 wasted effort): NEVER file upstream issues/bugs/defects for third-party tool failures — document the blocker locally (session log + plans/BLOCKER_<timestamp>.md), work around it, and move on. Upstream issues consume disproportionate time with near-zero return; vendor triage is not your responsibility. If a tool is fundamentally broken, switch to an alternative or drop the feature — do not invest in vendor support cycles.
+## Rules (full text in opencode.json `instructions`)
+| Rule | Summary |
+|------|---------|
+| **R1: Orchestrator** | Dispatch > inline, background > foreground, poll > block |
+| **R2: Permission** | Ask before long commands/destructive ops. Never kill without asking |
+| **R3: Verification** | Tier 1 per-edit, Tier 2 milestone only. `-n 6`, never `-n auto` |
+| **R4: CI Health** | Daily `gh run list`, fix red before other work. `/check-ci` shortcut |
+| **R5: Session** | Plan/save/resume via timestamp files. Pre-flight env check. Graphify on exit |
+| **R6: Safety** | 3-strike breaker, surgical edits, zero silent failures, turn discipline |
+| **R7: Quality** | Contract tests, prove-red-before-green, Tier-2 for eval/CI changes |
+| **R8: Coaching** | Enforce velocity on human. Anti-drift. Skill suggestions (1/turn max) |
+| **R9: Project** | Gen-build preflight, degradation=hypothesis-zero, one-concern/commit, no stash |
+| **R10: Rate limit** | Sleep N+2 on rate-limit errors |
 
 ## Tooling & Setup
 
 ### Local Development Setup
-First-time setup (builds image, starts stack, pulls Ollama models):
 ```bash
-make dev
+make dev    # First-time: build image, start stack, pull Ollama models
+make up     # Start with last built image
+make down   # Stop everything
+make rebuild # Rebuild after pyproject.toml/uv.lock changes
+make status  # Container + health status
 ```
 
-Day-to-day operations:
-- `make up` — Start everything (uses last built image)
-- `make down` — Stop everything
-- `make status` — Containers and health status
-- `make logs` — Stream logs
-- `make rebuild` — Rebuild after dependency changes
-
 ### CLI Commands (`dec_venv/bin/dec`)
-Core (in-process):
-- `dec ask "query"` — RAG query
-- `dec health` / `dec config` / `dec inspect-db` / `dec status` — Service health
-
-Ingestion:
-- `dec ingest --max-pages 40` — Celery ingestion (needs worker)
-- `dec ingest-claude-docs` — In-process ingestion
-
-Eval harnesses (in-process):
-- `dec eval-fast` — Zero-LLM retrieval integrity check
-- `dec eval-retrieval` — Retrieval benchmark
-- `dec eval-generation` — LLM quality tests
-- `dec eval-rerank` — Reranker smoke test
-- `dec eval-chunking` — Chunk quality tests
-
-Generation lifecycle:
-- `dec gen-manifest → gen-build → gen-validate → gen-activate` — Atomic index generation
-- `dec reset-index` — Clear all indexes
-- `dec clear-cache --query` — Clear specific caches
+Core: `dec ask "query"` · `dec health` · `dec config` · `dec inspect-db` · `dec status`
+Ingestion: `dec ingest --max-pages 40` (Celery) · `dec ingest-claude-docs` (in-process)
+Eval: `dec eval-fast` · `dec eval-retrieval` · `dec eval-generation` · `dec eval-rerank` · `dec eval-chunking`
+Generation: `dec gen-manifest` → `dec gen-build` → `dec gen-validate` → `dec gen-activate`
+Reset: `dec reset-index` · `dec clear-cache --query`
 
 ### Package Management
-- NEVER use `pip` or `python -m venv` - use `uv` exclusively
-- Create venv: `uv venv dec_venv`
-- Install dev: `uv pip install -e ".[dev]"`
+- NEVER use `pip` or `python -m venv` — use `uv` exclusively
+- Create venv: `uv venv dec_venv` · Install dev: `uv pip install -e ".[dev]"`
 
 ### Testing Commands
-- `make test-unit` — Unit tests (parallel, xdist)
-- `make test-unit-serial` — Unit tests serial (debug xdist)
-- `make test-integration` — Integration tests
-- `make test-e2e` — End-to-end tests
+- `make test-unit` / `make test-unit-serial` — Unit (parallel / `-n 0` for debug)
+- `make test-integration` — Integration (needs Qdrant + Ollama)
+- `make test-e2e` — End-to-end
 - `make test-real` — Hard gate with live infra (`REQUIRE_INFRA=1`)
+- `make test-ui` — Playwright browser E2E
 
 ## Testing Strategy
 
 ### Unit Testing (hermetic)
 - Use `make_settings()` factory for hermetic settings
-- Tests are auto-skipped when services are down
+- Tests auto-skip when services are down
 - Use `unique_collection_name()` for isolation
 - Rate limiter isolation via `_isolate_rate_limiter()` fixture
+- `make_settings()` hardcodes provider keys to `""` — tests needing env-file aliasing must construct `AppSettings(_env_file=...)` directly
 
 ### Integration Testing
-Requires live services:
-- `make test-integration` needs Qdrant + Ollama
-- `make test-real` needs full Docker stack
+- Requires live services: `make test-integration` needs Qdrant + Ollama; `make test-real` needs full stack
 - Use `require_qdrant()`/`require_ollama()` for guards
+- Host-side Redis: `redis://:local_secure_password_123@localhost:6379/0`
 
 ### Evaluation Gates
-- **Retrieval regression gate**: `make eval-retrieval-gate` (compares to baseline)
-- **Generation fidelity gate**: Configurable thresholds in `settings.py`
-- **Dataset schema gate**: `test-eval-data` (hermetic)
+- Retrieval: `make eval-retrieval-gate` (R@10 >= baseline - 0.02, floor 0.25)
+- Generation: Configurable thresholds in `settings.py`
+- Schema: `make test-eval-data` (hermetic)
 
 ### Test Structure
 - Markers: `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.rag`, `@pytest.mark.ingestion`, `@pytest.mark.e2e`
-- xdist default: `-n 6` (never `-n auto`)
-- Cache doubles: `tests/unit/test_doubles_fidelity.py` enforces fidelity contracts
-- API contracts: `tests/unit/test_api_contracts.py` (pin down exact interfaces)
+- xdist: `-n 6` (never `-n auto`). `-n 0` for xdist debugging.
+- API contracts: `tests/unit/test_api_contracts.py` — pin down interfaces before writing tests
+- Test doubles: input-faithful; fidelity contracts in `tests/unit/test_doubles_fidelity.py`
 
 ## RAG System Operations
 
 ### Query Path
-1. Two-tier cache (exact + semantic)
-2. Query rewriting (intent, decomposition, HyDE)
-3. Multi-query hybrid retrieval (dense + BM25 via Qdrant RRF)
-4. Reranking (cross-encoder / LLM)
-5. CRAG relevance gate
-6. Context assembly (dedup, sibling merge, MMR)
-7. Guardrails (groundedness, scope, PII redaction)
+1. Two-tier cache (exact + semantic) → 2. Query rewriting (intent, decomposition, HyDE) → 3. Multi-query hybrid retrieval (dense + BM25 via Qdrant RRF) → 4. Reranking (cross-encoder / LLM) → 5. CRAG relevance gate → 6. Context assembly (dedup, sibling merge, MMR) → 7. Guardrails (groundedness, scope, PII redaction)
 
 ### Index Generation
-1. `dec gen-manifest` — Create generation manifest
-2. `dec gen-build` — Build index (population)
-3. `dec gen-validate` — Validate against corpus
-4. `dec gen-activate` — Atomic alias switch
+`dec gen-manifest` → `dec gen-build` → `dec gen-validate` → `dec gen-activate`
 
 ### Retrieval Benchmarking
-```bash
-make eval-retrieval-gate  # Compare against baseline_inscope.json
-```
-- Threshold: R@10 >= baseline - 0.02 (absolute floor 0.25)
-- Per-intent gate: R@10 >= max(0, baseline_intent - 0.05)
-- Run after every RAG pipeline change
+`make eval-retrieval-gate` — threshold: R@10 >= baseline - 0.02; per-intent: R@10 >= max(0, baseline_intent - 0.05)
 
 ## Cache Discipline
-
-### Cache Strategy
-- Two-tier query cache (exact + semantic)
-- Embedding cache (`embedding_cache_enabled`)
-- Crawl cache (`crawl_cache_enabled`)
-- Clear with: `dec clear-cache --query --embedding --crawl --bm25 --all`
-
-### Cacheability Rules
+- Two-tier query cache (exact + semantic) + embedding cache + crawl cache
+- Clear: `dec clear-cache --query --embedding --crawl --bm25 --all`
 - `QueryCache.is_cacheable` requires non-empty `sources` + minimum confidence
-- Empty sources silently prevent caching
-- Semantic cache uses `semantic_cache_threshold: 0.95`
 
 ## Retrieval Flags (Dark until Gated)
-
-### Identifier-Aware Hybrid Search
-- `identifier_sparse_rrf_enabled` (default False) — Technical queries use weighted RRF
-- Benchmark gate: identifier recall >= +0.05
-
-### Namespace-Aware BM25
-- `namespace_bm25_enabled` (default False) — Namespace-aware tokenization
-- Benchmark gate: identifier recall >= +0.05, generic recall <= -0.01
-
-### Late Chunking (MRL)
-- `late_chunking_enabled` (default False) — Matryoshka retrieval
-- Benchmark gate: Recall@10 within -0.01 baseline + p95 latency improvement >= 20%
+| Flag | Default | Gate |
+|------|---------|------|
+| `identifier_sparse_rrf_enabled` | False | identifier recall >= +0.05 |
+| `namespace_bm25_enabled` | False | identifier recall >= +0.05, generic <= -0.01 |
+| `late_chunking_enabled` | False | Recall@10 within -0.01 baseline + p95 latency >= 20% |
 
 ## Configuration Management
-
-### Settings Loading Order
-1. `.env` — defaults (committed)
-2. `.env.secrets` — sensitive keys (gitignored)
-3. `.env.local` — personal overrides (gitignored)
-
-### Provider API Keys
-- API-key-gated providers validated in `settings.py validate_all()`
-- Only `skip_provider_check=True` for .env imports (tests use `make_settings()`)
-- Free-tier budget monitoring via rate limiters
-
-### Provider Fallback Chains
-- LLM: `groq → cerebras → nvidia → cloudflare → openrouter → gemini → agnes → ollama_cloud → ollama`
-- Embedding: `nvidia → openrouter → huggingface → local-hf`
-
-## Session Management
-
-### Plan & Context Files
-- Implementation plans: `plans/YYYY-MM-DD_HH-MM_plan.md`
-- Session context: `sessions/YYYY-MM-DD_HH-MM_session.md`
-- Resume: load latest of both files
-
-### Pre-Flight Checklist
-1. Check CI health (`/check-ci` or `gh run list`)
-2. Verify environment: `dec_venv/bin/python -c "import data_engineering_copilot"`
-3. Run Tier-1 gate after every edit (~5–10s)
-4. Run Tier-2 gate at milestone completion (~1–2 min)
-
-### Session Cleanup
-- Register heavy jobs: `make runcheck` (writes to `/tmp/opencode/ACTIVE_RUNS.md`)
-- Background jobs: `setsid <cmd> & disown` (RULE 1)
-- Heavy CPU jobs: serialize via `make rebuild` before xdist suite
-
-### Skill Usage (Required)
-**ALWAYS load relevant skills BEFORE responding or taking action** — including clarifying questions. Use the `skill` tool to load:
-- `brainstorming` — before any creative work / new features
-- `systematic-debugging` / `investigate-first` — before fixing bugs
-- `testing` — before writing tests
-- `codebase-design` — when designing module interfaces
-- `safe-refactor` / `surgical-patch` — when refactoring
-- `verification-before-completion` — before claiming work is done
-
-If any skill might apply (1% chance), you MUST invoke it. Check available skills with the skill tool.
+- Settings load order: `.env` → `.env.secrets` → `.env.local`
+- `.env` overrides class defaults in pydantic-settings — verify actual runtime fallback order when adding providers
+- Provider fallback chains: LLM: `groq → cerebras → nvidia → cloudflare → openrouter → gemini → agnes → ollama_cloud → ollama`; Embedding: `nvidia → openrouter → huggingface → local-hf`
 
 ## Architecture & Design Patterns
-
-### Dependency Injection
-- DI via `factory.py`: `build_rag_service()`, `build_llm_fallback_chain()`, etc.
-- Never hand-instantiate services directly
-
-### Three-Valued Returns
-- `extract_sentences` returns `None` (unsupported) vs `[]` (empty) vs list
-- Check with `is None` explicitly
-
-### ProviderFallbackChain
-- All LLM/embedding/rerank calls route through `ProviderFallbackChain`
-- Per-purpose LLM chains (answer, rewrite, groundedness, intent, enrichment, evaluation, code)
-- Provider selection: health-scored, Redis-backed, cached 15s
-
-### Error Categorization
-- `_default_categorizer` inspects `LLMClientError.response_body` for model-not-supported patterns
-- 401 → `INVALID_REQUEST` not `AUTH_ERROR`
-- Ollama is always `degraded_fallback` (last resort, max 2 consecutive failures)
+- DI via `factory.py`: `build_rag_service()`, `build_llm_fallback_chain()`, etc. Never hand-instantiate.
+- `ProviderFallbackChain`: all LLM/embedding/rerank calls route through it. Per-purpose LLM chains (answer, rewrite, groundedness, intent, enrichment, evaluation, code). Ollama is always `degraded_fallback`.
+- Three-valued returns: `None` (unsupported) vs `[]` (empty) vs list — check `is None` explicitly.
+- No LangChain/LlamaIndex (except `langchain-text-splitters`).
+- `settings.validate_all()` after constructing `AppSettings` (non-test code only).
+- Redis: always `get_shared_redis_client()`.
+- Generation layer: per-purpose tuning via `generation_temperature`/`code_generation_temperature`; `provider_capabilities.py` gates which params are emitted per provider.
+- Fail-open vs fail-closed is contractual: auxiliary verifiers fail open; only evidence-based refusals are hard.
+- Package layout: `README.md`. RAG techniques: `docs/RAG_SYSTEM_LEARNER_GUIDE.md`.
 
 ## Common Pitfalls
-
-### Test-Related
 - **Frozen Pydantic models**: `AppSettings` cannot be patched → use `make_settings()`
-- **MagicMock without spec**: makes `hasattr` always return True → always pass `spec=[...]`
-- **Ambient env vars**: raise `RuntimeError` instead of silently overriding → never export provider keys
+- **MagicMock without spec**: `hasattr` always returns True → always pass `spec=[...]`
+- **Ambient env vars**: raise `RuntimeError` instead of silently overriding
 - **Rate limiter**: module-global in-memory store shared across tests → use `_isolate_rate_limiter()`
-
-### Configuration-Related
-- **`.env` overrides**: `.env` beats `.env.local` beats class defaults in pydantic-settings
-- **Embedding dimensions**: unknown models fail toward `default_embedding_dimension: 2048`
-- **Retrieval flags**: flip only after benchmark gate passes
-
-### Performance-Related
-- **Ollama local**: CPU-bound, use `processing_concurrency: 4` (ROLLBACK to 3 if overloaded)
-- **xdist**: never use `-n auto`, use `-n 6` (or `-n 0` for debugging)
-- **Rate limiting**: shared `SlidingWindowRateLimiter` coordinates RPM/RPD
-
-## Debugging Tools
-
-### Service Health Checks
-```bash
-# Check service availability
-make health  # CLI health check
-make status  # Container status + health
-```
-
-### Log Locations
-- `logs/app.log` — CLI, Streamlit, ingestion, retrieval, vector store
-- `logs/ingestion_refresh.log` — UI refresh events
-
-### CI Health
-At first session of day: check `gh run list`, investigate failures before other work.
-
-## Best Practices
-
-### Code Quality
-- Surgical edits for >100 line files
-- Tier-1 gate after every edit (ruff, format, pyright, one targeted test)
-- Tier-2 gate before commit (full suite)
-- Contract tests before writing tests against any class
-
-### Retrieval Pipeline Changes
-- Run `make eval-fast` after every RAG pipeline change
-- Run `make eval-retrieval-gate` before any retrieval flag flip
-- Compare against baseline: `tests/evaluation/benchmarks/baseline_inscope.json`
-
-### Long-Running Tasks
-- Background with output to log file and poll
-- Register in `/tmp/opencode/ACTIVE_RUNS.md`
-- Use `setsid <cmd> & disown` not plain `nohup ... &`
-
-### Provider Onboarding
-- Update `tests/conftest.py`: add provider API key to `make_settings()` defaults AND to `_AMBIENT_PROVIDER_VARS`
-- Verify runtime fallback order when adding providers
-- Never add paid/anthropic models to `llm_fallback_order`
-
-## Environment
-- Always `dec_venv/bin/python` / `dec_venv/bin/dec` — never bare `python`. Install: `uv pip install -e ".[dev]"` (`make install`).
-- **Embeddings**: `local-hf` = in-process HF sentence-transformers (`nvidia/Nemotron-3-Embed-1B-BF16`, 2048-dim) — Ollama is NOT an embedding provider; it serves LLMs only. `eval-fast` hardwires local-hf.
-- `dec_pydocs_venv/` is a second venv used only by `dec spark-render` (Sphinx toolchain for PySpark API docs). Ignore it otherwise.
-- Settings load `.env` → `.env.secrets` → `.env.local`. `_env_file=None` does **not** reliably isolate (third-party `load_dotenv()` re-injects `.env` into `os.environ`, which beats env files) — pass explicit kwargs to override.
-- Commands expected to take >90–120s: run in background with output to a log file and poll — never block the foreground (opencode.json RULE 1). Detach with `setsid <cmd> & disown`; a plain `nohup … &` child can be killed when the tool call times out.
-- Serialize heavy CPU jobs: let `make rebuild`/`make dev` finish before running the xdist suite — concurrent runs starve pytest workers (`node down: Not properly terminated`).
-- Shared box, possibly parallel sessions: run `make runcheck` and register every heavy job (pid/log/eta) in `/tmp/opencode/ACTIVE_RUNS.md` before launching; deregister when done.
+- **`.env` overrides**: `.env` beats `.env.local` beats class defaults
+- **xdist**: never `-n auto`, use `-n 6`
+- **Docker image staleness**: after `pyproject.toml`/`uv.lock` changes, `make rebuild` — bind mount alone is not enough
 
 ## No-Leak Protocol (defect-class → gate)
-Every recurring defect class gets an executable gate; gates run in `make lint`/unit suite or as named targets:
+Every recurring defect class gets an executable gate:
 | Class | Gate |
 |---|---|
-| Lying test doubles | fidelity registry `tests/unit/test_doubles_fidelity.py` (+ rule above); doubles travel with consumer changes |
-| Config mutation | `scripts/lint_env.py` in `make lint` + `tests/unit/test_env_lint.py`; edit .env only via anchored `^KEY=` edits |
-| Stale derived goldens | provenance sidecars + `make eval-data-stale`; generators must write `.provenance.json` |
+| Lying test doubles | fidelity registry `tests/unit/test_doubles_fidelity.py` |
+| Config mutation | `scripts/lint_env.py` in `make lint` + `tests/unit/test_env_lint.py` |
+| Stale derived goldens | provenance sidecars + `make eval-data-stale` |
 | Multi-path pin divergence | `test_purpose_pin_precedence.py` parametrized over ALL purposes |
 | Container/env drift | `make env-verify` after ANY .env edit or container recreate |
-| Structural fracture (fence/table/tiny) | `make eval-chunking-corpus` ≤ 0.02 / ≤ 0.01 / ≤ 0.001 (local, vs ADR-018 baseline) |
+| Structural fracture | `make eval-chunking-corpus` ≤ 0.02 / ≤ 0.01 / ≤ 0.001 |
+
 Ratchet: a defect class recurring twice MUST get a gate in the fixing commit.
 
-## Session conventions (from opencode.json `instructions`)
-- Implementation plans → `plans/YYYY-MM-DD_HH-MM_plan.md`; on session exit save context → `sessions/YYYY-MM-DD_HH-MM_session.md`; "resume" = load latest of both and continue.
-- Check CI health (`gh run list`) at first session of the day and fix red runs before other work; `/check-ci` drives the same loop.
-- `.clinerules/` targets low-power executor models (one-edit-per-turn, single-command rules) — apply only when driving such a model.
-- Run `graphify update .` before ending a session to refresh graphify-out/graph.json (RULE 25 in opencode.json).
+## Session Conventions
+- Plans → `plans/YYYY-MM-DD_HH-MM_plan.md`; Session context → `sessions/YYYY-MM-DD_HH-MM_session.md`
+- Resume: load latest of both, continue first incomplete task
+- CI health at session start: `gh run list` or `/check-ci`
+- `.clinerules/` targets low-power executor models — apply only when driving such a model
+- `graphify update .` before ending session (refreshes graph.json)
 
 ## Planner-Worker Workflow (SDD)
 
 **When to use:** Any task with 2+ independent subtasks. Single-file fixes go inline.
 
-**Decomposition decision tree:**
-1. Can it be decomposed by file? → One task per file (workers edit different files)
-2. Can it be decomposed by layer? → One task per layer (domain → infrastructure → services)
-3. Can it be decomposed by concern? → One task per concern (schema + logic + tests)
-4. Too coupled? → Sequential in planner
-5. Cross-cutting concerns (factory.py, settings.py, cli.py) → Planner handles last
+**Decomposition tree:** by file → by layer → by concern → too coupled → sequential in planner. Cross-cutting concerns (factory.py, settings.py, cli.py) = planner-only.
 
-**Task brief format:**
-- Objective (one sentence)
-- Files to Modify (with line ranges)
-- Interface Contract (signatures for dependent tasks)
-- Existing Pattern to Follow (code snippet from codebase)
-- Verification (exact commands)
-- Constraints (make_settings, frozen dataclasses, test doubles)
+**Task brief:** Objective, Files, Interface Contract, Pattern, Verification, Constraints — one file per task in `.superpowers/sdd/<plan>/`.
 
-**Dispatch protocol:**
-1. Record BASE commit: `git rev-parse HEAD`
-2. Create workspace: `.superpowers/sdd/<plan-basename>/`
-3. Write task briefs (one file per task)
-4. Dispatch independent tasks in PARALLEL (same response = parallel)
-5. Dispatch dependent tasks SEQUENTIALLY (after dependency completes)
-6. Each worker: reads brief → reads source files → implements → verifies → writes report
-7. Planner: reads report → reviews → decides fix loop or next task
+**Dispatch:** Record BASE commit → write briefs → dispatch parallel (same response) or sequential (after dep) → workers implement+verify+report → planner reviews → fix loop (max 5 rounds, circuit breaker at 5).
 
-**Fix loop:** Up to 5 rounds. Rounds 1-3: resume original worker. Rounds 4-5: fresh worker on more capable model. Circuit breaker at round 5.
+**Shared state:** disk artifacts in `.superpowers/sdd/`. Never paste plans into dispatches.
 
-**Shared state:** Disk-based artifacts in `.superpowers/sdd/<plan-basename>/`. Never paste whole plans into dispatches. Planner reads reports, not worker context windows.
-
-**Convention enforcement:** Pattern snippets from actual codebase, verification commands that catch violations, explicit checklists in every brief.
-
-## Testing
-- Tests are hermetic: conftest no-ops `load_dotenv` and **raises** on ambient provider env vars/API keys. Build settings only via `make_settings()` (Ollama-only, no env files); provider-routing tests pass `_test_allow_non_ollama=True` with placeholder keys.
-- **`make_settings()` hardcodes provider keys to `""`.** Tests that need env-file aliasing (e.g. `HF_TOKEN` → `huggingface_api_key`) must construct `AppSettings(_env_file=...)` directly — `make_settings` overrides the env file with explicit empty strings.
-- **When adding a new LLM provider**, update `tests/conftest.py`: add `"{provider}_api_key": ""` to `make_settings()` defaults AND `"{PROVIDER}_API_KEY"` to `_AMBIENT_PROVIDER_VARS`. Skipping this causes silent env-var leakage into tests.
-- **`.env` overrides class defaults.** `pydantic-settings` reads env vars from `os.environ` first; if `.env` has a hardcoded `LLM_FALLBACK_ORDER`, it overrides the class-level default in `settings.py`. Always verify the actual runtime fallback order when adding providers.
-- xdist default is `-n 6`; never `-n auto` (destabilizes the machine). Use `-n 0` (`make test-unit-serial`) to debug xdist-order or shared-resource failures.
-- Integration/E2E spin up testcontainers (Qdrant/Redis/Ollama). The ambient Docker stack counts only under `REQUIRE_INFRA=1`; `make test-real` is the hard gate that fails when any service is down.
-- Host-side Redis probe needs auth: `redis://:local_secure_password_123@localhost:6379/0` (compose Redis runs with `requirepass`).
-- Markers are strict (`--strict-markers`); the vocabulary lives in `pyproject.toml`.
-- Refactors must ship a behavioral test with a real object; test-double contracts are pinned in `tests/unit/test_doubles_contract.py`.
-- **Test doubles are input-faithful**: output derives from the received input (or calls are recorded and asserted). Constant-output doubles only where the real contract is genuinely constant. Fidelity contracts live in `tests/unit/test_doubles_fidelity.py` and travel with consumer changes.
+## Environment
+- Always `dec_venv/bin/python` / `dec_venv/bin/dec` — never bare `python`. Install: `uv pip install -e ".[dev]"`.
+- `local-hf` = in-process HF sentence-transformers (`nvidia/Nemotron-3-Embed-1B-BF16`, 2048-dim). Ollama is NOT an embedding provider.
+- `dec_pydocs_venv/` = second venv for `dec spark-render` only. Ignore otherwise.
+- Serialize heavy CPU: let `make rebuild`/`make dev` finish before xdist suite.
+- Shared box: `make runcheck` + register every heavy job in `/tmp/opencode/ACTIVE_RUNS.md`.
 
 ## Docker
-- `backend-api` and `celery_worker` are gated behind `--profile app`; bare `docker compose up` starts infra only. Use `make dev` (first time: build + pull Ollama models) / `make up`.
-- The image bakes a dependency hash: after `pyproject.toml`/`uv.lock` changes, `make rebuild` — the bind mount is not enough.
-- Destructive make targets and destructive `dec` subcommands (gen/spark activate, rollback, reset) prompt for confirmation; non-interactive shells need `FORCE=1`.
-
-## Architecture conventions
-- No LangChain/LlamaIndex (except `langchain-text-splitters`).
-- DI via `factory.py` (`build_rag_service()`, …) — never hand-instantiate services.
-- All LLM/embedding/rerank calls route through `ProviderFallbackChain` (`infrastructure/provider_fallback.py`); obtain via `build_llm_fallback_chain()` / `build_embedding_fallback_chain()`. The factory builds separate per-purpose LLM chains (`answer`, `rewrite`, `groundedness`, `intent`, `enrichment`, `evaluation`, `code`) — don't override globally.
-- **Provider selection**: `ProviderFallbackChain` uses `ProviderSelector` (health-scored, Redis-backed, cached best 15s). Error categorizer (`_default_categorizer`) inspects `LLMClientError.response_body` for model-not-supported patterns (401 → `INVALID_REQUEST` not `AUTH_ERROR`). Ollama is always `degraded_fallback` (last resort, max 2 consecutive failures). Single-provider chains still get `ProviderFallbackChain` wrapping for health tracking.
-- Redis connections: always `get_shared_redis_client()`.
-- Three-valued returns: e.g. `extract_sentences` returns `None` (unsupported) vs `[]` (empty) vs list — check `is None` explicitly.
-- Non-test code: call `settings.validate_all()` after constructing `AppSettings`.
-- **Generation layer**: per-purpose tuning via `generation_temperature` (0.15) / `code_generation_temperature` (0.20) / `generation_seed` / penalties; `provider_capabilities.py` gates which params are emitted per provider (silently omitted, never errored). Doc-intent answers use schema-enforced structured output (`services/structured_output.py`, strict JSON schema; Ollama gets `format=`, others `response_format=json_schema`).
-- **Retrieval flags ship dark until their benchmark gate passes** (`identifier_sparse_rrf_enabled`, `namespace_bm25_enabled` default False with acceptance criteria in `settings.py` comments). Never flip a retrieval flag on without running its eval harness and comparing against baseline.
-- **Fail-open vs fail-closed is contractual**: auxiliary verifiers (groundedness, scope, CRAG grader, sibling rejoin, reranker init) fail open with logged warnings; only evidence-based refusals are hard (empty retrieval, low confidence, explicit scope `does_not_cover`). State the posture in module docstrings.
-- Package layout and per-module tour: `README.md`. RAG techniques tour: `docs/RAG_SYSTEM_LEARNER_GUIDE.md`.
-
-## API Contract Testing (before writing tests, pin down the API)
-**Key principle:** Before writing tests against any class, write a contract test that pins down its constructor signature, method names, property vs method, and behavioral invariants. This is cheap (22 tests, 3s to run) and prevents expensive debugging cycles. See `tests/unit/test_api_contracts.py`.
-
-Findings from prior sessions that cost ~2.5 hours of debugging:
-- **Dataclass constructors have specific field names** — `RetrievedChunk` takes `distance` + `confidence`, NOT `score`. `CachedAnswer` takes `sources` (tuple), NOT `citations` (list). Always verify with `inspect.signature` or `dataclasses.fields` before writing tests.
-- **Method names must be verified** — `RelevanceGrader.grade_chunks` (not `grades_relevance`), `QueryCache.aget`/`aset_exact` (not `get_or_compute`). Check `hasattr` before using.
-- **Property vs method** — `QueryCache.stats` is a property, not a method. Calling `stats()` raises `TypeError`. Use `inspect.getattr_static` to check.
-- **Async vs sync** — `QueryCache.aget` is async, `get_exact` is sync. Verify with `inspect.iscoroutinefunction`.
-- **MagicMock without `spec=`** makes `hasattr` always return True. Always pass `spec=[...]` when mocking interfaces.
-- **Frozen Pydantic models** (`AppSettings`) cannot be patched. Use `make_settings()` with explicit kwargs instead.
-- **Cacheability requirements** — `QueryCache.is_cacheable` requires non-empty `sources` AND minimum confidence. Empty sources silently prevent caching.
-- **Error constructors** — `ProviderError(category, provider, model)` takes positional args, NOT keyword args. `LLMClientError` uses `ProviderErrorCategory` enum, not raw strings.
-- **Numeric contracts** — `ndcg_at_k` with binary relevance returns 1.0 when ALL expected items are present, regardless of position.
-
-## Key make targets
-| Target | Description |
-|--------|-------------|
-| `make test-quick` | Unit tests minus `@slow`, parallel |
-| `make test-unit` / `make test-unit-serial` | All unit tests, parallel / `-n 0` for xdist debugging |
-| `make test-integration` | Integration in 3 legs: serial, light parallel, Ollama-heavy |
-| `make test-real` | Hard gate: `REQUIRE_INFRA=1`, fails if any service down |
-| `make test-e2e` | E2E (serial + parallel legs) |
-| `make test-eval` / `make test-eval-data` | Eval harness (mocked embedder) / dataset schema gates (both run in CI) |
-| `make eval-fast` | Zero-LLM retrieval integrity check (Qdrant + local embedder only) — run after RAG-pipeline changes |
-| `make test-chunking` / `test-chunking-serial` | Chunking evaluator suite (gold-span metrics, invariants, snapshots) |
-| `make streamlit` | Run the Streamlit UI locally |
-| `make dev` / `make up` / `make down` | First-time setup / start / stop stack |
-| `make rebuild` | Rebuild image + restart app services (after dependency changes) |
-| `make status` / `make logs` / `make logs-worker` | Health / log tailing |
-| `make shell svc=redis` | Shell into a service |
-| `make FORCE=1 prune` | Remove project containers/images/build cache (volumes kept) |
-
-## CLI entry points
-Entry: `main.py:main` → `cli.py`. Full list with per-command infra requirements: `docs/cli_guide.md`. Behavior-changing highlights:
-
-- **`dec probe-llm` makes live paid API calls (one per provider) — get explicit user approval before running.**
-- In-process (no Celery): `ask`, `ingest-claude-docs`, `evaluate`, `eval-fast`, `eval-coverage`, `inspect-db`, `health`, `config`. Celery path (needs API + worker + full stack): `ingest`, `profile`.
-- Isolated eval harnesses (in-process, frozen inputs): `eval-retrieval` (recall/MRR gate vs baseline), `eval-generation` (faithfulness/relevance/rubric with retrieval frozen), `eval-rerank` (nDCG@K/MRR/P@K on frozen candidate pools), `eval-assembly` (duplicate rate/coverage/compression/needle-loss), `eval-prompt-aug` (template/LLM modes), `eval-chunking` (gold-span chunker quality).
-- Generation lifecycle (immutable index gens): `gen-manifest` → `gen-build` → `gen-validate` → `gen-activate` (atomic alias switch); plus `gen-rollback`, `gen-stale`, `gen-reset`. Spark-only mirror: `spark-config-check`, `spark-manifest`, `spark-render` (Sphinx/Jekyll), `spark-build`/`spark-validate`/`spark-activate`/`spark-rollback`.
-- Reset granularity: `reset-index` (Qdrant + BM25 + Redis + PG) > `reset-qdrant` (collection + BM25) > `reset-crawler-db` (Redis/PG crawl state, keeps Qdrant); `clear-cache [--query|--embedding|--crawl|--bm25|--all]` for cache stores.
-- Recovery: `reenrich` (failed summaries), `retry-failed --category fetch` (failed pages), `unskip`.
+- `backend-api` and `celery_worker` are behind `--profile app`. Use `make dev`/`make up`.
+- Destructive targets prompt for confirmation; non-interactive needs `FORCE=1`.
 
 ## References
-- CLI details: `docs/cli_guide.md` · Makefile details: `docs/makefile_guide.md` · Design decisions: `docs/adr/`
-- Binding session rules: `opencode.json` `instructions` · Low-power-executor rules: `.clinerules/`
+- CLI: `docs/cli_guide.md` · Makefile: `docs/makefile_guide.md` · Design decisions: `docs/adr/`
+- Binding rules: `opencode.json` `instructions` · Low-power rules: `.clinerules/`
+- NVIDIA models: https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&q=agentic (Free Endpoint + agentic only)
 
 ## graphify
-If `graphify-out/graph.json` exists, answer codebase questions with `graphify query "<q>"` (or `path`/`explain`) before raw grep, and run `graphify update .` after modifying code (AST-only, no API cost). The directory is commonly dirty from hook updates — that is not a reason to skip it.
-
-- **NVIDIA model discovery**: use https://build.nvidia.com/models?filters=nimType%3Anim_type_preview&q=agentic — consider ONLY models marked Free Endpoint + agentic. `settings.nvidia_model` ids not listed there 404 on the API (calibration 2026-08-24).
+If `graphify-out/graph.json` exists, use `graphify query "<q>"` before raw grep, run `graphify update .` after code changes.
