@@ -37,3 +37,6 @@ class TestSlugify:
 
     def test_only_special_returns_document(self) -> None:
         assert slugify("!!!") == "document"
+
+    def test_collapses_consecutive_dashes(self) -> None:
+        assert slugify("hello---world") == "hello-world"
