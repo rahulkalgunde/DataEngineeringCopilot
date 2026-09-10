@@ -129,8 +129,8 @@ After all workers complete:
 - Verify fix loop handles worker failures
 
 ## Next Steps
-1. ~~Write this spec to `docs/superpowers/specs/2026-09-10_planner_worker_architecture-design.md`~~
-2. Commit spec
-3. Spec self-review
+1. Write spec (complete)
+2. Commit spec (complete)
+3. Spec self-review (complete)
 4. User reviews spec
 5. Transition to implementation via `writing-plans` skill
