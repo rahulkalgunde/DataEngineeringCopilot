@@ -340,6 +340,40 @@ Ratchet: a defect class recurring twice MUST get a gate in the fixing commit.
 - `.clinerules/` targets low-power executor models (one-edit-per-turn, single-command rules) — apply only when driving such a model.
 - Run `graphify update .` before ending a session to refresh graphify-out/graph.json (RULE 25 in opencode.json).
 
+## Planner-Worker Workflow (SDD)
+
+**When to use:** Any task with 2+ independent subtasks. Single-file fixes go inline.
+
+**Decomposition decision tree:**
+1. Can it be decomposed by file? → One task per file (workers edit different files)
+2. Can it be decomposed by layer? → One task per layer (domain → infrastructure → services)
+3. Can it be decomposed by concern? → One task per concern (schema + logic + tests)
+4. Too coupled? → Sequential in planner
+5. Cross-cutting concerns (factory.py, settings.py, cli.py) → Planner handles last
+
+**Task brief format:**
+- Objective (one sentence)
+- Files to Modify (with line ranges)
+- Interface Contract (signatures for dependent tasks)
+- Existing Pattern to Follow (code snippet from codebase)
+- Verification (exact commands)
+- Constraints (make_settings, frozen dataclasses, test doubles)
+
+**Dispatch protocol:**
+1. Record BASE commit: `git rev-parse HEAD`
+2. Create workspace: `.superpowers/sdd/<plan-basename>/`
+3. Write task briefs (one file per task)
+4. Dispatch independent tasks in PARALLEL (same response = parallel)
+5. Dispatch dependent tasks SEQUENTIALLY (after dependency completes)
+6. Each worker: reads brief → reads source files → implements → verifies → writes report
+7. Planner: reads report → reviews → decides fix loop or next task
+
+**Fix loop:** Up to 5 rounds. Rounds 1-3: resume original worker. Rounds 4-5: fresh worker on more capable model. Circuit breaker at round 5.
+
+**Shared state:** Disk-based artifacts in `.superpowers/sdd/<plan-basename>/`. Never paste whole plans into dispatches. Planner reads reports, not worker context windows.
+
+**Convention enforcement:** Pattern snippets from actual codebase, verification commands that catch violations, explicit checklists in every brief.
+
 ## Testing
 - Tests are hermetic: conftest no-ops `load_dotenv` and **raises** on ambient provider env vars/API keys. Build settings only via `make_settings()` (Ollama-only, no env files); provider-routing tests pass `_test_allow_non_ollama=True` with placeholder keys.
 - **`make_settings()` hardcodes provider keys to `""`.** Tests that need env-file aliasing (e.g. `HF_TOKEN` → `huggingface_api_key`) must construct `AppSettings(_env_file=...)` directly — `make_settings` overrides the env file with explicit empty strings.
