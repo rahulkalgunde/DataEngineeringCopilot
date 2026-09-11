@@ -35,3 +35,18 @@ def test_stall_alarm_fires_only_after_threshold():
 
 def test_extract_streaming_answer_still_works():
     assert extract_streaming_answer('{"answer": "hi", "missing_info": null}') == "hi"
+
+
+def test_interrupted_turn_flag_when_no_done_no_error():
+    st = ChatTurnState(full_text="partial …", raw_buffer='{"answer": "partial …', done=False)
+    assert st.error_msg is None and st.done is False
+    from data_engineering_copilot.ui.streamlit_app import _chat_turn_terminated
+
+    assert _chat_turn_terminated(st) is False
+
+
+def test_completed_turn_not_interrupted():
+    from data_engineering_copilot.ui.streamlit_app import _chat_turn_terminated
+
+    st = ChatTurnState(full_text="full", done=True)
+    assert _chat_turn_terminated(st) is True

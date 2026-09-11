@@ -1017,6 +1017,11 @@ def _stream_chat_once(message: str, session_id: str | None) -> tuple[list[dict],
     return events, full_text, resolved_session
 
 
+def _chat_turn_terminated(state: ChatTurnState) -> bool:
+    """True when a chat turn ended properly (error or done), not interrupted."""
+    return state.error_msg is not None or state.done
+
+
 def _render_suggestion_chips(suggestions: list[str]) -> None:
     """Render clickable follow-up suggestion chips (ChatGPT-style).
 
@@ -1148,6 +1153,15 @@ def render_chat_tab() -> None:
             elif not turn_state.full_text:
                 text_ph.markdown("…")
 
+            interrupted = not _chat_turn_terminated(turn_state) and bool(turn_state.raw_buffer)
+            if interrupted:
+                text_ph.caption("Generation was interrupted — partial answer preserved.")
+            if interrupted and turn_state.full_text:
+                st.session_state["chat_partial"] = {
+                    "session_id": st.session_state.get("chat_session_id"),
+                    "text": turn_state.full_text,
+                }
+
         # Citations + groundedness for the freshly generated turn. Sources arrive
         # as a separate SSE event; render them under the answer just like the QA
         # tab, then persist them with the assistant message for later renders.
@@ -1159,6 +1173,8 @@ def render_chat_tab() -> None:
             "groundedness_score": turn_state.groundedness_score,
             "groundedness_claims": turn_state.groundedness_claims,
         }
+        if interrupted:
+            assistant_payload["interrupted"] = True
         st.session_state.chat_messages.append(assistant_payload)
         if turn_state.sources and not turn_state.error_msg:
             with st.expander(f"Sources ({len(turn_state.sources)})", expanded=False):
