@@ -572,21 +572,36 @@ async def chat(
     effective_user_id = user_id or "anonymous"
 
     async def event_stream():
+        from collections.abc import AsyncGenerator
+        from typing import cast
+
+        from data_engineering_copilot.api.stream_budget import generator_with_global_budget
+
         try:
             conversation = await get_conversation_service()
-            async for event in conversation.chat_stream(
-                request.session_id,
-                effective_user_id,
-                request.message,
-                source_filter=effective_source_filter,
-                max_history_turns=request.max_history_turns,
-                cache_scope=cache_scope,
-            ):
+            agen = cast(
+                AsyncGenerator[str, None],
+                conversation.chat_stream(
+                    request.session_id,
+                    effective_user_id,
+                    request.message,
+                    source_filter=effective_source_filter,
+                    max_history_turns=request.max_history_turns,
+                    cache_scope=cache_scope,
+                ),
+            )
+            async for event in generator_with_global_budget(agen, float(settings.chat_turn_budget_seconds)):
                 if await fastapi_request.is_disconnected():
+                    await agen.aclose()
                     break
                 yield f"data: {json.dumps(event)}\n\n"
         except TimeoutError:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Request timed out'})}\n\n"
+            logger.warning(
+                "chat_turn_budget_exceeded budget=%.1f question=%r",
+                settings.chat_turn_budget_seconds,
+                request.message[:100],
+            )
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Chat turn exceeded the time budget. Please try a simpler question.'})}\n\n"
         except Exception as exc:
             logger.exception("RAG chat failed: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error'})}\n\n"
