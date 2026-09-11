@@ -236,6 +236,19 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+def _summarize_stage_times(stage_marks: dict[str, float], t0: float, now: float | None = None) -> dict[str, float]:
+    now = time.monotonic() if now is None else now
+    ordered = ["query_rewrite", "retrieval", "rerank", "generation"]
+    times: dict[str, float] = {}
+    prev = t0
+    for name in ordered:
+        mark = stage_marks.get(name, now)
+        times[name] = max(0.0, mark - prev)
+        prev = mark
+    times["total"] = now - t0
+    return times
+
+
 def _clean_chat_text(raw: str) -> str:
     """P0-B: unwrap the RAG JSON envelope for user display.
 
@@ -1972,6 +1985,7 @@ class AsyncRagService:
         served stale.
         """
         _t0 = time.monotonic()
+        stage_marks: dict[str, float] = {}
         yield _sse({"type": "status", "message": "Sanitizing query"})
 
         history = list(conversation_history or [])
@@ -2120,6 +2134,7 @@ class AsyncRagService:
                 output={"intent": intent},
             )
             rewrite_span.end()
+        stage_marks["query_rewrite"] = time.monotonic()
 
         # Build the full query set: original + rewrite steps + expansions + HyDE.
         all_queries: list[str] = [safe_question]
@@ -2236,6 +2251,7 @@ class AsyncRagService:
             )
             retrieval_span.end()
         yield _sse({"type": "status", "message": f"Retrieved {len(retrieved_chunks)} chunks"})
+        stage_marks["retrieval"] = time.monotonic()
 
         if not retrieved_chunks:
             if trace:
@@ -2313,6 +2329,7 @@ class AsyncRagService:
                 output=f"{len(retrieved_chunks)} chunks after reranking",
             )
             rerank_span.end()
+        stage_marks["rerank"] = time.monotonic()
 
         # P3: domain-coherence fail-safe. After reranking, the TOP chunks that
         # reach the prompt should not be dominated by a foreign domain (e.g.
@@ -2377,6 +2394,8 @@ class AsyncRagService:
         full_text = ""
         try:
             async for token in llm_client.generate_stream(prompt):
+                if not full_text:
+                    stage_marks["generation"] = time.monotonic()
                 full_text += token
                 yield _sse({"type": "token", "content": token})
         except Exception:
@@ -2476,6 +2495,7 @@ class AsyncRagService:
             except Exception:
                 logger.warning("Chat turn-1 cache write failed", exc_info=True)
 
+        stage_times_seconds = _summarize_stage_times(stage_marks, _t0)
         yield _sse(
             {
                 "type": "done",
@@ -2483,6 +2503,7 @@ class AsyncRagService:
                 "confidence": confidence,
                 "groundedness_score": groundedness_score,
                 "groundedness_claims": list(unsupported_claims),
+                "stage_times_seconds": stage_times_seconds,
             }
         )
         if suggestions:
