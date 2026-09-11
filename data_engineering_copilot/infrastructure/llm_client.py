@@ -454,7 +454,21 @@ class LLMClient(SafeAsyncClientMixin):
                         chunk = json.loads(data_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         if "content" in delta:
-                            yield delta["content"]
+                            content = delta["content"]
+                            if isinstance(content, str):
+                                yield content
+                            else:
+                                # Some providers (e.g. Cloudflare Workers AI) emit a
+                                # terminal chunk whose ``delta.content`` is a non-text
+                                # marker (e.g. ``1``) rather than a string. That is
+                                # protocol malformation, not model text — skip it so
+                                # downstream ``str`` accumulation never sees a non-str.
+                                logger.warning(
+                                    "streaming_chunk_skipped_non_text_content model=%s provider=%s content_type=%s",
+                                    self.model,
+                                    self._provider,
+                                    type(content).__name__,
+                                )
                     except (json.JSONDecodeError, IndexError, KeyError):
                         continue
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError):

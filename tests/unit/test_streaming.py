@@ -80,6 +80,37 @@ class TestLLMClientGenerateStream:
 
         assert tokens == []
 
+    async def test_generate_stream_skips_non_string_content(self, client: LLMClient) -> None:
+        """Providers that emit a non-text ``delta.content`` (e.g. Cloudflare's
+        terminal ``content: 1`` chunk) must not crash downstream str
+        accumulation — the non-string chunk is skipped, text is preserved."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        sse_lines = [
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+            'data: {"choices":[{"delta":{"content":1}}]}',
+            'data: {"choices":[{"delta":{"content":" world"}}]}',
+            "data: [DONE]",
+        ]
+
+        async def mock_aiter_lines():
+            for line in sse_lines:
+                yield line
+
+        mock_response.aiter_lines = mock_aiter_lines
+
+        mock_client = MagicMock()
+        mock_client.stream.return_value = _MockStreamContext(mock_response)
+
+        with patch.object(client, "_get_client", new_callable=AsyncMock, return_value=mock_client):
+            tokens = []
+            async for token in client.generate_stream("test prompt"):
+                tokens.append(token)
+
+        assert tokens == ["Hello", " world"]
+
     async def test_generate_stream_fallback_on_error(self, client: LLMClient) -> None:
         mock_client = MagicMock()
         mock_client.stream.side_effect = httpx.TimeoutException("timeout")
