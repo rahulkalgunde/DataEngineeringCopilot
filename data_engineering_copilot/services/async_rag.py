@@ -87,11 +87,6 @@ _SCOPE_REFUSAL_TEXT = (
     "the topic of the question, so I cannot answer it from the knowledge base."
 )
 
-# How long to wait for the cross-encoder model to load before degrading to
-# "no reranking". The model is cached locally after the first download, so
-# this only bites on a cold cache with a slow network.
-_RERANKER_INIT_TIMEOUT_SECONDS = 120.0
-
 
 def select_most_consistent(candidates: list[str]) -> str:
     """Return the medoid candidate by pairwise Jaccard token similarity.
@@ -2305,22 +2300,12 @@ class AsyncRagService:
         rerank_span = None
         if trace:
             rerank_span = trace.start_observation(name="reranking", as_type="span")
-        pre_rerank_count = len(retrieved_chunks)
-        if reranker is not None and self.config.reranker_enabled and pre_rerank_count > 1:
-            yield _sse({"type": "status", "message": "Reranking"})
-            await self._ensure_reranker_ready()
-            if reranker.is_available():
-                rerank_pool = min(
-                    pre_rerank_count,
-                    _rerank_pool_size(
-                        self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
-                    ),
-                )
-                if pre_rerank_count > rerank_pool:
-                    retrieved_chunks = retrieved_chunks[:rerank_pool]
-                retrieved_chunks = await reranker.rerank(question, retrieved_chunks, top_k=rerank_pool)
-            if len(retrieved_chunks) > self.config.reranker_top_k:
-                retrieved_chunks = retrieved_chunks[: self.config.reranker_top_k]
+        rerank_events: list[dict] = []
+        retrieved_chunks = await self._maybe_rerank_chat(
+            reranker, question, retrieved_chunks, rerank_events.append, trace=None
+        )
+        for ev in rerank_events:
+            yield _sse(ev)
         if rerank_span:
             rerank_span.update(
                 input=f"{len(retrieved_chunks)} chunks before reranking",
@@ -3123,27 +3108,55 @@ class AsyncRagService:
         )
         return rejoined
 
-    async def _ensure_reranker_ready(self) -> bool:
-        """Lazily load the cross-encoder model so reranking actually runs.
+    async def _ensure_reranker_ready(self, reranker=None, budget_seconds: float | None = None) -> bool:
+        """Load the reranker within ``budget_seconds``; fail open otherwise.
 
         Returns True when reranking can be used for this request. The model
-        load runs off the event loop and is fail-open: on timeout, missing
-        optional dependency, or any load error we degrade to "no reranking"
-        rather than failing or stalling the answer. Non-async doubles (test
-        mocks) are treated as already ready per ``is_available()``.
+        load runs off the event loop (single-flight in the reranker) and is
+        shielded so the per-turn budget timeout never aborts the background
+        load — later turns may still find the model ready.
         """
-        reranker = self.reranker
+        reranker = reranker or self.reranker
+        if budget_seconds is None:
+            budget_seconds = self.config.reranker_init_budget_seconds
         if reranker is None or not self.config.reranker_enabled or reranker.is_available():
             return reranker is not None and reranker.is_available()
         initialize = reranker.initialize()
         if not hasattr(initialize, "__await__"):
-            logger.debug("Reranker initialize() is not async; assuming ready=%s", reranker.is_available())
             return bool(reranker.is_available())
         try:
-            await asyncio.wait_for(initialize, timeout=_RERANKER_INIT_TIMEOUT_SECONDS)
+            await asyncio.wait_for(asyncio.shield(initialize), timeout=budget_seconds)
+        except TimeoutError:
+            logger.warning(
+                "reranker_init_budget_exceeded budget=%.1f reranker=%s",
+                budget_seconds,
+                type(reranker).__name__,
+            )
         except Exception:
-            logger.warning("Reranker initialization failed or timed out; proceeding without reranking")
+            logger.warning("reranker_initialize_failed", exc_info=True)
         return bool(reranker.is_available())
+
+    async def _maybe_rerank_chat(self, reranker, question, retrieved_chunks, emit, trace=None) -> list:
+        """Return possibly-reranked chunks. ``emit(ev)`` receives status events."""
+        pre = len(retrieved_chunks)
+        if reranker is not None and self.config.reranker_enabled and pre > 1:
+            emit({"type": "status", "message": "Reranking"})
+            ready = await self._ensure_reranker_ready(reranker, self.config.reranker_init_budget_seconds)
+            if ready:
+                pool = min(
+                    pre,
+                    _rerank_pool_size(
+                        self.config.retrieval_top_k, self.config.reranker_top_k, self.config.reranker_pool_size
+                    ),
+                )
+                if pre > pool:
+                    retrieved_chunks = retrieved_chunks[:pool]
+                retrieved_chunks = await reranker.rerank(question, retrieved_chunks, top_k=pool)
+            else:
+                emit({"type": "status", "message": "Reranking skipped (local reranker not ready)"})
+        if len(retrieved_chunks) > self.config.reranker_top_k:
+            retrieved_chunks = retrieved_chunks[: self.config.reranker_top_k]
+        return retrieved_chunks
 
     async def _validate_and_fix_code_syntax(
         self, answer_text: str, intent: str, llm_client: LLMClientProtocol, trace: Any | None = None
