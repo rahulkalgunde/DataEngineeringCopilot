@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
 import redis.asyncio as aioredis
@@ -1812,6 +1813,16 @@ def build_async_ingestion_service(app_settings: AppSettings = settings) -> Async
     )
 
 
+async def _warmup_reranker(reranker, budget_seconds: float) -> None:
+    """Best-effort background load of the reranker model. Never raises."""
+    try:
+        initialize = reranker.initialize()
+        await asyncio.wait_for(asyncio.shield(initialize), timeout=budget_seconds)
+        logger.info("reranker_warmup_done", model=getattr(reranker, "model_name", "?"))
+    except Exception:
+        logger.warning("reranker_warmup_failed", exc_info=True)
+
+
 def build_rag_service(
     app_settings: AppSettings = settings,
     token_tracker: TokenTracker | None = None,
@@ -2091,7 +2102,7 @@ def build_rag_service(
     # Phase 6 (Task 6.3): low-confidence answers → review dataset (fail-open).
     from data_engineering_copilot.evaluation.langfuse_datasets import create_review_item
 
-    return AsyncRagService(
+    service = AsyncRagService(
         config=rag_config,
         vector_store=vector_store,
         llm_client=answer_client or llm_client,
@@ -2123,6 +2134,22 @@ def build_rag_service(
         feedback_telemetry_service=feedback_telemetry,
         review_dataset_hook=create_review_item,
     )
+
+    # Eager reranker warmup: run only when an event loop is already running
+    # (async callers). Sync callers (Streamlit/CLI) have no running loop and
+    # fall back to the budget-armored lazy init in _ensure_reranker_ready.
+    service.reranker_warmup_task = None
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        if app_settings.reranker_eager_warmup and service.reranker is not None and not service.reranker.is_available():
+            service.reranker_warmup_task = asyncio.create_task(
+                _warmup_reranker(service.reranker, app_settings.reranker_init_budget_seconds)
+            )
+
+    return service
 
 
 def build_pipeline_lab(app_settings: AppSettings = settings, *, dry_run: bool = True) -> PipelineLab:

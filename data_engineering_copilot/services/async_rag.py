@@ -449,6 +449,7 @@ class AsyncRagService:
         self._pii_redactor = pii_redactor
         self.input_guardrails = input_guardrails
         self.review_dataset_hook = review_dataset_hook
+        self.reranker_warmup_task: asyncio.Task | None = None
         self.multi_hop_decomposer = multi_hop_decomposer
         self.graph_traversal_service = graph_traversal_service
         self.relevance_grader = relevance_grader
