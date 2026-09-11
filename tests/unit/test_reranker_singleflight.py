@@ -1,4 +1,7 @@
 import asyncio
+import logging
+import sys
+import types
 
 import pytest
 
@@ -49,3 +52,31 @@ async def test_cancelled_waiter_does_not_kill_background_load():
 
     await asyncio.sleep(0.25)  # background load still completes
     assert rr.model is not None
+
+
+async def test_transient_load_failure_retries(monkeypatch, caplog) -> None:
+    """A failed load clears the init handle so the next request retries."""
+    trials: list[int] = []
+
+    class _FlakyCrossEncoder:
+        def __init__(self, *args, **kwargs) -> None:
+            trials.append(1)
+            if len(trials) == 1:
+                raise OSError("transient model download failure")
+            self.loaded = True
+
+    fake_mod = types.ModuleType("sentence_transformers")
+    fake_mod.CrossEncoder = _FlakyCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_mod)
+
+    rr = CrossEncoderReranker(model_name="fake-reranker")
+    with caplog.at_level(logging.WARNING):
+        await rr.initialize()
+    assert rr.model is None
+    assert len(trials) == 1
+
+    with caplog.at_level(logging.WARNING):
+        await rr.initialize()
+    assert rr.model is not None
+    assert rr.model.loaded
+    assert len(trials) == 2

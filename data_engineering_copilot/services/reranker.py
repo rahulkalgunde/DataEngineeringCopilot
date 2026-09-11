@@ -122,6 +122,7 @@ class CrossEncoderReranker:
         await asyncio.shield(self._init_task)
 
     async def _load_model(self) -> None:
+        loaded = False
         try:
             from sentence_transformers import CrossEncoder
 
@@ -129,6 +130,7 @@ class CrossEncoderReranker:
             if self._executor is None:
                 self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reranker")
             self.model = await loop.run_in_executor(self._executor, lambda: CrossEncoder(self.model_name))
+            loaded = True
             logger.info("Initialized CrossEncoder reranker: %s", self.model_name)
         except ImportError:
             logger.warning(
@@ -138,8 +140,7 @@ class CrossEncoderReranker:
         except Exception as exc:
             logger.warning("Failed to initialize CrossEncoder reranker: %s", exc)
         finally:
-            task = self._init_task
-            if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
+            if not loaded:
                 self._init_task = None
 
     async def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
