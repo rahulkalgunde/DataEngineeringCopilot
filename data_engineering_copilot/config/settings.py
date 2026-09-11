@@ -1269,6 +1269,10 @@ class AppSettings(BaseSettings):
     nvidia_rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
     huggingface_rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_cloud_timeout_seconds: int = 8
+    # Local cross-encoder first-load budget per chat turn (seconds). The model
+    # thread cannot be cancelled, so this caps how long a turn waits before
+    # failing open to "no reranking".
+    reranker_init_budget_seconds: float = 15.0
     # Canonical: "lexical_ngram" = Char-3gram MaxSim lexical proxy (see
     # colbert_reranker.py) — NOT neural ColBERT. "colbert" is a deprecated
     # alias for "lexical_ngram" (back-compat, emits DeprecationWarning).
@@ -1338,6 +1342,11 @@ class AppSettings(BaseSettings):
     # (bge-reranker-v2-m3) is free and near-instant on CPU. Default ON for chat;
     # the single-turn Ask pipeline is unaffected.
     chat_rerank_local: bool = True
+    # Total wall-clock budget for one /api/v1/chat SSE turn. Stalled stages
+    # beyond this force an error event + [DONE] so connections never hang.
+    chat_turn_budget_seconds: float = 90.0
+    # Eagerly warm the local reranker model in the background at service build.
+    reranker_eager_warmup: bool = True
     # Chat speed tuning (Phase F): smart-cache recall tier — reuse similar
     # cached (question→answer) pairs via local synthesis, gated by scope
     # verify. Opt-in default-off; flip on after measuring cache hit rate.
@@ -1652,6 +1661,12 @@ class AppSettings(BaseSettings):
             )
         if self.rerank_cloud_timeout_seconds < 1:
             errors.append(f"rerank_cloud_timeout_seconds ({self.rerank_cloud_timeout_seconds}) must be >= 1")
+        if not 0 < self.reranker_init_budget_seconds <= 60:
+            errors.append(f"reranker_init_budget_seconds ({self.reranker_init_budget_seconds}) must be in (0, 60]")
+        if not 0 < self.chat_turn_budget_seconds <= 600:
+            errors.append(f"chat_turn_budget_seconds ({self.chat_turn_budget_seconds}) must be in (0, 600]")
+        if self.reranker_init_budget_seconds >= self.chat_turn_budget_seconds:
+            errors.append("reranker_init_budget_seconds must be < chat_turn_budget_seconds")
         if self.max_pages_per_source < 0:
             errors.append(f"max_pages_per_source ({self.max_pages_per_source}) must be >= 0")
         if self.max_pages_hard_cap < 1:

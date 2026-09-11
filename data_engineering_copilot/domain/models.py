@@ -252,6 +252,7 @@ class RagConfig:
     reranker_confidence_threshold: float = 0.10
     reranker_type: str = "cross_encoder"
     reranker_pool_size: int = 0
+    reranker_init_budget_seconds: float = 15.0
     reranker_doc_truncation_chars: int = 2000
     reranker_selective_threshold: float = 1.0
     colbert_rerank_model: str = "colbert-ir/colbertv2.0"

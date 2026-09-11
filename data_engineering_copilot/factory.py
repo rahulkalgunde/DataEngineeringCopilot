@@ -1860,6 +1860,7 @@ def build_rag_service(
         reranker_confidence_threshold=app_settings.reranker_confidence_threshold,
         reranker_type=app_settings.reranker_type,
         reranker_pool_size=app_settings.reranker_pool_size,
+        reranker_init_budget_seconds=app_settings.reranker_init_budget_seconds,
         reranker_doc_truncation_chars=app_settings.reranker_doc_truncation_chars,
         reranker_selective_threshold=app_settings.reranker_selective_threshold,
         colbert_rerank_model=app_settings.colbert_rerank_model,
