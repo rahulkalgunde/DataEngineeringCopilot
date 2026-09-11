@@ -25,6 +25,12 @@ from data_engineering_copilot.domain.models import RawDocument  # noqa: E402
 from data_engineering_copilot.factory import build_pipeline_lab, build_rag_service  # noqa: E402
 from data_engineering_copilot.observability.langfuse_client import build_trace_url  # noqa: E402
 from data_engineering_copilot.services.metrics import MetricsCollector  # noqa: E402
+from data_engineering_copilot.ui.chat_parse import extract_streaming_answer  # noqa: E402
+from data_engineering_copilot.ui.chat_stream_reducer import (  # noqa: E402
+    ChatTurnState,
+    apply_chat_event,
+    stall_alarm_message,
+)
 from data_engineering_copilot.ui.components.animations import (  # noqa: E402
     build_diagram_html,
     render_animated_metric,
@@ -41,6 +47,8 @@ from data_engineering_copilot.ui.components.pipeline_states import (  # noqa: E4
     ingestion_node_states,
     reduce_query_node_states,
 )
+
+_extract_streaming_answer = extract_streaming_answer
 
 if settings.logging_enabled:
     setup_logging()
@@ -990,32 +998,6 @@ def _iter_chat_events(message: str, session_id: str | None):
             yield event
 
 
-def _extract_streaming_answer(buffer: str) -> str | None:
-    """Return the clean answer if *buffer* is complete valid JSON with an answer.
-
-    Returns ``None`` while the streamed JSON is still incomplete so the UI shows
-    the progress status instead of raw ``{"status": ...}`` fragments.
-    """
-    if not buffer or not buffer.strip():
-        return None
-    import re
-
-    text = buffer.strip()
-    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
-    if m:
-        text = m.group(1).strip()
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    answer = data.get("answer") or data.get("response") or data.get("text") or data.get("content")
-    if answer is None:
-        return None
-    return str(answer)
-
-
 def _stream_chat_once(message: str, session_id: str | None) -> tuple[list[dict], str, str | None]:
     """Run one chat turn against the API, returning all events + final text.
 
@@ -1119,54 +1101,51 @@ def render_chat_tab() -> None:
         with chat_container.chat_message("assistant", avatar="🤖"):
             text_ph = st.empty()
             status_ph = st.empty()
-            full_text = ""
-            raw_buffer = ""
-            resolved_session = st.session_state.get("chat_session_id")
-            error_msg: str | None = None
-            turn_sources: list[dict] = []
-            groundedness_score = 1.0
-            groundedness_claims: list[str] = []
-
+            _turn_t0 = time.monotonic()
+            turn_state = ChatTurnState(
+                turn_started=_turn_t0,
+                stage_started=_turn_t0,
+                last_event_ts=_turn_t0,
+                session_id=st.session_state.get("chat_session_id"),
+            )
             try:
-                with status_ph.status("Connecting to chat API…", expanded=True) as status:
+                with status_ph.status(turn_state.last_status, expanded=True) as status:
                     for event in _iter_chat_events(prompt, st.session_state.get("chat_session_id")):
-                        etype = event.get("type")
-                        if etype == "session_created":
-                            resolved_session = event.get("session_id") or resolved_session
-                            status.update(label="Session ready", state="running")
-                        elif etype == "status":
-                            status.update(label=event.get("message", "Working…"), state="running")
-                        elif etype == "token":
-                            raw_buffer += event.get("content", "")
-                            clean = _extract_streaming_answer(raw_buffer)
-                            if clean is not None:
-                                full_text = clean
-                                text_ph.markdown(full_text)
-                        elif etype == "sources":
-                            turn_sources = event.get("sources", [])
-                        elif etype == "done":
-                            full_text = event.get("text", full_text)
-                            groundedness_score = float(event.get("groundedness_score", 1.0))
-                            groundedness_claims = event.get("groundedness_claims") or []
-                            text_ph.markdown(full_text)
-                        elif etype == "suggestions":
-                            st.session_state.chat_suggestions = event.get("suggestions", [])
-                        elif etype == "error":
-                            error_msg = event.get("message", "Unknown error")
-                            status.update(label="Failed", state="error")
+                        now = time.monotonic()
+                        turn_state = apply_chat_event(turn_state, event, now)
+                        if turn_state.session_id:
+                            st.session_state.chat_session_id = turn_state.session_id
+                        status.update(
+                            label=(f"{turn_state.last_status} · {now - turn_state.stage_started:.0f}s"),
+                            state=("error" if turn_state.error_msg else "running"),
+                        )
+                        if turn_state.error_msg:
+                            break
+                        if turn_state.done:
+                            text_ph.markdown(turn_state.full_text)
+                        alarm = stall_alarm_message(
+                            turn_state,
+                            now,
+                            stall_seconds=25.0,
+                            budget_seconds=settings.chat_turn_budget_seconds,
+                        )
+                        if alarm and not getattr(turn_state, "_alarm_shown", False):
+                            status_ph.caption(alarm)
+                            turn_state._alarm_shown = True  # one-shot
+                        if turn_state.full_text:
+                            text_ph.markdown(turn_state.full_text)
             except Exception as exc:
                 logger.exception("Chat turn failed")
-                error_msg = str(exc)
+                turn_state.error_msg = str(exc)
 
-            st.session_state.chat_session_id = resolved_session
+            st.session_state.chat_session_id = turn_state.session_id or st.session_state.get("chat_session_id")
 
-            # Remove the transient progress widget so no "Done" status lingers.
-            if not error_msg:
+            if not turn_state.error_msg:
                 status_ph.empty()
 
-            if error_msg:
-                text_ph.error(f"**Chat failed:** {error_msg}")
-            elif not full_text:
+            if turn_state.error_msg:
+                text_ph.error(f"**Chat failed:** {turn_state.error_msg}")
+            elif not turn_state.full_text:
                 text_ph.markdown("…")
 
         # Citations + groundedness for the freshly generated turn. Sources arrive
@@ -1174,26 +1153,26 @@ def render_chat_tab() -> None:
         # tab, then persist them with the assistant message for later renders.
         assistant_payload: dict = {
             "role": "assistant",
-            "content": full_text or (f"Error: {error_msg}" if error_msg else "(no answer)"),
-            "sources": turn_sources,
-            "groundedness_score": groundedness_score,
-            "groundedness_claims": groundedness_claims,
+            "content": turn_state.full_text
+            or (f"Error: {turn_state.error_msg}" if turn_state.error_msg else "(no answer)"),
+            "sources": turn_state.sources,
+            "groundedness_score": turn_state.groundedness_score,
+            "groundedness_claims": turn_state.groundedness_claims,
         }
         st.session_state.chat_messages.append(assistant_payload)
-        if turn_sources and not error_msg:
-            with st.expander(f"Sources ({len(turn_sources)})", expanded=False):
-                for i, source in enumerate(turn_sources, 1):
+        if turn_state.sources and not turn_state.error_msg:
+            with st.expander(f"Sources ({len(turn_state.sources)})", expanded=False):
+                for i, source in enumerate(turn_state.sources, 1):
                     st.markdown(f"**{i}. [{source.get('title', 'Source')}]({source.get('url', '#')})**")
                     st.caption(f"Source: {source.get('source_name')}")
-        if groundedness_claims and not error_msg:
+        if turn_state.groundedness_claims and not turn_state.error_msg:
             st.caption(
-                f"Groundedness {groundedness_score:.2f} — {len(groundedness_claims)} claim(s) not directly supported"
+                f"Groundedness {turn_state.groundedness_score:.2f} — "
+                f"{len(turn_state.groundedness_claims)} claim(s) not directly supported"
             )
 
-        # Render the follow-up chips for THIS answer immediately, inside the
-        # chat container so they appear under the answer but ABOVE the input box.
-        fresh = st.session_state.get("chat_suggestions", [])
-        if fresh and not error_msg:
+        fresh = turn_state.suggestions
+        if fresh and not turn_state.error_msg:
             with chat_container:
                 _render_suggestion_chips(fresh)
 
