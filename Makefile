@@ -103,13 +103,28 @@ define confirm_destructive
 	fi
 endef
 
-# Full rebuild: stop everything, remove containers + images + build cache
-prune:
-	$(call confirm_destructive,⚠️ This will remove ALL project containers images and build cache. Data volumes are preserved.)
-	@$(COMPOSE) down --rmi all
+# Remove ONLY project images NOT referenced by any container (running or stopped).
+# Does NOT touch containers. Infrastructure images preserved.
+prune-images:
+	$(call confirm_destructive,⚠️ This will remove de_copilot_base_image:* images NOT referenced by any container. Containers are NOT touched. Infrastructure images preserved.)
+	@echo "Removing unused project images (de_copilot_base_image:*)..."
+	@images=$$(docker images --filter "reference=de_copilot_base_image:*" --format "{{.Repository}}:{{.Tag}}"); \
+	if [ -z "$$images" ]; then \
+		echo "No project images to remove."; \
+	else \
+		for img in $$images; do \
+			if docker ps -aq --filter "ancestor=$$img" | grep -q .; then \
+				echo "  keep   $$img (referenced by container)"; \
+			else \
+				echo "  remove $$img"; \
+				docker image rm "$$img" >/dev/null 2>&1 || echo "    ! could not remove $$img"; \
+			fi; \
+		done; \
+	fi
+	@echo "Pruning build cache..."
 	@docker builder prune -f
 	@rm -f $(DOCKER_TAG_FILE)
-	@echo "✅ Pruned all project resources"
+	@echo "✅ prune-images complete (containers untouched)"
 
 # Remove only stale unused project images
 prune-stale:
