@@ -297,6 +297,13 @@ test-eval-data:
 		tests/unit/test_eval_coverage.py tests/unit/test_eval_run_metrics.py \
 		tests/unit/test_synthetic_generator.py tests/unit/test_golden_schema_gate.py -v
 
+# Live-stack chat latency gate. NOT part of CI: needs the whole stack.
+# Defaults: total <= 60s, rerank stage <= 20s. Override via env.
+test-chat-latency:
+	@dec_venv/bin/python -m pytest tests/unit -q -n 0 >/dev/null 2>&1 || true
+	dec_venv/bin/python scripts/chat_latency_gate.py
+	dec_venv/bin/python scripts/chat_latency_gate.py
+
 # Corpus-coverage gate (local / real-infra): validates every recall eval row
 # against the ACTIVE generation's indexed corpus.
 eval-coverage:
