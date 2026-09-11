@@ -103,9 +103,10 @@ define confirm_destructive
 	fi
 endef
 
-# Remove ONLY project images NOT referenced by any container (running or stopped).
-# Does NOT touch containers. Infrastructure images preserved.
-prune-images:
+# Safe prune: remove ONLY project images NOT referenced by any container
+# (running or stopped). Does NOT touch containers. Infrastructure images
+# preserved (previously: docker compose down --rmi all nuked the whole stack).
+prune:
 	$(call confirm_destructive,⚠️ This will remove de_copilot_base_image:* images NOT referenced by any container. Containers are NOT touched. Infrastructure images preserved.)
 	@echo "Removing unused project images (de_copilot_base_image:*)..."
 	@images=$$(docker images --filter "reference=de_copilot_base_image:*" --format "{{.Repository}}:{{.Tag}}"); \
@@ -124,7 +125,10 @@ prune-images:
 	@echo "Pruning build cache..."
 	@docker builder prune -f
 	@rm -f $(DOCKER_TAG_FILE)
-	@echo "✅ prune-images complete (containers untouched)"
+	@echo "✅ prune complete (containers untouched)"
+
+# Backward-compatible alias for the interim name.
+prune-images: prune
 
 # Remove only stale unused project images
 prune-stale:

@@ -456,12 +456,14 @@ make config
 ### Destructive Targets (require `FORCE=1`)
 
 #### `make prune`
-Remove all project containers, images, and build cache. Data volumes are preserved.
+Safe prune: remove only unused project images (`de_copilot_base_image:*`), clear the build cache, and remove the `.docker-tag` file. Containers and infrastructure images are preserved.
 
 ```bash
 make prune           # Shows warning, requires FORCE=1
 make FORCE=1 prune   # Actually prunes
 ```
+
+> Previous behavior (`docker compose down --rmi all`) removed ALL stack images including infrastructure; use `make docker-cleanup` or a manual `docker compose down --rmi all` if you truly want a full reset.
 
 #### `make prune-stale`
 Remove only stale unused project images (`de_copilot_base_image:*`). Safe — keeps images in use.
@@ -532,7 +534,7 @@ The old `docker-*` targets still work but are aliases for the new targets:
 | Follow worker logs | `make logs-worker` |
 | Shell into a service | `make shell svc=redis` |
 | Health report | `make health` |
-| Remove containers + images | `make FORCE=1 prune` |
+| Remove unused project images + build cache | `make FORCE=1 prune` |
 | Validate compose config | `make config` |
 | CI layout up/down | `make ci-up` / `make ci-down` |
 | Zero-LLM integrity gate | `make eval-fast` |
@@ -585,7 +587,7 @@ make eval-retrieval-gate                          # gate future changes against 
 
 **Clean slate for local testing**
 ```bash
-make FORCE=1 prune    # remove containers + images, keep data volumes
+make FORCE=1 prune    # remove unused project images + build cache (containers/infra images kept)
 make dev              # fresh stack + Ollama models
 make test-integration # (testcontainers; skips silently if infra down)
 ```
