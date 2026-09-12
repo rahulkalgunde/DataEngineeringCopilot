@@ -123,13 +123,14 @@
     }
   },
   "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git"
+    "superpowers@git+https://github.com/obra/superpowers.git#6.3.0"
   ],
   "indexing": {
     "enabled": true,
     "provider": "ollama",
     "model": "nomic-embed-text:v1.5",
     "vectorStore": "lancedb",
+    "fileExtensions": [".py", ".md", ".toml", ".cfg", ".ini"],
     "ollama": {
       "baseUrl": "http://localhost:11434"
     }

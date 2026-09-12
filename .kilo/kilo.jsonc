@@ -117,7 +117,7 @@
       }
   },
   "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git"
+    "superpowers@git+https://github.com/obra/superpowers.git#6.3.0"
 ],
   "indexing": {
       "enabled": true,
