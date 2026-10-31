@@ -31,6 +31,7 @@ scripts/*
 !scripts/tune_rrf_weights.py
 !scripts/tune_tier2_speed.py
 !scripts/run_chunking_eval.py
+!scripts/chat_latency_gate.py
 resources_*.csv
 *.csv
 *.parquet
@@ -46,7 +47,6 @@ Thumbs.db
 .idea/
 .vscode/
 .opencode/
-opencode.json
 profiling-output/
 .profiling/
 profiler_reports/
